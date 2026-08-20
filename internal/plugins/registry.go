@@ -45,6 +45,15 @@ type ToolSpec struct {
 	// effect. Read tools are idempotent by definition; this exists for the
 	// annotation.
 	Idempotent bool
+
+	// InputSchema overrides the schema derived from the handler's parameter
+	// type.
+	//
+	// An in-tree plugin leaves this empty and the schema is inferred. An
+	// out-of-process plugin must set it: its parameters arrive as raw JSON,
+	// which would otherwise be described as a byte array rather than the
+	// object it actually carries.
+	InputSchema json.RawMessage
 }
 
 func (s ToolSpec) validate(plugin string) error {
@@ -76,6 +85,10 @@ type MutationSpec struct {
 	// Reversible reports whether a rollback operation can be derived. A
 	// rollback is itself an approval-gated mutation, never an automatic undo.
 	Reversible bool
+
+	// InputSchema overrides the schema derived from the handler's parameter
+	// type, for the same reason as ToolSpec.InputSchema.
+	InputSchema json.RawMessage
 }
 
 func (s MutationSpec) validate(plugin string) error {
@@ -118,7 +131,7 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 		qualified:  qualified,
 		capability: auth.CapRead,
 		attach: func(s *mcp.Server, mw ToolMiddleware) {
-			mcp.AddTool(s, &mcp.Tool{
+			tool := &mcp.Tool{
 				Name:        qualified,
 				Description: spec.Description,
 				Annotations: &mcp.ToolAnnotations{
@@ -127,7 +140,11 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 					IdempotentHint: spec.Idempotent,
 					OpenWorldHint:  &openWorld,
 				},
-			}, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+			}
+			if len(spec.InputSchema) > 0 {
+				tool.InputSchema = spec.InputSchema
+			}
+			mcp.AddTool(s, tool, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 				var zero Out
 				if err := mw(ctx, qualified, auth.CapRead); err != nil {
 					return nil, zero, err
@@ -190,7 +207,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 		"approves it with " + plugin + "_approve_operation. This call returns an " +
 		"operation_id and leaves the system untouched."
 
-	mcp.AddTool(srv, &mcp.Tool{
+	tool := &mcp.Tool{
 		Name:        qualified,
 		Description: description,
 		Annotations: &mcp.ToolAnnotations{
@@ -203,7 +220,12 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 			DestructiveHint: &mutating,
 			IdempotentHint:  false,
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in P) (*mcp.CallToolResult, operationView, error) {
+	}
+	if len(spec.InputSchema) > 0 {
+		tool.InputSchema = spec.InputSchema
+	}
+
+	mcp.AddTool(srv, tool, func(ctx context.Context, _ *mcp.CallToolRequest, in P) (*mcp.CallToolResult, operationView, error) {
 		if err := gate(ctx, qualified, auth.CapPropose); err != nil {
 			return nil, operationView{}, err
 		}

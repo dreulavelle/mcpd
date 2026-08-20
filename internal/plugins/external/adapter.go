@@ -143,15 +143,27 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	p.mu.RUnlock()
 
 	for _, tool := range describe.Tools {
+		// The plugin's own published schema is used verbatim. Parameters
+		// arrive here as raw JSON, so an inferred schema would describe a byte
+		// array rather than the object the plugin actually accepts.
 		spec := plugins.ToolSpec{
 			Name:        tool.Name,
 			Title:       tool.Title,
 			Description: tool.Description,
 			Idempotent:  tool.Idempotent,
+			InputSchema: normalizeSchema(tool.InputSchema),
 		}
 		name := tool.Name
-		plugins.Tool(r, spec, func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
-			return p.callTool(ctx, name, args)
+		// The result type is `any` rather than json.RawMessage on purpose: the
+		// SDK generates no output schema for `any`, whereas a []byte would be
+		// described as an array and then fail to validate against the object
+		// the plugin actually returned.
+		plugins.Tool(r, spec, func(ctx context.Context, args json.RawMessage) (any, error) {
+			raw, err := p.callTool(ctx, name, args)
+			if err != nil {
+				return nil, err
+			}
+			return decodeResult(raw), nil
 		})
 	}
 
@@ -162,6 +174,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 			Description: mutation.Description,
 			Risk:        operations.RiskLevel(mutation.Risk),
 			Reversible:  mutation.Reversible,
+			InputSchema: normalizeSchema(mutation.InputSchema),
 		}, &mutationBridge{plugin: p, action: mutation.Action})
 	}
 	return nil
@@ -409,6 +422,44 @@ func Discover(root string, log logger) ([]Manifest, map[string]string, error) {
 // logger is the slice of slog this package needs.
 type logger interface {
 	Warn(msg string, args ...any)
+}
+
+// decodeResult turns a plugin's raw JSON result into a value the SDK can
+// return as structured content. A result that will not decode is passed
+// through as text rather than dropped, so a plugin bug is visible instead of
+// silently producing an empty response.
+func decodeResult(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return map[string]any{"raw": string(raw)}
+	}
+	return v
+}
+
+// normalizeSchema guarantees a usable object schema.
+//
+// The MCP SDK requires a tool's input schema to declare type "object" and
+// refuses anything else. A plugin that publishes nothing, or something
+// malformed, gets a permissive object rather than preventing its own mount --
+// the plugin validates parameters itself regardless, so the schema exists to
+// help a model construct a call rather than to enforce anything.
+func normalizeSchema(raw json.RawMessage) json.RawMessage {
+	const permissive = `{"type":"object"}`
+
+	if len(raw) == 0 {
+		return json.RawMessage(permissive)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return json.RawMessage(permissive)
+	}
+	if parsed["type"] != "object" {
+		return json.RawMessage(permissive)
+	}
+	return raw
 }
 
 func orDefault(v, fallback string) string {

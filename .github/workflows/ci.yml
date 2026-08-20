@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Verify formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # modernc.org/sqlite requires modernc.org/libc at the exact version in
+      # its own go.mod. A mismatch fails at runtime rather than at build time,
+      # so it is checked here instead of being left to chance.
+      - name: Verify dependency pinning
+        run: make verify-deps
+
+      # The race detector needs cgo, which is why this is separate from the
+      # build: the shipped binary is CGO-free so it stays static.
+      - name: Test
+        run: CGO_ENABLED=1 go test -race -count=1 ./...
+
+      - name: Build a static binary
+        run: CGO_ENABLED=0 go build -trimpath -o /tmp/mcpd ./cmd/mcpd
+
+      - name: Confirm the binary is static
+        run: |
+          file /tmp/mcpd
+          file /tmp/mcpd | grep -q "statically linked" || {
+            echo "the binary is not static; something reintroduced cgo"
+            exit 1
+          }
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        working-directory: web
+        run: npm ci
+
+      - name: Type-check and build
+        working-directory: web
+        run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          build-args: VERSION=ci

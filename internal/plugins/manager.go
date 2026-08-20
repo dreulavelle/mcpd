@@ -111,23 +111,12 @@ func (m *Manager) Register(ctx context.Context, p Plugin, required bool) error {
 		Instructions: d.Description,
 		Logger:       m.log.With("plugin", d.Name),
 	})
-	for _, t := range reg.tools {
-		t.attach(srv, m.middleware)
-	}
-
-	// Mutations become propose tools, and every endpoint with a mutation also
-	// gets the operation lifecycle tools. Without an approval service there is
-	// nowhere for a proposal to go, so registering a mutation would produce a
-	// tool that cannot work.
-	if len(reg.mutations) > 0 {
-		if m.approvals == nil {
-			return fmt.Errorf(
-				"plugins: %s registers mutations but no approval service is configured", d.Name)
-		}
-		for _, mu := range reg.mutations {
-			mu.attach(srv, m.middleware, m.approvals)
-		}
-		attachApprovalTools(srv, d.Name, m.approvals, m.middleware)
+	// The SDK panics on a malformed tool definition rather than returning an
+	// error. A plugin -- especially an out-of-process one the operator dropped
+	// in -- must not be able to take the host down that way, so registration
+	// is recovered and reported as a failed mount.
+	if err := attachAll(srv, reg, m.middleware, m.approvals); err != nil {
+		return fmt.Errorf("plugins: %s: %w", d.Name, err)
 	}
 
 	mounted := &Mounted{
@@ -241,4 +230,33 @@ func (m *Manager) All() []*Mounted {
 		out = append(out, m.mounted[n])
 	}
 	return out
+}
+
+// attachAll wires every tool and mutation onto an MCP server, converting a
+// panic from the SDK into an error.
+func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals ApprovalService) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("tool registration failed: %v", v)
+		}
+	}()
+
+	for _, t := range reg.tools {
+		t.attach(srv, mw)
+	}
+
+	// Mutations become propose tools, and any endpoint with a mutation also
+	// gets the operation lifecycle tools. Without an approval service there is
+	// nowhere for a proposal to go, so registering one would produce a tool
+	// that cannot work.
+	if len(reg.mutations) > 0 {
+		if approvals == nil {
+			return fmt.Errorf("registers mutations but no approval service is configured")
+		}
+		for _, mu := range reg.mutations {
+			mu.attach(srv, mw, approvals)
+		}
+		attachApprovalTools(srv, reg.descriptor.Name, approvals, mw)
+	}
+	return nil
 }
