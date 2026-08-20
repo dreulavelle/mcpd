@@ -1,12 +1,15 @@
 package sqlite
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/spoked/mcpd/internal/operations"
+	"time"
 )
 
 // genesisHash seeds the audit chain. Its only requirement is that it is a
@@ -126,4 +129,115 @@ func nullStr(s string) any {
 		return nil
 	}
 	return s
+}
+
+// AuditStore reads the append-only trail. There is no Append method by design:
+// audit entries are written only inside the transaction that caused them, via
+// UnitOfWork, so there is no path that records an event without the state
+// change it describes.
+type AuditStore struct {
+	db *DB
+}
+
+// NewAuditStore returns a reader over the audit trail.
+func NewAuditStore(db *DB) *AuditStore { return &AuditStore{db: db} }
+
+const auditColumns = `seq, event_id, at, kind, COALESCE(operation_id,''),
+	COALESCE(plugin,''), COALESCE(action,''), actor,
+	COALESCE(from_state,''), COALESCE(to_state,''), COALESCE(risk,''),
+	correlation_id, detail_json, prev_hash, entry_hash`
+
+// ByOperation returns every audit entry for one operation, oldest first.
+func (s *AuditStore) ByOperation(ctx context.Context, operationID string) ([]operations.AuditRecord, error) {
+	rows, err := s.db.Reader().QueryContext(ctx,
+		`SELECT `+auditColumns+` FROM audit_events WHERE operation_id = ? ORDER BY seq`,
+		operationID)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: read audit for %s: %w", operationID, err)
+	}
+	defer rows.Close()
+	return scanAudit(rows)
+}
+
+// Recent returns the newest audit entries.
+func (s *AuditStore) Recent(ctx context.Context, limit int) ([]operations.AuditRecord, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := s.db.Reader().QueryContext(ctx,
+		`SELECT `+auditColumns+` FROM audit_events ORDER BY seq DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: read recent audit: %w", err)
+	}
+	defer rows.Close()
+	return scanAudit(rows)
+}
+
+// VerifyChain walks the hash chain and reports the first sequence number where
+// it breaks, or zero if intact.
+//
+// This is what makes the trail evidence rather than a log. The triggers refuse
+// UPDATE and DELETE, but a database file can be edited outside the process;
+// recomputing each link detects that, because altering any row invalidates
+// every entry_hash after it.
+func (s *AuditStore) VerifyChain(ctx context.Context) (int64, error) {
+	rows, err := s.db.Reader().QueryContext(ctx,
+		`SELECT `+auditColumns+` FROM audit_events ORDER BY seq`)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: read audit chain: %w", err)
+	}
+	defer rows.Close()
+
+	prev := genesisHash
+	for rows.Next() {
+		rec, err := scanAuditRow(rows)
+		if err != nil {
+			return 0, err
+		}
+		if rec.PrevHash != prev {
+			return rec.Seq, nil
+		}
+		expected := chainHash(prev, rec.At.UnixMilli(), rec.Entry, rec.Entry.Detail)
+		if expected != rec.EntryHash {
+			return rec.Seq, nil
+		}
+		prev = rec.EntryHash
+	}
+	return 0, rows.Err()
+}
+
+func scanAudit(rows *sql.Rows) ([]operations.AuditRecord, error) {
+	var out []operations.AuditRecord
+	for rows.Next() {
+		rec, err := scanAuditRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func scanAuditRow(row scannable) (operations.AuditRecord, error) {
+	var (
+		rec      operations.AuditRecord
+		at       int64
+		from, to string
+		risk     string
+		detail   string
+	)
+	err := row.Scan(&rec.Seq, &rec.EventID, &at, &rec.Entry.Kind,
+		&rec.Entry.OperationID, &rec.Entry.Plugin, &rec.Entry.Action,
+		&rec.Entry.Actor, &from, &to, &risk,
+		&rec.Entry.CorrelationID, &detail, &rec.PrevHash, &rec.EntryHash)
+	if err != nil {
+		return rec, err
+	}
+	rec.At = time.UnixMilli(at).UTC()
+	rec.Entry.EventID = rec.EventID
+	rec.Entry.FromState = operations.OperationState(from)
+	rec.Entry.ToState = operations.OperationState(to)
+	rec.Entry.Risk = operations.RiskLevel(risk)
+	rec.Entry.Detail = json.RawMessage(detail)
+	return rec, nil
 }

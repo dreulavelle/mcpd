@@ -1,0 +1,447 @@
+// Package admin serves the operator dashboard: a JSON API and the static
+// single-page application that consumes it.
+//
+// It runs on its own listener, separate from the MCP endpoint. The two have
+// different audiences and different exposure -- agents reach MCP over a
+// tunnel, while the dashboard is for operators on an internal interface -- and
+// separating them means a firewall rule can tell them apart.
+package admin
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/observability"
+	"github.com/spoked/mcpd/internal/operations"
+	"github.com/spoked/mcpd/internal/plugins"
+)
+
+// Options configures the dashboard.
+type Options struct {
+	Log        *slog.Logger
+	Verifier   auth.TokenVerifier
+	Authorizer *auth.Authorizer
+	Approval   *operations.ApprovalPolicy
+	Service    *operations.Service
+	Repo       operations.Repository
+	Manager    *plugins.Manager
+	Health     *observability.HealthRegistry
+	Version    string
+	// Audit reads the append-only trail.
+	Audit AuditReader
+}
+
+// AuditReader is the slice of the audit store the dashboard needs.
+type AuditReader interface {
+	Recent(ctx context.Context, limit int) ([]operations.AuditRecord, error)
+	ByOperation(ctx context.Context, operationID string) ([]operations.AuditRecord, error)
+	VerifyChain(ctx context.Context) (int64, error)
+}
+
+// denyAllVerifier refuses every credential. It stands in for a missing
+// verifier so a misconfiguration fails closed and loudly.
+type denyAllVerifier struct{}
+
+func (denyAllVerifier) Scheme() string { return "unconfigured" }
+
+func (denyAllVerifier) Verify(context.Context, string, *http.Request) (*auth.Principal, error) {
+	return nil, auth.ErrUnauthenticated
+}
+
+// Server is the dashboard handler.
+type Server struct {
+	opts Options
+	mux  *http.ServeMux
+}
+
+// NewServer builds the dashboard.
+func NewServer(opts Options) *Server {
+	// A nil logger would panic on the first request rather than at
+	// construction, which is the worst place to discover it.
+	if opts.Log == nil {
+		opts.Log = slog.Default()
+	}
+	if opts.Authorizer == nil {
+		opts.Authorizer = auth.NewAuthorizer()
+	}
+	// A missing verifier must deny everything rather than panic on the first
+	// request. Failing open here would expose the whole dashboard.
+	if opts.Verifier == nil {
+		opts.Log.Error("dashboard has no token verifier configured; all requests will be refused")
+		opts.Verifier = denyAllVerifier{}
+	}
+	s := &Server{opts: opts, mux: http.NewServeMux()}
+	s.routes()
+	return s
+}
+
+func (s *Server) routes() {
+	api := func(path string, h http.HandlerFunc, required auth.Capability) {
+		s.mux.Handle(path, s.authenticate(required, h))
+	}
+
+	// Unauthenticated: the login page needs to know how to authenticate before
+	// it can authenticate.
+	s.mux.HandleFunc("GET /api/meta", s.handleMeta)
+
+	api("GET /api/operations", s.handleListOperations, auth.CapRead)
+	api("GET /api/operations/{id}", s.handleGetOperation, auth.CapRead)
+	api("POST /api/operations/{id}/approve", s.handleApprove, auth.CapApprove)
+	api("POST /api/operations/{id}/reject", s.handleReject, auth.CapApprove)
+	api("POST /api/operations/{id}/cancel", s.handleCancel, auth.CapPropose)
+	api("GET /api/plugins", s.handleListPlugins, auth.CapRead)
+	api("GET /api/audit", s.handleAudit, auth.CapRead)
+	api("GET /api/audit/verify", s.handleVerifyAudit, auth.CapAdmin)
+	api("GET /api/health", s.handleHealth, auth.CapRead)
+
+	// Everything else is the single-page application.
+	s.mux.Handle("/", s.staticHandler())
+}
+
+// Handler returns the fully wrapped dashboard handler.
+func (s *Server) Handler() http.Handler {
+	return observability.Correlate(s.opts.Log, s.securityHeaders(s.mux))
+}
+
+// securityHeaders applies the policy the dashboard needs.
+//
+// The dashboard renders operation detail that originated upstream -- device
+// names, alarm text -- so a restrictive CSP is doing real work here rather
+// than ticking a box.
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; connect-src 'self'; font-src 'self'; "+
+				"object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authenticate verifies a bearer token and checks one capability.
+func (s *Server) authenticate(required auth.Capability, next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := auth.BearerToken(r)
+		if !ok {
+			s.writeError(w, r, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		principal, err := s.opts.Verifier.Verify(r.Context(), token, r)
+		if err != nil {
+			s.opts.Log.Warn("dashboard authentication failed",
+				"path", r.URL.Path, "token_fingerprint", auth.Fingerprint(token))
+			s.writeError(w, r, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		if !principal.Can(required) {
+			s.writeError(w, r, http.StatusForbidden, "insufficient permissions")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), principal)))
+	})
+}
+
+// --- handlers --------------------------------------------------------------
+
+type metaResponse struct {
+	Version  string `json:"version"`
+	AuthMode string `json:"auth_mode"`
+}
+
+func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
+	// Deliberately thin. This endpoint is unauthenticated, so it names the
+	// authentication scheme and nothing else -- not the plugins, not the
+	// configuration, not the host.
+	s.writeJSON(w, r, http.StatusOK, metaResponse{
+		Version:  s.opts.Version,
+		AuthMode: s.opts.Verifier.Scheme(),
+	})
+}
+
+func (s *Server) handleListOperations(w http.ResponseWriter, r *http.Request) {
+	principal := auth.FromContext(r.Context())
+
+	var states []operations.OperationState
+	if raw := r.URL.Query().Get("state"); raw != "" {
+		st := operations.OperationState(raw)
+		if !st.Valid() {
+			s.writeError(w, r, http.StatusBadRequest, "unknown state")
+			return
+		}
+		states = []operations.OperationState{st}
+	}
+	limit := parseLimit(r.URL.Query().Get("limit"), 50, 200)
+
+	// Listing spans only the plugins this principal may reach, so the
+	// dashboard never shows an operation belonging to an integration the
+	// viewer has no access to.
+	visible := s.opts.Authorizer.VisiblePlugins(principal, s.opts.Manager.Names())
+
+	var all []operationDTO
+	for _, plugin := range visible {
+		ops, err := s.opts.Service.List(r.Context(), principal, plugin, states, limit)
+		if err != nil {
+			s.writeError(w, r, http.StatusInternalServerError, "could not list operations")
+			return
+		}
+		for _, op := range ops {
+			all = append(all, toDTO(op))
+		}
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"operations": all,
+		"count":      len(all),
+	})
+}
+
+func (s *Server) handleGetOperation(w http.ResponseWriter, r *http.Request) {
+	op, err := s.opts.Service.Get(r.Context(), auth.FromContext(r.Context()), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, http.StatusNotFound, "operation not found")
+		return
+	}
+
+	history, err := s.opts.Audit.ByOperation(r.Context(), op.ID)
+	if err != nil {
+		s.opts.Log.Warn("could not read audit history", "operation_id", op.ID, "error", err)
+	}
+
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"operation": toDTO(op),
+		"audit":     toAuditDTOs(history),
+	})
+}
+
+type decisionRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
+	s.decide(w, r, s.opts.Service.Approve)
+}
+
+func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
+	s.decide(w, r, s.opts.Service.Reject)
+}
+
+func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
+	s.decide(w, r, s.opts.Service.Cancel)
+}
+
+type decisionFunc func(context.Context, *auth.Principal, string, string) (*operations.Operation, error)
+
+func (s *Server) decide(w http.ResponseWriter, r *http.Request, fn decisionFunc) {
+	var req decisionRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req)
+	}
+
+	op, err := fn(r.Context(), auth.FromContext(r.Context()), r.PathValue("id"), req.Reason)
+	if err != nil {
+		// A guard refusal is the system working, so it is reported as a 409
+		// with its stable code rather than a generic failure. The operator
+		// needs to know it was refused and why.
+		var guardErr *operations.GuardError
+		if errorsAs(err, &guardErr) {
+			s.writeJSON(w, r, http.StatusConflict, map[string]string{
+				"error":          guardErr.Code(),
+				"detail":         guardErr.Detail,
+				"correlation_id": observability.CorrelationID(r.Context()),
+			})
+			return
+		}
+		s.writeError(w, r, http.StatusBadRequest, "the operation could not be updated")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, toDTO(op))
+}
+
+type pluginDTO struct {
+	Name        string   `json:"name"`
+	Version     string   `json:"version"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Endpoint    string   `json:"endpoint"`
+	Health      string   `json:"health"`
+	Message     string   `json:"health_message,omitempty"`
+	Tools       []string `json:"tools"`
+	Mutations   []string `json:"mutations"`
+	Required    bool     `json:"required"`
+}
+
+func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
+	principal := auth.FromContext(r.Context())
+
+	var out []pluginDTO
+	for _, m := range s.opts.Manager.All() {
+		d := m.Descriptor
+		// A principal never learns that a plugin exists which it cannot use.
+		if !principal.CanAccessPlugin(d.Name) {
+			continue
+		}
+		h := m.Health()
+		out = append(out, pluginDTO{
+			Name: d.Name, Version: d.Version, Title: d.Title,
+			Description: d.Description, Endpoint: d.Endpoint(),
+			Health: string(h.State), Message: h.Message,
+			Tools: m.Registry.ToolNames(), Mutations: m.Registry.MutationActions(),
+			Required: m.Required,
+		})
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"plugins": out, "count": len(out)})
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	limit := parseLimit(r.URL.Query().Get("limit"), 100, 500)
+	records, err := s.opts.Audit.Recent(r.Context(), limit)
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "could not read the audit trail")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"records": toAuditDTOs(records),
+		"count":   len(records),
+	})
+}
+
+func (s *Server) handleVerifyAudit(w http.ResponseWriter, r *http.Request) {
+	brokenAt, err := s.opts.Audit.VerifyChain(r.Context())
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "could not verify the audit chain")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{
+		"intact":    brokenAt == 0,
+		"broken_at": brokenAt,
+	})
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, r, http.StatusOK, s.opts.Health.Readiness(r.Context()))
+}
+
+// --- helpers ---------------------------------------------------------------
+
+func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		s.opts.Log.Error("failed to encode a dashboard response",
+			"path", r.URL.Path, "error", err)
+	}
+}
+
+func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	s.writeJSON(w, r, status, map[string]string{
+		"error":          msg,
+		"correlation_id": observability.CorrelationID(r.Context()),
+	})
+}
+
+func parseLimit(raw string, fallback, max int) int {
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
+// operationDTO is the dashboard's view of an operation.
+type operationDTO struct {
+	ID          string              `json:"id"`
+	Plugin      string              `json:"plugin"`
+	Action      string              `json:"action"`
+	State       string              `json:"state"`
+	Risk        string              `json:"risk"`
+	Impact      string              `json:"impact"`
+	Changes     []operations.Change `json:"changes,omitempty"`
+	Target      any                 `json:"target,omitempty"`
+	Before      any                 `json:"before,omitempty"`
+	Desired     any                 `json:"desired,omitempty"`
+	Observed    any                 `json:"observed,omitempty"`
+	RequestedBy string              `json:"requested_by"`
+	RequestedAt time.Time           `json:"requested_at"`
+	ExpiresAt   time.Time           `json:"expires_at"`
+	ApprovedBy  string              `json:"approved_by,omitempty"`
+	ApprovedAt  *time.Time          `json:"approved_at,omitempty"`
+	ExecuteBy   *time.Time          `json:"execute_by,omitempty"`
+	TerminalAt  *time.Time          `json:"terminal_at,omitempty"`
+	Verified    *bool               `json:"verified,omitempty"`
+	Attempts    int                 `json:"attempts"`
+	ErrorCode   string              `json:"error_code,omitempty"`
+	ErrorDetail string              `json:"error_detail,omitempty"`
+	Terminal    bool                `json:"terminal"`
+}
+
+func toDTO(op *operations.Operation) operationDTO {
+	return operationDTO{
+		ID: op.ID, Plugin: op.Plugin, Action: op.Action,
+		State: op.State.String(), Risk: op.Risk.String(), Impact: op.Impact,
+		Changes:     op.Changes,
+		Target:      decodeJSON(op.Target),
+		Before:      decodeJSON(op.Before),
+		Desired:     decodeJSON(op.Desired),
+		Observed:    decodeJSON(op.Observed),
+		RequestedBy: op.RequestedBy, RequestedAt: op.RequestedAt,
+		ExpiresAt: op.ExpiresAt, ApprovedBy: op.ApprovedBy,
+		ApprovedAt: op.ApprovedAt, ExecuteBy: op.ApprovalExpiresAt,
+		TerminalAt: op.TerminalAt, Verified: op.OutcomeVerified,
+		Attempts: op.AttemptCount, ErrorCode: op.ErrorCode,
+		ErrorDetail: op.ErrorDetail, Terminal: op.State.IsTerminal(),
+	}
+}
+
+type auditDTO struct {
+	Seq       int64     `json:"seq"`
+	At        time.Time `json:"at"`
+	Kind      string    `json:"kind"`
+	Actor     string    `json:"actor"`
+	Operation string    `json:"operation_id,omitempty"`
+	Plugin    string    `json:"plugin,omitempty"`
+	Action    string    `json:"action,omitempty"`
+	From      string    `json:"from_state,omitempty"`
+	To        string    `json:"to_state,omitempty"`
+	Risk      string    `json:"risk,omitempty"`
+	Detail    any       `json:"detail,omitempty"`
+}
+
+func toAuditDTOs(records []operations.AuditRecord) []auditDTO {
+	out := make([]auditDTO, 0, len(records))
+	for _, r := range records {
+		out = append(out, auditDTO{
+			Seq: r.Seq, At: r.At, Kind: r.Entry.Kind, Actor: r.Entry.Actor,
+			Operation: r.Entry.OperationID, Plugin: r.Entry.Plugin,
+			Action: r.Entry.Action, From: r.Entry.FromState.String(),
+			To: r.Entry.ToState.String(), Risk: r.Entry.Risk.String(),
+			Detail: decodeJSON(r.Entry.Detail),
+		})
+	}
+	return out
+}
+
+func decodeJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil
+	}
+	return v
+}

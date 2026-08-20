@@ -15,6 +15,17 @@ server:
   # complete the connector handshake.
   public_url: "https://mcp.example.net"
 
+  # Admin dashboard listener, separate from the MCP endpoint above.
+  #
+  # Agents reach MCP over a tunnel; operators reach the dashboard on an
+  # internal interface. Keeping them on different ports is what lets a
+  # firewall rule tell them apart.
+  #
+  # Binding below 1024 needs CAP_NET_BIND_SERVICE. The systemd unit grants it;
+  # under Docker the container binds 8081 and the host publishes 80.
+  frontend_listen: ":80"
+  frontend_enabled: true
+
   read_header_timeout: 10s
   read_timeout: 60s
   write_timeout: 120s

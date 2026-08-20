@@ -105,6 +105,16 @@ func bootstrapAdmin(ctx context.Context, cfg *config.Config, store *oauth.Store,
 	if b.Username == "" {
 		return nil
 	}
+	// A bootstrapped identity only means something when the OAuth consent flow
+	// is mounted. Under static-token authentication there is no way for it to
+	// log in, so creating one is pointless -- and failing startup because its
+	// password reference is unset would be worse.
+	if cfg.Auth.Mode != "oauth" && cfg.Auth.Mode != "mixed" {
+		log.Debug("skipping bootstrap administrator; it can only sign in under oauth or mixed auth",
+			"auth_mode", cfg.Auth.Mode)
+		return nil
+	}
+
 	n, err := store.CountUsers(ctx)
 	if err != nil {
 		return fmt.Errorf("auth: count users: %w", err)

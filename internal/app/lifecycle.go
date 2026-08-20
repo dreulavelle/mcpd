@@ -5,10 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"syscall"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth/oauth"
 )
+
+// isPermissionDenied reports whether an error is an EACCES from bind.
+func isPermissionDenied(err error) bool {
+	return errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM)
+}
 
 // startWorker runs a long-lived component, logging an unexpected exit.
 //
@@ -93,7 +99,30 @@ func (a *App) Run(ctx context.Context) error {
 	// is what makes the executor restart-safe.
 	a.startWorker("claimable-scan", workerCtx, a.scanClaimable)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+
+	if a.frontend != nil {
+		go func() {
+			a.log.Info("dashboard listening", "addr", a.frontend.Addr)
+			if err := a.frontend.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				// A privileged port is the likeliest cause, and the message
+				// has to say so: "permission denied" alone sends an operator
+				// looking in the wrong place.
+				if isPermissionDenied(err) {
+					errCh <- fmt.Errorf(
+						"app: dashboard cannot bind %s: binding a port below 1024 needs "+
+							"CAP_NET_BIND_SERVICE. Either grant it (the systemd unit has "+
+							"AmbientCapabilities set), publish a high port and map it, or "+
+							"set server.frontend_listen to a port above 1024: %w",
+						a.frontend.Addr, err)
+					return
+				}
+				errCh <- fmt.Errorf("app: dashboard server: %w", err)
+				return
+			}
+		}()
+	}
+
 	go func() {
 		a.log.Info("http server listening",
 			"addr", a.cfg.Server.Listen,
@@ -134,10 +163,15 @@ func (a *App) Shutdown() error {
 
 	// 1. Stop accepting new requests and drain those in flight. The readiness
 	//    probe already reports the server closing once ListenAndServe returns.
+	if a.frontend != nil {
+		if err := a.frontend.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("app: drain dashboard: %w", err))
+		}
+	}
 	if err := a.server.Shutdown(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("app: drain http server: %w", err))
 	}
-	a.log.Info("http server drained")
+	a.log.Info("http servers drained")
 
 	// 2. Stop background workers and wait for them.
 	//

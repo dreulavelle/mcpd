@@ -7,3 +7,13 @@
 /plugins/*/
 !/plugins/.gitkeep
 .env
+
+# The dashboard bundle is a build artifact, copied into the package at build
+# time so go:embed can reach it.
+/web/node_modules/
+/web/dist/
+/internal/admin/dist/*
+!/internal/admin/dist/.gitkeep
+!/internal/admin/dist/index.html
+/web/bun.lock
+/web/tsconfig.tsbuildinfo

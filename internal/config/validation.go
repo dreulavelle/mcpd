@@ -48,6 +48,17 @@ func (c *Config) Validate() error {
 	if c.Server.ShutdownTimeout <= 0 {
 		add("config: server.shutdown_timeout must be positive")
 	}
+	if c.Server.FrontendEnabled {
+		if strings.TrimSpace(c.Server.FrontendListen) == "" {
+			add("config: server.frontend_listen is required when the dashboard is enabled")
+		}
+		if c.Server.FrontendListen == c.Server.Listen {
+			// Sharing a port would put the dashboard and the MCP endpoint
+			// behind the same exposure, which defeats the reason they are
+			// separate listeners.
+			add("config: server.frontend_listen and server.listen must differ")
+		}
+	}
 
 	// --- storage ---
 	if strings.TrimSpace(c.Storage.Path) == "" {
@@ -82,7 +93,8 @@ func (c *Config) Validate() error {
 				"clients need an absolute URL to reach the authorization endpoints", c.Auth.Mode)
 		}
 		if b := c.Auth.OAuth.Bootstrap; b.Username != "" && b.PasswordRef == "" {
-			add("config: auth.oauth.bootstrap.password_ref is required when a bootstrap username is set")
+			add("config: auth.oauth.bootstrap.password_ref is required when a bootstrap " +
+				"username is set and auth.mode uses OAuth")
 		}
 	}
 	errs = append(errs, c.validateTokens()...)

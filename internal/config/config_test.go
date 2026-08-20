@@ -176,3 +176,56 @@ func TestSecretResolver_ErrorsDoNotLeakValues(t *testing.T) {
 		t.Fatal("resolver error leaked a secret value")
 	}
 }
+
+func TestEnvOverrides(t *testing.T) {
+	t.Setenv("MCPD_LISTEN", "0.0.0.0:9000")
+	t.Setenv("MCPD_FRONTEND_LISTEN", ":8081")
+	t.Setenv("MCPD_LOG_LEVEL", "debug")
+	t.Setenv("MCPD_PLUGIN_CNMAESTRO_ENABLED", "true")
+
+	c := validConfig()
+	c.Plugins["cnmaestro"] = PluginConfig{Enabled: false}
+	if err := c.applyEnvOverrides(); err != nil {
+		t.Fatal(err)
+	}
+
+	if c.Server.Listen != "0.0.0.0:9000" {
+		t.Fatalf("listen = %q", c.Server.Listen)
+	}
+	if c.Server.FrontendListen != ":8081" {
+		t.Fatalf("frontend_listen = %q", c.Server.FrontendListen)
+	}
+	if c.Logging.Level != "debug" {
+		t.Fatalf("log level = %q", c.Logging.Level)
+	}
+	if !c.Plugins["cnmaestro"].Enabled {
+		t.Fatal("plugin enablement was not overridden")
+	}
+}
+
+// Silently treating a typo as false would disable something with no
+// indication why.
+func TestEnvOverrides_RejectMalformedBoolean(t *testing.T) {
+	t.Setenv("MCPD_FRONTEND_ENABLED", "ture")
+
+	c := validConfig()
+	err := c.applyEnvOverrides()
+	if err == nil {
+		t.Fatal("a malformed boolean must be reported, not defaulted")
+	}
+	if !strings.Contains(err.Error(), "not a boolean") {
+		t.Fatalf("error should explain the problem, got %v", err)
+	}
+}
+
+// An unset variable must leave the file's value alone.
+func TestEnvOverrides_UnsetLeavesFileValues(t *testing.T) {
+	c := validConfig()
+	original := c.Server.Listen
+	if err := c.applyEnvOverrides(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.Listen != original {
+		t.Fatalf("listen changed to %q with no override set", c.Server.Listen)
+	}
+}

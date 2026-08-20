@@ -1,0 +1,68 @@
+[Unit]
+Description=mcpd — MCP application host
+Documentation=https://github.com/dreulavelle/mcpd
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcpd
+Group=mcpd
+ExecStart=/usr/local/bin/mcpd --config /etc/mcpd/config.yaml
+Restart=on-failure
+RestartSec=5s
+
+# Must exceed the drain budget in server.shutdown_timeout plus the worker wait,
+# or systemd will SIGKILL mid-shutdown and leave an execution unsettled.
+TimeoutStopSec=60
+KillSignal=SIGTERM
+
+# The dashboard binds port 80, which is privileged. This is the narrowest way
+# to allow it: a single capability rather than running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Secrets by reference, never in the config file.
+LoadCredential=cnmaestro-client-id:/etc/mcpd/credentials/cnmaestro-client-id
+LoadCredential=cnmaestro-client-secret:/etc/mcpd/credentials/cnmaestro-client-secret
+LoadCredential=bootstrap-password:/etc/mcpd/credentials/bootstrap-password
+
+# --- hardening ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# Safe for this stack: the SQLite driver is pure Go and JITs nothing. It would
+# break a wasm-based driver, which is one more reason to prefer modernc.
+MemoryDenyWriteExecute=yes
+
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# ProtectSystem=strict makes everything read-only except this directory, so
+# storage.path must live inside it. mcpd validates that at startup.
+StateDirectory=mcpd
+StateDirectoryMode=0750
+ReadWritePaths=/var/lib/mcpd
+
+LimitNOFILE=8192
+MemoryMax=1G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

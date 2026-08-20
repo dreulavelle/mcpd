@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spoked/mcpd/internal/admin"
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/oauth"
 	"github.com/spoked/mcpd/internal/config"
@@ -49,6 +50,7 @@ type App struct {
 	workers     sync.WaitGroup
 	stopWorkers context.CancelFunc
 	server      *http.Server
+	frontend    *http.Server
 	host        *mcphost.Host
 }
 
@@ -194,6 +196,33 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		return nil, err
 	}
 	a.host = host
+
+	// The dashboard runs on its own listener. Agents reach MCP over a tunnel;
+	// operators reach the dashboard on an internal interface, and a firewall
+	// rule can only tell them apart if they are separate ports.
+	if cfg.Server.FrontendEnabled {
+		dashboard := admin.NewServer(admin.Options{
+			Log:        log.With("component", "dashboard"),
+			Verifier:   verifier,
+			Authorizer: authorizer,
+			Approval:   a.approval,
+			Service:    a.opsService,
+			Repo:       a.ops,
+			Manager:    a.manager,
+			Health:     a.health,
+			Version:    Version,
+			Audit:      sqlite.NewAuditStore(db),
+		})
+		a.frontend = &http.Server{
+			Addr:              cfg.Server.FrontendListen,
+			Handler:           dashboard.Handler(),
+			ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
+			ReadTimeout:       cfg.Server.ReadTimeout,
+			WriteTimeout:      cfg.Server.WriteTimeout,
+			IdleTimeout:       cfg.Server.IdleTimeout,
+			ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+		}
+	}
 
 	a.server = &http.Server{
 		Addr:              cfg.Server.Listen,

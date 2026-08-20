@@ -37,6 +37,21 @@ type Server struct {
 	// what clients actually connect to.
 	PublicURL string `yaml:"public_url"`
 
+	// FrontendListen is the bind address for the admin dashboard.
+	//
+	// It is a separate listener from the MCP endpoint on purpose. The two have
+	// different audiences and different exposure: the MCP endpoint is reached
+	// by agents over a tunnel, while the dashboard is for operators and is
+	// usually kept on an internal interface. Separating them means a firewall
+	// rule can tell them apart.
+	//
+	// Binding below 1024 needs CAP_NET_BIND_SERVICE on Linux; the systemd unit
+	// and Docker setup both handle it.
+	FrontendListen string `yaml:"frontend_listen"`
+
+	// FrontendEnabled turns the dashboard off entirely.
+	FrontendEnabled bool `yaml:"frontend_enabled"`
+
 	ReadHeaderTimeout time.Duration `yaml:"read_header_timeout"`
 	ReadTimeout       time.Duration `yaml:"read_timeout"`
 	WriteTimeout      time.Duration `yaml:"write_timeout"`
@@ -177,6 +192,11 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(raw, cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	// Environment overrides layer over the file, so a container image can vary
+	// a handful of settings without a rewritten config.
+	if err := cfg.applyEnvOverrides(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -190,6 +210,8 @@ func Default() *Config {
 			// Loopback by default. mcpd expects a reverse proxy in front of
 			// it, and binding publicly by default would serve MCP in plaintext.
 			Listen:            "127.0.0.1:8080",
+			FrontendListen:    ":80",
+			FrontendEnabled:   true,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       60 * time.Second,
 			WriteTimeout:      120 * time.Second,

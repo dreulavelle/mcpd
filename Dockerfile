@@ -1,6 +1,16 @@
 # syntax=docker/dockerfile:1
 
-# ---- build ----------------------------------------------------------------
+# ---- dashboard --------------------------------------------------------------
+FROM node:24-alpine AS web
+
+WORKDIR /web
+COPY web/package.json web/package-lock.json* ./
+RUN npm install --silent
+
+COPY web/ ./
+RUN npm run build
+
+# ---- build ------------------------------------------------------------------
 FROM golang:1.26-alpine AS build
 
 WORKDIR /src
@@ -10,6 +20,9 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
+
+# The dashboard bundle must sit inside the package for go:embed to reach it.
+COPY --from=web /web/dist ./internal/admin/dist
 
 ARG VERSION=dev
 # CGO_ENABLED=0 is not an optimisation here, it is the point: the SQLite driver
@@ -34,7 +47,11 @@ COPY --from=build /src/configs/example.yaml /etc/mcpd/config.yaml
 USER nonroot:nonroot
 
 VOLUME ["/var/lib/mcpd"]
-EXPOSE 8080
+
+# 8080 is the MCP endpoint; 8081 is the admin dashboard. Both are
+# unprivileged so the container needs no capabilities -- the host publishes
+# port 80 for the dashboard by mapping to 8081.
+EXPOSE 8080 8081
 
 # Exec form by necessity as well as preference: mcpd receives SIGTERM directly
 # as PID 1 and runs its own graceful drain.
