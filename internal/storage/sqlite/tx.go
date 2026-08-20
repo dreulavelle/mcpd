@@ -1,0 +1,146 @@
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// UnitOfWork is the only way anything in mcpd writes to the database.
+//
+// The single most important invariant in the system is that a state change,
+// its transition record, its audit entry, and its outbox event become durable
+// together or not at all. Funnelling every write through one type makes that
+// invariant structural rather than a rule reviewers have to remember.
+//
+// A UnitOfWork is valid only for the duration of the WriteTx callback that
+// created it. Retaining one past that point will fail against a closed
+// transaction.
+type UnitOfWork struct {
+	tx  *sql.Tx
+	ctx context.Context
+	// now is the single timestamp used for every row written in this
+	// transaction, so that an operation, its transition, its audit entry and
+	// its outbox event all agree on when the change happened.
+	now int64
+}
+
+// Now returns the transaction's timestamp in Unix milliseconds.
+func (u *UnitOfWork) Now() int64 { return u.now }
+
+// exec runs a statement inside the transaction.
+func (u *UnitOfWork) exec(query string, args ...any) (sql.Result, error) {
+	return u.tx.ExecContext(u.ctx, query, args...)
+}
+
+// queryRow runs a single-row query inside the transaction. Reading through the
+// transaction rather than the reader pool matters: a guarded update needs to
+// see its own uncommitted writes.
+func (u *UnitOfWork) queryRow(query string, args ...any) *sql.Row {
+	return u.tx.QueryRowContext(u.ctx, query, args...)
+}
+
+// execGuarded runs an UPDATE whose WHERE clause encodes a precondition and
+// requires that exactly one row matched.
+//
+// Zero rows means the precondition did not hold — another worker won the race,
+// or the operation left the state the guard required. That is reported as
+// ErrNoRowsAffected, which callers are expected to handle rather than treat as
+// a failure.
+func (u *UnitOfWork) execGuarded(query string, args ...any) error {
+	res, err := u.exec(query, args...)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	switch {
+	case n == 1:
+		return nil
+	case n == 0:
+		return ErrNoRowsAffected
+	default:
+		// A guarded update is always keyed by primary key. More than one row
+		// means the WHERE clause is wrong, which is a bug worth failing on.
+		return fmt.Errorf("sqlite: guarded update matched %d rows, expected 1", n)
+	}
+}
+
+// WriteTx runs fn inside a single transaction on the writer pool.
+//
+// The writer pool holds exactly one connection and the DSN sets
+// _txlock=immediate, so transactions serialise in Go rather than contending in
+// SQLite. Callers never see SQLITE_BUSY on this path.
+//
+// If fn returns an error the transaction rolls back and the error is returned
+// unwrapped, so callers can match their own sentinels with errors.Is.
+func (d *DB) WriteTx(ctx context.Context, nowMillis int64, fn func(*UnitOfWork) error) error {
+	tx, err := d.write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			// Use a context detached from cancellation: if ctx is already
+			// cancelled, the rollback still needs to run or the single writer
+			// connection stays wedged.
+			_ = tx.Rollback()
+		}
+	}()
+
+	uow := &UnitOfWork{tx: tx, ctx: ctx, now: nowMillis}
+	if err := fn(uow); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// ReadTx runs fn against a read-only snapshot. Under WAL this never blocks
+// behind the writer, which is what keeps agent tool calls fast while an
+// approval is being committed.
+func (d *DB) ReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := d.read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("sqlite: begin read: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only; nothing to lose
+	return fn(tx)
+}
+
+// ErrNoRowsAffected reports a guarded UPDATE that matched nothing. Under this
+// design that is an expected outcome, not necessarily a failure.
+var ErrNoRowsAffected = errors.New("sqlite: guarded update matched no rows")
+
+// IsConstraint reports whether err is a SQLite constraint violation, which is
+// how uniqueness conflicts, CHECK failures and RAISE(ABORT) from triggers all
+// surface. modernc.org/sqlite does not export typed errors per constraint
+// class, so this matches on the driver's message.
+func IsConstraint(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "constraint failed") ||
+		strings.Contains(msg, "SQLITE_CONSTRAINT")
+}
+
+// IsImmutabilityViolation reports whether err came from one of the append-only
+// or immutability triggers. These indicate a bug in calling code attempting a
+// write the design forbids, and should never be retried.
+func IsImmutabilityViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "is immutable") ||
+		strings.Contains(msg, "append-only")
+}

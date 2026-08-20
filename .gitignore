@@ -1,0 +1,9 @@
+/bin/
+/dist/
+*.db
+*.db-wal
+*.db-shm
+/data/
+/plugins/*/
+!/plugins/.gitkeep
+.env

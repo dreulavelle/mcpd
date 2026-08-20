@@ -1,0 +1,1305 @@
+<title>mcpd Architecture Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+:root{
+  --signal:#0F6E5C;
+  --signal-soft:#0F6E5C1A;
+  --ink:#151B1A;
+  --ink-2:#33403D;
+  --slate:#5C6764;
+  --slate-2:#8A9591;
+  --paper:#F6F7F5;
+  --surface:#FFFFFF;
+  --surface-2:#EDF0EE;
+  --rule:#D6DCD9;
+  --rule-soft:#E5E9E7;
+  --caution:#8A5A0C;
+  --caution-bg:#8A5A0C14;
+  --alarm:#A33A2C;
+  --alarm-bg:#A33A2C14;
+  --ok:#1F6B4E;
+  --ok-bg:#1F6B4E14;
+
+  --f-display:"Newsreader",Georgia,"Times New Roman",serif;
+  --f-body:"Public Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+
+  --measure:68ch;
+  --wide:1180px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --signal:#4FBBA2;
+    --signal-soft:#4FBBA226;
+    --ink:#E7ECEA;
+    --ink-2:#BFCAC7;
+    --slate:#93A09C;
+    --slate-2:#6C7975;
+    --paper:#0E1413;
+    --surface:#151C1B;
+    --surface-2:#1D2625;
+    --rule:#2B3735;
+    --rule-soft:#222D2B;
+    --caution:#D7A252;
+    --caution-bg:#D7A25220;
+    --alarm:#E08472;
+    --alarm-bg:#E0847220;
+    --ok:#57BC8C;
+    --ok-bg:#57BC8C20;
+  }
+}
+:root[data-theme="dark"]{
+  --signal:#4FBBA2;
+  --signal-soft:#4FBBA226;
+  --ink:#E7ECEA;
+  --ink-2:#BFCAC7;
+  --slate:#93A09C;
+  --slate-2:#6C7975;
+  --paper:#0E1413;
+  --surface:#151C1B;
+  --surface-2:#1D2625;
+  --rule:#2B3735;
+  --rule-soft:#222D2B;
+  --caution:#D7A252;
+  --caution-bg:#D7A25220;
+  --alarm:#E08472;
+  --alarm-bg:#E0847220;
+  --ok:#57BC8C;
+  --ok-bg:#57BC8C20;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--f-body);
+  font-size:16px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ---------- shell ---------- */
+.shell{max-width:var(--wide);margin:0 auto;padding:0 28px 120px;
+  display:grid;grid-template-columns:minmax(0,1fr);gap:0}
+@media(min-width:1040px){
+  .shell{grid-template-columns:216px minmax(0,1fr);gap:56px;padding-right:40px}
+}
+
+/* ---------- masthead ---------- */
+.masthead{grid-column:1/-1;padding:64px 0 40px;border-bottom:1px solid var(--rule)}
+.eyebrow{font-family:var(--f-mono);font-size:11px;font-weight:500;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--signal);margin:0 0 18px}
+.masthead h1{font-family:var(--f-display);font-weight:500;font-size:clamp(38px,6vw,62px);
+  line-height:1.04;letter-spacing:-.018em;margin:0;text-wrap:balance;color:var(--ink)}
+.masthead .standfirst{font-size:18px;line-height:1.6;color:var(--slate);
+  max-width:58ch;margin:20px 0 0}
+.masthead .standfirst strong{color:var(--ink-2);font-weight:500}
+
+.verdict{margin-top:34px;display:flex;flex-wrap:wrap;gap:10px}
+.verdict span{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.06em;
+  padding:6px 11px;border-radius:2px;border:1px solid var(--rule)}
+.v-keep{color:var(--ok);background:var(--ok-bg);border-color:transparent}
+.v-change{color:var(--caution);background:var(--caution-bg);border-color:transparent}
+.v-cut{color:var(--alarm);background:var(--alarm-bg);border-color:transparent}
+
+/* ---------- toc ---------- */
+.toc{display:none}
+@media(min-width:1040px){
+  .toc{display:block;position:sticky;top:0;align-self:start;
+    padding-top:52px;max-height:100vh;overflow-y:auto}
+}
+.toc-label{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--slate-2);margin:0 0 14px}
+.toc ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.toc a{display:grid;grid-template-columns:22px 1fr;gap:6px;
+  font-size:13px;line-height:1.35;color:var(--slate);text-decoration:none;
+  padding:5px 0;border-top:1px solid var(--rule-soft)}
+.toc li:first-child a{border-top:none}
+.toc a span{font-family:var(--f-mono);font-size:11px;color:var(--slate-2);padding-top:1px}
+.toc a:hover{color:var(--signal)}
+.toc a:hover span{color:var(--signal)}
+.toc a:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+
+/* ---------- body ---------- */
+main{padding-top:52px;min-width:0}
+section{padding:44px 0;border-top:1px solid var(--rule)}
+section:first-of-type{border-top:none;padding-top:8px}
+.sec-head{display:grid;grid-template-columns:44px 1fr;gap:14px;align-items:baseline;margin-bottom:8px}
+.sec-num{font-family:var(--f-mono);font-size:12px;font-weight:700;color:var(--signal);
+  letter-spacing:.04em;padding-top:6px}
+h2{font-family:var(--f-display);font-weight:500;font-size:clamp(27px,3.4vw,36px);
+  line-height:1.15;letter-spacing:-.012em;margin:0;text-wrap:balance}
+h3{font-family:var(--f-body);font-weight:600;font-size:16.5px;letter-spacing:-.005em;
+  margin:38px 0 10px;color:var(--ink)}
+h4{font-family:var(--f-mono);font-weight:500;font-size:11.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--slate-2);margin:30px 0 10px}
+p{max-width:var(--measure);margin:0 0 16px}
+ul,ol.body{max-width:var(--measure);padding-left:19px;margin:0 0 16px}
+li{margin-bottom:7px}
+a{color:var(--signal);text-underline-offset:2px}
+strong{font-weight:600;color:var(--ink)}
+code{font-family:var(--f-mono);font-size:.87em;background:var(--surface-2);
+  padding:1.5px 5px;border-radius:2px;color:var(--ink-2);white-space:nowrap}
+.lede{font-size:17.5px;line-height:1.6;color:var(--slate);max-width:62ch;margin:14px 0 26px}
+
+/* ---------- panels & code ---------- */
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+  margin:0 0 22px;overflow:hidden}
+.panel-title{font-family:var(--f-mono);font-size:11px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--slate-2);padding:10px 16px;
+  border-bottom:1px solid var(--rule-soft);background:var(--surface-2)}
+pre{margin:0;padding:16px;overflow-x:auto;font-family:var(--f-mono);
+  font-size:12.5px;line-height:1.6;color:var(--ink-2);tab-size:2}
+pre.diagram{font-size:12px;line-height:1.45;color:var(--ink-2)}
+pre b{color:var(--signal);font-weight:500}
+pre i{color:var(--slate-2);font-style:normal}
+pre u{color:var(--caution);text-decoration:none}
+
+/* ---------- callouts ---------- */
+.call{border-left:3px solid var(--rule);padding:2px 0 2px 18px;margin:0 0 22px;
+  max-width:var(--measure)}
+.call p:last-child{margin-bottom:0}
+.call .tag{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.13em;
+  text-transform:uppercase;display:block;margin-bottom:6px}
+.c-cut{border-left-color:var(--alarm)}
+.c-cut .tag{color:var(--alarm)}
+.c-change{border-left-color:var(--caution)}
+.c-change .tag{color:var(--caution)}
+.c-keep{border-left-color:var(--ok)}
+.c-keep .tag{color:var(--ok)}
+.c-note{border-left-color:var(--signal)}
+.c-note .tag{color:var(--signal)}
+
+/* ---------- tables ---------- */
+.tw{overflow-x:auto;margin:0 0 24px;border:1px solid var(--rule);border-radius:3px;
+  background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{text-align:left;font-family:var(--f-mono);font-weight:500;font-size:10.5px;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--slate-2);
+  padding:11px 14px;border-bottom:1px solid var(--rule);background:var(--surface-2);
+  white-space:nowrap;vertical-align:bottom}
+td{padding:11px 14px;border-bottom:1px solid var(--rule-soft);vertical-align:top;
+  color:var(--ink-2);line-height:1.5}
+tr:last-child td{border-bottom:none}
+td code{background:none;padding:0;font-size:12.5px;color:var(--ink)}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--f-mono);font-size:12.5px;white-space:nowrap}
+
+.chip{font-family:var(--f-mono);font-size:10px;letter-spacing:.08em;font-weight:500;
+  padding:3px 7px;border-radius:2px;white-space:nowrap;display:inline-block}
+.ch-ok{color:var(--ok);background:var(--ok-bg)}
+.ch-warn{color:var(--caution);background:var(--caution-bg)}
+.ch-bad{color:var(--alarm);background:var(--alarm-bg)}
+
+/* ---------- misc ---------- */
+.grid2{display:grid;gap:18px;margin-bottom:22px}
+@media(min-width:760px){.grid2{grid-template-columns:1fr 1fr}}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:18px 20px}
+.card h5{font-family:var(--f-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  margin:0 0 10px;color:var(--signal)}
+.card p{font-size:14px;margin:0;color:var(--ink-2)}
+.card ul{font-size:14px;margin:0;padding-left:17px}
+hr.soft{border:none;border-top:1px solid var(--rule-soft);margin:32px 0}
+.footnote{font-size:13.5px;color:var(--slate);max-width:var(--measure)}
+:focus-visible{outline:2px solid var(--signal);outline-offset:3px}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="shell">
+
+<header class="masthead">
+  <p class="eyebrow">Pre-implementation review &middot; 20 Aug 2026</p>
+  <h1>mcpd&nbsp;Architecture Review</h1>
+  <p class="standfirst">A modular-monolith MCP host that gates every infrastructure mutation behind a durable approval state machine. <strong>The plugin model, the SQLite-as-authority rule, the outbox, and the two-step proposal flow are all correct and should be built as specified.</strong> Three things need to change before code is written, and one of the cnMaestro assumptions in the brief does not survive contact with the actual API.</p>
+  <div class="verdict">
+    <span class="v-keep">KEEP &nbsp;modular monolith</span>
+    <span class="v-keep">KEEP &nbsp;SQLite authority</span>
+    <span class="v-keep">KEEP &nbsp;outbox</span>
+    <span class="v-change">CHANGE &nbsp;plugin interface</span>
+    <span class="v-change">CHANGE &nbsp;state machine</span>
+    <span class="v-cut">DEFER &nbsp;embedded NATS</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <p class="toc-label">Sections</p>
+  <ol>
+    <li><a href="#s1"><span>01</span>Architecture review</a></li>
+    <li><a href="#s2"><span>02</span>Component diagram</a></li>
+    <li><a href="#s3"><span>03</span>Package design</a></li>
+    <li><a href="#s4"><span>04</span>Plugin contract</a></li>
+    <li><a href="#s5"><span>05</span>State machine</a></li>
+    <li><a href="#s6"><span>06</span>SQLite schema</a></li>
+    <li><a href="#s7"><span>07</span>NATS design</a></li>
+    <li><a href="#s8"><span>08</span>Outbox design</a></li>
+    <li><a href="#s9"><span>09</span>Deployment</a></li>
+    <li><a href="#s10"><span>10</span>cnMaestro findings</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<!-- ============ 0 — verified deps ============ -->
+<section id="deps">
+<h4>Dependency baseline — verified 20 Aug 2026</h4>
+<p class="footnote">Every row below was resolved through the Go module proxy and, where marked, executed locally against Go 1.26.6 on linux/amd64 with <code>CGO_ENABLED=0</code>.</p>
+<div class="tw">
+<table>
+<thead><tr><th>Module</th><th>Version</th><th>Released</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td class="mono">github.com/modelcontextprotocol/go-sdk</td><td class="mono num">v1.7.0</td><td class="num">2026-07-27</td><td><span class="chip ch-ok">API INSPECTED</span></td></tr>
+<tr><td class="mono">github.com/nats-io/nats-server/v2</td><td class="mono num">v2.14.5</td><td class="num">2026-08-12</td><td><span class="chip ch-ok">RAN EMBEDDED</span></td></tr>
+<tr><td class="mono">github.com/nats-io/nats.go</td><td class="mono num">v1.53.1</td><td class="num">2026-08-11</td><td><span class="chip ch-ok">JS + KV VERIFIED</span></td></tr>
+<tr><td class="mono">modernc.org/sqlite</td><td class="mono num">v1.57.0</td><td class="num">2026-08-19</td><td><span class="chip ch-ok">WAL + FK VERIFIED</span></td></tr>
+<tr><td class="mono">github.com/ncruces/go-sqlite3</td><td class="mono num">v0.35.3</td><td class="num">2026-08-03</td><td><span class="chip ch-warn">ALTERNATE</span></td></tr>
+</tbody>
+</table>
+</div>
+<div class="panel">
+<div class="panel-title">Local verification output</div>
+<pre>$ CGO_ENABLED=0 go run .            <i># modernc.org/sqlite v1.57.0</i>
+journal_mode = wal
+foreign_keys = 1
+busy_timeout = 5000
+synchronous = 2                     <i># FULL</i>
+sqlite_version = 3.53.3
+$ file ./mcpd
+ELF 64-bit LSB executable, x86-64, <b>statically linked</b>
+
+$ CGO_ENABLED=0 go run ./natsprobe  <i># nats-server v2.14.5 embedded, DontListen</i>
+stream ok: MCP_OPERATIONS dupwindow: 2h0m0s
+publish1 seq=1 dup=false | publish2 seq=1 <b>dup=true</b>
+lease created rev: 1 err: &lt;nil&gt;
+second claim err: <u>wrong last sequence: 1: key exists</u>
+CAS renew with correct rev err: &lt;nil&gt;
+CAS with stale rev err: <u>key revision mismatch</u></pre>
+</div>
+<div class="call c-change">
+  <span class="tag">Build constraint</span>
+  <p>modernc's own documentation warns that <code>modernc.org/libc</code> must be pinned to the <em>exact</em> version in the driver's <code>go.mod</code>; mismatches produce runtime faults rather than build errors. Encode this as a CI check, not a comment.</p>
+</div>
+</section>
+
+<!-- ============ 1 ============ -->
+<section id="s1">
+<div class="sec-head"><span class="sec-num">01</span><h2>Architecture review</h2></div>
+<p class="lede">The brief asked to be challenged rather than agreed with. Six things are worth arguing about; the rest of the design is sound and I would build it as written.</p>
+
+<h3>1.1 &nbsp;Embedded NATS is not earned at version one — defer it</h3>
+<p>This is the change I would push hardest for. The brief's own invariants dismantle the case for a broker on a single node:</p>
+<ul>
+<li>SQLite is the sole authority for whether a mutation is approved.</li>
+<li>The transactional outbox already provides durable, restart-safe delivery.</li>
+<li>The executor must reload and revalidate <em>everything</em> from SQLite on receipt, so the message carries no trust and no payload that matters.</li>
+<li>Version one is one process on one VM.</li>
+</ul>
+<p>Put those together and JetStream's job reduces to a single sentence: <em>"an operation became approved; wake the executor."</em> On one node that is a Go channel plus a claim query with a polling fallback — roughly fifty lines, trivially testable, zero dependencies.</p>
+<p>The cost side is not small. An embedded broker brings a second on-disk store to fsync and back up, a second corruption-recovery story, stream and consumer configuration that can drift from code, redelivery loops to bound, and an extra layer threaded through every integration test. It is a lot of operational surface to buy a wake-up signal.</p>
+<div class="call c-cut">
+  <span class="tag">The tell</span>
+  <p>The natural embedded configuration is <code>DontListen: true</code> — no TCP socket at all, which I verified works. But that setting is definitionally <em>a broker you cannot publish to or consume from outside the process</em>. Embedding with the listener enabled, on the other hand, is just running NATS with a worse operational story than a separate <code>nats-server</code> unit: no independent restart, no independent version, no <code>nats</code> CLI against a stable endpoint.</p>
+</div>
+<p><strong>Recommendation.</strong> Build the <code>EventBus</code> interface, the subject taxonomy, the event envelope, and the outbox table exactly as specified — that is the entire portability layer and it costs nothing. Ship <em>one</em> implementation in v1: an in-process dispatcher fed by the outbox table. Add the JetStream implementation of the same interface the day a second consumer exists, whether that is a second <code>mcpd</code> instance or an external system that wants the event feed. Section 7 specifies both so the second one is a drop-in.</p>
+<p>I have written Section 7 as though NATS <em>will</em> be added, because the subject and stream design has to be fixed now to stay portable. What I am arguing against is running the broker before anything reads from it.</p>
+
+<h3>1.2 &nbsp;The plugin interface is too large and mixes two concerns</h3>
+<p>The six-method interface in the brief bundles registration with lifecycle, which forces every plugin to implement <code>Start</code> and <code>Shutdown</code> whether or not it has background work. Most will not. Split it: a two-method <code>Plugin</code>, plus optional capability interfaces the host discovers by type assertion. Section 4 has the full contract.</p>
+<p>Related: <code>Services</code> as a wide interface handed to plugins is a service locator, and the brief already hedges on it. Replace it with a concrete <code>Deps</code> struct carrying exactly the typed dependencies a plugin may touch — and note what is deliberately <em>absent</em> from it: no <code>OperationService</code>, no <code>AuditService</code>, no database handle. A plugin that cannot reach operation state cannot corrupt it, and that is a structural guarantee rather than a code-review convention.</p>
+
+<h3>1.3 &nbsp;The state machine is missing its two most important transitions</h3>
+<p>Both gaps are safety-critical.</p>
+<p><strong><code>approved → expired</code>.</strong> The brief expires proposals but not approvals. Without a second deadline, an approval granted three weeks ago is still executable today against a network that has since changed underneath it. Approval must carry its own short expiry, separate from the proposal's.</p>
+<p><strong><code>executing → indeterminate</code>.</strong> This is the single most valuable addition. If the process dies between issuing an upstream <code>POST</code> and recording its result, the truthful answer is that we do not know whether the mutation applied. Recording that as <code>failed</code> is a lie that invites a retry, and the retry double-applies. It needs its own state, its own reconciler, and a rule that nothing automatically leaves it — the reconciler observes upstream and resolves to <code>succeeded</code> or <code>failed</code>, or a human does.</p>
+
+<h3>1.4 &nbsp;Separation of duties is unenforceable under the likely v1 identity model</h3>
+<p>"An operator cannot approve their own high-risk operation" requires two distinguishable principals. If v1 ships with a single static bearer token — the pragmatic starting point — there is exactly one principal, and the four-eyes rule silently degrades to no rule at all while the config file still claims it is on.</p>
+<div class="call c-change">
+  <span class="tag">Fail closed</span>
+  <p>Make <code>require_distinct_approver</code> a policy that <em>refuses</em> rather than degrades. If the active authentication mode cannot distinguish the approver from the requester, operations at that risk level are rejected at proposal time with an explicit reason. A capability the system cannot honour must not be silently disabled.</p>
+</div>
+
+<h3>1.5 &nbsp;Read tools have no threat model in the brief</h3>
+<p>The write path is well defended; reads are treated as harmless. They are not. Device names, client hostnames, SSIDs, and alarm text all originate outside the trust boundary and flow straight into the model's context — that is a prompt-injection channel into a system that also holds approval tools. Two mitigations, both cheap:</p>
+<ul>
+<li>Mark untrusted upstream text as data when rendering tool results, and never interpolate it into anything the host itself parses.</li>
+<li>Rate-limit reads per principal. cnMaestro's token is account-wide and its throttling is undocumented; an unbounded model loop will find that limit for you.</li>
+</ul>
+
+<h3>1.6 &nbsp;Adopt the stateless transport from day one</h3>
+<p>go-sdk v1.7.0 implements protocol <code>2026-07-28</code>, which removes the <code>initialize</code> handshake and protocol-level sessions in favour of per-request metadata. The SDK exposes this as <code>StreamableHTTPOptions{Stateless: true}</code>.</p>
+<p>Turn it on. It eliminates session affinity, which is precisely the thing that would otherwise make "multiple mcpd instances" a redesign rather than a config change. The trade-off is that server-to-client requests are rejected, so elicitation is unavailable — which only reinforces a decision the brief already made correctly: <strong>approval is a second tool call, not an interactive prompt.</strong> An elicitation-based approval would have put the authorization decision inside the model's turn, which is exactly the boundary violation the whole design exists to prevent.</p>
+
+<h3>1.7 &nbsp;Confirmed as specified</h3>
+<div class="grid2">
+<div class="card"><h5>Modular monolith</h5><p>Correct for this scale. One binary, one database, strong internal boundaries. Nothing here needs a network hop between components.</p></div>
+<div class="card"><h5>Endpoint per plugin</h5><p>Correct, and cheap to implement — the SDK's <code>NewStreamableHTTPHandler(getServer func(*http.Request) *Server, …)</code> is exactly the hook for it.</p></div>
+<div class="card"><h5>Compile-time registration</h5><p>Correct. Go's <code>plugin</code> package would buy nothing here and cost static linking, which is the deployment story.</p></div>
+<div class="card"><h5><code>synchronous = FULL</code></h5><p>Correct and verified. Under WAL, <code>NORMAL</code> can lose the last transactions on power loss. Write volume is human-paced, so the cost is irrelevant.</p></div>
+<div class="card"><h5>Typed mutations only</h5><p>Correct, and Section 10 shows why it matters more than expected: cnMaestro ships a remote-CLI endpoint that must be permanently blocked.</p></div>
+<div class="card"><h5>modernc.org/sqlite</h5><p>Correct. Active, pure Go, SQLite 3.53.3, static binary verified. <code>ncruces/go-sqlite3</code> benchmarks faster on reads but adds a wasm runtime for a workload that is not read-bound.</p></div>
+</div>
+<div class="call c-note">
+  <span class="tag">One addition</span>
+  <p>Under WAL, <code>database/sql</code> with a shared pool will produce <code>SQLITE_BUSY</code> as soon as two goroutines write. Open <strong>two</strong> handles against the same file: a reader pool, and a writer with <code>SetMaxOpenConns(1)</code>. All repository writes go through the writer. This is the standard fix and it is much easier to build in now than to retrofit.</p>
+</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section id="s2">
+<div class="sec-head"><span class="sec-num">02</span><h2>Component diagram</h2></div>
+<p class="lede">Runtime structure of a single <code>mcpd</code> process. The double rule marks the trust boundary: nothing above it is trusted to authorize anything below it.</p>
+<div class="panel">
+<div class="panel-title">Runtime architecture — one process, one VM</div>
+<pre class="diagram">   ChatGPT / MCP clients
+            │  HTTPS + Bearer (OAuth resource server)
+════════════╪════════════════════ TRUST BOUNDARY ════════════════════
+            ▼
+  ┌───────────────────────────────────────────────────────────────┐
+  │ <b>internal/mcp — Host</b>                                            │
+  │  http.ServeMux                                                │
+  │   ├─ /health/live  /health/ready   /.well-known/…-resource    │
+  │   └─ /mcp/{plugin} ─► StreamableHTTPHandler{Stateless:true}   │
+  │        middleware: correlation-id → authn → authz → ratelimit │
+  └────────────────────────────┬──────────────────────────────────┘
+                               │ resolves endpoint → *mcp.Server
+  ┌────────────────────────────▼──────────────────────────────────┐
+  │ <b>internal/plugins — Registry</b>   one mcp.Server per plugin       │
+  │   cnmaestro │ netbox(off) │ proxmox(off) │ …                  │
+  │   read tools ─────────────────────┐   mutation specs ──┐      │
+  └───────────────────────────────────┼────────────────────┼──────┘
+                                      │                    │
+              ┌───────────────────────┘                    │
+              ▼ direct, authorized, rate-limited           ▼ propose only
+     ┌─────────────────┐              ┌──────────────────────────────┐
+     │ plugin API      │              │ <b>internal/operations</b>           │
+     │ client (HTTP)   │◄─────────┐   │  risk → policy → authz       │
+     └────────┬────────┘   Apply/ │   │  canonicalize → sha256       │
+              │          Observe  │   │  state machine (guarded)     │
+              ▼                   │   └───────────┬──────────────────┘
+        upstream system           │               │ ONE transaction
+     (cnMaestro, NetBox, …)       │               ▼
+                                  │   ┌──────────────────────────────┐
+                                  │   │ <b>internal/storage/sqlite</b>       │
+                                  │   │  operations · transitions    │
+                                  │   │  audit_events (hash-chained) │
+                                  │   │  execution_attempts          │
+                                  │   │  idempotency · outbox_events │
+                                  │   │  ◄── AUTHORITY ──►           │
+                                  │   └───────┬──────────────────────┘
+                                  │           │ poll unpublished
+                                  │           ▼
+                                  │   ┌──────────────────────────────┐
+                                  │   │ <b>internal/messaging</b> EventBus    │
+                                  │   │  v1: in-process dispatcher   │
+                                  │   │  v2: JetStream + KV  <i>(§7)</i>    │
+                                  │   └───────┬──────────────────────┘
+                                  │           │ "op X may need work"
+                                  │           ▼   (no trust, no payload)
+                                  │   ┌──────────────────────────────┐
+                                  └───┤ <b>Executor</b> · <b>Verifier</b> · <b>Reaper</b>  │
+                                      │  reload → revalidate → claim │
+                                      └──────────────────────────────┘</pre>
+</div>
+<div class="call c-note">
+  <span class="tag">Reading the diagram</span>
+  <p>Two arrows leave the plugin box and they are not symmetric. Read tools call the upstream API directly. Mutation specs only ever <em>describe</em> a change to the operations service; the plugin's <code>Apply</code> is invoked later by the executor, from the other side of the database, after the operation has been reloaded and revalidated. A plugin can never move an operation through the state machine.</p>
+</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section id="s3">
+<div class="sec-head"><span class="sec-num">03</span><h2>Go package design</h2></div>
+<div class="panel">
+<div class="panel-title">Repository tree</div>
+<pre>mcpd/
+├── cmd/mcpd/main.go            <i>flags, config load, wire graph, run</i>
+├── internal/
+│   ├── app/                    <i>composition root + ordered lifecycle</i>
+│   │   ├── app.go              <i>New(cfg) (*App, error) — builds everything</i>
+│   │   ├── lifecycle.go        <i>ordered start, run group, error propagation</i>
+│   │   └── shutdown.go         <i>reverse-ordered drain (§9)</i>
+│   ├── config/                 <i>YAML + env + systemd creds; validate before use</i>
+│   ├── mcp/                    <i>transport &amp; routing. KNOWS NOTHING OF PLUGINS</i>
+│   │   ├── host.go             <i>mux, per-endpoint handler, listener</i>
+│   │   ├── endpoint.go         <i>getServer(*http.Request) *mcp.Server</i>
+│   │   ├── middleware.go       <i>correlation, authn, authz, ratelimit, panic</i>
+│   │   └── oauth.go            <i>RFC 9728 metadata + RequireBearerToken</i>
+│   ├── plugins/                <i>THE CONTRACT. Host-owned, plugin-implemented</i>
+│   │   ├── plugin.go           <i>Plugin, Descriptor, Starter/Stopper/Checker</i>
+│   │   ├── registry.go         <i>Registry, Tool[…], Mutation[…], Deps</i>
+│   │   ├── mutation.go         <i>MutationSpec, Plan, MutationHandler</i>
+│   │   └── cnmaestro/          <i>reference plugin — see §10</i>
+│   │       ├── plugin.go config.go client.go auth.go
+│   │       ├── models.go errors.go read_tools.go
+│   │       └── mutations/      <i>one file per typed mutation</i>
+│   ├── operations/             <i>THE DOMAIN. No HTTP, no SQL, no NATS</i>
+│   │   ├── models.go           <i>Operation, RiskLevel, OperationState</i>
+│   │   ├── state_machine.go    <i>transition table + guards (§5)</i>
+│   │   ├── canonical.go        <i>deterministic JSON + sha256 payload hash</i>
+│   │   ├── service.go          <i>Propose / Approve / Reject / Cancel</i>
+│   │   ├── executor.go         <i>claim → revalidate → Apply → settle</i>
+│   │   ├── verifier.go         <i>bounded-backoff Observe loop</i>
+│   │   ├── reconciler.go       <i>resolves `indeterminate` (§1.3)</i>
+│   │   ├── reaper.go           <i>proposal expiry, approval expiry, stale leases</i>
+│   │   ├── policies.go risk.go errors.go
+│   ├── approval/               <i>who may approve what, and when</i>
+│   ├── auth/                   <i>Principal, authentication, authorization</i>
+│   ├── storage/
+│   │   ├── repository.go       <i>interfaces + UnitOfWork (owned by domain)</i>
+│   │   └── sqlite/             <i>the ONLY package that writes SQL</i>
+│   │       ├── database.go     <i>dual handles: reader pool + 1-conn writer</i>
+│   │       ├── migrations.go   <i>embedded, forward-only, versioned</i>
+│   │       └── operations.go audit.go outbox.go idempotency.go
+│   ├── messaging/              <i>EventBus interface + implementations</i>
+│   │   ├── bus.go              <i>EventBus, Event envelope</i>
+│   │   ├── subjects.go         <i>THE naming authority (§7)</i>
+│   │   ├── inprocess.go        <i>v1 implementation</i>
+│   │   ├── jetstream.go kv.go  <i>v2 implementation</i>
+│   │   └── publisher.go        <i>outbox drain worker (§8)</i>
+│   ├── audit/                  <i>append-only writer + hash chain</i>
+│   └── observability/          <i>slog setup, correlation, health aggregation</i>
+├── migrations/  configs/  scripts/  docs/
+└── go.mod  Makefile  Dockerfile  README.md</pre>
+</div>
+<h4>Ownership rules that the tree encodes</h4>
+<div class="tw">
+<table>
+<thead><tr><th>Package</th><th>Owns</th><th>May not</th></tr></thead>
+<tbody>
+<tr><td class="mono">internal/mcp</td><td>Transport, routing, middleware, OAuth resource-server side. Maps an HTTP path to an <code>*mcp.Server</code>.</td><td>Know any plugin name, or import <code>operations</code>.</td></tr>
+<tr><td class="mono">internal/plugins</td><td>The contract itself: <code>Plugin</code>, <code>Registry</code>, <code>Deps</code>, <code>MutationSpec</code>. Host-owned, so plugins can never define platform types.</td><td>Import any concrete plugin. Registration is explicit in <code>app</code>.</td></tr>
+<tr><td class="mono">internal/operations</td><td>The domain: states, transitions, guards, canonical hashing, risk, execution orchestration.</td><td>Import <code>net/http</code>, <code>database/sql</code>, or NATS. Pure Go + interfaces.</td></tr>
+<tr><td class="mono">internal/storage/sqlite</td><td>Every SQL statement in the codebase. Transaction boundaries. Migrations.</td><td>Contain domain rules. It persists decisions; it does not make them.</td></tr>
+<tr><td class="mono">internal/messaging</td><td>Subject naming, event envelope, outbox drain, bus implementations.</td><td>Be consulted for any authorization decision.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="footnote">The dependency direction is strictly inward: <code>mcp → plugins → operations → storage-interfaces</code>. <code>storage/sqlite</code> and <code>messaging</code> implement interfaces the domain declares, and are injected in <code>app</code>. This is what makes the whole domain testable without a database, an HTTP server, or a broker.</p>
+</section>
+
+<!-- ============ 4 ============ -->
+<section id="s4">
+<div class="sec-head"><span class="sec-num">04</span><h2>Plugin contract</h2></div>
+<p class="lede">Two required methods. Everything else is an optional capability interface or a free generic function, because Go interfaces cannot carry type parameters.</p>
+<div class="panel">
+<div class="panel-title">internal/plugins/plugin.go</div>
+<pre>package plugins
+
+<i>// Plugin is the minimum contract. A plugin that only exposes read tools</i>
+<i>// implements exactly these two methods and nothing else.</i>
+type Plugin interface {
+	Descriptor() Descriptor
+	Register(ctx context.Context, r *Registry) error
+}
+
+type Descriptor struct {
+	Name        string <i>// "cnmaestro"; [a-z][a-z0-9_-]*; unique; forms /mcp/&lt;name&gt;</i>
+	Version     string
+	Title       string <i>// human label for the MCP server</i>
+	Description string <i>// becomes ServerOptions.Instructions</i>
+}
+
+<i>// Optional capabilities, discovered by type assertion. Implement only what</i>
+<i>// you need — most plugins need none of them.</i>
+type Starter interface{ Start(ctx context.Context) error }
+type Stopper interface{ Shutdown(ctx context.Context) error }
+type Checker interface{ Check(ctx context.Context) Health }
+
+type Health struct {
+	State   HealthState <i>// Healthy | Degraded | Unhealthy</i>
+	Message string      <i>// MUST be redaction-safe; surfaced on /health/ready</i>
+	Checked time.Time
+}</pre>
+</div>
+<div class="panel">
+<div class="panel-title">internal/plugins/registry.go — what a plugin is handed</div>
+<pre>package plugins
+
+<i>// Registry is concrete, not an interface, so registration can use generics.</i>
+type Registry struct{ <i>/* host-owned; unexported fields */</i> }
+
+<i>// Tool registers a read-only tool. In/Out schemas are derived from the types.</i>
+<i>// The host adds the plugin name prefix, ReadOnlyHint, authorization, rate</i>
+<i>// limiting, correlation IDs and audit around the handler.</i>
+func Tool[In, Out any](r *Registry, spec ToolSpec, fn ToolFunc[In, Out])
+
+<i>// Mutation registers an approval-gated write. This does NOT create an</i>
+<i>// executable tool — it creates a *propose* tool. Execution happens later,</i>
+<i>// from the executor, only after the operations service says so.</i>
+func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S])
+
+type ToolSpec struct {
+	Name        string <i>// bare; host prefixes with plugin name</i>
+	Title       string
+	Description string
+	Scope       auth.Scope <i>// minimum role required</i>
+}
+
+<i>// Deps is what a plugin receives at construction. Note what is ABSENT:</i>
+<i>// no OperationService, no AuditService, no *sql.DB, no KV. A plugin that</i>
+<i>// cannot reach operation state cannot corrupt it.</i>
+type Deps struct {
+	Log     *slog.Logger  <i>// pre-tagged with plugin=&lt;name&gt;</i>
+	Store   Store         <i>// namespaced KV over plugin_state; small values only</i>
+	Events  Publisher     <i>// namespaced to mcp.plugin.&lt;name&gt;.&gt; — cannot forge</i>
+	Secrets SecretSource  <i>// resolves refs; values never enter config structs</i>
+	HTTP    *http.Client  <i>// bounded conns, timeouts, redaction transport</i>
+	Now     func() time.Time
+}</pre>
+</div>
+
+<h3>The mutation contract</h3>
+<p>This is the part worth the most care. A mutation is not one function but three, and separating them is what makes precondition checking, verification, and at-most-once execution possible at all.</p>
+<div class="panel">
+<div class="panel-title">internal/plugins/mutation.go</div>
+<pre>package plugins
+
+type MutationSpec struct {
+	Action      string          <i>// "device.set_radio_channel"</i>
+	Title       string
+	Description string
+	Risk        operations.RiskLevel <i>// default; policy may raise it, never lower</i>
+	Scope       auth.Scope
+	Reversible  bool            <i>// may a rollback operation be generated?</i>
+}
+
+<i>// MutationHandler[P,S]: P is the typed parameter struct, S the typed</i>
+<i>// observable state of the target.</i>
+type MutationHandler[P, S any] interface {
+
+	<i>// Plan validates params and reads current state. It MUST NOT mutate.</i>
+	<i>// Called twice: once at proposal (to capture `before` and impact) and</i>
+	<i>// again immediately before Apply (to detect drift). The host compares</i>
+	<i>// the two Preconditions and fails with PRECONDITION_CHANGED on mismatch.</i>
+	Plan(ctx context.Context, p P) (Plan[S], error)
+
+	<i>// Apply performs the upstream write. Called at most once per attempt,</i>
+	<i>// only from the executor, only after the state machine granted a claim.</i>
+	<i>// On an ambiguous failure it MUST return ErrIndeterminate rather than an</i>
+	<i>// error that implies the write did not happen.</i>
+	Apply(ctx context.Context, p P, plan Plan[S]) (ApplyResult, error)
+
+	<i>// Observe re-reads state for verification and for reconciling</i>
+	<i>// indeterminate outcomes. MUST NOT mutate.</i>
+	Observe(ctx context.Context, p P) (S, error)
+}
+
+type Plan[S any] struct {
+	Before        S              <i>// observed state, persisted immutably</i>
+	Desired       S              <i>// what Apply intends to produce</i>
+	Preconditions map[string]any <i>// ETag / revision / field snapshot</i>
+	Changes       []Change       <i>// field, from, to — shown to the approver</i>
+	Impact        string         <i>// plain language; shown to the approver</i>
+	Rollback      json.RawMessage<i>// params for the inverse mutation, if any</i>
+	RiskOverride  *operations.RiskLevel <i>// may RAISE risk for these params only</i>
+}
+
+type ApplyResult struct {
+	UpstreamRef string <i>// job id / change id, for reconciliation</i>
+	Async       bool   <i>// true ⇒ success requires Observe, not HTTP 200</i>
+}</pre>
+</div>
+<div class="call c-note">
+  <span class="tag">Why three methods and not one</span>
+  <p><code>Plan</code> running twice is what turns "optimistic concurrency" from an aspiration into a mechanism — the same code path produces the snapshot shown to the approver and the snapshot checked at execution, so they cannot drift apart. <code>Observe</code> existing separately is what lets the verifier and the reconciler share one implementation. And <code>Apply</code> being the only mutating method means the audit rule is mechanical: an audit row is written around exactly one call site.</p>
+</div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section id="s5">
+<div class="sec-head"><span class="sec-num">05</span><h2>Mutation state machine</h2></div>
+<div class="panel">
+<div class="panel-title">States and transitions — additions to the brief marked ★</div>
+<pre class="diagram">                              ┌──────────┐
+                              │  DRAFT   │
+                              └────┬─────┘
+                     submit        │        cancel
+                        ┌──────────┴──────────┐
+                        ▼                     ▼
+             ┌────────────────────┐     ┌───────────┐
+             │  PENDING_APPROVAL  │────►│ CANCELLED │◄──┐
+             └─────────┬──────────┘     └───────────┘   │
+          reject ┌─────┼─────┐ expires_at                │
+                 ▼     │     ▼                           │
+          ┌──────────┐ │ ┌─────────┐                     │
+          │ REJECTED │ │ │ EXPIRED │◄────────┐           │
+          └──────────┘ │ └─────────┘         │           │
+                approve│      ★ approval_expires_at      │ cancel
+                       ▼                     │           │ (pre-claim)
+                ┌────────────┐───────────────┘           │
+                │  APPROVED  │───────────────────────────┘
+                └─────┬──────┘
+                      │ claim  (CAS: state='approved' AND hash ok
+                      ▼         AND approval_expires_at &gt; now)
+                ┌────────────┐
+                │ EXECUTING  │
+                └─────┬──────┘
+         ┌────────────┼────────────┐
+         ▼            ▼            ▼
+  ┌───────────┐ ┌──────────┐ ┌──────────────────┐
+  │ SUCCEEDED │ │  FAILED  │ │ ★ INDETERMINATE  │
+  └───────────┘ └──────────┘ └────────┬─────────┘
+                                      │ reconciler observes upstream
+                     ┌────────────────┴────────────────┐
+                     ▼                                 ▼
+              ┌───────────┐                      ┌──────────┐
+              │ SUCCEEDED │                      │  FAILED  │
+              └───────────┘                      └──────────┘</pre>
+</div>
+<h4>Transition table — the authoritative list</h4>
+<div class="tw">
+<table>
+<thead><tr><th>From</th><th>To</th><th>Trigger</th><th>Guard</th><th>Tx</th></tr></thead>
+<tbody>
+<tr><td class="mono">draft</td><td class="mono">pending_approval</td><td>submit</td><td>params validate; hash computed and frozen</td><td class="mono">TX-1</td></tr>
+<tr><td class="mono">draft</td><td class="mono">cancelled</td><td>requester</td><td>actor == requester</td><td class="mono">TX-6</td></tr>
+<tr><td class="mono">pending_approval</td><td class="mono">approved</td><td>approve</td><td>role ≥ approver; <code>now &lt; expires_at</code>; distinct-approver policy satisfied or refused (§1.4)</td><td class="mono">TX-2</td></tr>
+<tr><td class="mono">pending_approval</td><td class="mono">rejected</td><td>reject</td><td>role ≥ approver</td><td class="mono">TX-2</td></tr>
+<tr><td class="mono">pending_approval</td><td class="mono">cancelled</td><td>requester</td><td>actor == requester</td><td class="mono">TX-6</td></tr>
+<tr><td class="mono">pending_approval</td><td class="mono">expired</td><td>reaper</td><td><code>now ≥ expires_at</code></td><td class="mono">TX-6</td></tr>
+<tr><td class="mono">approved</td><td class="mono">executing</td><td>executor claim</td><td><b>CAS on state</b>; recomputed hash == stored hash; <code>now &lt; approval_expires_at</code>; <code>Plan</code> preconditions unchanged</td><td class="mono">TX-3</td></tr>
+<tr><td class="mono">approved</td><td class="mono">cancelled</td><td>requester/approver</td><td>no claim held</td><td class="mono">TX-6</td></tr>
+<tr><td class="mono">approved ★</td><td class="mono">expired</td><td>reaper</td><td><code>now ≥ approval_expires_at</code></td><td class="mono">TX-6</td></tr>
+<tr><td class="mono">executing</td><td class="mono">succeeded</td><td>executor</td><td><code>Apply</code> ok <em>and</em> <code>Observe</code> confirms desired state</td><td class="mono">TX-4</td></tr>
+<tr><td class="mono">executing</td><td class="mono">failed</td><td>executor</td><td>upstream rejected — write provably did not happen</td><td class="mono">TX-4</td></tr>
+<tr><td class="mono">executing ★</td><td class="mono">indeterminate</td><td>executor / reaper</td><td>timeout, ambiguous error, or lease expired with no settlement</td><td class="mono">TX-4 / TX-6</td></tr>
+<tr><td class="mono">indeterminate ★</td><td class="mono">succeeded</td><td>reconciler</td><td><code>Observe</code> == desired</td><td class="mono">TX-4</td></tr>
+<tr><td class="mono">indeterminate ★</td><td class="mono">failed</td><td>reconciler</td><td><code>Observe</code> == before, and bounded attempts exhausted</td><td class="mono">TX-4</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Terminal:</strong> <code>succeeded</code>, <code>failed</code>, <code>rejected</code>, <code>expired</code>, <code>cancelled</code>. <strong>Quasi-terminal:</strong> <code>indeterminate</code> — no automatic exit, no automatic retry; it leaves only when something observed reality. It is deliberately loud: it should page.</p>
+
+<h4>Invariants</h4>
+<div class="tw">
+<table>
+<thead><tr><th>#</th><th>Invariant</th><th>Enforced by</th></tr></thead>
+<tbody>
+<tr><td class="mono">I1</td><td>Mutation payload is immutable once the operation leaves <code>draft</code>.</td><td>No UPDATE statement touches <code>target_json</code>, <code>params_json</code>, or <code>payload_hash</code>; a trigger raises on attempts.</td></tr>
+<tr><td class="mono">I2</td><td>At most one transition into <code>executing</code> per attempt.</td><td><code>UPDATE … WHERE id=? AND state='approved'</code>; claim succeeds only if <code>RowsAffected()==1</code>.</td></tr>
+<tr><td class="mono">I3</td><td>No transition out of a terminal state, ever.</td><td>Transition table lookup + <code>CHECK</code> on the guarded UPDATE's <code>WHERE</code> clause.</td></tr>
+<tr><td class="mono">I4</td><td>Every state change writes a transition row, an audit row, and an outbox row in the <em>same</em> transaction.</td><td>Single <code>UnitOfWork</code> method; no other write path exists.</td></tr>
+<tr><td class="mono">I5</td><td>Recomputed payload hash must equal the stored hash before execution.</td><td>Claim transaction, before the state flips (§6, TX-3).</td></tr>
+<tr><td class="mono">I6</td><td>Approver ≠ requester where policy demands it — or the operation is refused.</td><td><code>approval</code> package; refuses at <em>propose</em> time if identity cannot distinguish principals.</td></tr>
+<tr><td class="mono">I7</td><td><code>attempt_count</code> increments only inside the claim transaction.</td><td>Same UPDATE as I2, so a lost claim cannot inflate the count.</td></tr>
+<tr><td class="mono">I8</td><td>Risk may be raised by policy or by <code>Plan</code>, never lowered.</td><td><code>operations/risk.go</code>; <code>max()</code> over declared, policy, and plan-supplied levels.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section id="s6">
+<div class="sec-head"><span class="sec-num">06</span><h2>SQLite schema</h2></div>
+<p class="lede">Timestamps are Unix milliseconds as <code>INTEGER</code> — sortable, comparable in SQL, and free of the text-format ambiguity that eventually bites ISO-8601-in-TEXT. JSON columns hold canonical (sorted-key, no-whitespace) form so hashes are reproducible.</p>
+<h4>Connection setup</h4>
+<div class="panel">
+<div class="panel-title">Pragmas — all verified against modernc.org/sqlite v1.57.0</div>
+<pre>journal_mode = WAL      <i>// concurrent readers alongside one writer</i>
+foreign_keys = ON       <i>// off by default in SQLite; must be set per connection</i>
+synchronous = FULL      <i>// approval durability &gt; write throughput (brief agrees)</i>
+busy_timeout = 5000     <i>// tolerate brief writer contention before erroring</i>
+wal_autocheckpoint=1000 <i>// bound WAL growth on a long-lived process</i>
+
+<i>// Two handles on the same file — see §1.7:</i>
+readDB.SetMaxOpenConns(max(4, runtime.NumCPU()))
+writeDB.SetMaxOpenConns(1)   <i>// serialise writers in Go, not via SQLITE_BUSY</i></pre>
+</div>
+
+<h4>Core tables</h4>
+<div class="panel">
+<div class="panel-title">operations — the authoritative record</div>
+<pre>CREATE TABLE operations (
+  id                  TEXT PRIMARY KEY,      <i>-- "op_" || ULID (sortable)</i>
+  plugin              TEXT NOT NULL,
+  action              TEXT NOT NULL,
+  state               TEXT NOT NULL,
+  risk                TEXT NOT NULL,
+
+  <i>-- immutable after leaving draft (I1) ------------------------------</i>
+  target_json         TEXT NOT NULL,         <i>-- canonical JSON</i>
+  params_json         TEXT NOT NULL,         <i>-- canonical JSON</i>
+  payload_hash        TEXT NOT NULL,         <i>-- sha256(plugin|action|target|params)</i>
+  before_json         TEXT,                  <i>-- Plan.Before at proposal</i>
+  desired_json        TEXT,                  <i>-- Plan.Desired</i>
+  precondition_json   TEXT,                  <i>-- ETag/rev snapshot, rechecked at claim</i>
+  rollback_json       TEXT,
+  impact              TEXT NOT NULL,
+  <i>-- ------------------------------------------------------------------</i>
+
+  requested_by        TEXT NOT NULL,
+  requested_at        INTEGER NOT NULL,
+  expires_at          INTEGER NOT NULL,      <i>-- proposal deadline</i>
+  approved_by         TEXT,
+  approved_at         INTEGER,
+  approval_expires_at INTEGER,               <i>-- ★ execute-by deadline (§1.3)</i>
+
+  attempt_count       INTEGER NOT NULL DEFAULT 0,
+  lease_owner         TEXT,                  <i>-- instance id holding the claim</i>
+  lease_expires_at    INTEGER,
+
+  terminal_at         INTEGER,
+  outcome_verified    INTEGER,               <i>-- NULL unknown / 0 no / 1 yes</i>
+  observed_json       TEXT,
+  error_code          TEXT,                  <i>-- typed: PRECONDITION_CHANGED, …</i>
+  error_detail        TEXT,                  <i>-- redacted before write</i>
+
+  correlation_id      TEXT NOT NULL,
+  idempotency_key     TEXT NOT NULL,
+
+  CHECK (state IN ('draft','pending_approval','approved','executing',
+                   'succeeded','failed','indeterminate',
+                   'rejected','expired','cancelled')),
+  CHECK (risk IN ('low','medium','high','critical')),
+  CHECK (json_valid(target_json) AND json_valid(params_json)),
+  CHECK (state != 'approved' OR approval_expires_at IS NOT NULL)
+) STRICT;
+
+<i>-- one live operation per logical intent; collapses duplicate proposals</i>
+CREATE UNIQUE INDEX ux_operations_idem
+  ON operations(plugin, action, idempotency_key);
+
+<i>-- reaper scans: proposals and approvals past their deadline</i>
+CREATE INDEX ix_operations_deadline ON operations(state, expires_at)
+  WHERE state IN ('pending_approval','approved');
+
+<i>-- reaper scans: leases whose holder died mid-execution</i>
+CREATE INDEX ix_operations_stale_lease ON operations(lease_expires_at)
+  WHERE state = 'executing';
+
+<i>-- executor wake-up scan (also the polling fallback for the in-process bus)</i>
+CREATE INDEX ix_operations_claimable ON operations(state, requested_at)
+  WHERE state = 'approved';
+
+CREATE INDEX ix_operations_listing ON operations(plugin, requested_at DESC);
+
+<i>-- I1: refuse to rewrite a frozen payload, whatever the calling code thinks</i>
+CREATE TRIGGER trg_operations_payload_immutable
+BEFORE UPDATE OF target_json, params_json, payload_hash ON operations
+FOR EACH ROW WHEN OLD.state != 'draft'
+BEGIN SELECT RAISE(ABORT, 'operation payload is immutable'); END;</pre>
+</div>
+
+<div class="panel">
+<div class="panel-title">operation_transitions · audit_events</div>
+<pre>CREATE TABLE operation_transitions (
+  seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+  operation_id   TEXT NOT NULL REFERENCES operations(id) ON DELETE RESTRICT,
+  from_state     TEXT,                       <i>-- NULL only for creation</i>
+  to_state       TEXT NOT NULL,
+  actor          TEXT NOT NULL,              <i>-- principal id or "system:reaper"</i>
+  reason         TEXT,
+  at             INTEGER NOT NULL,
+  correlation_id TEXT NOT NULL
+) STRICT;
+CREATE INDEX ix_transitions_op ON operation_transitions(operation_id, seq);
+
+<i>-- Append-only, hash-chained. The chain is what makes tampering detectable</i>
+<i>-- rather than merely discouraged: entry_hash = sha256(prev_hash || canonical row).</i>
+CREATE TABLE audit_events (
+  seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id       TEXT NOT NULL UNIQUE,
+  at             INTEGER NOT NULL,
+  kind           TEXT NOT NULL,              <i>-- operation.approved, tool.called, …</i>
+  operation_id   TEXT REFERENCES operations(id),
+  plugin         TEXT, action TEXT,
+  actor          TEXT NOT NULL,
+  from_state     TEXT, to_state TEXT,
+  risk           TEXT,
+  correlation_id TEXT NOT NULL,
+  detail_json    TEXT NOT NULL DEFAULT '{}', <i>-- REDACTED at construction</i>
+  prev_hash      TEXT NOT NULL,
+  entry_hash     TEXT NOT NULL
+) STRICT;
+CREATE INDEX ix_audit_op ON audit_events(operation_id, seq);
+CREATE INDEX ix_audit_at ON audit_events(at);
+
+CREATE TRIGGER trg_audit_no_update BEFORE UPDATE ON audit_events
+BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;
+CREATE TRIGGER trg_audit_no_delete BEFORE DELETE ON audit_events
+BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;</pre>
+</div>
+
+<div class="panel">
+<div class="panel-title">execution_attempts · outbox_events · idempotency_records · plugin_state</div>
+<pre>CREATE TABLE execution_attempts (
+  id              TEXT PRIMARY KEY,
+  operation_id    TEXT NOT NULL REFERENCES operations(id),
+  attempt_no      INTEGER NOT NULL,
+  instance_id     TEXT NOT NULL,
+  started_at      INTEGER NOT NULL,
+  finished_at     INTEGER,
+  outcome         TEXT,        <i>-- succeeded | failed | indeterminate</i>
+  upstream_ref    TEXT,        <i>-- cnMaestro job id, change id, …</i>
+  upstream_status INTEGER,
+  verified        INTEGER,
+  observed_json   TEXT,
+  error_code      TEXT, error_detail TEXT,
+  UNIQUE(operation_id, attempt_no)
+) STRICT;
+
+CREATE TABLE outbox_events (
+  seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id        TEXT NOT NULL UNIQUE,   <i>-- becomes Nats-Msg-Id (§8)</i>
+  subject         TEXT NOT NULL,
+  payload_json    TEXT NOT NULL,
+  headers_json    TEXT NOT NULL DEFAULT '{}',
+  created_at      INTEGER NOT NULL,
+  published_at    INTEGER,                <i>-- NULL ⇒ pending</i>
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  last_error      TEXT
+) STRICT;
+<i>-- partial index keeps the drain query O(pending), not O(all events ever)</i>
+CREATE INDEX ix_outbox_pending ON outbox_events(next_attempt_at, seq)
+  WHERE published_at IS NULL;
+
+CREATE TABLE idempotency_records (
+  scope         TEXT NOT NULL,            <i>-- plugin name</i>
+  key           TEXT NOT NULL,
+  request_hash  TEXT NOT NULL,            <i>-- same key + different body ⇒ 409</i>
+  operation_id  TEXT REFERENCES operations(id),
+  response_json TEXT,
+  created_at    INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  PRIMARY KEY (scope, key)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX ix_idem_expiry ON idempotency_records(expires_at);
+
+CREATE TABLE plugin_state (
+  plugin     TEXT NOT NULL,
+  key        TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (plugin, key)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE schema_migrations (
+  version    INTEGER PRIMARY KEY,
+  applied_at INTEGER NOT NULL,
+  checksum   TEXT NOT NULL
+) STRICT;</pre>
+</div>
+
+<h4>Transaction boundaries</h4>
+<p>Six transactions cover every write in the system. Anything not on this list is a bug.</p>
+<div class="tw">
+<table>
+<thead><tr><th>Tx</th><th>Operation</th><th>Statements — all or nothing</th></tr></thead>
+<tbody>
+<tr><td class="mono">TX-1</td><td>Propose</td><td><code>INSERT operations</code> (state <code>pending_approval</code>) + <code>INSERT idempotency_records</code> + transition + audit + outbox <code>mcp.operation.proposed</code></td></tr>
+<tr><td class="mono">TX-2</td><td>Approve / Reject</td><td><code>UPDATE operations SET state=… WHERE id=? AND state='pending_approval'</code> — must affect 1 row — + transition + audit + outbox</td></tr>
+<tr><td class="mono">TX-3</td><td>Claim</td><td>Guarded <code>UPDATE … SET state='executing', lease_owner=?, lease_expires_at=?, attempt_count=attempt_count+1 WHERE id=? AND state='approved' AND payload_hash=? AND approval_expires_at&gt;?</code> + <code>INSERT execution_attempts</code> + transition + audit + outbox. <strong>Zero rows affected means another worker won; abandon silently.</strong></td></tr>
+<tr><td class="mono">TX-4</td><td>Settle</td><td><code>UPDATE operations</code> to a terminal or indeterminate state + <code>UPDATE execution_attempts</code> + transition + audit + outbox</td></tr>
+<tr><td class="mono">TX-5</td><td>Outbox ack</td><td><code>UPDATE outbox_events SET published_at=?</code> — its own transaction, deliberately (§8)</td></tr>
+<tr><td class="mono">TX-6</td><td>Reap / Cancel</td><td>Guarded <code>UPDATE</code> per row + transition + audit + outbox. Batched, but one transaction per operation so a single bad row cannot stall the sweep.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="call c-note">
+  <span class="tag">The rule that makes it work</span>
+  <p>Every one of these writes its outbox row <em>inside</em> the same transaction as the state change. There is no code path that changes state without enqueueing an event, and none that enqueues an event without changing state. That is the entire dual-write defence, and it is enforced by there being exactly one <code>UnitOfWork</code> API rather than by discipline.</p>
+</div>
+</section>
+
+<!-- ============ 7 ============ -->
+<section id="s7">
+<div class="sec-head"><span class="sec-num">07</span><h2>NATS design</h2></div>
+<p class="lede">Specified in full so it stays portable, and — per §1.1 — recommended for v2 rather than v1. The subject taxonomy and event envelope go in now regardless; they are what make the swap a configuration change.</p>
+<div class="panel">
+<div class="panel-title">internal/messaging/bus.go — the seam</div>
+<pre>type Event struct {
+	ID            string    <i>// outbox event_id; the dedup key</i>
+	Subject       string
+	OperationID   string
+	CorrelationID string
+	OccurredAt    time.Time
+	Payload       json.RawMessage
+}
+
+type EventBus interface {
+	Publish(ctx context.Context, e Event) error <i>// MUST be idempotent on e.ID</i>
+	Subscribe(ctx context.Context, durable string, filter string,
+	          h Handler) (Subscription, error)
+}
+
+<i>// v1: inprocess.Bus  — outbox drain → fan-out to in-process handlers,</i>
+<i>//                      with a 5s poll as the liveness backstop.</i>
+<i>// v2: jetstream.Bus  — same interface, WithMsgID(e.ID) for dedup.</i></pre>
+</div>
+
+<h4>Subject taxonomy — <code>internal/messaging/subjects.go</code> is the only place these are constructed</h4>
+<div class="tw">
+<table>
+<thead><tr><th>Subject</th><th>Meaning</th><th>Producer</th></tr></thead>
+<tbody>
+<tr><td class="mono">mcp.operation.proposed</td><td>Operation entered <code>pending_approval</code></td><td>TX-1</td></tr>
+<tr><td class="mono">mcp.operation.approved</td><td>May now require processing — <em>not</em> an authorization</td><td>TX-2</td></tr>
+<tr><td class="mono">mcp.operation.rejected</td><td rowspan="2">Terminal, no work implied</td><td rowspan="2">TX-2 / TX-6</td></tr>
+<tr><td class="mono">mcp.operation.cancelled</td></tr>
+<tr><td class="mono">mcp.operation.expired</td><td>Proposal or approval deadline passed</td><td>TX-6</td></tr>
+<tr><td class="mono">mcp.operation.executing</td><td>Claim acquired</td><td>TX-3</td></tr>
+<tr><td class="mono">mcp.operation.succeeded</td><td rowspan="3">Settlement</td><td rowspan="3">TX-4</td></tr>
+<tr><td class="mono">mcp.operation.failed</td></tr>
+<tr><td class="mono">mcp.operation.indeterminate</td></tr>
+<tr><td class="mono">mcp.plugin.&lt;name&gt;.&lt;domain&gt;.&lt;event&gt;</td><td>Plugin-domain events. The host binds the <code>mcp.plugin.&lt;name&gt;.</code> prefix into <code>Deps.Events</code>, so a plugin cannot publish outside its own namespace or forge another's.</td><td>plugins</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>If and when JetStream is enabled</h4>
+<div class="grid2">
+<div class="card">
+<h5>Streams</h5>
+<ul>
+<li><code>MCP_OPERATIONS</code> — <code>mcp.operation.&gt;</code>, file storage, limits retention, <code>MaxAge 30d</code>, <code>Duplicates 2h</code></li>
+<li><code>MCP_PLUGINS</code> — <code>mcp.plugin.&gt;</code>, file storage, <code>MaxAge 7d</code>, <code>Duplicates 2h</code></li>
+</ul>
+<p style="margin-top:10px">The duplicate window must comfortably exceed the outbox's maximum retry backoff, or a slow retry re-publishes as a genuinely new message.</p>
+</div>
+<div class="card">
+<h5>Consumers — durable, explicit ack</h5>
+<ul>
+<li><code>mcpd-executor</code> — filter <code>mcp.operation.approved</code>, <code>AckWait 60s</code>, <code>MaxDeliver 5</code>, <code>MaxAckPending</code> = worker pool size</li>
+<li><code>mcpd-reconciler</code> — filter <code>mcp.operation.indeterminate</code>, long <code>AckWait</code>, low concurrency</li>
+</ul>
+<p style="margin-top:10px">On <code>MaxDeliver</code> exhaustion, terminate the message and record it — SQLite still holds the truth, so a dropped notification costs latency, never correctness.</p>
+</div>
+<div class="card">
+<h5>KV buckets — coordination only</h5>
+<ul>
+<li><code>mcpd_leases</code> — TTL 60s. <code>Create</code> to claim, <code>Update(rev)</code> to renew. Both verified: second claim and stale-revision renewal both fail correctly.</li>
+<li><code>mcpd_runtime</code> — TTL 30s. Instance heartbeat, plugin health, scheduler leadership.</li>
+</ul>
+</div>
+<div class="card">
+<h5>Core NATS</h5>
+<p>Nothing at v1. Reserved for genuinely ephemeral fan-out where loss is acceptable and durability would be wrong — live log tailing, UI push. Never for anything a decision depends on.</p>
+</div>
+</div>
+
+<h4>What must never touch NATS</h4>
+<div class="call c-cut">
+  <span class="tag">Explicit exclusions</span>
+  <p>Approval authority · operation state · the audit log · payload hashes · idempotency records · configuration · secrets · any value read on the critical path of an authorization decision.</p>
+  <p style="margin-top:10px">The KV lease is <em>supplemental</em>. If the KV bucket vanished entirely, TX-3's compare-and-set still guarantees at-most-once execution — the lease only reduces wasted work across instances. Any design where losing the lease bucket causes a double-apply has inverted the authority model.</p>
+</div>
+</section>
+
+<!-- ============ 8 ============ -->
+<section id="s8">
+<div class="sec-head"><span class="sec-num">08</span><h2>Transactional outbox</h2></div>
+<div class="panel">
+<div class="panel-title">Publisher lifecycle</div>
+<pre>  STARTING ──► RUNNING ◄──────► BACKOFF        <i>(exponential + jitter,</i>
+                 │                              <i> capped well below the</i>
+                 │                              <i> stream duplicate window)</i>
+                 ▼
+             DRAINING ──► STOPPED
+
+RUNNING loop:
+  1. SELECT … WHERE published_at IS NULL AND next_attempt_at &lt;= now
+       ORDER BY seq LIMIT batch        <i>-- ordered by seq: per-subject order held</i>
+  2. for each: Publish(ctx, event)      <i>-- dedup key = event_id</i>
+  3. on ack:  TX-5  UPDATE published_at = now
+  4. on err:  attempts++, next_attempt_at = now + backoff(attempts), record error
+  5. idle ⇒ wait on notify-channel or 5s tick, whichever fires first</pre>
+</div>
+
+<h4>Failure matrix</h4>
+<div class="tw">
+<table>
+<thead><tr><th>Scenario</th><th>What actually happens</th><th>Resolution</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>SQLite commits, publish fails</strong></td>
+<td>State change and outbox row are durable. The event is simply not out yet.</td>
+<td>Row stays <code>published_at IS NULL</code>; the publisher retries with backoff until it succeeds. <span class="chip ch-ok">NO LOSS</span></td>
+</tr>
+<tr>
+<td><strong>Publish succeeds, ack lost</strong></td>
+<td>The broker has the message; we never learned it. The row still looks pending, so we republish.</td>
+<td><code>WithMsgID(event_id)</code> against the stream's duplicate window — the republish is discarded server-side and returns <code>dup=true</code>, which we treat as success. <span class="chip ch-ok">VERIFIED</span></td>
+</tr>
+<tr>
+<td><strong>Duplicate delivery to the consumer</strong></td>
+<td>Redelivery after <code>AckWait</code>, or an at-least-once path we cannot close.</td>
+<td>The consumer carries no authority. It reloads from SQLite and attempts TX-3's guarded claim; the second delivery matches zero rows because the state is no longer <code>approved</code>, and it acks and exits. <span class="chip ch-ok">HARMLESS</span></td>
+</tr>
+<tr>
+<td><strong>Process restart mid-publish</strong></td>
+<td>Unpublished rows survive; in-flight publishes may or may not have landed.</td>
+<td>The drain query is the whole recovery procedure — there is no separate recovery path to get wrong. Anything that did land is caught by the dedup window; anything that did not is republished. <span class="chip ch-ok">SELF-HEALING</span></td>
+</tr>
+<tr>
+<td><strong>Broker down for hours</strong></td>
+<td>Outbox backlog grows. Proposals, approvals, and audit continue normally — none of them depend on the bus.</td>
+<td>The executor's polling fallback keeps approved work moving without any event at all. Backlog depth is a readiness signal, not a liveness one. <span class="chip ch-warn">DEGRADED, CORRECT</span></td>
+</tr>
+<tr>
+<td><strong>Backoff exceeds the duplicate window</strong></td>
+<td>A very late republish is no longer recognised as a duplicate and lands twice.</td>
+<td>The only genuinely dangerous case, and it is a configuration error, not a runtime one: cap backoff at a fraction of <code>Duplicates</code> and assert the relationship at startup. Even then, consumer idempotency (row 3) contains it. <span class="chip ch-bad">ASSERT AT BOOT</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="call c-note">
+  <span class="tag">Why TX-5 is deliberately separate</span>
+  <p>Marking an event published is not part of the business transaction. Folding it in would mean holding a write transaction open across a network call — turning broker latency into database contention, and a broker stall into a total write outage. Keeping it separate is what buys at-least-once instead of exactly-once, and at-least-once is fine precisely because the consumer has no authority.</p>
+</div>
+</section>
+
+<!-- ============ 9 ============ -->
+<section id="s9">
+<div class="sec-head"><span class="sec-num">09</span><h2>Deployment model</h2></div>
+<div class="panel">
+<div class="panel-title">Filesystem layout</div>
+<pre>/usr/local/bin/mcpd                    <i>static, CGO-free, ~30 MB</i>
+/etc/mcpd/config.yaml                  <i>0640 root:mcpd — no secrets</i>
+/var/lib/mcpd/mcpd.db                  <i>+ -wal, -shm</i>
+/var/lib/mcpd/nats/                    <i>only if messaging.mode = jetstream</i>
+                                       <i>logs → journald</i></pre>
+</div>
+<div class="panel">
+<div class="panel-title">/etc/systemd/system/mcpd.service</div>
+<pre>[Unit]
+Description=mcpd — MCP application host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify                     <i># sd_notify READY=1 after listener + migrations</i>
+User=mcpd
+Group=mcpd
+ExecStart=/usr/local/bin/mcpd --config /etc/mcpd/config.yaml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45               <i># must exceed the drain budget below</i>
+KillSignal=SIGTERM
+
+<i># secrets by reference, never in the YAML</i>
+LoadCredential=cnmaestro:/etc/mcpd/credentials/cnmaestro
+
+<i># hardening</i>
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+StateDirectory=mcpd             <i># the one writable path</i>
+ReadWritePaths=/var/lib/mcpd
+
+LimitNOFILE=8192
+MemoryMax=1G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target</pre>
+</div>
+<div class="call c-change">
+  <span class="tag">Two hardening caveats to document rather than discover</span>
+  <p><code>MemoryDenyWriteExecute=yes</code> is safe for the recommended stack but would break a wasm-based SQLite driver that JITs — one more reason to prefer <code>modernc.org/sqlite</code> over <code>ncruces/go-sqlite3</code> here. And <code>ProtectSystem=strict</code> makes everything read-only except <code>StateDirectory</code>, so SQLite must never be pointed outside <code>/var/lib/mcpd</code>; validate the configured path at startup and fail loudly rather than at first write.</p>
+</div>
+
+<h3>Exposure to ChatGPT</h3>
+<p>Terminate TLS at a reverse proxy (Caddy or nginx) and bind <code>mcpd</code> to loopback. This keeps certificate renewal, HTTP/2, and request logging out of the application, and lets the connector URL be a stable public hostname while <code>mcpd</code> restarts underneath it.</p>
+<div class="tw">
+<table>
+<thead><tr><th>Requirement</th><th>Implementation</th></tr></thead>
+<tbody>
+<tr><td>Public HTTPS endpoint</td><td><code>https://mcp.example.net/mcp/cnmaestro</code> → proxy → <code>127.0.0.1:8080</code></td></tr>
+<tr><td>Transport</td><td>Streamable HTTP with <code>Stateless: true</code>. ChatGPT accepts both SSE and streamable HTTP; streamable is the current spec direction.</td></tr>
+<tr><td>Authentication</td><td>OAuth. The SDK provides the resource-server half: <code>auth.RequireBearerToken(verifier, opts)</code> plus <code>auth.ProtectedResourceMetadataHandler</code> for the RFC 9728 document at <code>/.well-known/oauth-protected-resource</code>.</td></tr>
+<tr><td>Client registration</td><td>Client ID Metadata Documents (CIMD) is the current recommendation; Dynamic Client Registration is deprecated as of the <code>2026-07-28</code> revision. The SDK ships <code>ClientIDMetadataDocumentConfig</code>.</td></tr>
+<tr><td>Write confirmation</td><td>ChatGPT prompts before write tools by default — treat as a courtesy, never as one of the two approval factors. Set <code>ToolAnnotations.ReadOnlyHint</code> honestly; the spec itself warns clients not to trust annotations from untrusted servers.</td></tr>
+<tr><td>Deep research / company knowledge</td><td>Requires <code>search</code> and <code>fetch</code> tools with a fixed result schema (<code>id</code>, <code>title</code>, <code>url</code>, <code>text</code>). Per-plugin opt-in, not a host concern. <span class="chip ch-warn">IF NEEDED</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Graceful shutdown</h3>
+<div class="panel">
+<div class="panel-title">Reverse-ordered drain — total budget under TimeoutStopSec=45</div>
+<pre> 1. /health/ready → 503            <i>proxy stops routing; live stays 200</i>
+ 2. stop accepting new MCP requests, drain in-flight tool calls   <i>≤10s</i>
+ 3. operations service refuses new proposals and approvals
+ 4. stop consumers; stop claiming new work
+ 5. in-flight executions: wait ≤20s
+       ├─ settled       → TX-4 normally
+       └─ still running → TX-4 to `indeterminate`, lease left to expire
+ 6. flush outbox, best effort                                     <i>≤5s</i>
+ 7. plugin Shutdown(ctx), reverse registration order
+ 8. drain NATS if enabled; close reader pool, then writer
+ 9. checkpoint WAL; close; exit 0</pre>
+</div>
+<p>Step 5 is the one that matters. An execution interrupted by shutdown must land in <code>indeterminate</code>, not <code>failed</code> — the same reasoning as a crash, and the reason that state exists. Writing <code>failed</code> here would make an ordinary <code>systemctl restart</code> during a change window a source of double-applied mutations.</p>
+
+<h3>Switching to external NATS</h3>
+<div class="panel">
+<div class="panel-title">configs/example.yaml — the whole migration</div>
+<pre>messaging:
+  mode: inprocess              <i># v1 default — recommended (§1.1)</i>
+
+<i># mode: jetstream            # v2, embedded broker</i>
+<i>#   embedded:</i>
+<i>#     store_dir: /var/lib/mcpd/nats</i>
+
+<i># mode: jetstream            # v2, external cluster</i>
+<i>#   url: nats://nats.internal:4222</i>
+<i>#   credentials: nats-creds   # systemd LoadCredential name</i></pre>
+</div>
+<p>No plugin code changes across any of the three, because no plugin imports <code>messaging</code> — they receive a namespaced <code>Publisher</code> through <code>Deps</code>. Multi-instance additionally needs: distinct <code>instance_id</code> per process, the KV lease enabled, and SQLite moved to a shared filesystem — which is the point at which SQLite stops being the right answer and the repository interfaces earn their keep.</p>
+</section>
+
+<!-- ============ 10 ============ -->
+<section id="s10">
+<div class="sec-head"><span class="sec-num">10</span><h2>cnMaestro API findings</h2></div>
+<p class="lede">Sourced from the OpenAPI 3.0 specification that Cambium's own documentation viewer loads at <code>docs.cloud.cambiumnetworks.com/api/5.0.1/yaml/schemas/v2/</code> — the machine-readable spec, not the rendered page. Everything marked CONFIRMED was read from that spec. Nothing here is inferred from model knowledge.</p>
+
+<h3>The headline finding</h3>
+<div class="call c-cut">
+  <span class="tag">The brief's motivating example does not map to the API</span>
+  <p>There is no <code>radio.set_channel</code> endpoint, and no radio resource of any kind. Changing an AP's channel is a <strong>device configuration override</strong>: <code>PUT /api/v2/devices/{mac}</code> with a body containing <code>overrides.radios[]</code>. Three consequences follow, and each one changes the design:</p>
+  <p><code>channel</code> is a <strong>string enum</strong> — <code>"36"</code>, <code>"149"</code>, <code>"auto"</code> — not an integer. The brief's <code>Channel int</code> would fail validation. Same for <code>power</code>. Only <code>channel_width</code> is an integer.</p>
+  <p>It is a <strong>configuration intent</strong>, applied asynchronously by cnMaestro to the device. HTTP 200 means the override was accepted, not that the radio moved. Verification is genuinely two-phase, and <code>ApplyResult.Async</code> exists for exactly this.</p>
+  <p><strong>Whether <code>PUT overrides</code> merges or replaces is undocumented — and it is the single highest-risk unknown in this integration.</strong> If it replaces, a channel change silently discards every other override on that AP. No amount of approval workflow catches that, because the approver would be shown a correct one-field diff while the request wipes six other fields. This must be settled against a real controller before any write ships.</p>
+</div>
+
+<h3>Authentication and transport</h3>
+<div class="tw">
+<table>
+<thead><tr><th>Fact</th><th>Detail</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>Grant type</td><td>OAuth 2.0 Client Credentials, RFC 6749 §4.4. <code>grant_type=client_credentials</code>, client id/secret Base64 in the Authorization header.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Token endpoint</td><td><code>POST /api/v2/access/token</code>. Cloud: <code>cloud.cambiumnetworks.com</code>. On-prem: the appliance host.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Token lifetime</td><td><code>expires_in: 3600</code>. Refresh proactively at ~80%; never on 401, which would couple credential handling to error paths.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Scopes</td><td><code>scopes: {}</code> in the security scheme. There is no scope model — the token is all-or-nothing at account level, so least privilege must be enforced by <em>us</em>, in the mutation allow-list.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Cloud redirect</td><td>The Cloud token response includes a <code>redirect_uri</code>; subsequent API calls must go to <em>that</em> host, not to <code>cloud.cambiumnetworks.com</code>. Cloud accounts are regionally sharded. Ignoring this is a classic first-integration failure.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>API version</td><td><code>servers: [{url: /api/v2}]</code>, spec version 5.0.1. v1 exists and is deprecated.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Rate limits</td><td>HTTP 429 is documented as a possible response. No published limit, no documented <code>Retry-After</code>. Assume a low ceiling, use a bounded client-side limiter, and honour <code>Retry-After</code> if present.</td><td><span class="chip ch-warn">NEEDS VALIDATION</span></td></tr>
+<tr><td>Pagination</td><td><code>limit</code> and <code>offset</code>, both untyped <code>integer</code> with no documented maximum or default. Response envelope shape is not in the spec.</td><td><span class="chip ch-warn">NEEDS VALIDATION</span></td></tr>
+<tr><td>Cloud vs on-prem</td><td>Same v2 surface and spec. On-prem lags in version; MSP paths are Cloud-oriented. No documented behavioural diff.</td><td><span class="chip ch-warn">NEEDS VALIDATION</span></td></tr>
+<tr><td>Response schemas</td><td><strong>The spec declares response bodies only as <code>'200': description: OK</code>.</strong> Not one response is typed. Every model must be built from live captures against a real controller.</td><td><span class="chip ch-bad">NOT SPECIFIED</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Read endpoints — confirmed present in the v2 spec</h3>
+<div class="tw">
+<table>
+<thead><tr><th>Path</th><th>Query parameters</th><th>Proposed tool</th></tr></thead>
+<tbody>
+<tr><td class="mono">GET /devices</td><td class="mono">limit, offset, fields, search, network, status, online, sort, tower, site, deviceType, managed_account</td><td><code>cnmaestro_list_devices</code></td></tr>
+<tr><td class="mono">GET /devices/{mac}</td><td class="mono">fields, network, status, deviceType</td><td><code>cnmaestro_get_device</code></td></tr>
+<tr><td class="mono">GET /devices/statistics</td><td class="mono">limit, offset, …</td><td rowspan="2"><code>cnmaestro_device_statistics</code></td></tr>
+<tr><td class="mono">GET /devices/{mac}/statistics</td><td class="mono">—</td></tr>
+<tr><td class="mono">GET /devices/{mac}/performance</td><td class="mono">start, stop</td><td><code>cnmaestro_device_performance</code></td></tr>
+<tr><td class="mono">GET /devices/clients</td><td rowspan="2" class="mono">limit, offset, filters</td><td rowspan="2"><code>cnmaestro_list_clients</code></td></tr>
+<tr><td class="mono">GET /devices/{mac}/clients</td></tr>
+<tr><td class="mono">GET /devices/{mac}/clients/summary</td><td class="mono">—</td><td><code>cnmaestro_client_summary</code></td></tr>
+<tr><td class="mono">GET /devices/wired_clients</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_wired_clients</code></td></tr>
+<tr><td class="mono">GET /devices/mesh/peers</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_mesh_peers</code></td></tr>
+<tr><td class="mono">GET /alarms</td><td rowspan="2" class="mono">limit, offset, severity, network, …</td><td rowspan="2"><code>cnmaestro_list_alarms</code></td></tr>
+<tr><td class="mono">GET /alarms/history</td></tr>
+<tr><td class="mono">GET /events</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_events</code></td></tr>
+<tr><td class="mono">GET /networks</td><td rowspan="3" class="mono">limit, offset</td><td rowspan="3"><code>cnmaestro_list_topology</code></td></tr>
+<tr><td class="mono">GET /networks/{network_id}/sites</td></tr>
+<tr><td class="mono">GET /networks/{network_id}/towers</td></tr>
+<tr><td class="mono">GET /wifi_enterprise/ap_groups</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_ap_groups</code></td></tr>
+<tr><td class="mono">GET /wifi_enterprise/wlans</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_wlans</code></td></tr>
+<tr><td class="mono">GET /jobs</td><td class="mono">limit, offset, job_type</td><td rowspan="2"><code>cnmaestro_get_job</code></td></tr>
+<tr><td class="mono">GET /jobs/{job_id}/details</td><td class="mono">job_type</td></tr>
+<tr><td class="mono">GET /configuration/templates</td><td class="mono">limit, offset, template_type</td><td><code>cnmaestro_list_templates</code></td></tr>
+</tbody>
+</table>
+</div>
+<p class="footnote">Paths are CONFIRMED from the spec; every response <em>shape</em> is NEEDS VALIDATION. The listed metrics in the brief — noise floor, SNR, airtime utilisation, retries, roaming history — are plausible fields of <code>/statistics</code> and <code>/performance</code> but cannot be confirmed from a spec that types no responses. Build models from live captures, and expose only fields actually observed.</p>
+
+<h3>Write endpoints — and what to do with each</h3>
+<div class="tw">
+<table>
+<thead><tr><th>Path</th><th>Method</th><th>Assessment</th><th>Risk</th></tr></thead>
+<tbody>
+<tr><td class="mono">/devices/{mac}/reboot</td><td class="mono">POST</td><td>No request body, no idempotency key. A retried reboot is a second reboot — so <code>Apply</code> must return <code>ErrIndeterminate</code> on timeout, never retry. Verify via uptime reset in <code>/statistics</code>.</td><td><span class="chip ch-warn">MEDIUM</span></td></tr>
+<tr><td class="mono">/devices/{mac}</td><td class="mono">PUT</td><td>The real configuration path, including <code>overrides.radios[]</code>. <code>additionalProperties: false</code>, <code>minProperties: 1</code>. Merge-vs-replace unknown — see the headline finding.</td><td><span class="chip ch-warn">MEDIUM–HIGH</span></td></tr>
+<tr><td class="mono">/devices/{mac}/disconnect_clients</td><td class="mono">POST</td><td>Bounded, observable, naturally idempotent. A reasonable second mutation to implement.</td><td><span class="chip ch-warn">MEDIUM</span></td></tr>
+<tr><td class="mono">/configuration/commit</td><td class="mono">PUT</td><td>Commits pending AP-group / WLAN changes. <strong>Note the documented default: uncommitted changes auto-commit 30 seconds after the last write, and each write resets the timer.</strong> There is a 30-second window in which a "proposed" group change is already live-pending. Any group-level mutation must account for this, or the approval gate is decorative.</td><td><span class="chip ch-bad">HIGH</span></td></tr>
+<tr><td class="mono">/wifi_enterprise/wlans/{name}</td><td class="mono">PUT/DELETE</td><td>Service-affecting for every client on the WLAN. Defer past v1.</td><td><span class="chip ch-bad">HIGH</span></td></tr>
+<tr><td class="mono">/jobs</td><td class="mono">POST</td><td>Creates a software-update job. Genuinely asynchronous with a pollable job id — a good fit for <code>ApplyResult{Async: true, UpstreamRef: jobID}</code>. Defer past v1.</td><td><span class="chip ch-bad">CRITICAL</span></td></tr>
+<tr><td class="mono">/devices/{mac}</td><td class="mono">DELETE</td><td>Device removal. Not implemented at any risk level in v1.</td><td><span class="chip ch-bad">CRITICAL</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="call c-cut">
+  <span class="tag">Permanently blocked — assert this in code</span>
+  <p>cnMaestro exposes <code>POST /devices/{mac}/cli</code>: "Initiate execution of CLI command," supported on Enterprise Wi-Fi and cnMatrix devices. That is arbitrary remote command execution on network infrastructure, reachable with the same account-wide token as everything else.</p>
+  <p style="margin-top:10px">The brief forbids <code>execute_shell</code> in the abstract; the vendor ships one in practice. <code>/devices/{mac}/cli</code>, <code>/devices/{mac}/pull_config</code>, <code>/devices/{mac}/traceroute</code>, <code>/devices/{mac}/ping</code>, and the cnWave <code>iperf</code> endpoints belong on an explicit deny-list in the client layer, enforced below the mutation registry so no future mutation spec can reach them — with a test that fails if any registered mutation resolves to a blocked path. A deny-list that only exists as a decision in a document is not a control.</p>
+</div>
+
+<h3>Proposed v1 mutation surface</h3>
+<p>Two mutations, both low-blast-radius, both verifiable, both exercising a different part of the machinery.</p>
+<div class="grid2">
+<div class="card">
+<h5>device.set_radio_channel</h5>
+<pre style="padding:0;font-size:12px">type SetRadioChannel struct {
+  MAC     string <i>`json:"mac"`</i>
+  RadioID int    <i>`json:"radio_id"`</i>
+  Channel string <i>`json:"channel"`</i>
+  Width   *int   <i>`json:"width,omitempty"`</i>
+}</pre>
+<p style="margin-top:12px"><code>Plan</code> reads <code>GET /devices/{mac}</code> for current overrides. <code>Apply</code> issues the <code>PUT</code>. <code>Observe</code> re-reads and compares. Exercises async verification and precondition drift.</p>
+</div>
+<div class="card">
+<h5>device.reboot</h5>
+<pre style="padding:0;font-size:12px">type RebootDevice struct {
+  MAC    string <i>`json:"mac"`</i>
+  Reason string <i>`json:"reason"`</i>
+}</pre>
+<p style="margin-top:12px">The simplest possible mutation, and the sharpest test of the indeterminate path: no idempotency key upstream, so an ambiguous <code>POST</code> genuinely cannot be retried. Exercises <code>ErrIndeterminate</code> and the reconciler.</p>
+</div>
+</div>
+
+<h3>Must be answered against a live controller before writes ship</h3>
+<ol class="body">
+<li><strong>Does <code>PUT /devices/{mac}</code> merge or replace the <code>overrides</code> object?</strong> Everything else is secondary to this.</li>
+<li>What does <code>GET /devices/{mac}</code> actually return — configured overrides, effective configuration, or both? Verification is meaningless without knowing which.</li>
+<li>Where does the <em>operating</em> channel appear, as distinct from the configured one? Likely <code>/devices/{mac}/statistics</code>, unconfirmed.</li>
+<li>Does any response carry an ETag, revision, or generation? If not, optimistic concurrency degrades to field-snapshot comparison, which is weaker and must be documented as such.</li>
+<li>What is the actual 429 threshold, and is <code>Retry-After</code> returned?</li>
+<li>What is the maximum accepted <code>limit</code>, and what is the list-response envelope?</li>
+<li>How long does a radio override take to reach the device? This sets the verifier's backoff ceiling.</li>
+<li>Does the <code>/configuration/commit</code> 30-second auto-commit timer apply to device-level overrides, or only to AP-group and WLAN changes? If it applies to overrides, the approval gate needs rethinking for that path.</li>
+</ol>
+</section>
+
+<section>
+<div class="sec-head"><span class="sec-num">→</span><h2>Stop point</h2></div>
+<p>Sections 1–10 complete. No implementation code has been written; the repository contains only this document.</p>
+<p>Three decisions need to be made before the first commit:</p>
+<ol class="body">
+<li><strong>Embedded NATS in v1, or the in-process bus?</strong> (§1.1) — this is the one that changes the most code.</li>
+<li><strong>Identity model for v1.</strong> (§1.4) — static token with high/critical mutations refused, or OAuth with per-user principals from the start.</li>
+<li><strong>Is a live cnMaestro controller available for the eight questions above?</strong> (§10) — the cnMaestro write path cannot be responsibly built without it, though the entire host, plugin framework, storage layer, approval engine, and cnMaestro <em>read</em> path can all proceed in parallel.</li>
+</ol>
+<p>Once those are settled, the build order is: host and plugin framework → SQLite storage and migrations → operations service and state machine → outbox and event bus → cnMaestro reads → cnMaestro mutations.</p>
+</section>
+
+</main>
+</div>
