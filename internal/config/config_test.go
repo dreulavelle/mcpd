@@ -291,3 +291,19 @@ func TestWarnings_FlagsPlaintextOnANetwork(t *testing.T) {
 		}
 	}
 }
+
+// Loopback never leaves the machine, by name as well as by address, so it
+// needs no plaintext warning.
+func TestWarnings_LoopbackNamesDoNotWarn(t *testing.T) {
+	for _, host := range []string{
+		"http://localhost:9090", "http://127.0.0.1:9090", "http://[::1]:9090",
+	} {
+		c := validConfig()
+		c.Server.PublicURL = host
+		for _, w := range c.Warnings() {
+			if strings.Contains(w, "in the clear") {
+				t.Errorf("%s should not warn about plaintext: %s", host, w)
+			}
+		}
+	}
+}

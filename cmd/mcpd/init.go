@@ -1,0 +1,212 @@
+package main
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// initialize scaffolds a working deployment: directories, a configuration
+// file, a generated token, and a .env holding it.
+//
+// It exists because the first ten minutes with a new service are where most
+// deployments go wrong -- a token pasted into the config file, a data
+// directory the service user cannot write, a port already in use. Generating
+// all of it removes the chance to get any of those wrong.
+//
+// It refuses to overwrite anything. Re-running it on a live deployment must
+// never replace a token that credentials in the field are already using.
+func initialize(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", dir, err)
+	}
+
+	var (
+		configPath = filepath.Join(abs, "config.yaml")
+		envPath    = filepath.Join(abs, ".env")
+		pluginsDir = filepath.Join(abs, "plugins")
+		dbPath     = filepath.Join(abs, "mcpd.db")
+	)
+
+	for _, path := range []string{configPath, envPath} {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf(
+				"%s already exists; refusing to overwrite it. "+
+					"Remove it first if you really want to start over", path)
+		}
+	}
+
+	for _, d := range []string{abs, pluginsDir} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			return fmt.Errorf("create %s: %w", d, err)
+		}
+	}
+
+	token, err := generateToken()
+	if err != nil {
+		return err
+	}
+
+	if err := writeFile(configPath, 0o640, initialConfig(dbPath, pluginsDir)); err != nil {
+		return err
+	}
+	// 0600: this file holds a bearer token.
+	if err := writeFile(envPath, 0o600, initialEnv(token)); err != nil {
+		return err
+	}
+
+	fmt.Printf(`Created a deployment in %s
+
+  config.yaml   configuration (no secrets in it)
+  .env          generated token, mode 0600
+  plugins/      drop out-of-process plugins here
+  mcpd.db       created on first start
+
+Start it:
+
+  mcpd -config %s
+
+The dashboard is on http://localhost:9090 and the MCP endpoint on
+http://localhost:9080. Sign in to the dashboard with the token in .env.
+
+Both listeners are on loopback. Change server.listen and
+server.frontend_listen to reach it from elsewhere, and put TLS in front of
+it before it is reachable from any network you do not control.
+`, abs, configPath)
+
+	return nil
+}
+
+func writeFile(path string, mode os.FileMode, content string) error {
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	// WriteFile honours the umask, so the mode is set explicitly to guarantee
+	// the .env is not group- or world-readable.
+	if err := os.Chmod(path, mode); err != nil {
+		return fmt.Errorf("set permissions on %s: %w", path, err)
+	}
+	return nil
+}
+
+func generateToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("system entropy unavailable: %w", err)
+	}
+	// URL-safe and unpadded, so it survives headers, shells and .env files
+	// without quoting.
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func initialConfig(dbPath, pluginsDir string) string {
+	tmpl := `# mcpd configuration.
+#
+# No secrets belong in this file. Credentials are referenced by name and
+# resolved at startup from the environment, a .env beside this file, or
+# systemd's LoadCredential directory.
+
+server:
+  # Loopback by default. mcpd speaks plain HTTP and carries bearer tokens, so
+  # put a TLS-terminating proxy in front of it before exposing it further.
+  listen: "127.0.0.1:9080"
+
+  # The operator dashboard, on its own port so a firewall rule can distinguish
+  # it from the MCP endpoint.
+  frontend_listen: "127.0.0.1:9090"
+  frontend_enabled: true
+
+  # The URL clients actually reach. It appears in OAuth metadata, so it must
+  # match exactly or a connector handshake fails at the redirect.
+  public_url: "http://localhost:9090"
+
+  read_header_timeout: 10s
+  read_timeout: 60s
+  write_timeout: 120s
+  idle_timeout: 120s
+  shutdown_timeout: 30s
+
+storage:
+  path: __DB__
+  plugins_dir: __PLUGINS__
+  busy_timeout: 5s
+
+  # Leave false. Under WAL, relaxed durability can lose the most recent
+  # transactions on power loss, and those transactions authorise
+  # infrastructure changes.
+  relaxed_durability: false
+
+auth:
+  # static: bearer tokens, for machine callers and for OpenAI's Secure MCP
+  #         Tunnel, which injects the header itself.
+  # oauth:  the built-in authorization server, for ChatGPT connectors that
+  #         authenticate a human.
+  # mixed:  both.
+  mode: static
+
+  static_tokens:
+    - id: local
+      secret_ref: env:MCPD_TOKEN_LOCAL
+      principal: user:operator
+      role: admin
+      # Which plugins this credential may reach. Everything else returns 404,
+      # so a scoped agent cannot discover what else is deployed.
+      plugins: ["*"]
+
+approval:
+  # Risk level from which the requester may not also approve.
+  #
+  # Empty here because a single static token is a single principal: requiring
+  # a distinct approver would refuse every change rather than degrade. Set it
+  # to "high" once auth.mode is oauth and real identities exist.
+  require_distinct_approver_at_or_above: ""
+
+  proposal_ttl: 30m
+  approval_ttl: 15m
+  lease_ttl: 2m
+
+logging:
+  level: info
+  format: json
+
+plugins:
+  echo:
+    enabled: true
+    required: false
+
+  cnmaestro:
+    enabled: false
+    required: false
+    settings:
+      base_url: "https://cloud.cambiumnetworks.com"
+      client_id_ref: client_id_ref
+      client_secret_ref: client_secret_ref
+      # Always explicit. Omitting it means different things depending on
+      # whether a request names a network.
+      managed_account: "Base Infrastructure"
+`
+	tmpl = strings.ReplaceAll(tmpl, "__DB__", dbPath)
+	return strings.ReplaceAll(tmpl, "__PLUGINS__", pluginsDir)
+}
+
+func initialEnv(token string) string {
+	return fmt.Sprintf(`# Secrets for mcpd. Mode 0600; never commit this file.
+#
+# Real environment variables take precedence over anything here, so an
+# orchestrator injecting a rotated secret is not overridden by a stale value.
+
+# Bearer token for the dashboard and for machine callers.
+MCPD_TOKEN_LOCAL=%s
+
+# cnMaestro OAuth client credentials, once that plugin is enabled.
+# MCPD_CNMAESTRO_CLIENT_ID=
+# MCPD_CNMAESTRO_CLIENT_SECRET=
+
+# Password for the administrator created on first start under auth.mode: oauth.
+# MCPD_BOOTSTRAP_PASSWORD=
+`, token)
+}

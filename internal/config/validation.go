@@ -244,7 +244,7 @@ func (c *Config) Warnings() []string {
 		out = append(out, "server.public_url is unset: OAuth metadata will not be served, "+
 			"so ChatGPT cannot discover how to authenticate.")
 	} else if u, err := url.Parse(c.Server.PublicURL); err == nil && u.Scheme == "http" {
-		if ip := net.ParseIP(strings.Trim(u.Hostname(), "[]")); ip == nil || !ip.IsLoopback() {
+		if !isLoopbackHost(u.Hostname()) {
 			// Loopback never leaves the machine and needs no warning. Anything
 			// else means the credential crosses a network.
 			out = append(out, fmt.Sprintf(
@@ -255,6 +255,17 @@ func (c *Config) Warnings() []string {
 		}
 	}
 	return out
+}
+
+// isLoopbackHost reports whether a host resolves only to this machine, by
+// name as well as by address.
+func isLoopbackHost(host string) bool {
+	lower := strings.ToLower(strings.Trim(host, "[]"))
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(lower)
+	return ip != nil && ip.IsLoopback()
 }
 
 // isPrivateHost reports whether a host is loopback or on a private network.

@@ -1,13 +1,16 @@
 # mcpd via Docker Compose.
 #
-#   cp .env.example .env      # then fill in the tokens
+#   cp .env.example .env
+#   $EDITOR .env            # at minimum, set MCPD_TOKEN_LOCAL
 #   docker compose up -d
 #
-# The default profile runs mcpd alone on loopback, which is what you want
-# behind an existing reverse proxy. The `tunnel` profile adds Cloudflare
-# Tunnel for exposing the host to ChatGPT over HTTPS without opening a port:
+# Secrets live in .env and are read two ways: Compose interpolates the few it
+# needs for ports and image tags, and env_file passes the whole file into the
+# container, where mcpd resolves the `env:` references in its config.
 #
-#   docker compose --profile tunnel up -d
+# Nothing here publishes the MCP endpoint beyond loopback. To reach it from
+# ChatGPT, use OpenAI's Secure MCP Tunnel -- see the `tunnel` profile below --
+# which connects outbound and needs no inbound port at all.
 
 name: mcpd
 
@@ -20,59 +23,112 @@ services:
     image: ghcr.io/dreulavelle/mcpd:${MCPD_VERSION:-dev}
     restart: unless-stopped
 
+    # The whole file is passed through, so any `env:` reference in config.yaml
+    # resolves without naming each variable here.
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      # Overrides server.frontend_listen so the container binds an
+      # unprivileged port while the host publishes 80. Keeps the container's
+      # capability set empty.
+      MCPD_FRONTEND_LISTEN: ":8081"
+
     ports:
-      # MCP endpoint, on loopback only. mcpd speaks plain HTTP and carries
-      # bearer tokens, so it must sit behind something that terminates TLS --
-      # the tunnel service below, or your own proxy.
+      # MCP endpoint, loopback only. mcpd speaks plain HTTP and carries bearer
+      # tokens, so it must sit behind TLS or a tunnel.
       - "127.0.0.1:${MCPD_PORT:-8080}:8080"
 
-      # Admin dashboard. Published on port 80 of the host, mapped to 8081
-      # inside the container: the container runs as a non-root user, and
-      # binding below 1024 would otherwise need CAP_NET_BIND_SERVICE. Mapping
-      # keeps the capability set empty.
-      #
-      # Bind it to a specific interface if this host faces the internet:
-      #   - "10.0.0.5:80:8081"
-      - "${MCPD_FRONTEND_PORT:-80}:8081"
+      # Admin dashboard. Bind it to a specific interface if this host faces
+      # anything untrusted:  - "10.0.0.5:80:8081"
+      - "${MCPD_FRONTEND_BIND:-127.0.0.1}:${MCPD_FRONTEND_PORT:-80}:8081"
 
     volumes:
       # Database and all mutable state. Named rather than bind-mounted so the
       # nonroot container user owns it without host-side chown.
       - mcpd-data:/var/lib/mcpd
 
-      # Configuration, read-only.
       - ./configs/example.yaml:/etc/mcpd/config.yaml:ro
 
-      # Plugin drop-in directory. Out-of-process plugins are discovered here,
-      # so a plugin can be added without rebuilding the image.
+      # Out-of-process plugins. Read-only: mcpd only ever executes what is
+      # here, and a writable mount would let anything that can write to the
+      # host replace a reviewed integration.
       - ./plugins:/var/lib/mcpd/plugins:ro
 
-    environment:
-      # Secrets arrive as environment variables and are referenced from the
-      # config file as env:NAME. They are never written into the YAML.
-      MCPD_TOKEN_CHATGPT: ${MCPD_TOKEN_CHATGPT:?set MCPD_TOKEN_CHATGPT in .env}
-      MCPD_BOOTSTRAP_PASSWORD: ${MCPD_BOOTSTRAP_PASSWORD:-}
-      # Overrides server.frontend_listen so the container binds an unprivileged
-      # port while the host publishes 80.
-      MCPD_FRONTEND_LISTEN: ":8081"
-      MCPD_CNMAESTRO_CLIENT_ID: ${MCPD_CNMAESTRO_CLIENT_ID:-}
-      MCPD_CNMAESTRO_CLIENT_SECRET: ${MCPD_CNMAESTRO_CLIENT_SECRET:-}
-
     healthcheck:
-      # The image has no shell and no curl, so the check runs mcpd itself.
-      # It validates configuration rather than probing HTTP, which is the most
-      # a shell-free image can do without adding a binary to attack.
+      # mcpd answers its own readiness probe, so the check needs no shell and
+      # no curl in an image that has neither.
       test: ["CMD", "/usr/local/bin/mcpd", "-config", "/etc/mcpd/config.yaml", "-check"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
 
-    # The container needs to write to exactly one place. Everything else is
-    # read-only, which removes the usual foothold after a compromise.
+    stop_grace_period: 60s
+
+    # The container writes to exactly one place. Everything else is read-only,
+    # which removes the usual foothold after a compromise.
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # OpenAI's Secure MCP Tunnel. Connects outbound to OpenAI and forwards
+  # JSON-RPC to mcpd, so ChatGPT can reach it with no inbound port, no public
+  # DNS, and no NAT rule.
+  #
+  #   docker compose --profile tunnel up -d
+  #
+  # Create the tunnel and a runtime API key at
+  # platform.openai.com/settings/organization/tunnels, then attach it in
+  # ChatGPT under Plugins -> create a developer-mode app -> Connection: Tunnel.
+  tunnel:
+    profiles: ["tunnel"]
+    image: ghcr.io/openai/tunnel-client:latest
+    restart: unless-stopped
+
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      CONTROL_PLANE_API_KEY: ${OPENAI_TUNNEL_API_KEY:?set OPENAI_TUNNEL_API_KEY in .env}
+      CONTROL_PLANE_TUNNEL_ID: ${OPENAI_TUNNEL_ID:?set OPENAI_TUNNEL_ID in .env}
+
+      # One tunnel maps to one MCP server URL, and mcpd serves one endpoint per
+      # plugin. That is a good fit with per-plugin scoping: give this tunnel a
+      # token scoped to exactly this plugin and the connector cannot reach any
+      # other, whatever it asks for.
+      MCP_SERVER_URL: http://mcpd:8080/mcp/${MCPD_TUNNEL_PLUGIN:-echo}
+
+      # tunnel-client injects this on every forwarded request, so mcpd's
+      # ordinary bearer authentication works through the tunnel with no OAuth
+      # and nothing public. Header values accept env: and file: references.
+      MCP_EXTRA_HEADERS: "Authorization: Bearer ${MCPD_TOKEN_LOCAL:?set MCPD_TOKEN_LOCAL in .env}"
+
+      # mcpd binds after the tunnel container may start, so hold the first
+      # poll until the listener is reachable.
+      MCP_STARTUP_WAIT_TIMEOUT: 60s
+
+    depends_on:
+      mcpd:
+        condition: service_healthy
+
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -83,24 +139,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  # Exposes mcpd to ChatGPT over HTTPS without opening an inbound port.
-  # Create the tunnel in the Cloudflare dashboard, point it at
-  # http://mcpd:8080, and put the token in .env.
-  tunnel:
-    profiles: ["tunnel"]
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
-    depends_on:
-      mcpd:
-        condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
 
 volumes:
   mcpd-data:
