@@ -229,3 +229,65 @@ func TestEnvOverrides_UnsetLeavesFileValues(t *testing.T) {
 		t.Fatalf("listen changed to %q with no override set", c.Server.Listen)
 	}
 }
+
+// Plaintext is refused for a public address but permitted on a private one:
+// that is where development happens, and the traffic does not cross a network
+// the operator does not control.
+func TestValidate_PlaintextPublicURL(t *testing.T) {
+	tests := []struct {
+		url   string
+		valid bool
+	}{
+		{"https://mcp.example.net", true},
+		{"http://localhost:9090", true},
+		{"http://127.0.0.1:9090", true},
+		{"http://192.168.50.125:9090", true},
+		{"http://10.0.0.5:9090", true},
+		{"http://172.16.4.1:9090", true},
+		{"http://[::1]:9090", true},
+		{"http://mcpd.local:9090", true},
+		{"http://mcpd.internal:9090", true},
+		// Publicly routable plaintext hands the token to anything on the path.
+		{"http://mcp.example.net", false},
+		{"http://8.8.8.8:9090", false},
+		{"ftp://mcp.example.net", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.url, func(t *testing.T) {
+			c := validConfig()
+			c.Server.PublicURL = tc.url
+			err := c.Validate()
+			if tc.valid && err != nil {
+				t.Fatalf("%s should be accepted: %v", tc.url, err)
+			}
+			if !tc.valid && err == nil {
+				t.Fatalf("%s should be refused", tc.url)
+			}
+		})
+	}
+}
+
+// A plaintext LAN address is allowed, but the operator must be told the token
+// is in the clear.
+func TestWarnings_FlagsPlaintextOnANetwork(t *testing.T) {
+	c := validConfig()
+	c.Server.PublicURL = "http://192.168.50.125:9090"
+
+	var found bool
+	for _, w := range c.Warnings() {
+		if strings.Contains(w, "in the clear") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a plaintext warning, got %v", c.Warnings())
+	}
+
+	// Loopback never leaves the machine, so it needs no warning.
+	c.Server.PublicURL = "http://127.0.0.1:9090"
+	for _, w := range c.Warnings() {
+		if strings.Contains(w, "in the clear") {
+			t.Fatal("loopback should not produce a plaintext warning")
+		}
+	}
+}

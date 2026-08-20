@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -39,10 +40,21 @@ func (c *Config) Validate() error {
 		switch {
 		case err != nil:
 			add("config: server.public_url is not a valid URL: %v", err)
-		case u.Scheme != "https" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1":
-			// ChatGPT will not connect to a plaintext endpoint, and a bearer
-			// token over HTTP is a credential given away.
-			add("config: server.public_url must use https (got %q)", u.Scheme)
+		case u.Host == "":
+			add("config: server.public_url has no host")
+		case u.Scheme == "https":
+			// Fine.
+		case u.Scheme == "http" && isPrivateHost(u.Hostname()):
+			// Plaintext is permitted on loopback and private networks, which
+			// is where development happens. Warnings() says out loud that the
+			// bearer token travels in the clear.
+		case u.Scheme == "http":
+			// A publicly routable plaintext endpoint hands the bearer token to
+			// anything on the path, and ChatGPT will not connect to one.
+			add("config: server.public_url must use https for a public address "+
+				"(got %q for host %q)", u.Scheme, u.Hostname())
+		default:
+			add("config: server.public_url must use http or https (got %q)", u.Scheme)
 		}
 	}
 	if c.Server.ShutdownTimeout <= 0 {
@@ -231,8 +243,48 @@ func (c *Config) Warnings() []string {
 	if c.Server.PublicURL == "" {
 		out = append(out, "server.public_url is unset: OAuth metadata will not be served, "+
 			"so ChatGPT cannot discover how to authenticate.")
+	} else if u, err := url.Parse(c.Server.PublicURL); err == nil && u.Scheme == "http" {
+		if ip := net.ParseIP(strings.Trim(u.Hostname(), "[]")); ip == nil || !ip.IsLoopback() {
+			// Loopback never leaves the machine and needs no warning. Anything
+			// else means the credential crosses a network.
+			out = append(out, fmt.Sprintf(
+				"server.public_url is plaintext http on %s: bearer tokens travel in the "+
+					"clear to anything on that network. Acceptable on a trusted LAN; put "+
+					"TLS in front before exposing it further. ChatGPT will not connect to "+
+					"a plaintext endpoint.", u.Hostname()))
+		}
 	}
 	return out
+}
+
+// isPrivateHost reports whether a host is loopback or on a private network.
+//
+// Plaintext is acceptable there because the traffic does not cross a network
+// the operator does not control. It is not a judgement that the traffic is
+// safe -- Warnings() still says the token is in the clear -- only that the
+// tradeoff is theirs to make on their own LAN.
+func isPrivateHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	// Named loopback, plus the .local and .internal suffixes used on LANs.
+	lower := strings.ToLower(host)
+	if lower == "localhost" ||
+		strings.HasSuffix(lower, ".localhost") ||
+		strings.HasSuffix(lower, ".local") ||
+		strings.HasSuffix(lower, ".internal") {
+		return true
+	}
+
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		// A public hostname, or one this check cannot classify. Fail closed.
+		return false
+	}
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsUnspecified()
 }
 
 func sortStrings(s []string) { sort.Strings(s) }
