@@ -16,6 +16,7 @@ import (
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/plugins/cnmaestro"
 	"github.com/spoked/mcpd/internal/plugins/echo"
+	"github.com/spoked/mcpd/internal/plugins/external"
 )
 
 // decodeSettings converts a plugin's untyped YAML settings into its own config
@@ -178,8 +179,59 @@ func (a *App) registerPlugins(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := a.registerExternalPlugins(ctx); err != nil {
+		return err
+	}
+
 	if len(a.manager.Names()) == 0 {
 		a.log.Warn("no plugins enabled; the host will serve only operational endpoints")
+	}
+	return nil
+}
+
+// registerExternalPlugins mounts every plugin found in the plugins directory.
+//
+// Discovery is additive: a plugin that fails to start is reported and skipped
+// unless its manifest marks it required. One bad directory in a bind mount
+// must not stop the others from loading.
+func (a *App) registerExternalPlugins(ctx context.Context) error {
+	dir := a.cfg.PluginsDir()
+
+	manifests, dirs, err := external.Discover(dir, a.log)
+	if err != nil {
+		return err
+	}
+	if len(manifests) == 0 {
+		return nil
+	}
+	a.log.Info("discovered external plugins", "dir", dir, "count", len(manifests))
+
+	for _, m := range manifests {
+		// A compiled-in plugin of the same name wins. Otherwise a writable
+		// bind mount could shadow an integration the operator reviewed.
+		if a.manager.Lookup(m.Name) != nil {
+			a.log.Warn("ignoring an external plugin that shadows a compiled-in one",
+				"plugin", m.Name)
+			continue
+		}
+
+		p := external.NewPlugin(dirs[m.Name], m, a.pluginDeps(m.Name))
+		if err := p.Handshake(ctx); err != nil {
+			if m.Required {
+				return fmt.Errorf("app: required external plugin %s: %w", m.Name, err)
+			}
+			a.log.Error("external plugin failed to start; continuing without it",
+				"plugin", m.Name, "error", err)
+			continue
+		}
+		if err := a.manager.Register(ctx, p, m.Required); err != nil {
+			if m.Required {
+				return err
+			}
+			a.log.Error("external plugin failed to register; continuing without it",
+				"plugin", m.Name, "error", err)
+			_ = p.Shutdown(ctx)
+		}
 	}
 	return nil
 }

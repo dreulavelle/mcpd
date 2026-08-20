@@ -25,6 +25,18 @@ type Config struct {
 	Plugins  map[string]PluginConfig `yaml:"plugins"`
 }
 
+// PluginsDir is where out-of-process plugins are discovered.
+//
+// Each subdirectory holds a plugin.json and its executable. It is a bind mount
+// in the container image, so an integration can be added or upgraded without
+// rebuilding mcpd.
+func (c *Config) PluginsDir() string {
+	if c.Storage.PluginsDir != "" {
+		return c.Storage.PluginsDir
+	}
+	return filepath.Join(c.StorageDir(), "plugins")
+}
+
 // Server configures the HTTP listener.
 type Server struct {
 	// Listen is the bind address. Default is loopback: mcpd expects to sit
@@ -72,6 +84,10 @@ type Storage struct {
 	// NORMAL can lose the most recent transactions on power loss, and those
 	// transactions authorise infrastructure changes.
 	RelaxedDurability bool `yaml:"relaxed_durability"`
+
+	// PluginsDir overrides where out-of-process plugins are discovered.
+	// Defaults to a plugins directory beside the database.
+	PluginsDir string `yaml:"plugins_dir"`
 }
 
 // Auth configures authentication.
