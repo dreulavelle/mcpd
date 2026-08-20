@@ -214,7 +214,7 @@ hr.soft{border:none;border-top:1px solid var(--rule-soft);margin:32px 0}
 <header class="masthead">
   <p class="eyebrow">Pre-implementation review &middot; 20 Aug 2026</p>
   <h1>mcpd&nbsp;Architecture Review</h1>
-  <p class="standfirst">A modular-monolith MCP host that gates every infrastructure mutation behind a durable approval state machine. <strong>The plugin model, the SQLite-as-authority rule, the outbox, and the two-step proposal flow are all correct and should be built as specified.</strong> Three things need to change before code is written, and one of the cnMaestro assumptions in the brief does not survive contact with the actual API.</p>
+  <p class="standfirst">A modular-monolith MCP host that gates every infrastructure mutation behind a durable approval state machine. <strong>The plugin model, the SQLite-as-authority rule, the outbox, and the two-step proposal flow are all correct and should be built as specified.</strong> Three things need to change before code is written, and one of the cnMaestro assumptions in the brief does not survive contact with the actual API. <strong>Revised 20 Aug against cnMaestro 6.3.0</strong>, which answers half the open API questions and surfaces three hazards that were not visible in 5.0.1.</p>
   <div class="verdict">
     <span class="v-keep">KEEP &nbsp;modular monolith</span>
     <span class="v-keep">KEEP &nbsp;SQLite authority</span>
@@ -1170,15 +1170,56 @@ WantedBy=multi-user.target</pre>
 <!-- ============ 10 ============ -->
 <section id="s10">
 <div class="sec-head"><span class="sec-num">10</span><h2>cnMaestro API findings</h2></div>
-<p class="lede">Sourced from the OpenAPI 3.0 specification that Cambium's own documentation viewer loads at <code>docs.cloud.cambiumnetworks.com/api/5.0.1/yaml/schemas/v2/</code> — the machine-readable spec, not the rendered page. Everything marked CONFIRMED was read from that spec. Nothing here is inferred from model knowledge.</p>
+<p class="lede">Sourced from the OpenAPI specification Cambium's own documentation viewer loads, at <code>docs.cloud.cambiumnetworks.com/api/latest/yaml/schemas/v2/</code>. Everything marked CONFIRMED was read from that machine-readable spec, not from the rendered page and not from model knowledge.</p>
+<div class="call c-note">
+  <span class="tag">Revised against 6.3.0</span>
+  <p>This section originally targeted <strong>5.0.1</strong>. <code>/api/latest/</code> now serves <strong>6.3.0</strong>, and it is not a cosmetic bump: the spec moved to OpenAPI 3.2.0, grew from 112 to 178 paths, <strong>types its responses for the first time</strong>, renamed a family of path parameters, and deprecated offset pagination. Four of the eight questions I had flagged for live validation are now answered by the spec itself. Three new hazards appeared that were not present in 5.0.1.</p>
+</div>
 
-<h3>The headline finding</h3>
+<h3>What changed, and why each one matters</h3>
+<div class="tw">
+<table>
+<thead><tr><th>Change</th><th>Consequence</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>Responses are now typed.</strong> 5.0.1 declared every success as bare <code>'200': description: OK</code>. 6.3.0 <code>$ref</code>s real schemas under <code>responses/v2/</code>.</td>
+<td>The largest gap in the original findings closes. Device, statistics and client models can be generated from the spec instead of reverse-engineered from live captures. <span class="chip ch-ok">RESOLVED</span></td>
+</tr>
+<tr>
+<td><strong>Identifiers became names.</strong> <code>{network_id}</code> → <code>{network_name}</code>, <code>{site_id}</code> → <code>{site_name}</code>, <code>{tower_id}</code> → <code>{tower_name}</code>, <code>{portal_id}</code> → <code>{portalName}</code>.</td>
+<td>Targets are addressed by a <em>mutable</em> attribute. A network renamed between proposal and execution silently retargets or fails an approved operation, so the name must be captured in <code>Plan.Preconditions</code> and re-checked at claim time — not merely stored in the target. <span class="chip ch-warn">DESIGN IMPACT</span></td>
+</tr>
+<tr>
+<td><strong>Offset pagination is deprecated</strong>, "removed in the 6.4.0 release. Please use continuation token-based pagination instead." A <code>continuation_token</code> query parameter and a <code>next_continuation_token</code> response field replace it.</td>
+<td>Build the client on continuation tokens from day one. The response envelope offers <code>cursor_paging</code> alongside the legacy <code>offset_paging</code>, so both shapes must be handled during the transition. <span class="chip ch-warn">DESIGN IMPACT</span></td>
+</tr>
+<tr>
+<td><strong>6 GHz radios exist</strong>, and the overrides array grew from <code>maxItems: 2</code> to <code>maxItems: 5</code>.</td>
+<td>Radio IDs now overlap across bands: 2.4 GHz is id 1, 5 GHz is id 1–2, 6 GHz is id 2–3. <strong>A radio ID alone is ambiguous.</strong> The mutation target must carry band <em>and</em> id, or it will address the wrong radio. <span class="chip ch-bad">CORRECTION</span></td>
+</tr>
+<tr>
+<td><strong><code>overrides</code> now requires <code>ap_group</code>.</strong> The schema carries a conditional: if <code>overrides</code> is present then <code>ap_group</code> is required.</td>
+<td>A channel change cannot send only the radio block — it must also name the AP group. Sending the wrong one <em>moves the device between groups</em> as a side effect of a channel change. <code>Plan</code> must read the current <code>ap_group</code> and echo it back verbatim. <span class="chip ch-bad">NEW HAZARD</span></td>
+</tr>
+<tr>
+<td><strong>A second remote-execution endpoint.</strong> <code>POST /cnwave60/devices/{mac}/remote_command</code>, with a companion <code>list_commands</code>.</td>
+<td>Joins <code>/devices/{mac}/cli</code> on the permanent deny-list. The list is now demonstrably not static, which is the argument for enforcing it in the client layer with a test rather than by reviewing each new mutation. <span class="chip ch-bad">NEW HAZARD</span></td>
+</tr>
+<tr>
+<td><strong>Large new surface:</strong> EasyPass, Market Apps, NSE Groups, Certificate Bundles, Association ACL, Reports, <code>/devices/{mac}/network_info</code>, <code>/devices/{mac}/dns_filtering</code>. <code>/cnarcher/*</code> is gone, replaced by <code>/installation/summary</code>.</td>
+<td>None of it is needed for v1. Worth knowing that the guest-access and multi-tenant surfaces are far larger than the original review assumed, and carry their own write endpoints. <span class="chip ch-ok">SCOPE NOTE</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h3>The multi-tenancy trap</h3>
+<p>6.3.0 documents <code>managed_account</code> in detail for the first time, and what it documents is alarming for an agent-driven client. Three behaviours compound:</p>
 <div class="call c-cut">
-  <span class="tag">The brief's motivating example does not map to the API</span>
-  <p>There is no <code>radio.set_channel</code> endpoint, and no radio resource of any kind. Changing an AP's channel is a <strong>device configuration override</strong>: <code>PUT /api/v2/devices/{mac}</code> with a body containing <code>overrides.radios[]</code>. Three consequences follow, and each one changes the design:</p>
-  <p><code>channel</code> is a <strong>string enum</strong> — <code>"36"</code>, <code>"149"</code>, <code>"auto"</code> — not an integer. The brief's <code>Channel int</code> would fail validation. Same for <code>power</code>. Only <code>channel_width</code> is an integer.</p>
-  <p>It is a <strong>configuration intent</strong>, applied asynchronously by cnMaestro to the device. HTTP 200 means the override was accepted, not that the radio moved. Verification is genuinely two-phase, and <code>ApplyResult.Async</code> exists for exactly this.</p>
-  <p><strong>Whether <code>PUT overrides</code> merges or replaces is undocumented — and it is the single highest-risk unknown in this integration.</strong> If it replaces, a channel change silently discards every other override on that AP. No amount of approval workflow catches that, because the approver would be shown a correct one-field diff while the request wipes six other fields. This must be settled against a real controller before any write ships.</p>
+  <span class="tag">Read this before writing a single read tool</span>
+  <p><strong>Omitting the parameter does not mean one thing.</strong> The default depends on whether the request names a network. <code>GET /devices</code> spans <em>every</em> account; <code>GET /devices?network=Campus-1</code> returns only the Main Account. The same split applies to <code>/alarms</code> and <code>/alarms/history</code>. An agent that adds a network filter to narrow a query also silently changes which tenants it can see.</p>
+  <p><strong>The value you read back is not the value you send.</strong> Main Account objects report <code>"managed_account": ""</code>, and that empty string is never valid to send — it is treated as omission, falling back to the ambiguous default above. Round-tripping a read value into a write silently changes scope, which is precisely how a mutation lands in the wrong tenant.</p>
+  <p><strong>Therefore: always send <code>managed_account</code> explicitly.</strong> Never derive it from a response. The plugin's client must require it on every call and map the Main Account to the literal <code>Base Infrastructure</code>, whose matching is exact and case-sensitive.</p>
 </div>
 
 <h3>Authentication and transport</h3>
@@ -1186,109 +1227,75 @@ WantedBy=multi-user.target</pre>
 <table>
 <thead><tr><th>Fact</th><th>Detail</th><th>Status</th></tr></thead>
 <tbody>
-<tr><td>Grant type</td><td>OAuth 2.0 Client Credentials, RFC 6749 §4.4. <code>grant_type=client_credentials</code>, client id/secret Base64 in the Authorization header.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Grant type</td><td>OAuth 2.0 Client Credentials, RFC 6749 §4.4. <code>grant_type=client_credentials</code>, id and secret Base64 in the Authorization header.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
 <tr><td>Token endpoint</td><td><code>POST /api/v2/access/token</code>. Cloud: <code>cloud.cambiumnetworks.com</code>. On-prem: the appliance host.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
 <tr><td>Token lifetime</td><td><code>expires_in: 3600</code>. Refresh proactively at ~80%; never on 401, which would couple credential handling to error paths.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
-<tr><td>Scopes</td><td><code>scopes: {}</code> in the security scheme. There is no scope model — the token is all-or-nothing at account level, so least privilege must be enforced by <em>us</em>, in the mutation allow-list.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
-<tr><td>Cloud redirect</td><td>The Cloud token response includes a <code>redirect_uri</code>; subsequent API calls must go to <em>that</em> host, not to <code>cloud.cambiumnetworks.com</code>. Cloud accounts are regionally sharded. Ignoring this is a classic first-integration failure.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
-<tr><td>API version</td><td><code>servers: [{url: /api/v2}]</code>, spec version 5.0.1. v1 exists and is deprecated.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
-<tr><td>Rate limits</td><td>HTTP 429 is documented as a possible response. No published limit, no documented <code>Retry-After</code>. Assume a low ceiling, use a bounded client-side limiter, and honour <code>Retry-After</code> if present.</td><td><span class="chip ch-warn">NEEDS VALIDATION</span></td></tr>
-<tr><td>Pagination</td><td><code>limit</code> and <code>offset</code>, both untyped <code>integer</code> with no documented maximum or default. Response envelope shape is not in the spec.</td><td><span class="chip ch-warn">NEEDS VALIDATION</span></td></tr>
-<tr><td>Cloud vs on-prem</td><td>Same v2 surface and spec. On-prem lags in version; MSP paths are Cloud-oriented. No documented behavioural diff.</td><td><span class="chip ch-warn">NEEDS VALIDATION</span></td></tr>
-<tr><td>Response schemas</td><td><strong>The spec declares response bodies only as <code>'200': description: OK</code>.</strong> Not one response is typed. Every model must be built from live captures against a real controller.</td><td><span class="chip ch-bad">NOT SPECIFIED</span></td></tr>
+<tr><td>Scopes</td><td><code>scopes: {}</code>. There is no scope model — the token is all-or-nothing at account level, so least privilege must be enforced by <em>us</em>, in the mutation allow-list.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Cloud redirect</td><td>The Cloud token response carries a <code>redirect_uri</code>; subsequent calls must target <em>that</em> host. Cloud accounts are regionally sharded, and ignoring this is the classic first-integration failure.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Spec version</td><td>6.3.0, OpenAPI 3.2.0, <code>servers: [{url: /api/v2}]</code>. v1 exists and is deprecated.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Pagination</td><td><code>limit</code> plus <code>continuation_token</code>. <code>offset</code> is deprecated and removed in 6.4.0. No documented maximum for <code>limit</code>.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Response envelope</td><td><code>{paging: {limit, total, status, next_continuation_token}, warnings: [string], data: [...]}</code>. Note <code>warnings</code> — a 200 can carry partial-failure detail that must not be discarded.</td><td><span class="chip ch-ok">CONFIRMED</span></td></tr>
+<tr><td>Rate limits</td><td>429 is documented as a possible response. No published limit, no documented <code>Retry-After</code>. Assume a low ceiling and use a bounded client-side limiter.</td><td><span class="chip ch-warn">STILL UNDOCUMENTED</span></td></tr>
+<tr><td>Cloud vs on-prem</td><td>Same v2 surface and spec. On-prem lags in version; MSP paths are Cloud-oriented.</td><td><span class="chip ch-warn">NEEDS VALIDATION</span></td></tr>
 </tbody>
 </table>
 </div>
 
-<h3>Read endpoints — confirmed present in the v2 spec</h3>
-<div class="tw">
-<table>
-<thead><tr><th>Path</th><th>Query parameters</th><th>Proposed tool</th></tr></thead>
-<tbody>
-<tr><td class="mono">GET /devices</td><td class="mono">limit, offset, fields, search, network, status, online, sort, tower, site, deviceType, managed_account</td><td><code>cnmaestro_list_devices</code></td></tr>
-<tr><td class="mono">GET /devices/{mac}</td><td class="mono">fields, network, status, deviceType</td><td><code>cnmaestro_get_device</code></td></tr>
-<tr><td class="mono">GET /devices/statistics</td><td class="mono">limit, offset, …</td><td rowspan="2"><code>cnmaestro_device_statistics</code></td></tr>
-<tr><td class="mono">GET /devices/{mac}/statistics</td><td class="mono">—</td></tr>
-<tr><td class="mono">GET /devices/{mac}/performance</td><td class="mono">start, stop</td><td><code>cnmaestro_device_performance</code></td></tr>
-<tr><td class="mono">GET /devices/clients</td><td rowspan="2" class="mono">limit, offset, filters</td><td rowspan="2"><code>cnmaestro_list_clients</code></td></tr>
-<tr><td class="mono">GET /devices/{mac}/clients</td></tr>
-<tr><td class="mono">GET /devices/{mac}/clients/summary</td><td class="mono">—</td><td><code>cnmaestro_client_summary</code></td></tr>
-<tr><td class="mono">GET /devices/wired_clients</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_wired_clients</code></td></tr>
-<tr><td class="mono">GET /devices/mesh/peers</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_mesh_peers</code></td></tr>
-<tr><td class="mono">GET /alarms</td><td rowspan="2" class="mono">limit, offset, severity, network, …</td><td rowspan="2"><code>cnmaestro_list_alarms</code></td></tr>
-<tr><td class="mono">GET /alarms/history</td></tr>
-<tr><td class="mono">GET /events</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_events</code></td></tr>
-<tr><td class="mono">GET /networks</td><td rowspan="3" class="mono">limit, offset</td><td rowspan="3"><code>cnmaestro_list_topology</code></td></tr>
-<tr><td class="mono">GET /networks/{network_id}/sites</td></tr>
-<tr><td class="mono">GET /networks/{network_id}/towers</td></tr>
-<tr><td class="mono">GET /wifi_enterprise/ap_groups</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_ap_groups</code></td></tr>
-<tr><td class="mono">GET /wifi_enterprise/wlans</td><td class="mono">limit, offset</td><td><code>cnmaestro_list_wlans</code></td></tr>
-<tr><td class="mono">GET /jobs</td><td class="mono">limit, offset, job_type</td><td rowspan="2"><code>cnmaestro_get_job</code></td></tr>
-<tr><td class="mono">GET /jobs/{job_id}/details</td><td class="mono">job_type</td></tr>
-<tr><td class="mono">GET /configuration/templates</td><td class="mono">limit, offset, template_type</td><td><code>cnmaestro_list_templates</code></td></tr>
-</tbody>
-</table>
+<h3>The radio-channel mutation, corrected</h3>
+<p>There is still no <code>radio.set_channel</code> endpoint, and the shape of the real one is now better understood — and more dangerous than the 5.0.1 spec suggested.</p>
+<div class="panel">
+<div class="panel-title">PUT /api/v2/devices/{mac} — what a channel change actually sends</div>
+<pre>{
+  "ap_group": "Campus-Indoor",        <i>// REQUIRED whenever overrides is present.</i>
+                                      <i>// Wrong value ⇒ device moves group.</i>
+  "overrides": {
+    "radios": [                       <i>// maxItems: 5</i>
+      {
+        "id": 2,                      <i>// AMBIGUOUS ALONE: 5 GHz is 1-2, 6 GHz is 2-3</i>
+        "channel": "149",             <i>// STRING enum, not integer. "auto" is valid.</i>
+        "channel_width": 80,          <i>// integer</i>
+        "power": "auto"               <i>// STRING enum</i>
+      }
+    ]
+  }
+}</pre>
 </div>
-<p class="footnote">Paths are CONFIRMED from the spec; every response <em>shape</em> is NEEDS VALIDATION. The listed metrics in the brief — noise floor, SNR, airtime utilisation, retries, roaming history — are plausible fields of <code>/statistics</code> and <code>/performance</code> but cannot be confirmed from a spec that types no responses. Build models from live captures, and expose only fields actually observed.</p>
+<p>Three corrections to the original design follow. <code>channel</code> and <code>power</code> are string enums, so <code>Channel int</code> fails validation. The radio target needs band alongside id. And <code>ap_group</code> must be read by <code>Plan</code> and echoed back, because omitting it fails the schema while guessing it relocates the device.</p>
 
-<h3>Write endpoints — and what to do with each</h3>
+<h3>Write endpoints</h3>
 <div class="tw">
 <table>
 <thead><tr><th>Path</th><th>Method</th><th>Assessment</th><th>Risk</th></tr></thead>
 <tbody>
-<tr><td class="mono">/devices/{mac}/reboot</td><td class="mono">POST</td><td>No request body, no idempotency key. A retried reboot is a second reboot — so <code>Apply</code> must return <code>ErrIndeterminate</code> on timeout, never retry. Verify via uptime reset in <code>/statistics</code>.</td><td><span class="chip ch-warn">MEDIUM</span></td></tr>
-<tr><td class="mono">/devices/{mac}</td><td class="mono">PUT</td><td>The real configuration path, including <code>overrides.radios[]</code>. <code>additionalProperties: false</code>, <code>minProperties: 1</code>. Merge-vs-replace unknown — see the headline finding.</td><td><span class="chip ch-warn">MEDIUM–HIGH</span></td></tr>
-<tr><td class="mono">/devices/{mac}/disconnect_clients</td><td class="mono">POST</td><td>Bounded, observable, naturally idempotent. A reasonable second mutation to implement.</td><td><span class="chip ch-warn">MEDIUM</span></td></tr>
-<tr><td class="mono">/configuration/commit</td><td class="mono">PUT</td><td>Commits pending AP-group / WLAN changes. <strong>Note the documented default: uncommitted changes auto-commit 30 seconds after the last write, and each write resets the timer.</strong> There is a 30-second window in which a "proposed" group change is already live-pending. Any group-level mutation must account for this, or the approval gate is decorative.</td><td><span class="chip ch-bad">HIGH</span></td></tr>
+<tr><td class="mono">/devices/{mac}/reboot</td><td class="mono">POST</td><td>No body, no idempotency key. A retried reboot is a second reboot, so <code>Apply</code> must return <code>ErrIndeterminate</code> on timeout and never retry. Verify via uptime reset.</td><td><span class="chip ch-warn">MEDIUM</span></td></tr>
+<tr><td class="mono">/devices/{mac}</td><td class="mono">PUT</td><td>The real configuration path. Requires <code>ap_group</code> alongside <code>overrides</code>. Merge-vs-replace remains undocumented.</td><td><span class="chip ch-warn">MEDIUM–HIGH</span></td></tr>
+<tr><td class="mono">/devices/{mac}/disconnect_clients</td><td class="mono">POST</td><td>Bounded, observable, naturally idempotent. A reasonable second mutation.</td><td><span class="chip ch-warn">MEDIUM</span></td></tr>
+<tr><td class="mono">/configuration/commit</td><td class="mono">PUT</td><td>Commits pending AP-group and WLAN changes. <strong>Uncommitted changes auto-commit 30 seconds after the last write, and each write resets the timer.</strong> Any group-level mutation must account for that window or the approval gate is decorative.</td><td><span class="chip ch-bad">HIGH</span></td></tr>
 <tr><td class="mono">/wifi_enterprise/wlans/{name}</td><td class="mono">PUT/DELETE</td><td>Service-affecting for every client on the WLAN. Defer past v1.</td><td><span class="chip ch-bad">HIGH</span></td></tr>
-<tr><td class="mono">/jobs</td><td class="mono">POST</td><td>Creates a software-update job. Genuinely asynchronous with a pollable job id — a good fit for <code>ApplyResult{Async: true, UpstreamRef: jobID}</code>. Defer past v1.</td><td><span class="chip ch-bad">CRITICAL</span></td></tr>
+<tr><td class="mono">/jobs</td><td class="mono">POST</td><td>Software-update job. Genuinely asynchronous with a pollable id — a good fit for <code>ApplyResult{Async: true}</code>. Defer past v1.</td><td><span class="chip ch-bad">CRITICAL</span></td></tr>
 <tr><td class="mono">/devices/{mac}</td><td class="mono">DELETE</td><td>Device removal. Not implemented at any risk level in v1.</td><td><span class="chip ch-bad">CRITICAL</span></td></tr>
 </tbody>
 </table>
 </div>
 
 <div class="call c-cut">
-  <span class="tag">Permanently blocked — assert this in code</span>
-  <p>cnMaestro exposes <code>POST /devices/{mac}/cli</code>: "Initiate execution of CLI command," supported on Enterprise Wi-Fi and cnMatrix devices. That is arbitrary remote command execution on network infrastructure, reachable with the same account-wide token as everything else.</p>
-  <p style="margin-top:10px">The brief forbids <code>execute_shell</code> in the abstract; the vendor ships one in practice. <code>/devices/{mac}/cli</code>, <code>/devices/{mac}/pull_config</code>, <code>/devices/{mac}/traceroute</code>, <code>/devices/{mac}/ping</code>, and the cnWave <code>iperf</code> endpoints belong on an explicit deny-list in the client layer, enforced below the mutation registry so no future mutation spec can reach them — with a test that fails if any registered mutation resolves to a blocked path. A deny-list that only exists as a decision in a document is not a control.</p>
+  <span class="tag">Permanently blocked — enforced in code, with a test</span>
+  <p><code>POST /devices/{mac}/cli</code> — "Initiate execution of CLI command," on Enterprise Wi-Fi and cnMatrix devices. <code>POST /cnwave60/devices/{mac}/remote_command</code> — new in 6.3.0, same capability for 60 GHz nodes. Both are arbitrary remote command execution on network infrastructure, reachable with the same account-wide token as everything else.</p>
+  <p style="margin-top:10px">Also denied: <code>pull_config</code>, <code>traceroute</code>, <code>ping</code>, and the cnWave <code>iperf</code> endpoints. The deny-list is enforced in the HTTP client, below the mutation registry, so no future mutation can reach a blocked path — with a test that fails if one resolves to it. That a second execution endpoint appeared between 5.0.1 and 6.3.0 is the argument for enforcing this mechanically rather than by review.</p>
 </div>
 
-<h3>Proposed v1 mutation surface</h3>
-<p>Two mutations, both low-blast-radius, both verifiable, both exercising a different part of the machinery.</p>
-<div class="grid2">
-<div class="card">
-<h5>device.set_radio_channel</h5>
-<pre style="padding:0;font-size:12px">type SetRadioChannel struct {
-  MAC     string <i>`json:"mac"`</i>
-  RadioID int    <i>`json:"radio_id"`</i>
-  Channel string <i>`json:"channel"`</i>
-  Width   *int   <i>`json:"width,omitempty"`</i>
-}</pre>
-<p style="margin-top:12px"><code>Plan</code> reads <code>GET /devices/{mac}</code> for current overrides. <code>Apply</code> issues the <code>PUT</code>. <code>Observe</code> re-reads and compares. Exercises async verification and precondition drift.</p>
-</div>
-<div class="card">
-<h5>device.reboot</h5>
-<pre style="padding:0;font-size:12px">type RebootDevice struct {
-  MAC    string <i>`json:"mac"`</i>
-  Reason string <i>`json:"reason"`</i>
-}</pre>
-<p style="margin-top:12px">The simplest possible mutation, and the sharpest test of the indeterminate path: no idempotency key upstream, so an ambiguous <code>POST</code> genuinely cannot be retried. Exercises <code>ErrIndeterminate</code> and the reconciler.</p>
-</div>
-</div>
-
-<h3>Must be answered against a live controller before writes ship</h3>
+<h3>Still requiring a live controller</h3>
+<p>Four of the original eight questions are answered by the 6.3.0 spec. These remain, and the first still gates every write:</p>
 <ol class="body">
-<li><strong>Does <code>PUT /devices/{mac}</code> merge or replace the <code>overrides</code> object?</strong> Everything else is secondary to this.</li>
-<li>What does <code>GET /devices/{mac}</code> actually return — configured overrides, effective configuration, or both? Verification is meaningless without knowing which.</li>
-<li>Where does the <em>operating</em> channel appear, as distinct from the configured one? Likely <code>/devices/{mac}/statistics</code>, unconfirmed.</li>
-<li>Does any response carry an ETag, revision, or generation? If not, optimistic concurrency degrades to field-snapshot comparison, which is weaker and must be documented as such.</li>
-<li>What is the actual 429 threshold, and is <code>Retry-After</code> returned?</li>
-<li>What is the maximum accepted <code>limit</code>, and what is the list-response envelope?</li>
-<li>How long does a radio override take to reach the device? This sets the verifier's backoff ceiling.</li>
-<li>Does the <code>/configuration/commit</code> 30-second auto-commit timer apply to device-level overrides, or only to AP-group and WLAN changes? If it applies to overrides, the approval gate needs rethinking for that path.</li>
+<li><strong>Does <code>PUT /devices/{mac}</code> merge or replace the <code>overrides</code> object?</strong> If it replaces, a channel change silently discards every other override while showing the approver a correct one-field diff. Nothing in the schema settles this.</li>
+<li>Does <code>GET /devices/{mac}</code> return configured overrides, effective configuration, or both? Verification is meaningless without knowing which.</li>
+<li>Where does the <em>operating</em> channel appear, as distinct from the configured one? <code>/devices/{mac}/statistics</code> is now typed, so this is close to answerable from the spec alone.</li>
+<li>Does any response carry an ETag or revision? If not, optimistic concurrency degrades to field-snapshot comparison and must be documented as weaker.</li>
+<li>The actual 429 threshold, and whether <code>Retry-After</code> is returned.</li>
+<li>How long a radio override takes to reach the device — this sets the verifier's backoff ceiling.</li>
+<li>Whether the <code>/configuration/commit</code> 30-second auto-commit applies to device-level overrides or only to group and WLAN changes.</li>
 </ol>
 </section>
-
 <section>
 <div class="sec-head"><span class="sec-num">→</span><h2>Stop point</h2></div>
 <p>Sections 1–10 complete. No implementation code has been written; the repository contains only this document.</p>
