@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/operations"
-	"github.com/spoked/mcpd/internal/storage"
 )
 
 // OperationStore implements storage.OperationRepository.
@@ -42,7 +41,7 @@ const opColumns = `
 
 // Propose implements TX-1: insert the operation, its idempotency record, its
 // first transition, its audit entry and its outbox event, atomically.
-func (s *OperationStore) Propose(ctx context.Context, req storage.ProposeRequest) (*operations.Operation, error) {
+func (s *OperationStore) Propose(ctx context.Context, req operations.RepoProposeRequest) (*operations.Operation, error) {
 	op := req.Operation
 	if op == nil {
 		return nil, fmt.Errorf("sqlite: propose requires an operation")
@@ -75,7 +74,7 @@ func (s *OperationStore) Propose(ctx context.Context, req storage.ProposeRequest
 			op.CorrelationID, op.IdempotencyKey)
 		if err != nil {
 			if IsConstraint(err) {
-				return storage.ErrIdempotencyConflict
+				return operations.ErrIdempotencyConflict
 			}
 			return fmt.Errorf("sqlite: insert operation: %w", err)
 		}
@@ -111,7 +110,7 @@ func (s *OperationStore) Propose(ctx context.Context, req storage.ProposeRequest
 // The expected source state is part of the UPDATE's WHERE clause, so the check
 // and the write are one atomic operation. Two approvers racing cannot both
 // succeed: the second finds zero matching rows.
-func (s *OperationStore) Transition(ctx context.Context, req storage.TransitionRequest) (*operations.Operation, error) {
+func (s *OperationStore) Transition(ctx context.Context, req operations.TransitionRequest) (*operations.Operation, error) {
 	now := s.now().UnixMilli()
 
 	set := []string{"state = ?"}
@@ -141,7 +140,7 @@ func (s *OperationStore) Transition(ctx context.Context, req storage.TransitionR
 	err := s.db.WriteTx(ctx, now, func(u *UnitOfWork) error {
 		if err := u.execGuarded(query, args...); err != nil {
 			if errors.Is(err, ErrNoRowsAffected) {
-				return storage.ErrStateConflict
+				return operations.ErrStateConflict
 			}
 			return err
 		}
@@ -167,7 +166,7 @@ func (s *OperationStore) Transition(ctx context.Context, req storage.TransitionR
 // the operation must still be approved, its stored payload hash must match
 // what the caller verified, and the approval must not have expired. Anything
 // else matches zero rows and the caller learns it lost the race.
-func (s *OperationStore) Claim(ctx context.Context, req storage.ClaimRequest) (*operations.Operation, error) {
+func (s *OperationStore) Claim(ctx context.Context, req operations.ClaimRequest) (*operations.Operation, error) {
 	now := s.now().UnixMilli()
 	var attemptNo int
 
@@ -222,7 +221,7 @@ func (s *OperationStore) Claim(ctx context.Context, req storage.ClaimRequest) (*
 }
 
 // Settle implements TX-4: record the outcome of an execution attempt.
-func (s *OperationStore) Settle(ctx context.Context, req storage.SettleRequest) (*operations.Operation, error) {
+func (s *OperationStore) Settle(ctx context.Context, req operations.SettleRequest) (*operations.Operation, error) {
 	now := s.now().UnixMilli()
 
 	// Indeterminate is not terminal: it awaits reconciliation.
@@ -233,7 +232,7 @@ func (s *OperationStore) Settle(ctx context.Context, req storage.SettleRequest) 
 		var raw string
 		if err := u.queryRow(`SELECT state FROM operations WHERE id = ?`, req.OperationID).Scan(&raw); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return storage.ErrNotFound
+				return operations.ErrNotFound
 			}
 			return err
 		}
@@ -258,7 +257,7 @@ func (s *OperationStore) Settle(ctx context.Context, req storage.SettleRequest) 
 			`UPDATE operations SET %s WHERE id = ? AND state = ?`,
 			strings.Join(set, ", ")), args...); err != nil {
 			if errors.Is(err, ErrNoRowsAffected) {
-				return storage.ErrStateConflict
+				return operations.ErrStateConflict
 			}
 			return err
 		}
@@ -298,13 +297,13 @@ func (s *OperationStore) Get(ctx context.Context, id string) (*operations.Operat
 		`SELECT `+opColumns+` FROM operations WHERE id = ?`, id)
 	op, err := scanOperation(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, storage.ErrNotFound
+		return nil, operations.ErrNotFound
 	}
 	return op, err
 }
 
 // List returns operations matching f, newest first.
-func (s *OperationStore) List(ctx context.Context, f storage.ListFilter) ([]*operations.Operation, error) {
+func (s *OperationStore) List(ctx context.Context, f operations.ListFilter) ([]*operations.Operation, error) {
 	var where []string
 	var args []any
 	if f.Plugin != "" {
@@ -399,7 +398,7 @@ func (s *OperationStore) byIdempotencyKey(ctx context.Context, scope, key, reque
 		return nil, nil
 	}
 	if storedHash != requestHash {
-		return nil, storage.ErrIdempotencyConflict
+		return nil, operations.ErrIdempotencyConflict
 	}
 	return s.Get(ctx, opID)
 }

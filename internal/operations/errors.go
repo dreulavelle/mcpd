@@ -1,6 +1,10 @@
 package operations
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/spoked/mcpd/internal/auth"
+)
 
 // Sentinel errors for conditions callers routinely branch on.
 var (
@@ -27,9 +31,9 @@ const (
 	CodePreconditionChanged = "PRECONDITION_CHANGED"
 	CodeProposalExpired     = "PROPOSAL_EXPIRED"
 	CodeApprovalExpired     = "APPROVAL_EXPIRED"
-	CodeSelfApproval        = "SELF_APPROVAL_FORBIDDEN"
-	CodeIdentityIndistinct  = "IDENTITY_INDISTINCT"
-	CodeNotAuthorized       = "NOT_AUTHORIZED"
+	CodeSelfApproval        = auth.CodeSelfApproval
+	CodeIdentityIndistinct  = auth.CodeIdentityIndistinct
+	CodeNotAuthorized       = auth.CodeNotAuthorized
 	CodeUpstreamFailed      = "UPSTREAM_FAILED"
 	CodeIndeterminate       = "INDETERMINATE"
 	CodeVerificationFailed  = "VERIFICATION_FAILED"

@@ -220,3 +220,35 @@ func isSystem(actor string) bool {
 	return actor == SystemActor || (len(actor) > len(SystemActor) &&
 		actor[:len(SystemActor)+1] == SystemActor+":")
 }
+
+// subjectFor maps a state to the event subject announcing it.
+//
+// The mapping lives here, next to the states themselves, so that adding a
+// state without deciding what it publishes is a compile-time omission rather
+// than a silent one. The messaging package owns the subject strings; this
+// duplicates the small set the domain needs so that operations does not depend
+// on the transport layer.
+func subjectFor(state OperationState) string {
+	switch state {
+	case StatePendingApproval:
+		return "mcp.operation.proposed"
+	case StateApproved:
+		return "mcp.operation.approved"
+	case StateRejected:
+		return "mcp.operation.rejected"
+	case StateCancelled:
+		return "mcp.operation.cancelled"
+	case StateExpired:
+		return "mcp.operation.expired"
+	case StateExecuting:
+		return "mcp.operation.executing"
+	case StateSucceeded:
+		return "mcp.operation.succeeded"
+	case StateFailed:
+		return "mcp.operation.failed"
+	case StateIndeterminate:
+		return "mcp.operation.indeterminate"
+	default:
+		return ""
+	}
+}

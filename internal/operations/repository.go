@@ -1,18 +1,34 @@
-// Package storage declares the persistence contracts the domain depends on.
-// Implementations live in subpackages; nothing here imports a database driver.
-package storage
+package operations
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
-
-	"github.com/spoked/mcpd/internal/operations"
 )
 
-// Event is an envelope queued in the outbox as part of a state change. It
+// The repository contracts live here, beside the domain that consumes them,
+// rather than in the storage package. Declaring an interface next to its
+// caller is the Go convention, and here it also breaks what would otherwise be
+// a cycle: the domain would import storage for these types while storage
+// imported the domain for Operation.
+
+// Persistence errors callers routinely branch on.
+var (
+	// ErrStateConflict reports that a guarded transition found the operation
+	// in a different state than expected. Under concurrency this is an
+	// ordinary outcome: another actor got there first.
+	ErrStateConflict = errors.New("operations: operation is no longer in the expected state")
+
+	// ErrIdempotencyConflict reports an idempotency key reused with a
+	// different request body. Returning the first operation would execute
+	// something the caller did not ask for.
+	ErrIdempotencyConflict = errors.New("operations: idempotency key reused with a different payload")
+)
+
+// OutboxEvent is an envelope queued in the outbox as part of a state change. It
 // becomes a message on the bus once the publisher drains it.
-type Event struct {
+type OutboxEvent struct {
 	ID            string
 	Subject       string
 	OperationID   string
@@ -29,20 +45,20 @@ type AuditEntry struct {
 	Plugin        string
 	Action        string
 	Actor         string
-	FromState     operations.OperationState
-	ToState       operations.OperationState
-	Risk          operations.RiskLevel
+	FromState     OperationState
+	ToState       OperationState
+	Risk          RiskLevel
 	CorrelationID string
 	// Detail must already be redacted. The storage layer will not strip
 	// credentials it does not know how to recognise.
 	Detail json.RawMessage
 }
 
-// ProposeRequest carries everything TX-1 writes.
-type ProposeRequest struct {
-	Operation *operations.Operation
+// RepoProposeRequest carries everything TX-1 writes.
+type RepoProposeRequest struct {
+	Operation *Operation
 	Audit     AuditEntry
-	Event     Event
+	Event     OutboxEvent
 	// RequestHash lets a repeated idempotency key with a different body be
 	// rejected rather than silently returning the first operation.
 	RequestHash string
@@ -53,12 +69,12 @@ type ProposeRequest struct {
 // TransitionRequest carries a guarded state change: TX-2 and TX-6.
 type TransitionRequest struct {
 	OperationID string
-	From        operations.OperationState
-	To          operations.OperationState
+	From        OperationState
+	To          OperationState
 	Actor       string
 	Reason      string
 	Audit       AuditEntry
-	Event       Event
+	Event       OutboxEvent
 
 	// Approval is set when To is StateApproved.
 	Approval *ApprovalFields
@@ -89,14 +105,14 @@ type ClaimRequest struct {
 	LeaseExpiresAt time.Time
 	AttemptID      string
 	Audit          AuditEntry
-	Event          Event
+	Event          OutboxEvent
 }
 
 // SettleRequest carries TX-4: the outcome of an execution attempt.
 type SettleRequest struct {
 	OperationID string
 	AttemptID   string
-	To          operations.OperationState
+	To          OperationState
 	Actor       string
 	Reason      string
 	Verified    *bool
@@ -105,48 +121,48 @@ type SettleRequest struct {
 	ErrorCode   string
 	ErrorDetail string
 	Audit       AuditEntry
-	Event       Event
+	Event       OutboxEvent
 }
 
 // ListFilter narrows an operation listing.
 type ListFilter struct {
 	Plugin string
-	States []operations.OperationState
+	States []OperationState
 	Limit  int
 	Offset int
 }
 
-// OperationRepository persists operations and their state changes. Every
+// Repository persists operations and their state changes. Every
 // method that changes state does so atomically with the corresponding
 // transition, audit entry, and outbox event.
-type OperationRepository interface {
+type Repository interface {
 	// Propose writes a new operation in pending_approval (TX-1). It returns
 	// ErrIdempotencyConflict if the key was reused with a different payload,
 	// and the existing operation if the key was reused with the same payload.
-	Propose(ctx context.Context, req ProposeRequest) (*operations.Operation, error)
+	Propose(ctx context.Context, req RepoProposeRequest) (*Operation, error)
 
-	Get(ctx context.Context, id string) (*operations.Operation, error)
-	List(ctx context.Context, f ListFilter) ([]*operations.Operation, error)
+	Get(ctx context.Context, id string) (*Operation, error)
+	List(ctx context.Context, f ListFilter) ([]*Operation, error)
 
 	// Transition applies a guarded state change (TX-2, TX-6). It returns
 	// ErrStateConflict when the operation is no longer in the expected state.
-	Transition(ctx context.Context, req TransitionRequest) (*operations.Operation, error)
+	Transition(ctx context.Context, req TransitionRequest) (*Operation, error)
 
 	// Claim moves an approved operation into executing (TX-3). It returns
-	// operations.ErrClaimLost when another worker won the race.
-	Claim(ctx context.Context, req ClaimRequest) (*operations.Operation, error)
+	// ErrClaimLost when another worker won the race.
+	Claim(ctx context.Context, req ClaimRequest) (*Operation, error)
 
 	// Settle records the outcome of an execution attempt (TX-4).
-	Settle(ctx context.Context, req SettleRequest) (*operations.Operation, error)
+	Settle(ctx context.Context, req SettleRequest) (*Operation, error)
 
 	// DueForExpiry returns operations whose proposal or approval deadline has
 	// passed, and executing operations whose lease has lapsed.
-	DueForExpiry(ctx context.Context, now time.Time, limit int) ([]*operations.Operation, error)
+	DueForExpiry(ctx context.Context, now time.Time, limit int) ([]*Operation, error)
 
 	// Claimable returns approved operations awaiting execution. This is both
 	// the executor's startup scan and the polling fallback that keeps work
 	// moving when an event is missed.
-	Claimable(ctx context.Context, limit int) ([]*operations.Operation, error)
+	Claimable(ctx context.Context, limit int) ([]*Operation, error)
 }
 
 // OutboxRepository drains queued events onto the bus.

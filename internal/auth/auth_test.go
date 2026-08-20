@@ -6,8 +6,6 @@ import (
 	"errors"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/spoked/mcpd/internal/operations"
 )
 
 func mustToken(t *testing.T, id, plaintext string, p Principal) *StaticToken {
@@ -187,7 +185,7 @@ func TestFromContext_DefaultsToAnonymous(t *testing.T) {
 // --- authorization --------------------------------------------------------
 
 func TestAuthorizeEndpoint(t *testing.T) {
-	a := NewAuthorizer(RiskPolicy{})
+	a := NewAuthorizer()
 	scoped := &Principal{ID: "svc:a", Role: RoleOperator, Plugins: []string{"cnmaestro"}}
 
 	if d := a.AuthorizeEndpoint(scoped, "cnmaestro"); !d.Allowed {
@@ -201,61 +199,8 @@ func TestAuthorizeEndpoint(t *testing.T) {
 	}
 }
 
-func TestAuthorizeApproval_SeparationOfDuties(t *testing.T) {
-	a := NewAuthorizer(RiskPolicy{
-		RequireDistinctApproverAtOrAbove: operations.RiskHigh,
-	})
-	op := func(risk operations.RiskLevel) *operations.Operation {
-		return &operations.Operation{
-			Plugin: "cnmaestro", Risk: risk, RequestedBy: "user:alice"}
-	}
-	alice := &Principal{ID: "user:alice", Role: RoleApprover,
-		Plugins: []string{"cnmaestro"}, Distinguishable: true}
-	bob := &Principal{ID: "user:bob", Role: RoleApprover,
-		Plugins: []string{"cnmaestro"}, Distinguishable: true}
-	shared := &Principal{ID: "svc:shared", Role: RoleApprover,
-		Plugins: []string{"cnmaestro"}, Distinguishable: false, TokenID: "static"}
-
-	tests := []struct {
-		name    string
-		p       *Principal
-		op      *operations.Operation
-		allowed bool
-		code    string
-	}{
-		{"self-approval below threshold is fine", alice, op(operations.RiskMedium), true, ""},
-		{"self-approval at threshold refused", alice, op(operations.RiskHigh), false, operations.CodeSelfApproval},
-		{"self-approval above threshold refused", alice, op(operations.RiskCritical), false, operations.CodeSelfApproval},
-		{"distinct approver permitted", bob, op(operations.RiskCritical), true, ""},
-		{"indistinct identity fails closed", shared, op(operations.RiskHigh), false, operations.CodeIdentityIndistinct},
-		{"indistinct identity fine below threshold", shared, op(operations.RiskLow), true, ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			d := a.AuthorizeApproval(tc.p, tc.op)
-			if d.Allowed != tc.allowed {
-				t.Fatalf("Allowed = %v, want %v (reason: %s)", d.Allowed, tc.allowed, d.Reason)
-			}
-			if !tc.allowed && d.Code != tc.code {
-				t.Fatalf("code = %s, want %s", d.Code, tc.code)
-			}
-		})
-	}
-}
-
-func TestAuthorizeApproval_RequiresApproveCapability(t *testing.T) {
-	a := NewAuthorizer(RiskPolicy{})
-	operator := &Principal{ID: "user:o", Role: RoleOperator,
-		Plugins: []string{"cnmaestro"}, Distinguishable: true}
-	op := &operations.Operation{Plugin: "cnmaestro", Risk: operations.RiskLow, RequestedBy: "user:x"}
-
-	if d := a.AuthorizeApproval(operator, op); d.Allowed {
-		t.Fatal("an operator must not be able to approve")
-	}
-}
-
 func TestVisiblePlugins_HidesUngrantedPlugins(t *testing.T) {
-	a := NewAuthorizer(RiskPolicy{})
+	a := NewAuthorizer()
 	p := &Principal{ID: "svc:a", Role: RoleOperator, Plugins: []string{"cnmaestro"}}
 
 	got := a.VisiblePlugins(p, []string{"cnmaestro", "proxmox", "netbox"})

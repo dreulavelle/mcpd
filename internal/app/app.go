@@ -37,6 +37,7 @@ type App struct {
 
 	oauthStore  *oauth.Store
 	oauthServer *oauth.Server
+	approval    *operations.ApprovalPolicy
 	server      *http.Server
 	host        *mcphost.Host
 }
@@ -115,7 +116,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			return nil, err
 		}
 	}
-	authorizer := auth.NewAuthorizer(auth.RiskPolicy{
+	authorizer := auth.NewAuthorizer()
+	a.approval = operations.NewApprovalPolicy(authorizer, operations.RiskPolicy{
 		RequireDistinctApproverAtOrAbove: operations.RiskLevel(
 			cfg.Approval.RequireDistinctApproverAtOrAbove),
 	})

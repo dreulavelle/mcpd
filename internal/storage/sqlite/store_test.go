@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/operations"
-	"github.com/spoked/mcpd/internal/storage"
 )
 
 var testClock = time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
@@ -69,15 +68,15 @@ func proposeOp(t *testing.T, s *OperationStore, id string) *operations.Operation
 		CorrelationID:  "corr-" + id,
 		IdempotencyKey: "idem-" + id,
 	}
-	got, err := s.Propose(context.Background(), storage.ProposeRequest{
+	got, err := s.Propose(context.Background(), operations.RepoProposeRequest{
 		Operation:   op,
 		RequestHash: hash,
-		Audit: storage.AuditEntry{
+		Audit: operations.AuditEntry{
 			EventID: "aud-" + id, Kind: "operation.proposed", OperationID: id,
 			Plugin: op.Plugin, Action: op.Action, Actor: op.RequestedBy,
 			ToState: op.State, Risk: op.Risk, CorrelationID: op.CorrelationID,
 		},
-		Event: storage.Event{
+		Event: operations.OutboxEvent{
 			ID: "evt-" + id, Subject: "mcp.operation.proposed",
 			OperationID: id, CorrelationID: op.CorrelationID,
 			Payload: json.RawMessage(`{"operation_id":"` + id + `"}`),
@@ -91,22 +90,22 @@ func proposeOp(t *testing.T, s *OperationStore, id string) *operations.Operation
 
 func approve(t *testing.T, s *OperationStore, id, approver string) (*operations.Operation, error) {
 	t.Helper()
-	return s.Transition(context.Background(), storage.TransitionRequest{
+	return s.Transition(context.Background(), operations.TransitionRequest{
 		OperationID: id,
 		From:        operations.StatePendingApproval,
 		To:          operations.StateApproved,
 		Actor:       approver,
-		Approval: &storage.ApprovalFields{
+		Approval: &operations.ApprovalFields{
 			ApprovedBy:        approver,
 			ApprovedAt:        testClock,
 			ApprovalExpiresAt: testClock.Add(15 * time.Minute),
 		},
-		Audit: storage.AuditEntry{
+		Audit: operations.AuditEntry{
 			EventID: "aud-approve-" + approver + "-" + id, Kind: "operation.approved",
 			OperationID: id, Actor: approver, FromState: operations.StatePendingApproval,
 			ToState: operations.StateApproved, CorrelationID: "corr-" + id,
 		},
-		Event: storage.Event{
+		Event: operations.OutboxEvent{
 			ID: "evt-approve-" + approver + "-" + id, Subject: "mcp.operation.approved",
 			OperationID: id, CorrelationID: "corr-" + id,
 			Payload: json.RawMessage(`{}`),
@@ -163,7 +162,7 @@ func TestTransition_ConcurrentApprovalYieldsExactlyOneWinner(t *testing.T) {
 			switch {
 			case err == nil:
 				wins.Add(1)
-			case errors.Is(err, storage.ErrStateConflict):
+			case errors.Is(err, operations.ErrStateConflict):
 				conflicts.Add(1)
 			default:
 				t.Errorf("unexpected error: %v", err)
@@ -211,18 +210,18 @@ func TestClaim_ConcurrentClaimsYieldExactlyOneExecutor(t *testing.T) {
 			defer wg.Done()
 			id := string(rune('a' + n))
 			<-start
-			_, err := s.Claim(context.Background(), storage.ClaimRequest{
+			_, err := s.Claim(context.Background(), operations.ClaimRequest{
 				OperationID:    "op_claim",
 				ExpectedHash:   op.PayloadHash,
 				InstanceID:     "mcpd-" + id,
 				LeaseExpiresAt: testClock.Add(time.Minute),
 				AttemptID:      "attempt-" + id,
-				Audit: storage.AuditEntry{
+				Audit: operations.AuditEntry{
 					EventID: "aud-claim-" + id, Kind: "operation.executing",
 					OperationID: "op_claim", Actor: "mcpd-" + id,
 					CorrelationID: "corr-op_claim",
 				},
-				Event: storage.Event{
+				Event: operations.OutboxEvent{
 					ID: "evt-claim-" + id, Subject: "mcp.operation.executing",
 					OperationID: "op_claim", Payload: json.RawMessage(`{}`),
 				},
@@ -272,14 +271,14 @@ func TestClaim_RefusesTamperedPayloadHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := s.Claim(context.Background(), storage.ClaimRequest{
+	_, err := s.Claim(context.Background(), operations.ClaimRequest{
 		OperationID:    "op_tamper",
 		ExpectedHash:   "not-the-stored-hash",
 		InstanceID:     "mcpd-01",
 		LeaseExpiresAt: testClock.Add(time.Minute),
 		AttemptID:      "attempt-1",
-		Audit:          storage.AuditEntry{EventID: "a1", Kind: "x", Actor: "sys", CorrelationID: "c"},
-		Event:          storage.Event{ID: "e1", Subject: "s", Payload: json.RawMessage(`{}`)},
+		Audit:          operations.AuditEntry{EventID: "a1", Kind: "x", Actor: "sys", CorrelationID: "c"},
+		Event:          operations.OutboxEvent{ID: "e1", Subject: "s", Payload: json.RawMessage(`{}`)},
 	})
 	if !errors.Is(err, operations.ErrClaimLost) {
 		t.Fatalf("expected claim to be refused, got %v", err)
@@ -299,14 +298,14 @@ func TestClaim_RefusesExpiredApproval(t *testing.T) {
 	// Advance past the 15-minute approval window.
 	clock = testClock.Add(time.Hour)
 
-	_, err := s.Claim(context.Background(), storage.ClaimRequest{
+	_, err := s.Claim(context.Background(), operations.ClaimRequest{
 		OperationID:    "op_stale",
 		ExpectedHash:   op.PayloadHash,
 		InstanceID:     "mcpd-01",
 		LeaseExpiresAt: clock.Add(time.Minute),
 		AttemptID:      "attempt-1",
-		Audit:          storage.AuditEntry{EventID: "a1", Kind: "x", Actor: "sys", CorrelationID: "c"},
-		Event:          storage.Event{ID: "e1", Subject: "s", Payload: json.RawMessage(`{}`)},
+		Audit:          operations.AuditEntry{EventID: "a1", Kind: "x", Actor: "sys", CorrelationID: "c"},
+		Event:          operations.OutboxEvent{ID: "e1", Subject: "s", Payload: json.RawMessage(`{}`)},
 	})
 	if !errors.Is(err, operations.ErrClaimLost) {
 		t.Fatalf("an approval past its execute-by deadline must not be claimable, got %v", err)
@@ -382,11 +381,11 @@ func TestIdempotency_ReplayReturnsOriginalAndConflictIsRefused(t *testing.T) {
 	// duplicate operation.
 	replay := *first
 	replay.ID = "op_idem_replay"
-	got, err := s.Propose(context.Background(), storage.ProposeRequest{
+	got, err := s.Propose(context.Background(), operations.RepoProposeRequest{
 		Operation:   &replay,
 		RequestHash: first.PayloadHash,
-		Audit:       storage.AuditEntry{EventID: "a-r", Kind: "x", Actor: "u", CorrelationID: "c"},
-		Event:       storage.Event{ID: "e-r", Subject: "s", Payload: json.RawMessage(`{}`)},
+		Audit:       operations.AuditEntry{EventID: "a-r", Kind: "x", Actor: "u", CorrelationID: "c"},
+		Event:       operations.OutboxEvent{ID: "e-r", Subject: "s", Payload: json.RawMessage(`{}`)},
 	})
 	if err != nil {
 		t.Fatalf("replay should succeed: %v", err)
@@ -399,13 +398,13 @@ func TestIdempotency_ReplayReturnsOriginalAndConflictIsRefused(t *testing.T) {
 	// would execute something the caller did not ask for.
 	conflict := *first
 	conflict.ID = "op_idem_conflict"
-	_, err = s.Propose(context.Background(), storage.ProposeRequest{
+	_, err = s.Propose(context.Background(), operations.RepoProposeRequest{
 		Operation:   &conflict,
 		RequestHash: "a-different-request-hash",
-		Audit:       storage.AuditEntry{EventID: "a-c", Kind: "x", Actor: "u", CorrelationID: "c"},
-		Event:       storage.Event{ID: "e-c", Subject: "s", Payload: json.RawMessage(`{}`)},
+		Audit:       operations.AuditEntry{EventID: "a-c", Kind: "x", Actor: "u", CorrelationID: "c"},
+		Event:       operations.OutboxEvent{ID: "e-c", Subject: "s", Payload: json.RawMessage(`{}`)},
 	})
-	if !errors.Is(err, storage.ErrIdempotencyConflict) {
+	if !errors.Is(err, operations.ErrIdempotencyConflict) {
 		t.Fatalf("expected idempotency conflict, got %v", err)
 	}
 }
@@ -416,22 +415,22 @@ func TestSettle_IndeterminateIsNotTerminal(t *testing.T) {
 	if _, err := approve(t, s, "op_indet", "user:bob"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Claim(context.Background(), storage.ClaimRequest{
+	if _, err := s.Claim(context.Background(), operations.ClaimRequest{
 		OperationID: "op_indet", ExpectedHash: op.PayloadHash,
 		InstanceID: "mcpd-01", LeaseExpiresAt: testClock.Add(time.Minute),
 		AttemptID: "att-1",
-		Audit:     storage.AuditEntry{EventID: "a-cl", Kind: "x", Actor: "sys", CorrelationID: "c"},
-		Event:     storage.Event{ID: "e-cl", Subject: "s", Payload: json.RawMessage(`{}`)},
+		Audit:     operations.AuditEntry{EventID: "a-cl", Kind: "x", Actor: "sys", CorrelationID: "c"},
+		Event:     operations.OutboxEvent{ID: "e-cl", Subject: "s", Payload: json.RawMessage(`{}`)},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	settled, err := s.Settle(context.Background(), storage.SettleRequest{
+	settled, err := s.Settle(context.Background(), operations.SettleRequest{
 		OperationID: "op_indet", AttemptID: "att-1",
 		To: operations.StateIndeterminate, Actor: "system:executor",
 		ErrorCode: operations.CodeIndeterminate,
-		Audit:     storage.AuditEntry{EventID: "a-st", Kind: "x", Actor: "sys", CorrelationID: "c"},
-		Event:     storage.Event{ID: "e-st", Subject: "s", Payload: json.RawMessage(`{}`)},
+		Audit:     operations.AuditEntry{EventID: "a-st", Kind: "x", Actor: "sys", CorrelationID: "c"},
+		Event:     operations.OutboxEvent{ID: "e-st", Subject: "s", Payload: json.RawMessage(`{}`)},
 	})
 	if err != nil {
 		t.Fatal(err)

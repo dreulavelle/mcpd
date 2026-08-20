@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spoked/mcpd/internal/storage"
+	"github.com/spoked/mcpd/internal/messaging"
+	"github.com/spoked/mcpd/internal/operations"
 )
 
 // OutboxStore implements storage.OutboxRepository.
@@ -27,7 +28,7 @@ func NewOutboxStore(db *DB, now func() time.Time) *OutboxStore {
 //
 // Ordering by seq preserves the order in which state changes were committed,
 // so a consumer never sees an operation succeed before it sees it start.
-func (s *OutboxStore) Pending(ctx context.Context, now time.Time, limit int) ([]storage.PendingEvent, error) {
+func (s *OutboxStore) Pending(ctx context.Context, now time.Time, limit int) ([]operations.PendingEvent, error) {
 	if limit <= 0 {
 		limit = 128
 	}
@@ -42,9 +43,9 @@ func (s *OutboxStore) Pending(ctx context.Context, now time.Time, limit int) ([]
 	}
 	defer rows.Close()
 
-	var out []storage.PendingEvent
+	var out []operations.PendingEvent
 	for rows.Next() {
-		var e storage.PendingEvent
+		var e operations.PendingEvent
 		var payload string
 		if err := rows.Scan(&e.Seq, &e.EventID, &e.Subject, &e.OperationID,
 			&e.CorrelationID, &payload, &e.Attempts); err != nil {
@@ -124,4 +125,33 @@ func truncate(s string, n int) any {
 		return s[:n]
 	}
 	return s
+}
+
+// Pending implements messaging.OutboxReader.
+//
+// The messaging package declares its own view of an outbox row so that it does
+// not depend on the domain packages that queue events into it. This adapter is
+// the seam between the two, and it is deliberately the only place the two
+// shapes are mapped.
+type MessagingAdapter struct{ *OutboxStore }
+
+// Pending returns unpublished events in the messaging package's shape.
+func (a MessagingAdapter) Pending(ctx context.Context, now time.Time, limit int) ([]messaging.PendingEvent, error) {
+	rows, err := a.OutboxStore.Pending(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]messaging.PendingEvent, len(rows))
+	for i, r := range rows {
+		out[i] = messaging.PendingEvent{
+			Seq:           r.Seq,
+			EventID:       r.EventID,
+			Subject:       r.Subject,
+			OperationID:   r.OperationID,
+			CorrelationID: r.CorrelationID,
+			Payload:       r.Payload,
+			Attempts:      r.Attempts,
+		}
+	}
+	return out, nil
 }

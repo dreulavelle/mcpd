@@ -6,8 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-
-	"github.com/spoked/mcpd/internal/storage"
+	"github.com/spoked/mcpd/internal/operations"
 )
 
 // genesisHash seeds the audit chain. Its only requirement is that it is a
@@ -23,7 +22,7 @@ const genesisHash = "00000000000000000000000000000000000000000000000000000000000
 //
 // This is unexported and takes a UnitOfWork because an audit entry must never
 // be written outside the transaction that caused it.
-func (u *UnitOfWork) appendAudit(e storage.AuditEntry) error {
+func (u *UnitOfWork) appendAudit(e operations.AuditEntry) error {
 	var prev string
 	err := u.queryRow(`SELECT entry_hash FROM audit_events ORDER BY seq DESC LIMIT 1`).Scan(&prev)
 	switch {
@@ -60,7 +59,7 @@ func (u *UnitOfWork) appendAudit(e storage.AuditEntry) error {
 // Fields are length-prefixed so that boundaries cannot be shifted: without
 // them, actor "ab" with kind "c" would hash identically to actor "a" with
 // kind "bc".
-func chainHash(prev string, at int64, e storage.AuditEntry, detail []byte) string {
+func chainHash(prev string, at int64, e operations.AuditEntry, detail []byte) string {
 	h := sha256.New()
 	parts := [][]byte{
 		[]byte(prev),
@@ -88,7 +87,7 @@ func chainHash(prev string, at int64, e storage.AuditEntry, detail []byte) strin
 // that produced it. This is the entire defence against a dual-write
 // inconsistency between the database and the event bus: there is no code path
 // that changes state without queueing an event, because both happen here.
-func (u *UnitOfWork) enqueue(e storage.Event) error {
+func (u *UnitOfWork) enqueue(e operations.OutboxEvent) error {
 	if e.ID == "" || e.Subject == "" {
 		return fmt.Errorf("sqlite: outbox event requires an id and subject")
 	}
