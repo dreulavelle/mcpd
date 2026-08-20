@@ -64,17 +64,33 @@ export interface AuditRecord {
   detail?: unknown;
 }
 
+export interface Tool {
+  name: string;
+  /** "read" looks things up; "propose" suggests a change for approval. */
+  kind: "read" | "propose";
+}
+
+export interface Setting {
+  key: string;
+  value: string;
+  /** True when the real value was withheld. */
+  secret: boolean;
+}
+
 export interface Plugin {
   name: string;
   version: string;
   title: string;
   description: string;
   endpoint: string;
+  /** Full address to paste into a client. */
+  connect_url: string;
   health: "healthy" | "degraded" | "unhealthy";
   health_message?: string;
-  tools: string[];
+  tools: Tool[];
   mutations: string[];
   required: boolean;
+  settings: Setting[];
 }
 
 export interface HealthCheck {

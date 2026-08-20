@@ -1,14 +1,16 @@
-// Command hello is a complete mcpd plugin in one file.
+// Command echo is a complete mcpd plugin in one file.
 //
-// Build it and drop it into the plugins directory:
+// It is the same Echo integration mcpd ships built in, written instead as a
+// standalone program, so it doubles as the template for a real one. Build it
+// and drop it into the plugins directory:
 //
-//	go build -o /var/lib/mcpd/plugins/hello/hello ./examples/hello
-//	cat > /var/lib/mcpd/plugins/hello/plugin.json <<'JSON'
-//	{"name": "hello", "exec": "hello"}
-//	JSON
+//	go build -o /var/lib/mcpd/plugins/echo/echo ./examples/echo
+//	echo '{"name":"echo","exec":"echo"}' > /var/lib/mcpd/plugins/echo/plugin.json
 //
-// mcpd mounts it at /mcp/hello on the next restart. Nothing about the host
-// changes.
+// mcpd mounts it at /mcp/echo on the next restart. Nothing about the host
+// changes. (If the built-in echo is also enabled, the compiled-in one wins --
+// a writable plugins directory must not be able to shadow a reviewed
+// integration.)
 package main
 
 import (
@@ -21,9 +23,10 @@ import (
 )
 
 func main() {
-	p := sdk.New("hello", "1.0.0", "Hello",
-		"A worked example of an out-of-process mcpd plugin. It keeps a greeting "+
-			"in memory and lets you read it immediately or change it with approval.")
+	p := sdk.New("echo", "1.0.0", "Echo",
+		"A test connection for checking that everything works. It has one "+
+			"lookup and one harmless change you can practise approving. It "+
+			"touches nothing outside mcpd.")
 
 	state := &greeting{value: "hello"}
 
@@ -117,7 +120,7 @@ func (s *setGreeting) Plan(_ context.Context, in SetGreetingParams) (sdk.Plan[Gr
 		Changes: []sdk.Change{
 			{Field: "greeting", From: current, To: value},
 		},
-		Impact:   "Changes the wording returned by hello_greet. Nothing else is affected.",
+		Impact:   "Changes the wording returned by the greet tool. Nothing else is affected.",
 		Rollback: SetGreetingParams{Greeting: current},
 	}, nil
 }

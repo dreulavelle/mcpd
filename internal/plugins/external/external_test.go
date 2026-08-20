@@ -23,23 +23,23 @@ func buildExample(t *testing.T) (root, name string) {
 	}
 
 	root = t.TempDir()
-	dir := filepath.Join(root, "hello")
+	dir := filepath.Join(root, "echo")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "hello"),
-		"github.com/spoked/mcpd/examples/hello")
+	cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "echo"),
+		"github.com/spoked/mcpd/examples/echo")
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building the example plugin failed: %v\n%s", err, out)
 	}
 
-	manifest := `{"name":"hello","exec":"hello"}`
+	manifest := `{"name":"echo","exec":"echo"}`
 	if err := os.WriteFile(filepath.Join(dir, "plugin.json"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return root, "hello"
+	return root, "echo"
 }
 
 func testDeps() plugins.Deps {
@@ -74,7 +74,7 @@ func TestExternalPlugin_EndToEnd(t *testing.T) {
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
 
 	d := p.Descriptor()
-	if d.Name != "hello" || d.Version != "1.0.0" {
+	if d.Name != "echo" || d.Version != "1.0.0" {
 		t.Fatalf("descriptor = %+v", d)
 	}
 

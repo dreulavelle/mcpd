@@ -10,9 +10,12 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
@@ -34,6 +37,18 @@ type Options struct {
 	Version    string
 	// Audit reads the append-only trail.
 	Audit AuditReader
+
+	// PublicURL is the address clients reach, used to render a connect URL an
+	// operator can copy rather than assemble.
+	PublicURL string
+
+	// PluginSettings returns a plugin's configuration block for display.
+	// Values that name credentials are withheld before they are sent.
+	PluginSettings func(plugin string) map[string]any
+
+	// AuthMode names the configured authentication mode, so the setup guide
+	// can show the steps that actually apply.
+	AuthMode string
 }
 
 // AuditReader is the slice of the audit store the dashboard needs.
@@ -266,16 +281,41 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, fn decisionFunc)
 }
 
 type pluginDTO struct {
-	Name        string   `json:"name"`
-	Version     string   `json:"version"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Endpoint    string   `json:"endpoint"`
-	Health      string   `json:"health"`
-	Message     string   `json:"health_message,omitempty"`
-	Tools       []string `json:"tools"`
-	Mutations   []string `json:"mutations"`
-	Required    bool     `json:"required"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Endpoint    string `json:"endpoint"`
+	// ConnectURL is the full address to paste into a client, rather than the
+	// bare path. It is the thing an operator actually needs and the thing they
+	// are most likely to assemble wrongly by hand.
+	ConnectURL string       `json:"connect_url"`
+	Health     string       `json:"health"`
+	Message    string       `json:"health_message,omitempty"`
+	Tools      []toolDTO    `json:"tools"`
+	Mutations  []string     `json:"mutations"`
+	Required   bool         `json:"required"`
+	Settings   []settingDTO `json:"settings"`
+}
+
+// toolDTO describes one tool for the plugin list.
+type toolDTO struct {
+	Name string `json:"name"`
+	// Kind separates what a tool can do, which is the distinction that
+	// matters to whoever is deciding whether to hand out access.
+	Kind string `json:"kind"` // "read" or "propose"
+}
+
+// settingDTO is one plugin configuration value.
+//
+// Values that look like credentials are never sent. They are configured by
+// reference rather than by value, so the reference is what an operator needs
+// to see anyway -- and the dashboard is a place a screen gets shared.
+type settingDTO struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+	// Secret marks a value that was withheld.
+	Secret bool `json:"secret"`
 }
 
 func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
@@ -289,15 +329,99 @@ func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		h := m.Health()
+		mutations := m.Registry.MutationActions()
+
+		// A propose tool is derived from a mutation action, so the two views
+		// are reconciled here rather than leaving the UI to guess which is
+		// which from a name.
+		proposeTools := make(map[string]bool, len(mutations))
+		for _, action := range mutations {
+			proposeTools[d.Name+"_"+strings.ReplaceAll(action, ".", "_")] = true
+		}
+
+		tools := make([]toolDTO, 0, len(m.Registry.ToolNames()))
+		for _, name := range m.Registry.ToolNames() {
+			kind := "read"
+			if proposeTools[name] {
+				kind = "propose"
+			}
+			tools = append(tools, toolDTO{Name: name, Kind: kind})
+		}
+		for name := range proposeTools {
+			tools = append(tools, toolDTO{Name: name, Kind: "propose"})
+		}
+		sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
+
 		out = append(out, pluginDTO{
 			Name: d.Name, Version: d.Version, Title: d.Title,
 			Description: d.Description, Endpoint: d.Endpoint(),
-			Health: string(h.State), Message: h.Message,
-			Tools: m.Registry.ToolNames(), Mutations: m.Registry.MutationActions(),
-			Required: m.Required,
+			ConnectURL: s.connectURL(d.Endpoint()),
+			Health:     string(h.State), Message: h.Message,
+			Tools:     tools,
+			Mutations: mutations,
+			Required:  m.Required,
+			Settings:  s.settingsFor(d.Name),
 		})
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"plugins": out, "count": len(out)})
+}
+
+// connectURL builds the address a client connects to.
+func (s *Server) connectURL(endpoint string) string {
+	base := strings.TrimRight(s.opts.PublicURL, "/")
+	if base == "" {
+		return endpoint
+	}
+	return base + endpoint
+}
+
+// secretish reports whether a configuration key names a credential.
+//
+// Matching on the key rather than inspecting the value is deliberate: a
+// reference like "env:MCPD_TOKEN" is not itself secret, but a key named
+// "password" holding a literal certainly is, and the dashboard is a place a
+// screen gets shared.
+func secretish(key string) bool {
+	lower := strings.ToLower(key)
+	for _, marker := range []string{
+		"secret", "password", "passwd", "token", "key", "credential", "auth",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// settingsFor renders a plugin's configuration for display.
+func (s *Server) settingsFor(plugin string) []settingDTO {
+	if s.opts.PluginSettings == nil {
+		return nil
+	}
+	raw := s.opts.PluginSettings(plugin)
+	keys := make([]string, 0, len(raw))
+	for k := range raw {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make([]settingDTO, 0, len(keys))
+	for _, k := range keys {
+		value := fmt.Sprint(raw[k])
+		if secretish(k) {
+			// A reference is safe to show and is what the operator needs; a
+			// literal is not shown at all.
+			if strings.HasPrefix(value, "env:") || strings.HasPrefix(value, "file:") ||
+				strings.HasPrefix(value, "credential:") {
+				out = append(out, settingDTO{Key: k, Value: value, Secret: true})
+				continue
+			}
+			out = append(out, settingDTO{Key: k, Value: "(set)", Secret: true})
+			continue
+		}
+		out = append(out, settingDTO{Key: k, Value: value})
+	}
+	return out
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {

@@ -137,7 +137,7 @@ go build -o /var/lib/mcpd/plugins/weather/weather ./cmd/weather
 echo '{"name":"weather","exec":"weather"}' > /var/lib/mcpd/plugins/weather/plugin.json
 ```
 
-mcpd mounts it at `/mcp/weather`. See [`examples/hello`](examples/hello) for a
+mcpd mounts it at `/mcp/weather`. See [`examples/echo`](examples/echo) for a
 complete plugin including an approval-gated mutation, and the [`sdk`](sdk)
 package docs for the mutation contract.
 

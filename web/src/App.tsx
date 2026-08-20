@@ -11,6 +11,8 @@ import {
   type Operation,
   type Plugin,
 } from "./api";
+import { Plugins } from "./Plugins";
+import { Setup } from "./Setup";
 import {
   AuditTrail,
   Banner,
@@ -23,7 +25,7 @@ import {
   stateMeaning,
 } from "./components";
 
-type Tab = "operations" | "plugins" | "audit";
+type Tab = "changes" | "connections" | "setup" | "activity";
 
 export default function App() {
   const [authed, setAuthed] = useState(() => getToken() !== null);
@@ -108,9 +110,10 @@ function Login({ meta, onAuthenticated }: { meta: Meta | null; onAuthenticated: 
 /* --- shell ---------------------------------------------------------------- */
 
 function Dashboard({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => void }) {
-  const [tab, setTab] = useState<Tab>("operations");
+  const [tab, setTab] = useState<Tab>("changes");
   const [selected, setSelected] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthReport | null>(null);
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
 
   useEffect(() => {
     const poll = () => api.health().then(setHealth).catch(() => setHealth(null));
@@ -119,41 +122,54 @@ function Dashboard({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => vo
     return () => clearInterval(timer);
   }, []);
 
+  // Loaded here rather than per tab so the setup guide can show real
+  // addresses without a second round trip.
+  useEffect(() => {
+    api.plugins().then((r) => setPlugins(r.plugins ?? [])).catch(() => setPlugins([]));
+  }, []);
+
+  const tabs: [Tab, string][] = [
+    ["changes", "Changes"],
+    ["connections", "Connections"],
+    ["setup", "Setup"],
+    ["activity", "Activity"],
+  ];
+
   return (
     <div className="shell">
       <header className="topbar">
         <span className="brand">mcpd</span>
         <nav className="tabs">
-          {(["operations", "plugins", "audit"] as Tab[]).map((t) => (
+          {tabs.map(([id, label]) => (
             <button
-              key={t}
-              onClick={() => { setTab(t); setSelected(null); }}
-              aria-current={tab === t ? "page" : undefined}
+              key={id}
+              onClick={() => { setTab(id); setSelected(null); }}
+              aria-current={tab === id ? "page" : undefined}
             >
-              {t[0]!.toUpperCase() + t.slice(1)}
+              {label}
             </button>
           ))}
         </nav>
         <span className="spacer" />
         {health && (
           <span className={`status-dot ${health.status}`} title={describeHealth(health)}>
-            {health.status}
+            {health.status === "up" ? "All good" : health.status}
           </span>
         )}
         <button className="btn" onClick={onSignOut}>Sign out</button>
       </header>
 
       <main>
-        {tab === "operations" &&
+        {tab === "changes" &&
           (selected ? (
             <OperationDetail id={selected} onBack={() => setSelected(null)} />
           ) : (
             <Operations onSelect={setSelected} />
           ))}
-        {tab === "plugins" && <Plugins />}
-        {tab === "audit" && <Audit />}
+        {tab === "connections" && <Plugins />}
+        {tab === "setup" && <Setup meta={meta} plugins={plugins} />}
+        {tab === "activity" && <Audit />}
       </main>
-      {meta && <div style={{ display: "none" }}>{meta.version}</div>}
     </div>
   );
 }
@@ -202,20 +218,21 @@ function Operations({ onSelect }: { onSelect: (id: string) => void }) {
 
   return (
     <>
-      <h1>Operations</h1>
+      <h1>Changes</h1>
       <p className="subtitle">
-        Every proposed change to managed infrastructure, and what became of it.
+        Every change an assistant has suggested, and what happened to it.
+        Nothing here takes effect until someone approves it.
       </p>
       {error && <Banner tone="error">{error}</Banner>}
 
       {needsAttention.length > 0 && (
         <>
-          <h2>Needs attention</h2>
+          <h2>Waiting on you</h2>
           <OperationTable operations={needsAttention} onSelect={onSelect} />
         </>
       )}
 
-      <h2>{needsAttention.length > 0 ? "Everything else" : "All operations"}</h2>
+      <h2>{needsAttention.length > 0 ? "Everything else" : "All changes"}</h2>
       {rest.length === 0 ? (
         <div className="card"><p className="empty">No operations yet.</p></div>
       ) : (
@@ -445,63 +462,6 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-/* --- plugins -------------------------------------------------------------- */
-
-function Plugins() {
-  const [plugins, setPlugins] = useState<Plugin[]>([]);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    api
-      .plugins()
-      .then((r) => setPlugins(r.plugins ?? []))
-      .catch((e) => setError(e instanceof Error ? e.message : "Could not load plugins."));
-  }, []);
-
-  return (
-    <>
-      <h1>Plugins</h1>
-      <p className="subtitle">
-        Integrations mounted on this host. Each serves its own MCP endpoint.
-      </p>
-      {error && <Banner tone="error">{error}</Banner>}
-
-      {plugins.length === 0 && !error && (
-        <div className="card"><p className="empty">No plugins are mounted.</p></div>
-      )}
-
-      {plugins.map((p) => (
-        <div className="card" key={p.name}>
-          <div className="card-head">
-            {p.title} · {p.name} {p.version}
-          </div>
-          <div className="card-body">
-            <div className="row" style={{ marginBottom: 12 }}>
-              <span className={`status-dot ${p.health === "healthy" ? "up" : p.health === "degraded" ? "degraded" : "down"}`}>
-                {p.health}
-              </span>
-              {p.required && <span className="chip risk-medium">required</span>}
-              <span className="mono muted">{p.endpoint}</span>
-            </div>
-            {p.health_message && <Banner tone="warn">{p.health_message}</Banner>}
-            <p className="muted">{p.description}</p>
-
-            <h2 style={{ fontSize: 13, marginTop: 18 }}>Tools ({p.tools.length})</h2>
-            <p className="mono muted">{p.tools.join(", ") || "none"}</p>
-
-            {p.mutations.length > 0 && (
-              <>
-                <h2 style={{ fontSize: 13 }}>Approval-gated changes ({p.mutations.length})</h2>
-                <p className="mono muted">{p.mutations.join(", ")}</p>
-              </>
-            )}
-          </div>
-        </div>
-      ))}
-    </>
-  );
-}
-
 /* --- audit ---------------------------------------------------------------- */
 
 function Audit() {
@@ -521,20 +481,22 @@ function Audit() {
 
   return (
     <>
-      <h1>Audit trail</h1>
+      <h1>Activity</h1>
       <p className="subtitle">
-        Append-only and hash-chained. Altering any entry invalidates every one
-        after it, which is what makes this evidence rather than a log.
+        A permanent record of everything that has happened. Entries can only be
+        added, never edited or removed — if anyone tampers with the history,
+        mcpd notices.
       </p>
 
       {error && <Banner tone="error">{error}</Banner>}
       {chain &&
         (chain.intact ? (
-          <Banner tone="ok">Hash chain verified intact.</Banner>
+          <Banner tone="ok">History checked — nothing has been tampered with.</Banner>
         ) : (
           <Banner tone="error">
-            Hash chain broken at sequence {chain.broken_at}. The audit trail has
-            been altered outside mcpd.
+            The history has been altered outside mcpd, starting at entry{" "}
+            {chain.broken_at}. Someone or something has edited the database
+            directly.
           </Banner>
         ))}
 

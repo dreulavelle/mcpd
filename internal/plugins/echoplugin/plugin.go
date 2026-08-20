@@ -4,7 +4,7 @@
 // per-plugin authorization, tool dispatch — without depending on an external
 // system. It is the template a real integration follows, and it is what the
 // host's integration tests run against.
-package echo
+package echoplugin
 
 import (
 	"context"
@@ -37,8 +37,9 @@ func (p *Plugin) Descriptor() plugins.Descriptor {
 		Name:    "echo",
 		Version: "1.0.0",
 		Title:   "Echo",
-		Description: "A diagnostic integration for verifying connectivity and " +
-			"authorization. It reads and computes only; it changes nothing.",
+		Description: "A test integration for checking that a connection works. " +
+			"It has one read tool and one harmless change you can practise " +
+			"approving. It touches nothing outside mcpd.",
 	}
 }
 

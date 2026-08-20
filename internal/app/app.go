@@ -220,6 +220,11 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Health:     a.health,
 			Version:    Version,
 			Audit:      sqlite.NewAuditStore(db),
+			PublicURL:  cfg.Server.PublicURL,
+			AuthMode:   cfg.Auth.Mode,
+			PluginSettings: func(name string) map[string]any {
+				return cfg.Plugins[name].Settings
+			},
 		})
 		a.frontend = &http.Server{
 			Addr:              cfg.Server.FrontendListen,

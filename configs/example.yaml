@@ -10,9 +10,10 @@ server:
   # TLS; binding publicly would serve MCP, and its bearer tokens, in plaintext.
   listen: "127.0.0.1:8080"
 
-  # The URL clients actually connect to. It appears in the OAuth
-  # protected-resource document, so it must match exactly or ChatGPT cannot
-  # complete the connector handshake.
+  # The address assistants reach the MCP endpoint at -- the `listen` port
+  # above, not the dashboard. It identifies this resource in OAuth metadata
+  # and is what the dashboard shows as a connection address, so it must match
+  # what clients actually use or a connector handshake fails at the redirect.
   public_url: "https://mcp.example.net"
 
   # Admin dashboard listener, separate from the MCP endpoint above.
@@ -118,8 +119,10 @@ logging:
   format: json
 
 plugins:
+  # A test connection for checking that everything works. It touches nothing
+  # outside mcpd. Turn it on while setting up, then turn it off.
   echo:
-    enabled: true
+    enabled: false
     required: false
 
   cnmaestro:

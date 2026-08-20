@@ -44,9 +44,14 @@ type Server struct {
 	// default would expose it in plaintext.
 	Listen string `yaml:"listen"`
 
-	// PublicURL is the externally reachable base URL, e.g.
-	// https://mcp.example.net. It appears in OAuth metadata, so it must match
-	// what clients actually connect to.
+	// PublicURL is the externally reachable base URL of the MCP endpoint --
+	// the Listen address above, not the dashboard.
+	//
+	// It identifies this resource in OAuth metadata and is what the dashboard
+	// renders as a connection address, so it must match what clients actually
+	// use. A mismatch surfaces late and confusingly: as a connector handshake
+	// that fails at the redirect, or a copied address that reaches the wrong
+	// listener.
 	PublicURL string `yaml:"public_url"`
 
 	// FrontendListen is the bind address for the admin dashboard.

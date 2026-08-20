@@ -120,9 +120,11 @@ server:
   frontend_listen: "127.0.0.1:9090"
   frontend_enabled: true
 
-  # The URL clients actually reach. It appears in OAuth metadata, so it must
-  # match exactly or a connector handshake fails at the redirect.
-  public_url: "http://localhost:9090"
+  # The address assistants reach the MCP endpoint at -- the "listen" port
+  # above, not the dashboard. It identifies this resource in OAuth metadata
+  # and is what the dashboard shows as a connection address, so it must match
+  # what clients actually use or a connector handshake fails at the redirect.
+  public_url: "http://localhost:9080"
 
   read_header_timeout: 10s
   read_timeout: 60s
@@ -174,6 +176,9 @@ logging:
   format: json
 
 plugins:
+  # A test connection for checking that everything works end to end. It
+  # touches nothing outside mcpd. Leave it on until you have connected an
+  # assistant successfully, then turn it off.
   echo:
     enabled: true
     required: false
