@@ -109,11 +109,19 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		return nil, err
 	}
 
-	issuer := cfg.Auth.OAuth.Issuer
-	if issuer == "" {
-		issuer = cfg.Server.PublicURL
+	// The issuer is only meaningful when the authorization server is actually
+	// mounted. Advertising one that is not there points every client at a
+	// 404 -- and a tunnel or connector that treats the advertised issuer as
+	// its source of truth will fail discovery rather than fall back.
+	issuer := ""
+	oauthMounted := cfg.Auth.Mode == "oauth" || cfg.Auth.Mode == "mixed"
+	if oauthMounted {
+		issuer = cfg.Auth.OAuth.Issuer
+		if issuer == "" {
+			issuer = cfg.Server.PublicURL
+		}
 	}
-	if cfg.Auth.Mode == "oauth" || cfg.Auth.Mode == "mixed" {
+	if oauthMounted {
 		a.oauthServer, err = oauth.NewServer(oauth.Config{
 			Issuer:                   issuer,
 			AccessTokenTTL:           cfg.Auth.OAuth.AccessTokenTTL,

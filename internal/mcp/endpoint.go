@@ -68,6 +68,11 @@ func (h *Host) handleResourceMetadata(w http.ResponseWriter, r *http.Request) {
 		BearerMethodsSupported: []string{"header"},
 		ResourceName:           "mcpd",
 	}
+	// authorization_servers is omitted entirely when no authorization server
+	// is mounted. A client reading this document -- OpenAI's tunnel-client
+	// treats authorization_servers[0] as its only metadata target -- must be
+	// able to tell "this resource takes a bearer token you already have" from
+	// "go here to obtain one".
 	if h.opts.AuthorizationServer != "" {
 		meta.AuthorizationServers = []string{h.opts.AuthorizationServer}
 	}

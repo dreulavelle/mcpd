@@ -243,3 +243,50 @@ func mustJSON(t *testing.T, b []byte, into any) {
 		t.Fatalf("decode %s: %v", b, err)
 	}
 }
+
+// Advertising an authorization server that is not mounted points every client
+// at a 404. OpenAI's tunnel-client treats authorization_servers[0] as its only
+// metadata target, so a stale advertisement breaks discovery rather than
+// degrading.
+func TestProtectedResourceMetadata_OmitsUnmountedAuthorizationServer(t *testing.T) {
+	a := newTestApp(t) // static-token mode
+	h := a.Handler()
+
+	var prm struct {
+		Resource             string   `json:"resource"`
+		AuthorizationServers []string `json:"authorization_servers"`
+	}
+	getJSON(t, h, "/.well-known/oauth-protected-resource", &prm)
+
+	if len(prm.AuthorizationServers) != 0 {
+		t.Fatalf("static-token mode advertises %v, but no authorization server is "+
+			"mounted; a client would fetch metadata from a 404", prm.AuthorizationServers)
+	}
+	if prm.Resource == "" {
+		t.Fatal("the resource identifier must still be advertised")
+	}
+
+	// And the endpoints really are absent, which is what makes the
+	// advertisement wrong.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("authorization server metadata = %d, want 404 in static mode", w.Code)
+	}
+}
+
+// Under OAuth it must be advertised, or a connector cannot discover where to
+// authenticate.
+func TestProtectedResourceMetadata_AdvertisesMountedAuthorizationServer(t *testing.T) {
+	a := newOAuthApp(t)
+
+	var prm struct {
+		AuthorizationServers []string `json:"authorization_servers"`
+	}
+	getJSON(t, a.Handler(), "/.well-known/oauth-protected-resource", &prm)
+
+	if len(prm.AuthorizationServers) != 1 {
+		t.Fatalf("oauth mode must advertise its authorization server, got %v",
+			prm.AuthorizationServers)
+	}
+}
