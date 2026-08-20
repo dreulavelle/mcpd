@@ -93,3 +93,7 @@ func normalizePath(path string) string {
 	}
 	return path
 }
+
+// errorsAs is a local alias so this package's helpers do not each import
+// errors purely for one call.
+func errorsAs(err error, target any) bool { return stdErrorsAs(err, target) }

@@ -8,12 +8,35 @@ import (
 	"net/http"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/oauth"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/plugins/cnmaestro"
 	"github.com/spoked/mcpd/internal/plugins/echo"
 )
+
+// decodeSettings converts a plugin's untyped YAML settings into its own config
+// struct.
+//
+// It round-trips through YAML rather than reflecting field by field, so a
+// plugin declares its configuration once, with its own tags, and the host does
+// not need to know the shape.
+func decodeSettings(settings map[string]any, into any) error {
+	if len(settings) == 0 {
+		return nil
+	}
+	encoded, err := yaml.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("re-encode settings: %w", err)
+	}
+	if err := yaml.Unmarshal(encoded, into); err != nil {
+		return fmt.Errorf("decode settings: %w", err)
+	}
+	return nil
+}
 
 // buildVerifier constructs the token verifier for the configured auth mode.
 //
@@ -124,6 +147,18 @@ func (a *App) registerPlugins(ctx context.Context) error {
 		switch name {
 		case "echo":
 			p = echo.New(deps)
+
+		case "cnmaestro":
+			var cnCfg cnmaestro.Config
+			if err := decodeSettings(pc.Settings, &cnCfg); err != nil {
+				return fmt.Errorf("app: plugin %q settings: %w", name, err)
+			}
+			built, err := cnmaestro.New(deps, cnCfg)
+			if err != nil {
+				return err
+			}
+			p = built
+
 		default:
 			return fmt.Errorf("app: plugin %q is enabled in configuration "+
 				"but not compiled into this binary", name)
