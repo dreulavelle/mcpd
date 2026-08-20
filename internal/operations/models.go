@@ -80,11 +80,19 @@ const (
 // String implements fmt.Stringer.
 func (r RiskLevel) String() string { return string(r) }
 
-// rank orders risk levels for comparison. Unknown levels rank highest so that
-// a malformed or unrecognised value fails closed rather than being treated as
-// harmless.
+// rank orders risk levels for comparison.
+//
+// An empty level ranks lowest because it means "not specified" -- an absent
+// policy override, a zero-valued field. A non-empty but unrecognised level
+// ranks highest, because that is a genuinely unknown classification and
+// treating it as harmless would be the wrong way to fail.
+//
+// The distinction matters: conflating the two makes every missing override
+// outrank the risk a plugin actually declared.
 func (r RiskLevel) rank() int {
 	switch r {
+	case "":
+		return 0
 	case RiskLow:
 		return 1
 	case RiskMedium:
@@ -98,8 +106,12 @@ func (r RiskLevel) rank() int {
 	}
 }
 
-// Valid reports whether r is a recognised risk level.
-func (r RiskLevel) Valid() bool { return r.rank() <= 4 }
+// Valid reports whether r is a recognised risk level. An unset level is not
+// valid: callers must decide what to do about it rather than defaulting.
+func (r RiskLevel) Valid() bool {
+	rank := r.rank()
+	return rank >= 1 && rank <= 4
+}
 
 // AtLeast reports whether r is at least as severe as other.
 func (r RiskLevel) AtLeast(other RiskLevel) bool { return r.rank() >= other.rank() }
@@ -107,12 +119,23 @@ func (r RiskLevel) AtLeast(other RiskLevel) bool { return r.rank() >= other.rank
 // MaxRisk returns the most severe of the supplied levels. It is the only
 // sanctioned way to combine a plugin's declared risk with policy overrides,
 // and it enforces invariant I8: risk may be raised, never lowered.
+//
+// Unset levels are ignored so that an absent override does not outrank a
+// declared risk. If nothing at all is specified the result is RiskLow, which
+// is the only sensible floor -- an operation with no risk classification still
+// has to have one.
 func MaxRisk(levels ...RiskLevel) RiskLevel {
-	out := RiskLow
+	out := RiskLevel("")
 	for _, l := range levels {
+		if l == "" {
+			continue
+		}
 		if l.rank() > out.rank() {
 			out = l
 		}
+	}
+	if out == "" {
+		return RiskLow
 	}
 	return out
 }

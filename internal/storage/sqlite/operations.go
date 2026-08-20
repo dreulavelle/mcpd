@@ -73,7 +73,11 @@ func (s *OperationStore) Propose(ctx context.Context, req operations.RepoPropose
 			op.Impact, op.RequestedBy, op.RequestedAt.UnixMilli(), op.ExpiresAt.UnixMilli(),
 			op.CorrelationID, op.IdempotencyKey)
 		if err != nil {
-			if IsConstraint(err) {
+			// Only the idempotency index means a duplicate proposal. Every
+			// other constraint -- a CHECK, a foreign key, a NOT NULL -- is a
+			// different bug, and reporting them all as an idempotency conflict
+			// hides the real cause behind a plausible-sounding message.
+			if isUniqueViolation(err, "ux_operations_idem") {
 				return operations.ErrIdempotencyConflict
 			}
 			return fmt.Errorf("sqlite: insert operation: %w", err)

@@ -249,6 +249,8 @@ func TestRiskLevel_MaxRiskNeverLowers(t *testing.T) {
 		want RiskLevel
 	}{
 		{"empty defaults low", nil, RiskLow},
+		{"unset override is ignored", []RiskLevel{RiskHigh, ""}, RiskHigh},
+		{"only unset defaults low", []RiskLevel{"", ""}, RiskLow},
 		{"single", []RiskLevel{RiskMedium}, RiskMedium},
 		{"policy raises", []RiskLevel{RiskLow, RiskHigh}, RiskHigh},
 		{"policy cannot lower", []RiskLevel{RiskCritical, RiskLow}, RiskCritical},

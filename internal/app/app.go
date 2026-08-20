@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/oauth"
 	"github.com/spoked/mcpd/internal/config"
 	mcphost "github.com/spoked/mcpd/internal/mcp"
+	"github.com/spoked/mcpd/internal/messaging"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
@@ -38,6 +40,14 @@ type App struct {
 	oauthStore  *oauth.Store
 	oauthServer *oauth.Server
 	approval    *operations.ApprovalPolicy
+	opsService  *operations.Service
+	executor    *operations.Executor
+	reaper      *operations.Reaper
+	bus         *messaging.InProcessBus
+	publisher   *messaging.Publisher
+
+	workers     sync.WaitGroup
+	stopWorkers context.CancelFunc
 	server      *http.Server
 	host        *mcphost.Host
 }
@@ -122,9 +132,46 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			cfg.Approval.RequireDistinctApproverAtOrAbove),
 	})
 
-	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer))
+	// The bus and publisher exist before plugins register, because a
+	// mutation's propose tool needs somewhere to send the resulting event.
+	a.bus = messaging.NewInProcessBus(log)
+	a.publisher = messaging.NewPublisher(
+		sqlite.MessagingAdapter{OutboxStore: a.outbox}, a.bus, log,
+		messaging.PublisherConfig{}, time.Now)
+
+	ids := operations.NewULIDGenerator(time.Now)
+	a.opsService = operations.NewService(a.ops, a.approval, operations.Policy{
+		ProposalTTL: cfg.Approval.ProposalTTL,
+		ApprovalTTL: cfg.Approval.ApprovalTTL,
+		LeaseTTL:    cfg.Approval.LeaseTTL,
+	}, log, time.Now, ids, a.publisher.Notify)
+
+	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService)
 
 	if err := a.registerPlugins(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	// The executor bridges back into the plugin registry, so it can only be
+	// built once plugins are mounted.
+	a.executor = operations.NewExecutor(a.ops, plugins.NewRunner(a.manager),
+		operations.ExecutorConfig{
+			InstanceID: instanceID(cfg),
+			LeaseTTL:   cfg.Approval.LeaseTTL,
+		}, log, time.Now, ids, a.publisher.Notify)
+
+	a.reaper = operations.NewReaper(a.ops, log, time.Now, ids, a.publisher.Notify, 30*time.Second)
+
+	// The executor subscribes to approvals. The event is only a hint to look:
+	// Execute reloads and revalidates everything from the database.
+	if err := a.bus.Subscribe("mcpd-executor", messaging.SubjectOperationApproved,
+		func(ctx context.Context, e messaging.Event) error {
+			if e.OperationID == "" {
+				return nil
+			}
+			return a.executor.Execute(ctx, e.OperationID)
+		}); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -277,4 +324,15 @@ func oauthRoutes(s *oauth.Server) interface{ Routes(*http.ServeMux) } {
 		return nil
 	}
 	return s
+}
+
+// instanceID identifies this process in leases and attempt records. It is
+// derived from the hostname so that a multi-instance deployment attributes
+// work correctly without any additional configuration.
+func instanceID(cfg *config.Config) string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "mcpd"
+	}
+	return host + ":" + cfg.Server.Listen
 }

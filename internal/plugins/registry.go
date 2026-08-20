@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 )
 
@@ -162,11 +163,90 @@ func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S])
 			"plugins: %s registers mutation %q twice", r.descriptor.Name, spec.Action))
 		return
 	}
+	adapter := newAdapter(h)
+	qualified := r.descriptor.Name + "_" + strings.ReplaceAll(spec.Action, ".", "_")
+
 	r.mutations = append(r.mutations, registeredMutation{
-		spec:    spec,
-		plugin:  r.descriptor.Name,
-		adapter: newAdapter(h),
+		spec:      spec,
+		plugin:    r.descriptor.Name,
+		qualified: qualified,
+		adapter:   adapter,
+		attach: func(s *mcp.Server, gate ToolMiddleware, svc ApprovalService) {
+			attachProposeTool[P](s, r.descriptor.Name, qualified, spec, adapter, gate, svc)
+		},
 	})
+}
+
+// attachProposeTool registers the tool that proposes a mutation.
+//
+// It is emphatically not the tool that performs one. The description says so,
+// the annotations say so, and the returned operation says so in a note field,
+// because a model that reads only a state string can still mistake "proposed"
+// for "done".
+func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec MutationSpec, adapter *handlerAdapter, gate ToolMiddleware, svc ApprovalService) {
+	mutating := false
+	description := spec.Description + "\n\n" +
+		"IMPORTANT: this only records a proposal. Nothing changes until a human " +
+		"approves it with " + plugin + "_approve_operation. This call returns an " +
+		"operation_id and leaves the system untouched."
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        qualified,
+		Description: description,
+		Annotations: &mcp.ToolAnnotations{
+			Title: spec.Title,
+			// Proposing genuinely changes nothing upstream, but it is not a
+			// read either: it creates a durable record a human must act on.
+			// Marking it non-destructive and non-idempotent is the honest
+			// reading.
+			ReadOnlyHint:    false,
+			DestructiveHint: &mutating,
+			IdempotentHint:  false,
+		},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in P) (*mcp.CallToolResult, operationView, error) {
+		if err := gate(ctx, qualified, auth.CapPropose); err != nil {
+			return nil, operationView{}, err
+		}
+
+		params, err := json.Marshal(in)
+		if err != nil {
+			return nil, operationView{}, fmt.Errorf("encode parameters: %w", err)
+		}
+
+		// Plan runs here to capture the current state and build the diff the
+		// approver will read. It runs again before execution, and the two are
+		// compared -- which is what makes drift detectable.
+		plan, err := adapter.plan(ctx, params)
+		if err != nil {
+			return nil, operationView{}, err
+		}
+
+		op, err := svc.Propose(ctx, auth.FromContext(ctx), operations.ProposeRequest{
+			Plugin:        plugin,
+			Action:        spec.Action,
+			Risk:          operations.MaxRisk(spec.Risk, derefRisk(plan.RiskOverride)),
+			Target:        plan.Before,
+			Params:        params,
+			Before:        plan.Before,
+			Desired:       plan.Desired,
+			Preconditions: plan.Preconditions,
+			Rollback:      plan.Rollback,
+			Changes:       plan.Changes,
+			Impact:        plan.Impact,
+			CorrelationID: observability.CorrelationID(ctx),
+		})
+		if err != nil {
+			return nil, operationView{}, err
+		}
+		return nil, viewOf(op), nil
+	})
+}
+
+func derefRisk(r *operations.RiskLevel) operations.RiskLevel {
+	if r == nil {
+		return operations.RiskLow
+	}
+	return *r
 }
 
 // --- internal plumbing ----------------------------------------------------
@@ -184,9 +264,11 @@ type registeredTool struct {
 }
 
 type registeredMutation struct {
-	spec    MutationSpec
-	plugin  string
-	adapter *handlerAdapter
+	spec      MutationSpec
+	plugin    string
+	qualified string
+	adapter   *handlerAdapter
+	attach    func(*mcp.Server, ToolMiddleware, ApprovalService)
 }
 
 func (r *Registry) hasTool(name string) bool {

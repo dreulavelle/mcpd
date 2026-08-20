@@ -47,6 +47,8 @@ type Manager struct {
 	middleware ToolMiddleware
 	version    string
 
+	approvals ApprovalService
+
 	mu      sync.RWMutex
 	mounted map[string]*Mounted
 	order   []string // registration order, for reverse-order shutdown
@@ -54,7 +56,7 @@ type Manager struct {
 
 // NewManager returns an empty manager. middleware is the host gate applied to
 // every tool call; version identifies the host in MCP handshakes.
-func NewManager(log *slog.Logger, version string, middleware ToolMiddleware) *Manager {
+func NewManager(log *slog.Logger, version string, middleware ToolMiddleware, approvals ApprovalService) *Manager {
 	if middleware == nil {
 		// A nil gate would mean unauthenticated tool access, so refuse to
 		// operate rather than defaulting to permissive.
@@ -66,6 +68,7 @@ func NewManager(log *slog.Logger, version string, middleware ToolMiddleware) *Ma
 		log:        log,
 		version:    version,
 		middleware: middleware,
+		approvals:  approvals,
 		mounted:    make(map[string]*Mounted),
 	}
 }
@@ -110,6 +113,21 @@ func (m *Manager) Register(ctx context.Context, p Plugin, required bool) error {
 	})
 	for _, t := range reg.tools {
 		t.attach(srv, m.middleware)
+	}
+
+	// Mutations become propose tools, and every endpoint with a mutation also
+	// gets the operation lifecycle tools. Without an approval service there is
+	// nowhere for a proposal to go, so registering a mutation would produce a
+	// tool that cannot work.
+	if len(reg.mutations) > 0 {
+		if m.approvals == nil {
+			return fmt.Errorf(
+				"plugins: %s registers mutations but no approval service is configured", d.Name)
+		}
+		for _, mu := range reg.mutations {
+			mu.attach(srv, m.middleware, m.approvals)
+		}
+		attachApprovalTools(srv, d.Name, m.approvals, m.middleware)
 	}
 
 	mounted := &Mounted{

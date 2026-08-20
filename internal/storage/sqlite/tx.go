@@ -133,6 +133,17 @@ func IsConstraint(err error) bool {
 		strings.Contains(msg, "SQLITE_CONSTRAINT")
 }
 
+// isUniqueViolation reports whether err is a UNIQUE constraint failure on a
+// named index. Matching the index name is what separates "this exact proposal
+// already exists" from any other constraint the table enforces.
+func isUniqueViolation(err error, index string) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "UNIQUE constraint failed") && strings.Contains(msg, index)
+}
+
 // IsImmutabilityViolation reports whether err came from one of the append-only
 // or immutability triggers. These indicate a bug in calling code attempting a
 // write the design forbids, and should never be retried.

@@ -6,7 +6,67 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/spoked/mcpd/internal/auth/oauth"
 )
+
+// startWorker runs a long-lived component, logging an unexpected exit.
+//
+// Every background goroutine in mcpd is started here so that each one has an
+// owner, a shutdown signal, and somewhere for its error to surface. A
+// goroutine started anywhere else would have none of those.
+func (a *App) startWorker(name string, ctx context.Context, run func(context.Context) error) {
+	a.workers.Add(1)
+	go func() {
+		defer a.workers.Done()
+		if err := run(ctx); err != nil && ctx.Err() == nil {
+			a.log.Error("background worker stopped unexpectedly", "worker", name, "error", err)
+			return
+		}
+		a.log.Debug("background worker stopped", "worker", name)
+	}()
+}
+
+// waitForWorkers blocks until every worker has returned or the budget expires.
+func (a *App) waitForWorkers(budget time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		a.workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(budget):
+		return false
+	}
+}
+
+// scanClaimable executes approved work left over from a previous run.
+//
+// It is a one-shot pass rather than a loop: the outbox publisher redelivers
+// pending approval events, and the reaper catches anything stuck. This only
+// covers the gap where an event was published and acknowledged but its
+// consumer died before acting.
+func (a *App) scanClaimable(ctx context.Context) error {
+	pending, err := a.ops.Claimable(ctx, 100)
+	if err != nil {
+		return err
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	a.log.Info("resuming approved operations left from a previous run", "count", len(pending))
+	for _, op := range pending {
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err := a.executor.Execute(ctx, op.ID); err != nil {
+			a.log.Error("failed to resume an operation", "operation_id", op.ID, "error", err)
+		}
+	}
+	return nil
+}
 
 // Run starts every component and blocks until ctx is cancelled, then shuts
 // down in reverse order.
@@ -14,6 +74,24 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.manager.Start(ctx); err != nil {
 		return err
 	}
+
+	// Background workers share a context cancelled at shutdown, and each is
+	// tracked so Shutdown can wait for it rather than abandoning work
+	// mid-transaction.
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	a.stopWorkers = stopWorkers
+
+	a.startWorker("outbox-publisher", workerCtx, a.publisher.Run)
+	a.startWorker("reaper", workerCtx, a.reaper.Run)
+	if a.oauthStore != nil {
+		hk := oauth.NewHousekeeper(a.oauthStore, time.Hour, 7*24*time.Hour)
+		a.startWorker("oauth-housekeeper", workerCtx, hk.Run)
+	}
+
+	// Anything approved while the process was down still needs executing. The
+	// event announcing it was consumed, or never delivered, so a startup scan
+	// is what makes the executor restart-safe.
+	a.startWorker("claimable-scan", workerCtx, a.scanClaimable)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -61,7 +139,29 @@ func (a *App) Shutdown() error {
 	}
 	a.log.Info("http server drained")
 
-	// 2. Stop plugins, in reverse registration order.
+	// 2. Stop background workers and wait for them.
+	//
+	// The publisher performs a final drain on the way out, so events committed
+	// moments before shutdown still reach consumers rather than waiting for
+	// the next start. An in-flight execution is left to its own context: an
+	// abandoned mutation would land in indeterminate on the next sweep, which
+	// is correct but noisy, so the wait is generous enough to let it settle.
+	if a.stopWorkers != nil {
+		a.stopWorkers()
+	}
+	if !a.waitForWorkers(20 * time.Second) {
+		a.log.Warn("background workers did not stop within the drain budget")
+	} else {
+		a.log.Info("background workers stopped")
+	}
+
+	if a.bus != nil {
+		if err := a.bus.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	// 3. Stop plugins, in reverse registration order.
 	pluginCtx, pluginCancel := context.WithTimeout(ctx, 10*time.Second)
 	if err := a.manager.Shutdown(pluginCtx); err != nil {
 		errs = append(errs, err)
@@ -69,7 +169,7 @@ func (a *App) Shutdown() error {
 	pluginCancel()
 	a.log.Info("plugins stopped")
 
-	// 3. Close the database last, checkpointing the WAL so the file is
+	// 4. Close the database last, checkpointing the WAL so the file is
 	//    self-contained for backup on exit.
 	if err := a.db.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("app: close database: %w", err))
