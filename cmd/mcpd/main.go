@@ -36,6 +36,7 @@ func run() error {
 		showVersion = flag.Bool("version", false, "print the version and exit")
 		checkOnly   = flag.Bool("check", false, "validate the configuration and exit")
 		initDir     = flag.String("init", "", "generate a config, token and directories under this path, then exit")
+		backupTo    = flag.String("backup", "", "write a consistent database snapshot to this path or directory, then exit")
 	)
 	flag.Parse()
 
@@ -45,6 +46,9 @@ func run() error {
 	}
 	if *initDir != "" {
 		return initialize(*initDir)
+	}
+	if *backupTo != "" {
+		return backup(*configPath, *envPath, *backupTo)
 	}
 
 	// A .env is loaded before configuration so that secret references in the

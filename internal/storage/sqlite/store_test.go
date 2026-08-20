@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -501,5 +502,113 @@ func TestMigrate_IsIdempotent(t *testing.T) {
 func TestOpen_RefusesInMemoryDatabase(t *testing.T) {
 	if _, err := Open(context.Background(), Options{Path: ":memory:"}); err == nil {
 		t.Fatal("in-memory databases cannot provide durable approvals and must be refused")
+	}
+}
+
+// A file copy is not a safe backup under WAL: committed state is split
+// between the database and the -wal, so a plain copy can capture a torn
+// snapshot. VACUUM INTO takes a consistent view without blocking writers.
+func TestBackup_ProducesAConsistentRestorableCopy(t *testing.T) {
+	s, db := newStore(t)
+	ctx := context.Background()
+
+	for _, id := range []string{"op_a", "op_b", "op_c"} {
+		proposeOp(t, s, id)
+	}
+	if _, err := approve(t, s, "op_b", "user:bob"); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(t.TempDir(), "backup.db")
+	if err := db.Backup(ctx, dest); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	// The copy must open, pass an integrity check, and hold the same data.
+	restored, err := Open(ctx, Options{Path: dest, RelaxedDurability: true})
+	if err != nil {
+		t.Fatalf("the backup could not be opened: %v", err)
+	}
+	defer restored.Close()
+
+	if err := restored.Integrity(ctx); err != nil {
+		t.Fatalf("the backup failed its integrity check: %v", err)
+	}
+
+	rs := NewOperationStore(restored, func() time.Time { return testClock })
+	for _, id := range []string{"op_a", "op_b", "op_c"} {
+		if _, err := rs.Get(ctx, id); err != nil {
+			t.Errorf("%s is missing from the backup: %v", id, err)
+		}
+	}
+	op, err := rs.Get(ctx, "op_b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.State != operations.StateApproved || op.ApprovedBy != "user:bob" {
+		t.Fatalf("approval state did not survive the backup: %+v", op.State)
+	}
+
+	// The audit chain must still verify, which is the real test that the
+	// snapshot is coherent rather than merely readable.
+	audit := NewAuditStore(restored)
+	brokenAt, err := audit.VerifyChain(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if brokenAt != 0 {
+		t.Fatalf("the audit chain in the backup breaks at %d", brokenAt)
+	}
+}
+
+// Overwriting a backup silently would destroy the copy someone is relying on.
+func TestBackup_RefusesToOverwrite(t *testing.T) {
+	_, db := newStore(t)
+	ctx := context.Background()
+
+	dest := filepath.Join(t.TempDir(), "backup.db")
+	if err := db.Backup(ctx, dest); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Backup(ctx, dest); err == nil {
+		t.Fatal("a second backup to the same path must fail rather than overwrite")
+	}
+}
+
+// Backups run while the process is serving, so they must not need exclusive
+// access.
+func TestBackup_RunsAlongsideWrites(t *testing.T) {
+	s, db := newStore(t)
+	ctx := context.Background()
+	proposeOp(t, s, "op_live")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 20 {
+			proposeOp(t, s, fmt.Sprintf("op_bg_%d", i))
+		}
+	}()
+
+	dest := filepath.Join(t.TempDir(), "live.db")
+	if err := db.Backup(ctx, dest); err != nil {
+		t.Fatalf("backup during concurrent writes: %v", err)
+	}
+	<-done
+
+	restored, err := Open(ctx, Options{Path: dest, RelaxedDurability: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if err := restored.Integrity(ctx); err != nil {
+		t.Fatalf("a backup taken during writes failed its integrity check: %v", err)
+	}
+}
+
+func TestIntegrity_PassesOnAHealthyDatabase(t *testing.T) {
+	_, db := newStore(t)
+	if err := db.Integrity(context.Background()); err != nil {
+		t.Fatalf("a fresh database should pass: %v", err)
 	}
 }

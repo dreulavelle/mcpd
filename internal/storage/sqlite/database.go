@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -206,4 +207,50 @@ func (d *DB) Close() error {
 // Stats reports pool utilisation for the health endpoint.
 func (d *DB) Stats() (read, write sql.DBStats) {
 	return d.read.Stats(), d.write.Stats()
+}
+
+// Backup writes a consistent snapshot to path while the database is in use.
+//
+// VACUUM INTO is the right tool rather than a file copy. Under WAL the
+// committed state is split between the main file and the -wal, so copying
+// either alone can capture a torn snapshot that restores to a state no
+// transaction ever produced. VACUUM INTO reads a single consistent view
+// without blocking writers, and the result is a defragmented database rather
+// than a byte-for-byte image.
+//
+// The destination must not exist; SQLite refuses to overwrite, which is the
+// behaviour a backup should have.
+func (d *DB) Backup(ctx context.Context, path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("sqlite: resolve backup path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
+		return fmt.Errorf("sqlite: create backup directory: %w", err)
+	}
+
+	// The path is a literal in the statement because SQLite does not accept a
+	// bound parameter here. Quotes are doubled so a path containing one cannot
+	// terminate the string early.
+	quoted := "'" + strings.ReplaceAll(abs, "'", "''") + "'"
+	if _, err := d.read.ExecContext(ctx, "VACUUM INTO "+quoted); err != nil {
+		return fmt.Errorf("sqlite: backup to %s: %w", abs, err)
+	}
+	return nil
+}
+
+// Integrity runs SQLite's own consistency check.
+//
+// Worth running after a restore, or when investigating a host that lost power:
+// it reports structural damage that ordinary queries would not surface until
+// they happened to touch the affected page.
+func (d *DB) Integrity(ctx context.Context) error {
+	var result string
+	if err := d.read.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&result); err != nil {
+		return fmt.Errorf("sqlite: integrity check: %w", err)
+	}
+	if result != "ok" {
+		return fmt.Errorf("sqlite: integrity check failed: %s", result)
+	}
+	return nil
 }
