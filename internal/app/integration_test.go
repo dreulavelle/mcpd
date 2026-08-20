@@ -330,14 +330,15 @@ func TestNew_RefusesUnknownPlugin(t *testing.T) {
 
 // Configuring OAuth must not silently fall back to static verification, which
 // would accept a weaker credential than the configuration promises.
-func TestBuildVerifier_RefusesUnimplementedOAuthMode(t *testing.T) {
+func TestBuildVerifier_RefusesOAuthWithoutStore(t *testing.T) {
 	cfg := config.Default()
 	cfg.Auth.Mode = "oauth"
 	cfg.Auth.OAuth.Issuer = "https://issuer.test.invalid"
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if _, err := buildVerifier(cfg, log); err == nil {
-		t.Fatal("oauth mode must fail rather than fall back to static tokens")
+	if _, err := buildVerifier(cfg, log, nil); err == nil {
+		t.Fatal("oauth mode without a token store must fail rather than " +
+			"falling back to static tokens")
 	}
 }
 

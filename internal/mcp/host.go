@@ -35,6 +35,9 @@ type Options struct {
 	// protected-resource metadata. Empty when running with static tokens only.
 	AuthorizationServer string
 
+	// OAuth mounts the built-in authorization server. Nil in static mode.
+	OAuth interface{ Routes(*http.ServeMux) }
+
 	// SessionTimeout bounds idle MCP sessions. It has no effect in stateless
 	// mode.
 	SessionTimeout time.Duration
@@ -89,6 +92,13 @@ func (h *Host) routes() {
 		Logger:         h.opts.Log,
 		SessionTimeout: h.opts.SessionTimeout,
 	})
+
+	// The authorization server, when enabled. Its endpoints are
+	// unauthenticated by necessity: they are how a caller obtains a
+	// credential in the first place.
+	if h.opts.OAuth != nil {
+		h.opts.OAuth.Routes(h.mux)
+	}
 
 	h.mux.Handle("/mcp/{plugin}", h.authenticate(streamable))
 	h.mux.Handle("/mcp/{plugin}/", h.authenticate(streamable))

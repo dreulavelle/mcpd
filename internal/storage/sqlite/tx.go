@@ -174,3 +174,27 @@ func (u *UnitOfWork) EnqueueEvent(subject, operationID, correlationID string, pa
 		string(payload), u.now)
 	return err
 }
+
+// Exec runs a statement inside the transaction, discarding the result. It is
+// exported so packages outside this one can compose their own writes into a
+// UnitOfWork without gaining access to the underlying connection.
+func (u *UnitOfWork) Exec(query string, args ...any) error {
+	_, err := u.exec(query, args...)
+	return err
+}
+
+// ExecAffected runs a statement and reports how many rows it changed. Callers
+// use it to implement guarded updates of their own.
+func (u *UnitOfWork) ExecAffected(query string, args ...any) (int64, error) {
+	res, err := u.exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// QueryRow runs a single-row query inside the transaction, so a caller can
+// read its own uncommitted writes.
+func (u *UnitOfWork) QueryRow(query string, args ...any) *sql.Row {
+	return u.queryRow(query, args...)
+}

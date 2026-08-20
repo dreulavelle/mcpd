@@ -73,12 +73,16 @@ func (c *Config) Validate() error {
 			"the host would be unreachable")
 	}
 	if c.Auth.Mode == "oauth" || c.Auth.Mode == "mixed" {
-		if strings.TrimSpace(c.Auth.OAuth.Issuer) == "" {
-			add("config: auth.oauth.issuer is required for mode %q", c.Auth.Mode)
+		// The issuer defaults to public_url, so one of the two must be set.
+		// It ends up in metadata clients fetch, so a wrong value produces a
+		// connector that fails only at the final redirect.
+		if strings.TrimSpace(c.Auth.OAuth.Issuer) == "" &&
+			strings.TrimSpace(c.Server.PublicURL) == "" {
+			add("config: auth.oauth.issuer or server.public_url is required for mode %q; "+
+				"clients need an absolute URL to reach the authorization endpoints", c.Auth.Mode)
 		}
-		if strings.TrimSpace(c.Auth.OAuth.Audience) == "" && c.Server.PublicURL == "" {
-			add("config: auth.oauth.audience or server.public_url is required for mode %q",
-				c.Auth.Mode)
+		if b := c.Auth.OAuth.Bootstrap; b.Username != "" && b.PasswordRef == "" {
+			add("config: auth.oauth.bootstrap.password_ref is required when a bootstrap username is set")
 		}
 	}
 	errs = append(errs, c.validateTokens()...)

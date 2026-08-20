@@ -45,10 +45,15 @@ func TestValidate_Rejects(t *testing.T) {
 		{"approval outliving proposal", func(c *Config) {
 			c.Approval.ApprovalTTL = c.Approval.ProposalTTL * 2
 		}, "outlive"},
-		{"oauth without issuer", func(c *Config) {
+		{"oauth with no reachable base url", func(c *Config) {
 			c.Auth.Mode = "oauth"
 			c.Auth.OAuth.Issuer = ""
-		}, "issuer is required"},
+			c.Server.PublicURL = ""
+		}, "auth.oauth.issuer or server.public_url is required"},
+		{"bootstrap without password reference", func(c *Config) {
+			c.Auth.Mode = "oauth"
+			c.Auth.OAuth.Bootstrap.Username = "admin"
+		}, "password_ref is required"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

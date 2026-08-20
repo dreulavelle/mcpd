@@ -42,6 +42,7 @@ services:
       # Secrets arrive as environment variables and are referenced from the
       # config file as env:NAME. They are never written into the YAML.
       MCPD_TOKEN_CHATGPT: ${MCPD_TOKEN_CHATGPT:?set MCPD_TOKEN_CHATGPT in .env}
+      MCPD_BOOTSTRAP_PASSWORD: ${MCPD_BOOTSTRAP_PASSWORD:-}
       MCPD_CNMAESTRO_CLIENT_ID: ${MCPD_CNMAESTRO_CLIENT_ID:-}
       MCPD_CNMAESTRO_CLIENT_SECRET: ${MCPD_CNMAESTRO_CLIENT_SECRET:-}
 

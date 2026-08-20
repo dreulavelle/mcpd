@@ -90,25 +90,45 @@ type StaticTokenConfig struct {
 	Plugins []string `yaml:"plugins"`
 }
 
-// OAuth configures the resource-server half of the OAuth flow.
+// OAuth configures the built-in authorization server.
+//
+// mcpd is its own authorization server. The alternative is requiring an
+// operator to run Keycloak or buy Auth0 before ChatGPT can reach their own
+// network gear, which is a steep prerequisite for a single-VM deployment.
 type OAuth struct {
-	// Issuer is the authorization server URL advertised to clients.
+	// Issuer is the authorization server's base URL. It defaults to
+	// server.public_url, which is almost always correct since both describe
+	// the same host.
 	Issuer string `yaml:"issuer"`
-	// Audience is the expected token audience, normally the public URL.
-	Audience string `yaml:"audience"`
-	// JWKSURL overrides discovery of the issuer's signing keys.
-	JWKSURL string `yaml:"jwks_url"`
-	// DefaultRole is granted to a token carrying no role claim.
-	DefaultRole string `yaml:"default_role"`
-	// ClaimMappings maps token claims onto principal fields.
-	ClaimMappings ClaimMappings `yaml:"claim_mappings"`
+
+	AccessTokenTTL  time.Duration `yaml:"access_token_ttl"`
+	RefreshTokenTTL time.Duration `yaml:"refresh_token_ttl"`
+	AuthCodeTTL     time.Duration `yaml:"auth_code_ttl"`
+	SessionTTL      time.Duration `yaml:"session_ttl"`
+
+	// AllowDynamicRegistration enables RFC 7591. ChatGPT uses it when Client
+	// ID Metadata Documents are unavailable.
+	//
+	// Open registration is safe here because registering confers nothing on
+	// its own: a client still cannot obtain a token without a user completing
+	// the consent flow, and the resulting token is bounded by that user's own
+	// role and plugin grants.
+	AllowDynamicRegistration bool `yaml:"allow_dynamic_registration"`
+
+	// AllowCIMD enables Client ID Metadata Documents, which supersede dynamic
+	// registration in the 2026-07-28 MCP revision.
+	AllowCIMD bool `yaml:"allow_cimd"`
+
+	// Bootstrap provisions the first administrator when no users exist. It is
+	// ignored once any identity is present.
+	Bootstrap Bootstrap `yaml:"bootstrap"`
 }
 
-// ClaimMappings names the token claims carrying identity and grants.
-type ClaimMappings struct {
-	Subject string `yaml:"subject"`
-	Role    string `yaml:"role"`
-	Plugins string `yaml:"plugins"`
+// Bootstrap describes the initial administrator.
+type Bootstrap struct {
+	Username string `yaml:"username"`
+	// PasswordRef is a secret reference, never a password.
+	PasswordRef string `yaml:"password_ref"`
 }
 
 // Approval configures the risk policy.
@@ -181,7 +201,17 @@ func Default() *Config {
 			Path:        "/var/lib/mcpd/mcpd.db",
 			BusyTimeout: 5 * time.Second,
 		},
-		Auth: Auth{Mode: "static"},
+		Auth: Auth{
+			Mode: "static",
+			OAuth: OAuth{
+				AccessTokenTTL:           time.Hour,
+				RefreshTokenTTL:          30 * 24 * time.Hour,
+				AuthCodeTTL:              time.Minute,
+				SessionTTL:               30 * time.Minute,
+				AllowDynamicRegistration: true,
+				AllowCIMD:                true,
+			},
+		},
 		Approval: Approval{
 			RequireDistinctApproverAtOrAbove: "high",
 			ProposalTTL:                      30 * time.Minute,

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/oauth"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/plugins/echo"
@@ -19,7 +20,7 @@ import (
 // Secrets are resolved here, once, at startup. A missing credential fails the
 // process rather than producing a host that silently rejects every request
 // from one agent.
-func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, error) {
+func buildVerifier(cfg *config.Config, log *slog.Logger, oauthStore *oauth.Store) (auth.TokenVerifier, error) {
 	resolver := config.NewSecretResolver()
 
 	var tokens []*auth.StaticToken
@@ -46,17 +47,66 @@ func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, er
 	switch cfg.Auth.Mode {
 	case "static":
 		return auth.NewStaticVerifier(tokens...)
-	case "oauth", "mixed":
-		// The OAuth resource-server verifier is the next piece of work. Until
-		// it lands, refuse to start rather than falling back to static
-		// verification, which would silently accept a weaker credential than
-		// the configuration promises.
-		return nil, fmt.Errorf(
-			"auth: mode %q is configured but the OAuth verifier is not yet implemented; "+
-				"use mode \"static\" until it lands", cfg.Auth.Mode)
+
+	case "oauth":
+		if oauthStore == nil {
+			return nil, fmt.Errorf("auth: oauth mode requires a token store")
+		}
+		return oauth.NewVerifier(oauthStore, time.Now), nil
+
+	case "mixed":
+		// Both schemes at once: OAuth for interactive clients like ChatGPT,
+		// static tokens for machine callers that cannot complete a browser
+		// flow. A credential verifies against one or neither.
+		if oauthStore == nil {
+			return nil, fmt.Errorf("auth: mixed mode requires a token store")
+		}
+		static, err := auth.NewStaticVerifier(tokens...)
+		if err != nil {
+			return nil, err
+		}
+		return oauth.NewMultiVerifier(oauth.NewVerifier(oauthStore, time.Now), static), nil
+
 	default:
 		return nil, fmt.Errorf("auth: unknown mode %q", cfg.Auth.Mode)
 	}
+}
+
+// bootstrapAdmin provisions the first administrator when no identity exists.
+//
+// It runs only on a genuinely empty user table. Re-running it on an existing
+// deployment would silently reset an account, so the check is for zero users
+// rather than for the absence of this particular one.
+func bootstrapAdmin(ctx context.Context, cfg *config.Config, store *oauth.Store, log *slog.Logger) error {
+	b := cfg.Auth.OAuth.Bootstrap
+	if b.Username == "" {
+		return nil
+	}
+	n, err := store.CountUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("auth: count users: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+
+	password, err := config.NewSecretResolver().Resolve(b.PasswordRef)
+	if err != nil {
+		return fmt.Errorf("auth: bootstrap administrator: %w", err)
+	}
+	user, err := store.CreateUserWithPassword(ctx, oauth.CreateUserRequest{
+		Username:    b.Username,
+		Password:    password,
+		DisplayName: b.Username,
+		Role:        "admin",
+		Plugins:     []string{auth.Wildcard},
+	})
+	if err != nil {
+		return fmt.Errorf("auth: bootstrap administrator: %w", err)
+	}
+	log.Info("bootstrap administrator created; this runs only on an empty database",
+		"username", user.Username, "id", user.ID)
+	return nil
 }
 
 // registerPlugins mounts every enabled plugin.

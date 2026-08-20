@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/oauth"
 	"github.com/spoked/mcpd/internal/config"
 	mcphost "github.com/spoked/mcpd/internal/mcp"
 	"github.com/spoked/mcpd/internal/observability"
@@ -33,8 +34,11 @@ type App struct {
 	outbox  *sqlite.OutboxStore
 	manager *plugins.Manager
 	health  *observability.HealthRegistry
-	server  *http.Server
-	host    *mcphost.Host
+
+	oauthStore  *oauth.Store
+	oauthServer *oauth.Server
+	server      *http.Server
+	host        *mcphost.Host
 }
 
 // New builds the application graph. It opens the database, applies migrations,
@@ -77,10 +81,39 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		health: observability.NewHealthRegistry(2 * time.Second),
 	}
 
-	verifier, err := buildVerifier(cfg, log)
+	// The OAuth store backs both the authorization server and the
+	// resource-server verifier, so it exists even in static mode where only
+	// the admin interface uses it.
+	a.oauthStore = oauth.NewStore(db, time.Now)
+	if err := bootstrapAdmin(ctx, cfg, a.oauthStore, log); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	verifier, err := buildVerifier(cfg, log, a.oauthStore)
 	if err != nil {
 		db.Close()
 		return nil, err
+	}
+
+	issuer := cfg.Auth.OAuth.Issuer
+	if issuer == "" {
+		issuer = cfg.Server.PublicURL
+	}
+	if cfg.Auth.Mode == "oauth" || cfg.Auth.Mode == "mixed" {
+		a.oauthServer, err = oauth.NewServer(oauth.Config{
+			Issuer:                   issuer,
+			AccessTokenTTL:           cfg.Auth.OAuth.AccessTokenTTL,
+			RefreshTokenTTL:          cfg.Auth.OAuth.RefreshTokenTTL,
+			AuthCodeTTL:              cfg.Auth.OAuth.AuthCodeTTL,
+			SessionTTL:               cfg.Auth.OAuth.SessionTTL,
+			AllowDynamicRegistration: cfg.Auth.OAuth.AllowDynamicRegistration,
+			AllowCIMD:                cfg.Auth.OAuth.AllowCIMD,
+		}, a.oauthStore, log, time.Now, newPluginHTTPClient())
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	authorizer := auth.NewAuthorizer(auth.RiskPolicy{
 		RequireDistinctApproverAtOrAbove: operations.RiskLevel(
@@ -103,7 +136,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		Authorizer:          authorizer,
 		Health:              a.health,
 		PublicURL:           cfg.Server.PublicURL,
-		AuthorizationServer: cfg.Auth.OAuth.Issuer,
+		AuthorizationServer: issuer,
+		OAuth:               oauthRoutes(a.oauthServer),
 		SessionTimeout:      cfg.Server.SessionTimeout,
 	})
 	if err != nil {
@@ -228,3 +262,17 @@ func (a *App) dataDir() string { return filepath.Dir(a.cfg.Storage.Path) }
 
 // nowMillis returns the current time in Unix milliseconds.
 func nowMillis() int64 { return time.Now().UnixMilli() }
+
+// oauthRoutes converts a possibly-nil *oauth.Server into a genuinely nil
+// interface.
+//
+// Assigning a nil pointer to an interface field produces a non-nil interface
+// holding a nil pointer, so a `!= nil` check downstream passes and the first
+// method call panics. Returning an untyped nil is the only way to make the
+// downstream check mean what it reads as.
+func oauthRoutes(s *oauth.Server) interface{ Routes(*http.ServeMux) } {
+	if s == nil {
+		return nil
+	}
+	return s
+}
