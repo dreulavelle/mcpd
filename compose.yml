@@ -1,0 +1,93 @@
+# mcpd via Docker Compose.
+#
+#   cp .env.example .env      # then fill in the tokens
+#   docker compose up -d
+#
+# The default profile runs mcpd alone on loopback, which is what you want
+# behind an existing reverse proxy. The `tunnel` profile adds Cloudflare
+# Tunnel for exposing the host to ChatGPT over HTTPS without opening a port:
+#
+#   docker compose --profile tunnel up -d
+
+name: mcpd
+
+services:
+  mcpd:
+    build:
+      context: .
+      args:
+        VERSION: ${MCPD_VERSION:-dev}
+    image: ghcr.io/dreulavelle/mcpd:${MCPD_VERSION:-dev}
+    restart: unless-stopped
+
+    # Published on loopback only. mcpd speaks plain HTTP and carries bearer
+    # tokens, so it must sit behind something that terminates TLS -- the
+    # tunnel service below, or your own proxy.
+    ports:
+      - "127.0.0.1:${MCPD_PORT:-8080}:8080"
+
+    volumes:
+      # Database and all mutable state. Named rather than bind-mounted so the
+      # nonroot container user owns it without host-side chown.
+      - mcpd-data:/var/lib/mcpd
+
+      # Configuration, read-only.
+      - ./configs/example.yaml:/etc/mcpd/config.yaml:ro
+
+      # Plugin drop-in directory. Out-of-process plugins are discovered here,
+      # so a plugin can be added without rebuilding the image.
+      - ./plugins:/var/lib/mcpd/plugins:ro
+
+    environment:
+      # Secrets arrive as environment variables and are referenced from the
+      # config file as env:NAME. They are never written into the YAML.
+      MCPD_TOKEN_CHATGPT: ${MCPD_TOKEN_CHATGPT:?set MCPD_TOKEN_CHATGPT in .env}
+      MCPD_CNMAESTRO_CLIENT_ID: ${MCPD_CNMAESTRO_CLIENT_ID:-}
+      MCPD_CNMAESTRO_CLIENT_SECRET: ${MCPD_CNMAESTRO_CLIENT_SECRET:-}
+
+    healthcheck:
+      # The image has no shell and no curl, so the check runs mcpd itself.
+      # It validates configuration rather than probing HTTP, which is the most
+      # a shell-free image can do without adding a binary to attack.
+      test: ["CMD", "/usr/local/bin/mcpd", "-config", "/etc/mcpd/config.yaml", "-check"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # The container needs to write to exactly one place. Everything else is
+    # read-only, which removes the usual foothold after a compromise.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Exposes mcpd to ChatGPT over HTTPS without opening an inbound port.
+  # Create the tunnel in the Cloudflare dashboard, point it at
+  # http://mcpd:8080, and put the token in .env.
+  tunnel:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      mcpd:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  mcpd-data:

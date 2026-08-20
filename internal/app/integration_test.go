@@ -1,0 +1,356 @@
+package app
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spoked/mcpd/internal/config"
+)
+
+const (
+	tokenScoped   = "scoped-agent-token-0000000000000000000000"
+	tokenWildcard = "wildcard-admin-token-00000000000000000000"
+)
+
+// newTestApp builds a fully wired host against a temporary database.
+func newTestApp(t *testing.T) *App {
+	t.Helper()
+	dir := t.TempDir()
+
+	t.Setenv("MCPD_TOKEN_SCOPED", tokenScoped)
+	t.Setenv("MCPD_TOKEN_WILDCARD", tokenWildcard)
+
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	cfg.Storage.RelaxedDurability = true
+	cfg.Server.PublicURL = "https://mcp.test.invalid"
+	cfg.Plugins = map[string]config.PluginConfig{
+		"echo": {Enabled: true, Required: true},
+	}
+	cfg.Auth.StaticTokens = []config.StaticTokenConfig{
+		{
+			ID: "scoped", SecretRef: "env:MCPD_TOKEN_SCOPED",
+			Principal: "svc:scoped", Role: "operator",
+			Plugins: []string{"echo"},
+		},
+		{
+			ID: "wildcard", SecretRef: "env:MCPD_TOKEN_WILDCARD",
+			Principal: "svc:wildcard", Role: "admin",
+			Plugins: []string{"*"},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("test config invalid: %v", err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	a, err := New(context.Background(), cfg, log)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { a.db.Close() })
+	return a
+}
+
+// mcpRequest issues a JSON-RPC call against a plugin endpoint.
+func mcpRequest(t *testing.T, h http.Handler, path, token string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", "application/json, text/event-stream")
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func TestHost_PluginEndpointIsMounted(t *testing.T) {
+	a := newTestApp(t)
+	if names := a.PluginNames(); len(names) != 1 || names[0] != "echo" {
+		t.Fatalf("mounted plugins = %v, want [echo]", names)
+	}
+}
+
+// The headline requirement: a token scoped to one plugin must not be able to
+// reach another, and must not learn that the other exists.
+func TestHost_PerPluginScoping(t *testing.T) {
+	a := newTestApp(t)
+	h := a.Handler()
+
+	listTools := map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": map[string]any{},
+	}
+
+	tests := []struct {
+		name       string
+		path       string
+		token      string
+		wantStatus int
+		reason     string
+	}{
+		{
+			name: "granted plugin is reachable", path: "/mcp/echo", token: tokenScoped,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "wildcard reaches the same plugin", path: "/mcp/echo", token: tokenWildcard,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "ungranted plugin is indistinguishable from absent",
+			path: "/mcp/proxmox", token: tokenScoped,
+			wantStatus: http.StatusNotFound,
+			reason:     "a scoped agent must not learn which other plugins are deployed",
+		},
+		{
+			name: "unmounted plugin is 404 even for an admin",
+			path: "/mcp/proxmox", token: tokenWildcard,
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name: "missing credential is rejected", path: "/mcp/echo", token: "",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name: "invalid credential is rejected", path: "/mcp/echo", token: "not-a-real-token",
+			wantStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := mcpRequest(t, h, tc.path, tc.token, listTools)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (%s)\nbody: %s",
+					w.Code, tc.wantStatus, tc.reason, w.Body.String())
+			}
+		})
+	}
+}
+
+// An unauthenticated request must not reveal whether a plugin exists: a 401
+// for a real endpoint and a 401 for an imaginary one look identical.
+func TestHost_UnauthenticatedResponsesDoNotProbePluginExistence(t *testing.T) {
+	a := newTestApp(t)
+	h := a.Handler()
+	body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+	real := mcpRequest(t, h, "/mcp/echo", "", body)
+	fake := mcpRequest(t, h, "/mcp/ghost", "", body)
+
+	if real.Code != fake.Code {
+		t.Fatalf("mounted plugin returned %d but unknown returned %d; "+
+			"the difference lets an unauthenticated caller enumerate plugins",
+			real.Code, fake.Code)
+	}
+}
+
+func TestHost_ToolsListAndCall(t *testing.T) {
+	a := newTestApp(t)
+	h := a.Handler()
+
+	// tools/list must expose the plugin-prefixed names.
+	w := mcpRequest(t, h, "/mcp/echo", tokenScoped, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": map[string]any{},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("tools/list status = %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{"echo_echo", "echo_status"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("tools/list does not advertise %q\nbody: %s", want, body)
+		}
+	}
+
+	// tools/call must dispatch through the host gate to the plugin handler.
+	w = mcpRequest(t, h, "/mcp/echo", tokenScoped, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "echo_echo",
+			"arguments": map[string]any{"message": "hello mcpd"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("tools/call status = %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); !strings.Contains(got, "hello mcpd") {
+		t.Fatalf("tool result did not echo the message\nbody: %s", got)
+	}
+}
+
+func TestHost_HealthEndpoints(t *testing.T) {
+	a := newTestApp(t)
+	h := a.Handler()
+
+	// Liveness performs no dependency checks and needs no credentials.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("live status = %d", w.Code)
+	}
+
+	// Readiness aggregates component checks.
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ready status = %d: %s", w.Code, w.Body.String())
+	}
+	var report struct {
+		Status string `json:"status"`
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Status != "up" {
+		t.Fatalf("readiness = %s, want up: %s", report.Status, w.Body.String())
+	}
+	seen := map[string]bool{}
+	for _, c := range report.Checks {
+		seen[c.Name] = true
+	}
+	for _, want := range []string{"database", "outbox", "plugins"} {
+		if !seen[want] {
+			t.Errorf("readiness report omits the %s check", want)
+		}
+	}
+}
+
+// ChatGPT fetches this document during connector setup to discover where to
+// authenticate. It must be readable without credentials.
+func TestHost_ProtectedResourceMetadataIsPublic(t *testing.T) {
+	a := newTestApp(t)
+	w := httptest.NewRecorder()
+	a.Handler().ServeHTTP(w, httptest.NewRequest(
+		http.MethodGet, "/.well-known/oauth-protected-resource", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("metadata status = %d: %s", w.Code, w.Body.String())
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["resource"] != "https://mcp.test.invalid" {
+		t.Fatalf("resource = %v, want the configured public URL", meta["resource"])
+	}
+	// The document is unauthenticated, so it must not name plugins.
+	if strings.Contains(w.Body.String(), "echo") {
+		t.Fatal("public metadata must not disclose which plugins are mounted")
+	}
+}
+
+// A 401 must point the client at the metadata document, which is how an MCP
+// client discovers the authorization server.
+func TestHost_ChallengeAdvertisesResourceMetadata(t *testing.T) {
+	a := newTestApp(t)
+	w := mcpRequest(t, a.Handler(), "/mcp/echo", "", map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+	})
+	challenge := w.Header().Get("WWW-Authenticate")
+	if !strings.Contains(challenge, "resource_metadata=") {
+		t.Fatalf("WWW-Authenticate = %q, want a resource_metadata pointer", challenge)
+	}
+}
+
+// Every response carries a correlation ID so a caller can quote it and an
+// operator can find the matching log lines.
+func TestHost_CorrelationIDIsAlwaysReturned(t *testing.T) {
+	a := newTestApp(t)
+	h := a.Handler()
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+	if w.Header().Get("X-Correlation-Id") == "" {
+		t.Fatal("a generated correlation ID must be returned")
+	}
+
+	// A supplied ID is honoured so a trace can span client and server.
+	r := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	r.Header.Set("X-Correlation-Id", "client-supplied-123")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if got := w.Header().Get("X-Correlation-Id"); got != "client-supplied-123" {
+		t.Fatalf("correlation ID = %q, want the client-supplied value", got)
+	}
+
+	// A hostile value is sanitised rather than echoed into structured logs.
+	r = httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	r.Header.Set("X-Correlation-Id", "bad\nvalue\"with{injection}")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	got := w.Header().Get("X-Correlation-Id")
+	if strings.ContainsAny(got, "\n\"{}") {
+		t.Fatalf("correlation ID %q was not sanitised", got)
+	}
+}
+
+// A plugin enabled in configuration but absent from the binary must fail
+// startup loudly, rather than silently serving nothing at that endpoint.
+func TestNew_RefusesUnknownPlugin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MCPD_TOKEN_SCOPED", tokenScoped)
+
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	cfg.Storage.RelaxedDurability = true
+	cfg.Plugins = map[string]config.PluginConfig{"nonexistent": {Enabled: true}}
+	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
+		ID: "scoped", SecretRef: "env:MCPD_TOKEN_SCOPED",
+		Principal: "svc:scoped", Role: "operator", Plugins: []string{"nonexistent"},
+	}}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, err := New(context.Background(), cfg, log)
+	if err == nil {
+		t.Fatal("expected startup to fail for a plugin not compiled into the binary")
+	}
+	if !strings.Contains(err.Error(), "not compiled into this binary") {
+		t.Fatalf("error should explain the cause, got: %v", err)
+	}
+}
+
+// Configuring OAuth must not silently fall back to static verification, which
+// would accept a weaker credential than the configuration promises.
+func TestBuildVerifier_RefusesUnimplementedOAuthMode(t *testing.T) {
+	cfg := config.Default()
+	cfg.Auth.Mode = "oauth"
+	cfg.Auth.OAuth.Issuer = "https://issuer.test.invalid"
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if _, err := buildVerifier(cfg, log); err == nil {
+		t.Fatal("oauth mode must fail rather than fall back to static tokens")
+	}
+}
+
+func TestSplitToolName(t *testing.T) {
+	tests := []struct{ in, plugin, bare string }{
+		{"echo_echo", "echo", "echo"},
+		{"cnmaestro_list_devices", "cnmaestro", "list_devices"},
+		{"noprefix", "noprefix", ""},
+	}
+	for _, tc := range tests {
+		p, b, _ := splitToolName(tc.in)
+		if p != tc.plugin || b != tc.bare {
+			t.Errorf("splitToolName(%q) = (%q,%q), want (%q,%q)", tc.in, p, b, tc.plugin, tc.bare)
+		}
+	}
+}

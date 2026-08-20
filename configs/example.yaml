@@ -1,0 +1,105 @@
+# mcpd configuration.
+#
+# Secrets are never written here. Each credential names a *reference* --
+# env:NAME, credential:NAME (systemd LoadCredential), or file:/abs/path --
+# which is resolved at startup. A config file that never holds a token cannot
+# leak one into version control.
+
+server:
+  # Bind to loopback. mcpd expects a reverse proxy in front of it to terminate
+  # TLS; binding publicly would serve MCP, and its bearer tokens, in plaintext.
+  listen: "127.0.0.1:8080"
+
+  # The URL clients actually connect to. It appears in the OAuth
+  # protected-resource document, so it must match exactly or ChatGPT cannot
+  # complete the connector handshake.
+  public_url: "https://mcp.example.net"
+
+  read_header_timeout: 10s
+  read_timeout: 60s
+  write_timeout: 120s
+  idle_timeout: 120s
+  shutdown_timeout: 30s
+
+storage:
+  path: /var/lib/mcpd/mcpd.db
+
+  # Reader pool size. Zero derives it from GOMAXPROCS. Reads never block behind
+  # the writer under WAL, so this is what governs tool-call concurrency.
+  read_pool_size: 0
+
+  busy_timeout: 5s
+
+  # Leave false. Under WAL, relaxed durability can lose the most recent
+  # transactions on power loss -- and those transactions authorise
+  # infrastructure changes.
+  relaxed_durability: false
+
+auth:
+  # static | oauth | mixed
+  mode: static
+
+  static_tokens:
+    # Scoping is per credential. This agent can reach /mcp/cnmaestro and
+    # nothing else: other endpoints return 404, so it cannot even discover
+    # which other integrations are deployed.
+    - id: chatgpt-cnmaestro
+      secret_ref: env:MCPD_TOKEN_CHATGPT
+      principal: svc:chatgpt
+      role: operator
+      plugins:
+        - cnmaestro
+
+    - id: diagnostics
+      secret_ref: credential:diagnostics
+      principal: svc:diagnostics
+      role: viewer
+      plugins:
+        - echo
+
+  # Required for ChatGPT's tunnel connector, which authenticates over OAuth.
+  oauth:
+    issuer: ""
+    audience: ""
+    default_role: viewer
+    claim_mappings:
+      subject: sub
+      role: mcpd_role
+      plugins: mcpd_plugins
+
+approval:
+  # Risk level from which the requester may not also approve.
+  #
+  # This fails closed: under static-token auth every caller is the same
+  # principal, so operations at or above this level are refused rather than
+  # self-approved. Set to "" to disable, or move to OAuth for real identities.
+  require_distinct_approver_at_or_above: high
+
+  # How long a proposal waits for a decision.
+  proposal_ttl: 30m
+
+  # How long an approval stays executable. Without this, an approval granted
+  # weeks ago could still execute against a network that has since changed.
+  approval_ttl: 15m
+
+  # How long an execution claim is held before the reaper reclaims it.
+  lease_ttl: 2m
+
+logging:
+  level: info
+  format: json
+
+plugins:
+  echo:
+    enabled: true
+    required: false
+
+  cnmaestro:
+    enabled: false
+    # required: true means a startup failure here fails the whole host.
+    # Leave false so an upstream outage marks only this plugin unhealthy.
+    required: false
+    settings:
+      base_url: "https://cloud.cambiumnetworks.com"
+      client_id_ref: env:MCPD_CNMAESTRO_CLIENT_ID
+      client_secret_ref: env:MCPD_CNMAESTRO_CLIENT_SECRET

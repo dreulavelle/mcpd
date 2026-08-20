@@ -144,3 +144,33 @@ func IsImmutabilityViolation(err error) bool {
 	return strings.Contains(msg, "is immutable") ||
 		strings.Contains(msg, "append-only")
 }
+
+// PluginStatePut upserts a namespaced plugin value.
+func (u *UnitOfWork) PluginStatePut(plugin, key, valueJSON string) error {
+	_, err := u.exec(`
+		INSERT INTO plugin_state (plugin, key, value_json, updated_at)
+		VALUES (?,?,?,?)
+		ON CONFLICT (plugin, key) DO UPDATE
+		SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+		plugin, key, valueJSON, u.now)
+	return err
+}
+
+// PluginStateDelete removes a namespaced plugin value.
+func (u *UnitOfWork) PluginStateDelete(plugin, key string) error {
+	_, err := u.exec(`DELETE FROM plugin_state WHERE plugin = ? AND key = ?`, plugin, key)
+	return err
+}
+
+// EnqueueEvent queues an outbox event outside an operation transaction. It is
+// used by plugin publishers, whose domain events are not tied to a state
+// change.
+func (u *UnitOfWork) EnqueueEvent(subject, operationID, correlationID string, payload []byte) error {
+	_, err := u.exec(`
+		INSERT INTO outbox_events (event_id, subject, operation_id, correlation_id,
+		                           payload_json, created_at, next_attempt_at)
+		VALUES (?,?,?,?,?,?,0)`,
+		newEventID(), subject, nullStr(operationID), correlationID,
+		string(payload), u.now)
+	return err
+}

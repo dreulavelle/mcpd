@@ -1,0 +1,188 @@
+package plugins
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"regexp"
+
+	"github.com/spoked/mcpd/internal/operations"
+)
+
+var (
+	toolNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,47}$`)
+	actionPattern   = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+)
+
+// Plan is what a mutation handler produces before anything is changed. It is
+// both what an approver reads and what the executor re-checks.
+type Plan[S any] struct {
+	// Before is the observed current state of the target.
+	Before S
+	// Desired is the state Apply intends to produce.
+	Desired S
+	// Preconditions is the snapshot re-checked immediately before execution.
+	// Prefer an ETag, revision or generation where the upstream provides one;
+	// fall back to the specific fields the mutation depends on.
+	Preconditions map[string]any
+	// Changes is the field-level diff shown to the approver. It must describe
+	// the mutation completely: an approver shown one field while five change
+	// has not meaningfully approved anything.
+	Changes []operations.Change
+	// Impact is plain language describing the consequence, e.g. "Clients on
+	// this radio will briefly disconnect."
+	Impact string
+	// Rollback holds parameters for the inverse mutation, if one exists.
+	// A rollback is itself approval-gated; this is not an automatic undo.
+	Rollback any
+	// RiskOverride raises the risk for these specific parameters. It cannot
+	// lower the spec's declared risk.
+	RiskOverride *operations.RiskLevel
+}
+
+// ApplyResult reports what an upstream write produced.
+type ApplyResult struct {
+	// UpstreamRef is a job or change identifier used to reconcile an
+	// indeterminate outcome.
+	UpstreamRef string
+	// Async reports that upstream accepted the request but has not yet applied
+	// it. When true, success requires Observe to confirm the desired state;
+	// an HTTP 200 alone does not settle the operation.
+	Async bool
+}
+
+// MutationHandler is a typed, approval-gated write.
+//
+// Splitting it into three methods is what makes precondition checking,
+// verification, and at-most-once execution possible:
+//
+//   - Plan runs twice — once at proposal to capture Before and build the diff,
+//     and again immediately before Apply to detect drift. Because it is the
+//     same code both times, the snapshot shown to the approver and the one
+//     checked at execution cannot diverge.
+//   - Observe backs both verification and the reconciliation of indeterminate
+//     outcomes, so both share one implementation.
+//   - Apply is the only method that mutates, which makes the audit rule
+//     mechanical: exactly one call site to wrap.
+type MutationHandler[P, S any] interface {
+	// Plan validates params and reads current state. It must not mutate.
+	Plan(ctx context.Context, params P) (Plan[S], error)
+
+	// Apply performs the upstream write. It is called at most once per
+	// attempt, only by the executor, only after the state machine granted a
+	// claim.
+	//
+	// On an ambiguous failure — a timeout, a dropped connection, any outcome
+	// where the write may or may not have landed — it must return an error
+	// wrapping operations.ErrIndeterminate. Returning an ordinary error
+	// implies the write did not happen, and a retry on that basis
+	// double-applies the mutation.
+	Apply(ctx context.Context, params P, plan Plan[S]) (ApplyResult, error)
+
+	// Observe re-reads the target's current state. It must not mutate.
+	Observe(ctx context.Context, params P) (S, error)
+}
+
+// handlerAdapter erases the type parameters of a MutationHandler so the host
+// can store handlers of differing types in one registry, while keeping the
+// typed contract at the plugin's own boundary.
+//
+// Decoding happens inside the adapter, so a payload that does not fit the
+// plugin's parameter type is rejected before any plugin code runs.
+type handlerAdapter struct {
+	plan    func(ctx context.Context, params json.RawMessage) (planResult, error)
+	apply   func(ctx context.Context, params json.RawMessage, pl planResult) (ApplyResult, error)
+	observe func(ctx context.Context, params json.RawMessage) (json.RawMessage, error)
+}
+
+// planResult is the type-erased form of Plan.
+type planResult struct {
+	Before        json.RawMessage
+	Desired       json.RawMessage
+	Preconditions json.RawMessage
+	Changes       []operations.Change
+	Impact        string
+	Rollback      json.RawMessage
+	RiskOverride  *operations.RiskLevel
+	// typed retains the original Plan so Apply receives it without a
+	// re-decode, preserving any state that does not survive a JSON round trip.
+	typed any
+}
+
+func newAdapter[P, S any](h MutationHandler[P, S]) *handlerAdapter {
+	decode := func(raw json.RawMessage) (P, error) {
+		var p P
+		if len(raw) == 0 {
+			return p, fmt.Errorf("plugins: mutation parameters are required")
+		}
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return p, fmt.Errorf("plugins: decode mutation parameters: %w", err)
+		}
+		return p, nil
+	}
+
+	return &handlerAdapter{
+		plan: func(ctx context.Context, raw json.RawMessage) (planResult, error) {
+			params, err := decode(raw)
+			if err != nil {
+				return planResult{}, err
+			}
+			pl, err := h.Plan(ctx, params)
+			if err != nil {
+				return planResult{}, err
+			}
+			return erasePlan(pl)
+		},
+		apply: func(ctx context.Context, raw json.RawMessage, pr planResult) (ApplyResult, error) {
+			params, err := decode(raw)
+			if err != nil {
+				return ApplyResult{}, err
+			}
+			pl, ok := pr.typed.(Plan[S])
+			if !ok {
+				return ApplyResult{}, fmt.Errorf("plugins: plan type mismatch for apply")
+			}
+			return h.Apply(ctx, params, pl)
+		},
+		observe: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+			params, err := decode(raw)
+			if err != nil {
+				return nil, err
+			}
+			s, err := h.Observe(ctx, params)
+			if err != nil {
+				return nil, err
+			}
+			return rawJSON(s)
+		},
+	}
+}
+
+func erasePlan[S any](pl Plan[S]) (planResult, error) {
+	before, err := rawJSON(pl.Before)
+	if err != nil {
+		return planResult{}, err
+	}
+	desired, err := rawJSON(pl.Desired)
+	if err != nil {
+		return planResult{}, err
+	}
+	pre, err := rawJSON(pl.Preconditions)
+	if err != nil {
+		return planResult{}, err
+	}
+	rollback, err := rawJSON(pl.Rollback)
+	if err != nil {
+		return planResult{}, err
+	}
+	return planResult{
+		Before:        before,
+		Desired:       desired,
+		Preconditions: pre,
+		Changes:       pl.Changes,
+		Impact:        pl.Impact,
+		Rollback:      rollback,
+		RiskOverride:  pl.RiskOverride,
+		typed:         pl,
+	}, nil
+}
