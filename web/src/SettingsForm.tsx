@@ -17,12 +17,21 @@ export interface FieldLink {
  * Settings -- and a second copy of this would drift from the first in exactly
  * the ways that matter: validation, secret handling, and what "saved" means.
  */
-export function SettingsForm({ groups, settings, links, onSaved, show }: {
+export function SettingsForm({ groups, settings, links, onSaved, show, readOnly = false }: {
   groups: SettingGroup[];
   settings: SettingsPayload;
   links?: Record<string, FieldLink>;
   onSaved: () => void;
   show: (tone: "good" | "problem", text: string) => void;
+  /**
+   * Renders the values without any way to change them.
+   *
+   * A user may see how the host is set up -- that is most of understanding
+   * what it will do -- but changing it is an administrator's. The API refuses
+   * the write regardless; this is so nobody fills in a field and then learns
+   * that.
+   */
+  readOnly?: boolean;
 }) {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [clearing, setClearing] = useState<string[]>([]);
@@ -96,6 +105,7 @@ export function SettingsForm({ groups, settings, links, onSaved, show }: {
                     link={links?.[f.key]}
                     isSet={settings.secrets_set[f.key] ?? false}
                     clearing={clearing.includes(f.key)}
+                    readOnly={readOnly}
                     onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))}
                     onToggleClear={() =>
                       setClearing((c) => c.includes(f.key)
@@ -109,25 +119,28 @@ export function SettingsForm({ groups, settings, links, onSaved, show }: {
         );
       })}
 
-      <div className="savebar">
-        <button className="btn primary" disabled={!dirty || busy} onClick={save}>
-          {busy ? "Saving…" : "Save changes"}
-        </button>
-        {dirty
-          ? <button className="btn quiet" disabled={busy}
-                    onClick={() => { setDraft({}); setClearing([]); }}>Discard</button>
-          : <span className="note tight">Nothing to save.</span>}
-      </div>
+      {!readOnly && (
+        <div className="savebar">
+          <button className="btn primary" disabled={!dirty || busy} onClick={save}>
+            {busy ? "Saving…" : "Save changes"}
+          </button>
+          {dirty
+            ? <button className="btn quiet" disabled={busy}
+                      onClick={() => { setDraft({}); setClearing([]); }}>Discard</button>
+            : <span className="note tight">Nothing to save.</span>}
+        </div>
+      )}
     </>
   );
 }
 
-function Field({ field, value, link, isSet, clearing, onChange, onToggleClear }: {
+function Field({ field, value, link, isSet, clearing, readOnly, onChange, onToggleClear }: {
   field: SettingField;
   value: string;
   link?: FieldLink;
   isSet: boolean;
   clearing: boolean;
+  readOnly: boolean;
   onChange: (v: string) => void;
   onToggleClear: () => void;
 }) {
@@ -137,7 +150,7 @@ function Field({ field, value, link, isSet, clearing, onChange, onToggleClear }:
     return (
       <div className="field">
         <label className="switch" htmlFor={id}>
-          <input id={id} type="checkbox" checked={value === "true"}
+          <input id={id} type="checkbox" checked={value === "true"} disabled={readOnly}
                  onChange={(e) => onChange(String(e.target.checked))} />
           <span className="switch-track" aria-hidden="true" />
           <span>
@@ -157,24 +170,26 @@ function Field({ field, value, link, isSet, clearing, onChange, onToggleClear }:
       </label>
 
       {field.kind === "enum" ? (
-        <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+        <select id={id} value={value} disabled={readOnly}
+                onChange={(e) => onChange(e.target.value)}>
           {field.options?.map((o) => (
             <option key={o} value={o}>{optionLabel(field.key, o)}</option>
           ))}
         </select>
       ) : field.kind === "secret" ? (
         <div className="row">
-          <input id={id} type="password" autoComplete="new-password" disabled={clearing}
+          <input id={id} type="password" autoComplete="new-password"
+                 disabled={clearing || readOnly}
                  placeholder={isSet ? "Saved — type to replace" : field.placeholder ?? ""}
                  value={value} onChange={(e) => onChange(e.target.value)} />
-          {isSet && (
+          {isSet && !readOnly && (
             <button className="btn sm" type="button" onClick={onToggleClear}>
               {clearing ? "Keep" : "Remove"}
             </button>
           )}
         </div>
       ) : (
-        <input id={id}
+        <input id={id} disabled={readOnly}
                type={field.kind === "int" || field.kind === "duration" ? "number" : "text"}
                value={value} placeholder={field.placeholder ?? ""}
                min={field.min} max={field.max}

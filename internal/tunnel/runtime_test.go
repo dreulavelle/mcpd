@@ -20,7 +20,7 @@ func testConfig() Config {
 		TunnelID: "tunnel_0123456789abcdef0123456789abcdef",
 		APIKey:   "sk-runtime-not-a-real-key",
 		Principal: auth.Principal{
-			ID: "svc:chatgpt", Role: auth.RoleOperator,
+			ID: "svc:chatgpt", Role: auth.RoleUser,
 			Plugins: []string{auth.Wildcard}, TokenID: "tunnel",
 		},
 	}

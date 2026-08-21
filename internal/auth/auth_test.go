@@ -40,7 +40,7 @@ func TestCanAccessPlugin_ScopingIsolatesAgents(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &Principal{ID: "svc:agent", Role: RoleOperator, Plugins: tc.grants}
+			p := &Principal{ID: "svc:agent", Role: RoleUser, Plugins: tc.grants}
 			if got := p.CanAccessPlugin(tc.probe); got != tc.allowed {
 				t.Fatalf("CanAccessPlugin(%q) with grants %v = %v, want %v",
 					tc.probe, tc.grants, got, tc.allowed)
@@ -52,7 +52,7 @@ func TestCanAccessPlugin_ScopingIsolatesAgents(t *testing.T) {
 // A principal with no plugins listed must be denied everything. Treating an
 // empty list as "all" would turn an incomplete config into a full grant.
 func TestValidate_RefusesPrincipalWithNoPluginGrants(t *testing.T) {
-	p := &Principal{ID: "svc:agent", Role: RoleOperator}
+	p := &Principal{ID: "svc:agent", Role: RoleUser}
 	if err := p.Validate(); err == nil {
 		t.Fatal("a principal granting no plugins must be refused at load time")
 	}
@@ -64,9 +64,9 @@ func TestRoleCapabilities(t *testing.T) {
 		can    []Capability
 		cannot []Capability
 	}{
-		{RoleViewer, []Capability{CapRead}, []Capability{CapPropose, CapApprove, CapAdmin}},
-		{RoleOperator, []Capability{CapRead, CapPropose}, []Capability{CapApprove, CapAdmin}},
-		{RoleApprover, []Capability{CapRead, CapPropose, CapApprove}, []Capability{CapAdmin}},
+		// The whole of the model: the line is administering the host, not
+		// operating it.
+		{RoleUser, []Capability{CapRead, CapPropose, CapApprove}, []Capability{CapAdmin}},
 		{RoleAdmin, []Capability{CapRead, CapPropose, CapApprove, CapAdmin}, nil},
 	}
 	for _, tc := range tests {
@@ -101,9 +101,9 @@ func TestAnonymousHoldsNothing(t *testing.T) {
 func TestStaticVerifier(t *testing.T) {
 	v, err := NewStaticVerifier(
 		mustToken(t, "agent-a", tokenA, Principal{
-			ID: "svc:agent-a", Role: RoleOperator, Plugins: []string{"cnmaestro"}}),
+			ID: "svc:agent-a", Role: RoleUser, Plugins: []string{"cnmaestro"}}),
 		mustToken(t, "agent-b", tokenB, Principal{
-			ID: "svc:agent-b", Role: RoleViewer, Plugins: []string{"netbox"}}),
+			ID: "svc:agent-b", Role: RoleUser, Plugins: []string{"netbox"}}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestStaticVerifier(t *testing.T) {
 
 func TestStaticToken_RejectsWeakSecrets(t *testing.T) {
 	if _, err := NewStaticToken("weak", "short", Principal{
-		ID: "u", Role: RoleViewer, Plugins: []string{Wildcard}}); err == nil {
+		ID: "u", Role: RoleUser, Plugins: []string{Wildcard}}); err == nil {
 		t.Fatal("a short token must be refused")
 	}
 }
@@ -173,7 +173,7 @@ func TestFromContext_DefaultsToAnonymous(t *testing.T) {
 
 func TestAuthorizeEndpoint(t *testing.T) {
 	a := NewAuthorizer()
-	scoped := &Principal{ID: "svc:a", Role: RoleOperator, Plugins: []string{"cnmaestro"}}
+	scoped := &Principal{ID: "svc:a", Role: RoleUser, Plugins: []string{"cnmaestro"}}
 
 	if d := a.AuthorizeEndpoint(scoped, "cnmaestro"); !d.Allowed {
 		t.Fatalf("granted plugin refused: %s", d.Reason)
@@ -188,7 +188,7 @@ func TestAuthorizeEndpoint(t *testing.T) {
 
 func TestVisiblePlugins_HidesUngrantedPlugins(t *testing.T) {
 	a := NewAuthorizer()
-	p := &Principal{ID: "svc:a", Role: RoleOperator, Plugins: []string{"cnmaestro"}}
+	p := &Principal{ID: "svc:a", Role: RoleUser, Plugins: []string{"cnmaestro"}}
 
 	got := a.VisiblePlugins(p, []string{"cnmaestro", "proxmox", "netbox"})
 	if len(got) != 1 || got[0] != "cnmaestro" {

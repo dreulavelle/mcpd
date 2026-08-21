@@ -20,13 +20,13 @@ func TestEachTunnelGetsItsOwnServer(t *testing.T) {
 	a := newSettingsApp(t)
 
 	first, err := a.tunnelFactory(&auth.Principal{
-		ID: "svc:one", Role: auth.RoleOperator, Plugins: []string{"echo"},
+		ID: "svc:one", Role: auth.RoleUser, Plugins: []string{"echo"},
 	})
 	if err != nil {
 		t.Fatalf("building the first server: %v", err)
 	}
 	second, err := a.tunnelFactory(&auth.Principal{
-		ID: "svc:two", Role: auth.RoleApprover, Plugins: []string{"echo"},
+		ID: "svc:two", Role: auth.RoleUser, Plugins: []string{"echo"},
 	})
 	if err != nil {
 		t.Fatalf("building the second server: %v", err)
@@ -65,14 +65,14 @@ func TestChangingTheRoleReachesTheTunnel(t *testing.T) {
 
 	ctx := context.Background()
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
-		{Key: settings.KeyTunnelRole, Value: `"approver"`},
+		{Key: settings.KeyTunnelRole, Value: `"user"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	// A connector that cannot approve cannot apply anything: approval happens
 	// in the conversation and this is what carries the answer back.
-	if got := a.tunnelConfig(ctx).Principal.Role; got != auth.RoleApprover {
+	if got := a.tunnelConfig(ctx).Principal.Role; got != auth.RoleUser {
 		t.Fatalf("role = %q, want approver", got)
 	}
 	principal := a.tunnelConfig(ctx).Principal

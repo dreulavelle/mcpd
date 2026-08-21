@@ -63,7 +63,7 @@ func TestTunnelConfigComesFromSettings(t *testing.T) {
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
 		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
 		{Key: settings.KeyTunnelAPIKey, Value: "sk-runtime-key", Secret: true},
-		{Key: settings.KeyTunnelRole, Value: `"approver"`},
+		{Key: settings.KeyTunnelRole, Value: `"user"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestTunnelConfigComesFromSettings(t *testing.T) {
 	if got.APIKey != "sk-runtime-key" {
 		t.Fatal("the stored API key must reach the tunnel config")
 	}
-	if string(got.Principal.Role) != "approver" {
+	if string(got.Principal.Role) != "user" {
 		t.Fatalf("role = %q, want the stored value", got.Principal.Role)
 	}
 }

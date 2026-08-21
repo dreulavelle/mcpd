@@ -41,6 +41,10 @@ var (
 	// ErrLastAdmin reports an edit that would leave no one able to administer
 	// the host.
 	ErrLastAdmin = errors.New("users: cannot remove the last administrator")
+	// ErrAlreadyClaimed reports registration attempted on an instance that
+	// already has an account. Registration exists to claim an unclaimed
+	// instance; once claimed, accounts are made by an administrator.
+	ErrAlreadyClaimed = errors.New("users: this instance already has an account")
 )
 
 // User is a local identity that can sign in to the dashboard.

@@ -29,8 +29,8 @@ func newApprovalApp(t *testing.T) *App {
 	cfg.Server.PublicURL = "https://mcp.test.invalid"
 	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
-		ID: "approver", SecretRef: "env:MCPD_TOKEN_APPROVER",
-		Principal: "svc:approver", Role: "approver", Plugins: []string{"echo"},
+		ID: "user", SecretRef: "env:MCPD_TOKEN_APPROVER",
+		Principal: "svc:approver", Role: "user", Plugins: []string{"echo"},
 	}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config invalid: %v", err)

@@ -181,6 +181,8 @@ func (s *Server) routes() {
 	// destroy, and refusing an already-invalid session would leave the browser
 	// holding a cookie it cannot get rid of.
 	s.mux.HandleFunc("POST /api/session", s.handleSignIn)
+	// Claiming an unclaimed instance. It refuses once any account exists.
+	s.mux.HandleFunc("POST /api/setup", s.handleRegisterFirst)
 	s.mux.HandleFunc("DELETE /api/session", s.handleSignOut)
 	s.mux.HandleFunc("GET /api/session", s.handleCurrentSession)
 
@@ -277,6 +279,10 @@ func (s *Server) authenticate(required auth.Capability, next http.HandlerFunc) h
 type metaResponse struct {
 	Version  string `json:"version"`
 	AuthMode string `json:"auth_mode"`
+	// NeedsSetup reports that no account exists yet, so the dashboard should
+	// offer to create the first one instead of asking for a sign-in nobody
+	// can complete.
+	NeedsSetup bool `json:"needs_setup"`
 }
 
 // endpointsResponse describes the two ways to connect.
@@ -292,9 +298,22 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	// Deliberately thin. This endpoint is unauthenticated, so it names the
 	// authentication scheme and nothing else -- not the plugins, not the
 	// configuration, not the host.
+	//
+	// Whether an account exists is the one addition. It is a fact anyone can
+	// establish by trying to register, and withholding it would only mean the
+	// dashboard shows a sign-in form on an instance where nobody can sign in.
+	needsSetup := false
+	if s.opts.Accounts != nil {
+		if n, err := s.opts.Accounts.Count(r.Context()); err == nil {
+			needsSetup = n == 0
+		} else {
+			s.opts.Log.Error("could not count accounts", "error", err)
+		}
+	}
 	s.writeJSON(w, r, http.StatusOK, metaResponse{
-		Version:  s.opts.Version,
-		AuthMode: s.opts.Verifier.Scheme(),
+		Version:    s.opts.Version,
+		AuthMode:   s.opts.Verifier.Scheme(),
+		NeedsSetup: needsSetup,
 	})
 }
 

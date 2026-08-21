@@ -58,16 +58,16 @@ find and no second credential to keep in step.
 
 ```bash
 cp .env.example .env
-$EDITOR .env      # set MCPD_BOOTSTRAP_PASSWORD, and the address to match in config.yaml
+$EDITOR .env
 docker compose up -d
 ```
 
 The dashboard is on **port 80**; the MCP endpoint is on loopback:8080.
 
-Sign in with the address in `auth.accounts.bootstrap.email` and the password
-you just set. That account is created on the first start and only while the
-account table is empty, so set the password *before* starting: an empty one
-leaves you with no way in short of clearing the table.
+Open the dashboard and it asks you to create the first account. That account is
+the administrator, and registration stops being offered the moment it exists --
+a door that closes behind the first person through it. Nothing to set
+beforehand, and no password in a file.
 
 ### From source
 
@@ -107,6 +107,13 @@ it.
 People sign in to the dashboard with their own email and password. An account
 is an address, a role, and the systems it may reach; administrators manage them
 on the **Users** page.
+
+There are two roles, and the line between them is administering the host rather
+than operating it. A **user** reads, proposes, and approves -- everything the
+integrations exist to do, including confirming a change in the conversation. An
+**admin** additionally changes settings, makes and assigns tunnels, manages
+accounts, and clears history. A user sees the settings and how each plugin is
+reached; they just cannot change either.
 
 The session is an HttpOnly cookie the page cannot read, and writes carry a CSRF
 token in a header. Rights are re-read on every request rather than fixed at
@@ -199,20 +206,16 @@ else:
 
 ```yaml
 auth:
-  # People. The bootstrap account is created on the first start and only while
-  # the account table is empty, so it cannot be used to reset a live one.
+  # People. Accounts are made in the dashboard, not here.
   accounts:
     session_ttl: 12h
-    bootstrap:
-      email: you@example.com
-      password_ref: env:MCPD_BOOTSTRAP_PASSWORD
 
   # Machines that cannot complete a sign-in form.
   static_tokens:
     - id: chatgpt-cnmaestro
       secret_ref: env:MCPD_TOKEN_CHATGPT
       principal: svc:chatgpt
-      role: operator
+      role: user
       plugins: [cnmaestro]
 ```
 
@@ -249,7 +252,7 @@ is in [`docs/architecture.html`](docs/architecture.html).
 
 Working: the MCP host with per-plugin endpoints and scoping; OpenAI's Secure
 MCP Tunnel, embedded, one per connector; email-and-password accounts with
-cookie sessions; the approval engine end to end, including confirmation raised
+cookie sessions and first-run registration; the approval engine end to end, including confirmation raised
 in the conversation; SQLite storage with a hash-chained audit trail; the
 cnMaestro plugin; the operator dashboard; and the out-of-process plugin SDK.
 

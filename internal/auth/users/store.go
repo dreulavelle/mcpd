@@ -101,6 +101,68 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	return u, nil
 }
 
+// CreateFirst provisions the first account, and only when there are none.
+//
+// This is what backs the registration form a new instance shows instead of a
+// sign-in form. The emptiness check runs inside the write transaction: two
+// browsers reaching an unclaimed instance at the same moment would otherwise
+// both see zero accounts and both be made administrator, which is the one
+// outcome this endpoint must not have.
+//
+// The first account is always an administrator. There is nobody to grant it
+// the role afterwards, and an instance whose first account cannot manage
+// accounts is one nobody can finish setting up.
+func (s *Store) CreateFirst(ctx context.Context, email, password, displayName string) (*User, error) {
+	normalized, err := NormalizeEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	id, err := newID("usr_")
+	if err != nil {
+		return nil, err
+	}
+
+	u := &User{
+		ID:           id,
+		Email:        normalized,
+		PasswordHash: hash,
+		DisplayName:  strings.TrimSpace(displayName),
+		Role:         auth.RoleAdmin,
+		Plugins:      []string{auth.Wildcard},
+	}
+	plugins, err := json.Marshal(u.Plugins)
+	if err != nil {
+		return nil, fmt.Errorf("users: encode plugin grants: %w", err)
+	}
+
+	now := s.now().UnixMilli()
+	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			return ErrAlreadyClaimed
+		}
+		return tx.Exec(`
+			INSERT INTO users (id, email, password_hash, display_name, role,
+			                   plugins_json, disabled, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,0,?,?)`,
+			u.ID, u.Email, u.PasswordHash, u.DisplayName, string(u.Role),
+			string(plugins), now, now)
+	})
+	if err != nil {
+		return nil, err
+	}
+	u.CreatedAt = time.UnixMilli(now).UTC()
+	u.UpdatedAt = u.CreatedAt
+	return u, nil
+}
+
 // ByEmail loads an account by address. The address is normalised first, so a
 // caller may pass whatever the sign-in form collected.
 func (s *Store) ByEmail(ctx context.Context, email string) (*User, error) {
@@ -138,8 +200,10 @@ func (s *Store) List(ctx context.Context) ([]*User, error) {
 	return out, rows.Err()
 }
 
-// Count reports how many accounts exist, so startup can tell whether
-// bootstrapping is needed.
+// Count reports how many accounts exist.
+//
+// Zero is what makes an instance unclaimed: the dashboard offers to create the
+// first account rather than asking for a sign-in nobody can complete.
 func (s *Store) Count(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.Reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)

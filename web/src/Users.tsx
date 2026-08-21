@@ -3,10 +3,8 @@ import { api, ApiError, type Role, type User } from "./api";
 import { Message, Skeleton, usePoll, useToasts } from "./components";
 
 const ROLES: [Role, string][] = [
-  ["viewer", "Viewer — can read"],
-  ["operator", "Operator — can read and propose changes"],
-  ["approver", "Approver — can also approve them"],
-  ["admin", "Admin — can also administer this host"],
+  ["user", "User — can read, propose, and approve changes"],
+  ["admin", "Admin — can also change settings, tunnels, and accounts"],
 ];
 
 /**
@@ -151,7 +149,7 @@ function AddUser({ onClose, onAdded }: {
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<Role>("operator");
+  const [role, setRole] = useState<Role>("user");
   const [everything, setEverything] = useState(true);
   const [plugins, setPlugins] = useState("");
   const [error, setError] = useState("");

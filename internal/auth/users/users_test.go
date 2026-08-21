@@ -3,7 +3,9 @@ package users
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,7 +88,7 @@ func TestCreate_EmailIsNormalisedAndUnique(t *testing.T) {
 
 	_, err := s.Create(ctx, CreateRequest{
 		Email: "ALICE@example.com", Password: "another-long-passphrase",
-		Role: auth.RoleViewer, Plugins: []string{"echo"},
+		Role: auth.RoleUser, Plugins: []string{"echo"},
 	})
 	if !errors.Is(err, ErrDuplicateEmail) {
 		t.Fatalf("second registration of the same address: %v, want ErrDuplicateEmail", err)
@@ -97,7 +99,7 @@ func TestCreate_RejectsEmptyPluginGrant(t *testing.T) {
 	s, _ := newStore(t)
 	_, err := s.Create(context.Background(), CreateRequest{
 		Email: "b@example.com", Password: "a-sufficiently-long-passphrase",
-		Role: auth.RoleViewer,
+		Role: auth.RoleUser,
 	})
 	if err == nil {
 		t.Fatal("an account granting no plugins reaches nothing; creating one must be refused")
@@ -132,7 +134,7 @@ func TestAuthenticate_DisabledAccountIsRefused(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
 	mustCreate(t, s, "admin@example.com", auth.RoleAdmin)
-	u := mustCreate(t, s, "bob@example.com", auth.RoleOperator)
+	u := mustCreate(t, s, "bob@example.com", auth.RoleUser)
 
 	off := true
 	if _, err := s.Update(ctx, u.ID, UpdateRequest{Disabled: &off}); err != nil {
@@ -200,7 +202,7 @@ func TestUpdate_DisablingEndsLiveSessions(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
 	mustCreate(t, s, "admin@example.com", auth.RoleAdmin)
-	u := mustCreate(t, s, "bob@example.com", auth.RoleOperator)
+	u := mustCreate(t, s, "bob@example.com", auth.RoleUser)
 
 	token, _, err := s.NewSession(ctx, u.ID, time.Hour)
 	if err != nil {
@@ -242,9 +244,9 @@ func TestLastAdminIsProtected(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
 	admin := mustCreate(t, s, "admin@example.com", auth.RoleAdmin)
-	mustCreate(t, s, "viewer@example.com", auth.RoleViewer)
+	mustCreate(t, s, "viewer@example.com", auth.RoleUser)
 
-	viewer := auth.RoleViewer
+	viewer := auth.RoleUser
 	if _, err := s.Update(ctx, admin.ID, UpdateRequest{Role: &viewer}); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("demoting the last admin: %v, want ErrLastAdmin", err)
 	}
@@ -278,4 +280,117 @@ func TestPassword(t *testing.T) {
 	if err := ValidatePassword("a-sufficiently-long-passphrase"); err != nil {
 		t.Errorf("a reasonable passphrase was refused: %v", err)
 	}
+}
+
+// A new instance is claimed by whoever registers first, and they become the
+// administrator: there is nobody to grant them the role afterwards.
+func TestCreateFirst_ClaimsAnEmptyInstance(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := context.Background()
+
+	u, err := s.CreateFirst(ctx, " Alice@Example.COM ", "a-sufficiently-long-passphrase", "Alice")
+	if err != nil {
+		t.Fatalf("CreateFirst: %v", err)
+	}
+	if u.Email != "alice@example.com" {
+		t.Errorf("email = %q, want it normalised", u.Email)
+	}
+	if u.Role != auth.RoleAdmin {
+		t.Errorf("role = %q, want admin", u.Role)
+	}
+	if len(u.Plugins) != 1 || u.Plugins[0] != auth.Wildcard {
+		t.Errorf("plugins = %v, want the wildcard", u.Plugins)
+	}
+	if _, err := s.Authenticate(ctx, "alice@example.com", "a-sufficiently-long-passphrase"); err != nil {
+		t.Errorf("the registered account cannot sign in: %v", err)
+	}
+}
+
+// Registration claims an unclaimed instance. Once claimed it must refuse, or
+// it is a way to mint an administrator on a running host.
+func TestCreateFirst_RefusesOnceClaimed(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := context.Background()
+
+	if _, err := s.CreateFirst(ctx, "alice@example.com", "a-sufficiently-long-passphrase", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.CreateFirst(ctx, "mallory@example.com", "another-long-passphrase", "")
+	if !errors.Is(err, ErrAlreadyClaimed) {
+		t.Fatalf("second registration: %v, want ErrAlreadyClaimed", err)
+	}
+
+	// And the instance still belongs to the first registrant alone.
+	list, err := s.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Email != "alice@example.com" {
+		t.Fatalf("accounts = %v, want alice alone", list)
+	}
+}
+
+// Two browsers reaching an unclaimed instance at the same moment must produce
+// one administrator, not two. The emptiness check lives inside the write
+// transaction for exactly this.
+func TestCreateFirst_ConcurrentClaimsProduceOneAdmin(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := context.Background()
+
+	const racers = 8
+	var wg sync.WaitGroup
+	errs := make([]error, racers)
+	wg.Add(racers)
+	for i := range racers {
+		go func() {
+			defer wg.Done()
+			_, errs[i] = s.CreateFirst(ctx,
+				fmt.Sprintf("racer%d@example.com", i), "a-sufficiently-long-passphrase", "")
+		}()
+	}
+	wg.Wait()
+
+	var won int
+	for _, err := range errs {
+		if err == nil {
+			won++
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d registrations succeeded, want exactly 1", won)
+	}
+	n, err := s.Count(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("%d accounts exist, want 1", n)
+	}
+}
+
+// A user does everything the integrations exist to do; an administrator
+// additionally administers the host. That one line is the whole role model.
+func TestRolesSeparateOperatingFromAdministering(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := context.Background()
+	admin := mustCreate(t, s, "admin@example.com", auth.RoleAdmin)
+	user := mustCreate(t, s, "user@example.com", auth.RoleUser)
+
+	up := user.Principal("ses_u")
+	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove} {
+		if !up.Can(c) {
+			t.Errorf("a user should hold %s", c)
+		}
+	}
+	if up.Can(auth.CapAdmin) {
+		t.Error("a user must not hold admin; that is the line between the two roles")
+	}
+
+	ap := admin.Principal("ses_a")
+	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove, auth.CapAdmin} {
+		if !ap.Can(c) {
+			t.Errorf("an administrator should hold %s", c)
+		}
+	}
+	_ = ctx
 }

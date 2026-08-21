@@ -3,7 +3,7 @@ import {
   api, ApiError, type Endpoints, type Plugin, type TunnelInfo, type TunnelStatus,
 } from "./api";
 import {
-  CodeBlock, Copyable, Dot, Empty, Message, Pill, Skeleton, usePoll, useToasts,
+  CodeBlock, Copyable, Dot, Empty, Message, Pill, Skeleton, useIsAdmin, usePoll, useToasts,
 } from "./components";
 
 /**
@@ -172,6 +172,7 @@ function TunnelControl({ plugin, tunnels, tunnel, onChange, show }: {
   show: (tone: "good" | "problem", text: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const admin = useIsAdmin();
 
   async function create() {
     setBusy(true);
@@ -208,10 +209,22 @@ function TunnelControl({ plugin, tunnels, tunnel, onChange, show }: {
         <span className="note tight" style={{ flex: 1 }}>
           Its own connector, {describe(tunnel.state)}.
         </span>
-        <button className="btn sm danger" disabled={busy} onClick={remove}>
-          {busy ? "Working…" : "Remove"}
-        </button>
+        {admin && (
+          <button className="btn sm danger" disabled={busy} onClick={remove}>
+            {busy ? "Working…" : "Remove"}
+          </button>
+        )}
       </div>
+    );
+  }
+
+  // A user sees how the plugin is reached and cannot change it. Offering the
+  // button and refusing the call would be a worse way to say the same thing.
+  if (!admin) {
+    return (
+      <p className="note tight">
+        Reachable through any connector that covers everything.
+      </p>
     );
   }
 

@@ -187,8 +187,8 @@ func schema() []Group {
 				},
 				{
 					Key: KeyTunnelRole, Label: "What ChatGPT may do", Kind: KindEnum,
-					Group: "tunnel", Apply: ApplyReconnect, Default: "approver",
-					Options: []string{"viewer", "operator", "approver"},
+					Group: "tunnel", Apply: ApplyReconnect, Default: "user",
+					Options: []string{"user", "admin"},
 					// "Also approve" sounds like the agent deciding for itself,
 					// and it is not: approval happens in the conversation, and
 					// the agent is what carries your answer back. Without it a
