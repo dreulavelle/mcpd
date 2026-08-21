@@ -63,8 +63,6 @@ func NewStaticToken(id, plaintext string, p Principal) (*StaticToken, error) {
 	}
 	p.TokenID = id
 	// A static token identifies a credential, not a human. Two callers sharing
-	// it are indistinguishable, and separation of duties must know that.
-	p.Distinguishable = false
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}

@@ -41,6 +41,10 @@ type Options struct {
 	// Audit reads the append-only trail.
 	Audit AuditReader
 
+	// Pruner removes history past its retention, or all of it. It is separate
+	// from AuditReader because reading and removing are different rights.
+	Pruner AuditPruner
+
 	// PublicURL is the address clients reach, used to render a connect URL an
 	// operator can copy rather than assemble.
 	PublicURL string
@@ -92,6 +96,11 @@ type BootstrapSetting struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
 	Help  string `json:"help,omitempty"`
+}
+
+// AuditPruner removes history. The removal is itself recorded.
+type AuditPruner interface {
+	Prune(ctx context.Context, actor string, cutoff, now time.Time) (int64, error)
 }
 
 // TunnelController is the slice of the tunnel group the dashboard needs.
@@ -189,6 +198,8 @@ func (s *Server) routes() {
 	api("DELETE /api/tunnels/{id}", s.handleDeleteTunnel, auth.CapAdmin)
 	api("GET /api/audit", s.handleAudit, auth.CapRead)
 	api("GET /api/audit/verify", s.handleVerifyAudit, auth.CapAdmin)
+	// Clearing the record is administrative, and is itself recorded.
+	api("DELETE /api/audit", s.handleClearAudit, auth.CapAdmin)
 	api("GET /api/health", s.handleHealth, auth.CapRead)
 
 	// Everything else is the single-page application.
@@ -1141,4 +1152,24 @@ func (s *Server) decode(w http.ResponseWriter, r *http.Request, out any) bool {
 		return false
 	}
 	return true
+}
+
+// handleClearAudit removes the whole history.
+//
+// It is not a hole in the append-only guarantee. The removal is written into
+// the trail as it happens, so what remains says that something was cleared, by
+// whom, and how much -- and still verifies as a chain from there.
+func (s *Server) handleClearAudit(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Pruner == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "history cannot be cleared here")
+		return
+	}
+	now := time.Now()
+	removed, err := s.opts.Pruner.Prune(r.Context(), auth.FromContext(r.Context()).ID, now, now)
+	if err != nil {
+		s.opts.Log.Error("clearing history failed", "error", err)
+		s.writeError(w, r, http.StatusInternalServerError, "couldn't clear the history")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]int64{"removed": removed})
 }

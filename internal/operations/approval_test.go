@@ -6,135 +6,44 @@ import (
 	"github.com/spoked/mcpd/internal/auth"
 )
 
-func policy(threshold RiskLevel) *ApprovalPolicy {
-	return NewApprovalPolicy(auth.NewAuthorizer(), RiskPolicy{
-		RequireDistinctApproverAtOrAbove: threshold,
-	})
+func policy() *ApprovalPolicy {
+	return NewApprovalPolicy(auth.NewAuthorizer())
 }
 
-func principal(id string, role auth.Role, distinguishable bool) *auth.Principal {
-	return &auth.Principal{
-		ID: id, Role: role,
-		Plugins:         []string{"cnmaestro"},
-		Distinguishable: distinguishable,
-	}
+func principal(id string, role auth.Role) *auth.Principal {
+	return &auth.Principal{ID: id, Role: role, Plugins: []string{"cnmaestro"}}
 }
 
 func opWithRisk(risk RiskLevel) *Operation {
 	return &Operation{Plugin: "cnmaestro", Risk: risk, RequestedBy: "user:alice"}
 }
 
-func TestAuthorizeApproval_SeparationOfDuties(t *testing.T) {
-	p := policy(RiskHigh)
+// Approval happens in the conversation with whoever asked for the change, so
+// there is no second-person rule: a proposal only the requester can see is not
+// one a colleague could act on. What remains is capability, which still bites.
+func TestAuthorizeApproval_RequiresTheApproveCapability(t *testing.T) {
+	p := policy()
 
-	alice := principal("user:alice", auth.RoleApprover, true)
-	bob := principal("user:bob", auth.RoleApprover, true)
-	shared := principal("svc:shared", auth.RoleApprover, false)
+	viewer := principal("user:viewer", auth.RoleViewer)
+	if d := p.AuthorizeApproval(viewer, opWithRisk(RiskLow)); d.Allowed {
+		t.Fatal("a viewer must not be able to approve")
+	}
 
-	tests := []struct {
-		name    string
-		p       *auth.Principal
-		op      *Operation
-		allowed bool
-		code    string
-	}{
-		{"self-approval below threshold is fine", alice, opWithRisk(RiskMedium), true, ""},
-		{"self-approval at threshold refused", alice, opWithRisk(RiskHigh), false, auth.CodeSelfApproval},
-		{"self-approval above threshold refused", alice, opWithRisk(RiskCritical), false, auth.CodeSelfApproval},
-		{"distinct approver permitted", bob, opWithRisk(RiskCritical), true, ""},
-		{"indistinct identity fails closed", shared, opWithRisk(RiskHigh), false, auth.CodeIdentityIndistinct},
-		{"indistinct identity fine below threshold", shared, opWithRisk(RiskLow), true, ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			d := p.AuthorizeApproval(tc.p, tc.op)
-			if d.Allowed != tc.allowed {
-				t.Fatalf("Allowed = %v, want %v (reason: %s)", d.Allowed, tc.allowed, d.Reason)
-			}
-			if !tc.allowed && d.Code != tc.code {
-				t.Fatalf("code = %s, want %s", d.Code, tc.code)
-			}
-		})
-	}
-}
-
-func TestAuthorizeApproval_RequiresApproveCapability(t *testing.T) {
-	p := policy("")
-	operator := principal("user:o", auth.RoleOperator, true)
-
-	if d := p.AuthorizeApproval(operator, opWithRisk(RiskLow)); d.Allowed {
-		t.Fatal("an operator must not be able to approve")
-	}
-}
-
-func TestAuthorizeApproval_RequiresPluginAccess(t *testing.T) {
-	p := policy("")
-	outsider := &auth.Principal{
-		ID: "user:x", Role: auth.RoleApprover,
-		Plugins: []string{"netbox"}, Distinguishable: true,
-	}
-	if d := p.AuthorizeApproval(outsider, opWithRisk(RiskLow)); d.Allowed {
-		t.Fatal("approving an operation for an ungranted plugin must be refused")
-	}
-}
-
-func TestRequiresDistinctApprover(t *testing.T) {
-	tests := []struct {
-		threshold RiskLevel
-		risk      RiskLevel
-		want      bool
-	}{
-		{RiskHigh, RiskLow, false},
-		{RiskHigh, RiskMedium, false},
-		{RiskHigh, RiskHigh, true},
-		{RiskHigh, RiskCritical, true},
-		{RiskCritical, RiskHigh, false},
-		{RiskCritical, RiskCritical, true},
-		// An unset threshold disables the rule entirely.
-		{"", RiskCritical, false},
-	}
-	for _, tc := range tests {
-		p := policy(tc.threshold)
-		if got := p.RequiresDistinctApprover(tc.risk); got != tc.want {
-			t.Errorf("threshold %q, risk %q: got %v, want %v",
-				tc.threshold, tc.risk, got, tc.want)
+	approver := principal("user:alice", auth.RoleApprover)
+	for _, risk := range []RiskLevel{RiskLow, RiskMedium, RiskHigh, RiskCritical} {
+		if d := p.AuthorizeApproval(approver, opWithRisk(risk)); !d.Allowed {
+			t.Fatalf("%s risk was refused: %s", risk, d.Reason)
 		}
 	}
 }
 
-// Inline approval is a ceiling, not a switch. A routine change can be
-// confirmed in a conversation; a consequential one goes to the dashboard,
-// where the full before-and-after and a second person are available.
-func TestInlineApprovalPolicy(t *testing.T) {
-	tests := []struct {
-		name    string
-		maxRisk RiskLevel
-		risk    RiskLevel
-		allowed bool
-	}{
-		{"medium ceiling allows low", RiskMedium, RiskLow, true},
-		{"medium ceiling allows medium", RiskMedium, RiskMedium, true},
-		{"medium ceiling refuses high", RiskMedium, RiskHigh, false},
-		{"medium ceiling refuses critical", RiskMedium, RiskCritical, false},
-		{"low ceiling refuses medium", RiskLow, RiskMedium, false},
-		{"critical ceiling allows everything", RiskCritical, RiskCritical, true},
-		// The zero value permits nothing, so a deployment that never
-		// configures this keeps every approval at the dashboard.
-		{"unset ceiling refuses everything", "", RiskLow, false},
-		// An unrecognised classification is exactly the case to put in front
-		// of a person.
-		{"unknown risk is never inline", RiskCritical, RiskLevel("weird"), false},
+// Reaching a plugin the principal was not granted is still refused, and it is
+// the check that keeps a scoped credential scoped.
+func TestAuthorizeApproval_RefusesAnUngrantedPlugin(t *testing.T) {
+	elsewhere := &auth.Principal{
+		ID: "user:alice", Role: auth.RoleApprover, Plugins: []string{"echo"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			p := InlineApprovalPolicy{MaxRisk: tc.maxRisk}
-			if got := p.Allows(tc.risk); got != tc.allowed {
-				t.Fatalf("ceiling %q, risk %q: got %v, want %v",
-					tc.maxRisk, tc.risk, got, tc.allowed)
-			}
-			if p.AllowsInline(tc.risk) != p.Allows(tc.risk) {
-				t.Fatal("AllowsInline must agree with Allows")
-			}
-		})
+	if d := policy().AuthorizeApproval(elsewhere, opWithRisk(RiskLow)); d.Allowed {
+		t.Fatal("approving inside an ungranted plugin must be refused")
 	}
 }

@@ -363,5 +363,8 @@ export const api = {
 
   verifyAudit: () => request<{ intact: boolean; broken_at: number }>("/api/audit/verify"),
 
+  clearAudit: () =>
+    request<{ removed: number }>("/api/audit", { method: "DELETE" }),
+
   health: () => request<HealthReport>("/api/health"),
 };

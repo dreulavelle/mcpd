@@ -245,13 +245,6 @@ type Bootstrap struct {
 
 // Approval configures the risk policy.
 type Approval struct {
-	// RequireDistinctApproverAtOrAbove is the risk level from which the
-	// requester may not also approve. Empty disables the rule.
-	//
-	// Note that this fails closed: if the authentication mode cannot
-	// distinguish principals, operations at or above this level are refused
-	// rather than self-approved.
-	RequireDistinctApproverAtOrAbove string `yaml:"require_distinct_approver_at_or_above"`
 
 	// ProposalTTL bounds how long a proposal awaits approval.
 	ProposalTTL time.Duration `yaml:"proposal_ttl"`
@@ -345,7 +338,6 @@ func Default() *Config {
 			},
 		},
 		Approval: Approval{
-			RequireDistinctApproverAtOrAbove: "high",
 			// Routine changes are confirmed in the conversation; anything
 			// weightier goes to the dashboard.
 			InlineMaxRisk: "medium",

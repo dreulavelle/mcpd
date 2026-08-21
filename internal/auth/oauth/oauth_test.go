@@ -181,9 +181,6 @@ func TestFullAuthorizationCodeFlow(t *testing.T) {
 		t.Fatal("principal must not reach a plugin that was not in the token scope, " +
 			"even though the user themselves is granted it")
 	}
-	if !p.Distinguishable {
-		t.Fatal("an OAuth principal is a specific user and must be distinguishable")
-	}
 }
 
 // A code is single-use. Replaying it must fail even with a valid verifier.

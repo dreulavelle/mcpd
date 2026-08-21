@@ -300,9 +300,6 @@ func TestValidate(t *testing.T) {
 		{KeyApprovalProposalTTL, "0", false},
 		{KeyApprovalProposalTTL, "99999", false},
 		{KeyApprovalProposalTTL, "thirty", false},
-		{KeyApprovalDistinct, "high", true},
-		{KeyApprovalDistinct, "", true},
-		{KeyApprovalDistinct, "extreme", false},
 		{"not.a.setting", "x", false},
 	}
 	for _, tc := range tests {

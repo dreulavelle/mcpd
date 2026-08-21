@@ -19,7 +19,7 @@ const approverToken = "approver-token-000000000000000000000000"
 
 // newApprovalApp builds a host whose principal can both propose and approve,
 // so a single test can drive the whole lifecycle.
-func newApprovalApp(t *testing.T, distinctApproverAtOrAbove string) *App {
+func newApprovalApp(t *testing.T) *App {
 	t.Helper()
 	t.Setenv("MCPD_TOKEN_APPROVER", approverToken)
 
@@ -27,7 +27,6 @@ func newApprovalApp(t *testing.T, distinctApproverAtOrAbove string) *App {
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "mcpd.db")
 	cfg.Storage.RelaxedDurability = true
 	cfg.Server.PublicURL = "https://mcp.test.invalid"
-	cfg.Approval.RequireDistinctApproverAtOrAbove = distinctApproverAtOrAbove
 	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
 		ID: "approver", SecretRef: "env:MCPD_TOKEN_APPROVER",
@@ -102,7 +101,7 @@ func decodeToolResult(t *testing.T, tool, body string) map[string]any {
 // TestApprovalLifecycle walks propose -> approve -> execute -> verify and
 // asserts that nothing changes until approval lands.
 func TestApprovalLifecycle(t *testing.T) {
-	a := newApprovalApp(t, "") // separation of duties off; one token does both
+	a := newApprovalApp(t) // separation of duties off; one token does both
 	h := a.Handler()
 	ctx := context.Background()
 
@@ -167,7 +166,7 @@ func TestApprovalLifecycle(t *testing.T) {
 
 // A rejected proposal must never take effect.
 func TestApprovalLifecycle_RejectionChangesNothing(t *testing.T) {
-	a := newApprovalApp(t, "")
+	a := newApprovalApp(t)
 	h := a.Handler()
 
 	proposal := callTool(t, h, approverToken, "echo_label_set",
@@ -186,33 +185,8 @@ func TestApprovalLifecycle_RejectionChangesNothing(t *testing.T) {
 	}
 }
 
-// Separation of duties under static tokens must refuse rather than silently
-// self-approve. The refusal has to happen at proposal time, so an operator is
-// not left holding a change they can never enact.
-func TestApproval_SeparationOfDutiesRefusesUnderStaticTokens(t *testing.T) {
-	a := newApprovalApp(t, "low") // every operation demands a distinct approver
-	h := a.Handler()
-
-	w := mcpRequest(t, h, "/mcp/echo", approverToken, map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": map[string]any{
-			"name":      "echo_label_set",
-			"arguments": map[string]any{"label": "nope"},
-		},
-	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("transport error: %d", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "IDENTITY_INDISTINCT") {
-		t.Fatalf("expected the proposal to be refused as IDENTITY_INDISTINCT, got: %s", body)
-	}
-}
-
-// Approval must reference a stored operation and cannot carry parameters. A
-// caller that never proposed has nothing to approve.
 func TestApproval_RequiresAnExistingOperation(t *testing.T) {
-	a := newApprovalApp(t, "")
+	a := newApprovalApp(t)
 	h := a.Handler()
 
 	w := mcpRequest(t, h, "/mcp/echo", approverToken, map[string]any{
@@ -229,7 +203,7 @@ func TestApproval_RequiresAnExistingOperation(t *testing.T) {
 
 // The propose tool must advertise itself honestly.
 func TestProposeTool_IsAdvertisedAsNonDestructive(t *testing.T) {
-	a := newApprovalApp(t, "")
+	a := newApprovalApp(t)
 	w := mcpRequest(t, a.Handler(), "/mcp/echo", approverToken, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": map[string]any{},
 	})

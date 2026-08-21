@@ -82,11 +82,6 @@ func TestTunnelConfigComesFromSettings(t *testing.T) {
 	if string(got.Principal.Role) != "approver" {
 		t.Fatalf("role = %q, want the stored value", got.Principal.Role)
 	}
-	// A tunnel is a shared credential and must never be treated as a
-	// distinguishable identity, whatever is configured.
-	if got.Principal.Distinguishable {
-		t.Fatal("a tunnel principal must not be distinguishable")
-	}
 }
 
 // Leaving the plugin list blank means "everything I can see", not "nothing".
@@ -317,5 +312,23 @@ func TestSettingsDoesNotOfferPerPluginTunnelFields(t *testing.T) {
 				t.Errorf("settings still offers %q", f.Key)
 			}
 		}
+	}
+}
+
+// A nil store still compiles and still satisfies its interface, so the wiring
+// only fails when something reads through it -- which was a panic in the
+// dashboard rather than an error at startup.
+func TestHistoryIsReadableAndPrunable(t *testing.T) {
+	a := newSettingsApp(t)
+	ctx := context.Background()
+
+	if _, err := a.audit.Recent(ctx, 10); err != nil {
+		t.Fatalf("reading history: %v", err)
+	}
+	if _, err := a.audit.Prune(ctx, "user:test", time.Now(), time.Now()); err != nil {
+		t.Fatalf("pruning history: %v", err)
+	}
+	if broken, err := a.audit.VerifyChain(ctx); err != nil || broken != 0 {
+		t.Fatalf("VerifyChain = %d, %v", broken, err)
 	}
 }

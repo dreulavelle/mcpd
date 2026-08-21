@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth/oauth"
+	"github.com/spoked/mcpd/internal/settings"
 )
 
 // isPermissionDenied reports whether an error is an EACCES from bind.
@@ -93,6 +94,8 @@ func (a *App) Run(ctx context.Context) error {
 		hk := oauth.NewHousekeeper(a.oauthStore, time.Hour, 7*24*time.Hour)
 		a.startWorker("oauth-housekeeper", workerCtx, hk.Run)
 	}
+
+	a.startWorker("history-retention", workerCtx, a.pruneHistory)
 
 	// Anything approved while the process was down still needs executing. The
 	// event announcing it was consumed, or never delivered, so a startup scan
@@ -237,4 +240,42 @@ func (a *App) Shutdown() error {
 	a.log.Info("database closed")
 
 	return errors.Join(errs...)
+}
+
+// pruneHistory removes history past its retention, once a day.
+//
+// It reads the setting on every pass rather than at startup, so changing the
+// retention takes effect without a restart -- and so shortening it actually
+// shortens it, instead of taking effect the next time someone remembers to
+// restart mcpd.
+func (a *App) pruneHistory(ctx context.Context) error {
+	const every = 24 * time.Hour
+
+	// A first pass shortly after start, because a deployment that restarts
+	// daily would otherwise never reach the tick.
+	timer := time.NewTimer(time.Minute)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+		}
+		timer.Reset(every)
+
+		days := a.settings.Int(ctx, settings.KeyHistoryRetentionDays, 7)
+		if days <= 0 {
+			continue
+		}
+		cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+		removed, err := a.audit.Prune(ctx, "system:retention", cutoff, time.Now())
+		if err != nil {
+			a.log.Warn("could not prune history", "error", err)
+			continue
+		}
+		if removed > 0 {
+			a.log.Info("pruned history", "removed", removed, "older_than_days", days)
+		}
+	}
 }

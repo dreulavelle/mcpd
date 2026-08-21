@@ -174,25 +174,15 @@ auth:
       plugins: ["*"]
 
 approval:
-  # Risk level from which the requester may not also approve.
-  #
-  # Empty here because a single static token is a single principal: requiring
-  # a distinct approver would refuse every change rather than degrade. Set it
-  # to "high" once auth.mode is oauth and real identities exist.
-  require_distinct_approver_at_or_above: ""
 
   proposal_ttl: 30m
   approval_ttl: 15m
   lease_ttl: 2m
 
-  # Highest risk a user may approve from inside a conversation -- through the
-  # client's own confirmation prompt -- rather than opening the dashboard.
-  #
-  # Approving routine changes inline is what stops the gate being worked
-  # around: an operator who must switch windows for every trivial edit
-  # eventually stops using it. Anything above this goes to the dashboard,
-  # where the full before-and-after, the audit trail, and a second person are
-  # available. Empty sends every approval there.
+  # Highest risk a user may approve from a single yes/no prompt raised by
+  # their assistant. Above it the shortcut is withheld, not the decision: the
+  # assistant has to show the change in full and be told explicitly. Either way
+  # the person decides in the conversation.
   inline_max_risk: medium
 
 logging:
