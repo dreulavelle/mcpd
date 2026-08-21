@@ -202,12 +202,21 @@ export interface TunnelInfo {
   missing?: string;
   /** The systems a tunnel can be pointed at. */
   plugins: string[];
+  /**
+   * ChatGPT workspaces already in use by a tunnel here.
+   *
+   * OpenAI publishes no endpoint that lists workspaces, so these are read off
+   * the tunnels that have one. Empty means either no workspaces (a personal
+   * account has none) or no tunnel has been scoped to one yet.
+   */
+  workspaces: string[];
 }
 
 export interface OpenAITunnel {
   id: string;
   name: string;
   description?: string;
+  workspace_ids?: string[];
 }
 
 export type SettingKind =
@@ -409,10 +418,10 @@ export const api = {
 
   tunnelStop: () => request<TunnelStatus>("/api/tunnel/stop", { method: "POST" }),
 
-  createTunnel: (name: string, plugin: string) =>
+  createTunnel: (name: string, plugin: string, workspaceID?: string) =>
     request<OpenAITunnel>("/api/tunnels", {
       method: "POST",
-      body: JSON.stringify({ name, plugin }),
+      body: JSON.stringify({ name, plugin, workspace_id: workspaceID ?? "" }),
     }),
 
   assignTunnel: (id: string, plugin: string) =>
