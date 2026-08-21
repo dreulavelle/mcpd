@@ -1,86 +1,76 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  api,
-  ApiError,
-  type SettingField,
-  type SettingsPayload,
-} from "./api";
-import { Banner } from "./components";
+import { api, ApiError, type SettingField, type SettingsPayload } from "./api";
+import { Message, Out, Pill, Skeleton, useToasts } from "./components";
+
+const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
+const OPENAI_API_KEYS = "https://platform.openai.com/settings/organization/api-keys";
+
+/** Where a field should link to, when the value comes from somewhere else. */
+const LINKS: Record<string, { href: string; label: string }> = {
+  "tunnel.tunnel_id": { href: OPENAI_TUNNELS, label: "Get one from your OpenAI account" },
+  "tunnel.api_key": { href: OPENAI_API_KEYS, label: "Create one on the API keys page" },
+};
 
 /**
- * Settings page.
+ * Settings.
  *
- * Everything that can change while mcpd is running is editable here. The few
- * things that cannot -- addresses and file paths, which have to be known
- * before anything starts -- are shown read-only at the bottom, so someone
- * looking for a setting finds out where it lives rather than concluding it
- * doesn't exist.
+ * Everything that can change while mcpd is running is here. The few things
+ * that can't — addresses and file paths, which have to be known before
+ * anything starts — are shown read-only at the bottom, so someone hunting for
+ * a setting finds out where it lives instead of assuming it isn't there.
  */
 export function Settings() {
-  const [payload, setPayload] = useState<SettingsPayload | null>(null);
+  const [data, setData] = useState<SettingsPayload | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [clearing, setClearing] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string[]>([]);
-  const [saved, setSaved] = useState<string | null>(null);
+  const [problems, setProblems] = useState<string[]>([]);
+  const { show, view } = useToasts();
 
   const load = useCallback(async () => {
     try {
-      const p = await api.settings();
-      setPayload(p);
+      setData(await api.settings());
       setDraft({});
       setClearing([]);
-    } catch (e) {
-      setError([e instanceof Error ? e.message : "Could not load settings."]);
+    } catch {
+      setProblems(["Couldn't load settings."]);
     }
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
-  if (!payload) {
-    return error.length ? <Banner tone="error">{error[0]}</Banner> : <p className="empty">Loading…</p>;
+  if (!data) {
+    return <><h1>Settings</h1>{problems.length
+      ? <Message tone="problem">{problems[0]}</Message>
+      : <Skeleton rows={5} />}</>;
   }
 
   const dirty = Object.keys(draft).length > 0 || clearing.length > 0;
 
-  function valueOf(field: SettingField): string {
-    if (field.key in draft) return draft[field.key]!;
-    const stored = payload!.values[field.key];
+  const valueOf = (key: string): string => {
+    if (key in draft) return draft[key]!;
+    const stored = data.values[key];
     if (stored === undefined || stored === null) return "";
     if (Array.isArray(stored)) return stored.join(", ");
     return String(stored);
-  }
-
-  function set(key: string, value: string) {
-    setDraft((d) => ({ ...d, [key]: value }));
-    setSaved(null);
-  }
+  };
 
   async function save() {
     setBusy(true);
-    setError([]);
-    setSaved(null);
+    setProblems([]);
     try {
       const result = await api.saveSettings(draft, clearing);
-
-      const notes: string[] = [];
-      if (result.reconnected?.length) {
-        notes.push(`Reconnected: ${result.reconnected.join(", ")}.`);
-      }
-      if (result.restart_required?.length) {
-        notes.push("Some changes need mcpd restarted before they take effect.");
-      }
-      setSaved(notes.length ? `Saved. ${notes.join(" ")}` : "Saved.");
+      const restart = result.restart_required?.length;
+      show("good", restart ? "Saved — some of it needs a restart." : "Saved.");
       await load();
     } catch (e) {
       if (e instanceof ApiError) {
-        const problems = (e as unknown as { problems?: string[] }).problems;
-        setError(problems?.length ? problems : [e.detail]);
+        const list = (e as unknown as { problems?: string[] }).problems;
+        setProblems(list?.length ? list : [e.detail]);
       } else {
-        setError(["Could not save. Is mcpd still running?"]);
+        setProblems(["Couldn't save. Is mcpd still running?"]);
       }
+      show("problem", "Nothing was saved.");
     } finally {
       setBusy(false);
     }
@@ -88,57 +78,42 @@ export function Settings() {
 
   return (
     <>
+      {view}
       <h1>Settings</h1>
-      <p className="subtitle">
-        Change how mcpd behaves. Most of it takes effect straight away — you'll
-        be told when something needs a restart.
+      <p className="lede">
+        How mcpd behaves. Most changes apply straight away — you'll be told if
+        one needs a restart.
       </p>
 
-      {error.map((e, i) => (
-        <Banner tone="error" key={i}>{e}</Banner>
-      ))}
-      {saved && <Banner tone="ok">{saved}</Banner>}
+      {problems.map((p, i) => <Message tone="problem" key={i}>{tidy(p)}</Message>)}
 
-      {!payload.encryption_available && (
-        <Banner tone="warn">
-          Passwords and keys can't be saved here yet, because mcpd has nowhere
-          safe to keep them. Add <code>secret_key_ref</code> to your startup
-          file pointing at a key — <code>openssl rand -base64 32</code> makes a
-          good one — and restart.
-        </Banner>
+      {!data.encryption_available && (
+        <Message tone="attention">
+          <strong>Passwords and keys can't be saved yet.</strong> mcpd has
+          nowhere safe to keep them. Add <code>secret_key_ref</code> to your
+          startup file pointing at a key — <code>openssl rand -base64 32</code>{" "}
+          makes a good one — then restart.
+        </Message>
       )}
 
-      {payload.groups.map((group) => {
-        const enabled =
-          !group.enabled_by || valueOf({ key: group.enabled_by } as SettingField) === "true";
-
+      {data.groups.map((group) => {
+        const on = !group.enabled_by || valueOf(group.enabled_by) === "true";
         return (
           <div className="card" key={group.name}>
             <div className="card-body">
-              <h2 style={{ marginTop: 0 }}>{group.title}</h2>
-              {group.help && <p className="hint">{group.help}</p>}
+              <h3>{group.title}</h3>
+              {group.help && <p className="note" style={{ marginBottom: "var(--s5)" }}>{group.help}</p>}
 
-              {group.fields.map((field) => {
-                // Hide the detail of a switched-off group rather than showing
-                // a form that does nothing.
-                if (group.enabled_by && field.key !== group.enabled_by && !enabled) {
-                  return null;
-                }
+              {group.fields.map((f) => {
+                if (group.enabled_by && f.key !== group.enabled_by && !on) return null;
                 return (
-                  <FieldInput
-                    key={field.key}
-                    field={field}
-                    value={valueOf(field)}
-                    secretSet={payload.secrets_set[field.key] ?? false}
-                    clearing={clearing.includes(field.key)}
-                    onChange={(v) => set(field.key, v)}
-                    onClear={() =>
-                      setClearing((c) =>
-                        c.includes(field.key)
-                          ? c.filter((k) => k !== field.key)
-                          : [...c, field.key],
-                      )
-                    }
+                  <Field
+                    key={f.key} field={f} value={valueOf(f.key)}
+                    isSet={data.secrets_set[f.key] ?? false}
+                    clearing={clearing.includes(f.key)}
+                    onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))}
+                    onToggleClear={() =>
+                      setClearing((c) => c.includes(f.key) ? c.filter((k) => k !== f.key) : [...c, f.key])}
                   />
                 );
               })}
@@ -147,33 +122,31 @@ export function Settings() {
         );
       })}
 
-      <div className="save-bar">
+      <div className="savebar">
         <button className="btn primary" disabled={!dirty || busy} onClick={save}>
           {busy ? "Saving…" : "Save changes"}
         </button>
-        {dirty && (
-          <button className="btn" disabled={busy} onClick={() => { setDraft({}); setClearing([]); }}>
-            Discard
-          </button>
-        )}
-        {!dirty && <span className="hint" style={{ margin: 0 }}>No unsaved changes.</span>}
+        {dirty
+          ? <button className="btn quiet" disabled={busy}
+                    onClick={() => { setDraft({}); setClearing([]); }}>Discard</button>
+          : <span className="note tight">Nothing to save.</span>}
       </div>
 
+      <h2>Set when mcpd starts</h2>
       <div className="card">
         <div className="card-body">
-          <h2 style={{ marginTop: 0 }}>Set at startup</h2>
-          <p className="hint">
+          <p className="note" style={{ marginBottom: "var(--s4)" }}>
             These have to be known before mcpd can start, so they live in its
-            startup file rather than here. Editing them means editing that file
+            startup file rather than here. Changing one means editing that file
             and restarting.
           </p>
-          <dl className="settings">
-            {payload.bootstrap.map((b) => (
-              <div className="setting" key={b.key}>
+          <dl className="kv">
+            {data.bootstrap.map((b) => (
+              <div key={b.key}>
                 <dt title={b.key}>{b.label}</dt>
                 <dd>
-                  <code>{b.value || "(not set)"}</code>
-                  {b.help && <span className="hint inline">{b.help}</span>}
+                  <code>{b.value || "not set"}</code>
+                  {b.help && <span className="note tight">{b.help}</span>}
                 </dd>
               </div>
             ))}
@@ -184,36 +157,29 @@ export function Settings() {
   );
 }
 
-function FieldInput({
-  field,
-  value,
-  secretSet,
-  clearing,
-  onChange,
-  onClear,
-}: {
+function Field({ field, value, isSet, clearing, onChange, onToggleClear }: {
   field: SettingField;
   value: string;
-  secretSet: boolean;
+  isSet: boolean;
   clearing: boolean;
   onChange: (v: string) => void;
-  onClear: () => void;
+  onToggleClear: () => void;
 }) {
-  const id = `set-${field.key}`;
+  const id = `s-${field.key}`;
+  const link = LINKS[field.key];
 
   if (field.kind === "bool") {
     return (
-      <div className="field toggle">
-        <label htmlFor={id}>
-          <input
-            id={id}
-            type="checkbox"
-            checked={value === "true"}
-            onChange={(e) => onChange(String(e.target.checked))}
-          />
-          <span>{field.label}</span>
+      <div className="field">
+        <label className="switch" htmlFor={id}>
+          <input id={id} type="checkbox" checked={value === "true"}
+                 onChange={(e) => onChange(String(e.target.checked))} />
+          <span className="switch-track" aria-hidden="true" />
+          <span>
+            <span className="switch-label">{field.label}</span>
+            {field.help && <p className="note tight">{field.help}</p>}
+          </span>
         </label>
-        {field.help && <p className="hint">{field.help}</p>}
       </div>
     );
   }
@@ -222,48 +188,54 @@ function FieldInput({
     <div className="field">
       <label htmlFor={id}>
         {field.label}
-        {field.apply === "restart" && <span className="pill">needs restart</span>}
+        {field.apply === "restart" && <> <Pill tone="attention">needs a restart</Pill></>}
       </label>
 
       {field.kind === "enum" ? (
         <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
           {field.options?.map((o) => (
-            <option key={o} value={o}>
-              {o === "" ? "Never require a second person" : o}
-            </option>
+            <option key={o} value={o}>{optionLabel(field.key, o)}</option>
           ))}
         </select>
       ) : field.kind === "secret" ? (
-        <div className="secret-field">
-          <input
-            id={id}
-            type="password"
-            autoComplete="new-password"
-            placeholder={secretSet ? "Saved — type to replace" : field.placeholder ?? ""}
-            value={value}
-            disabled={clearing}
-            onChange={(e) => onChange(e.target.value)}
-          />
-          {secretSet && (
-            <button className="btn small" type="button" onClick={onClear}>
+        <div className="row">
+          <input id={id} type="password" autoComplete="new-password" disabled={clearing}
+                 placeholder={isSet ? "Saved — type to replace" : field.placeholder ?? ""}
+                 value={value} onChange={(e) => onChange(e.target.value)} />
+          {isSet && (
+            <button className="btn sm" type="button" onClick={onToggleClear}>
               {clearing ? "Keep" : "Remove"}
             </button>
           )}
         </div>
       ) : (
-        <input
-          id={id}
-          type={field.kind === "int" || field.kind === "duration" ? "number" : "text"}
-          value={value}
-          placeholder={field.placeholder ?? ""}
-          min={field.min}
-          max={field.max}
-          onChange={(e) => onChange(e.target.value)}
-        />
+        <input id={id}
+               type={field.kind === "int" || field.kind === "duration" ? "number" : "text"}
+               value={value} placeholder={field.placeholder ?? ""}
+               min={field.min} max={field.max}
+               onChange={(e) => onChange(e.target.value)} />
       )}
 
-      {field.help && <p className="hint">{field.help}</p>}
-      {field.kind === "duration" && <p className="hint">Measured in minutes.</p>}
+      {field.help && <p className="note">{field.help}</p>}
+      {field.kind === "duration" && <p className="note">In minutes.</p>}
+      {link && <p className="note"><Out href={link.href}>{link.label}</Out></p>}
     </div>
   );
+}
+
+function optionLabel(key: string, option: string): string {
+  if (option === "") return "Never require a second person";
+  if (key.endsWith("role")) {
+    return {
+      viewer: "Look things up only",
+      operator: "Look things up and suggest changes",
+      approver: "Also approve its own changes",
+    }[option] ?? option;
+  }
+  return { low: "Minor", medium: "Moderate", high: "Significant", critical: "Major" }[option] ?? option;
+}
+
+/** Strips the internal prefix off a validation message. */
+function tidy(problem: string): string {
+  return problem.replace(/^settings:\s*/, "");
 }

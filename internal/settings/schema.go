@@ -105,13 +105,14 @@ func Schema() []Group {
 	return []Group{
 		{
 			Name:      "tunnel",
-			Title:     "ChatGPT tunnel",
+			Title:     "ChatGPT",
 			EnabledBy: KeyTunnelEnabled,
 			Help: "Lets ChatGPT reach mcpd without opening anything to the internet. " +
-				"The connection is made outward from here, so nothing needs to reach in.",
+				"The connection is made outward from here, so nothing needs to reach in. " +
+				"See the Setup tab for where to get these.",
 			Fields: []Field{
 				{
-					Key: KeyTunnelEnabled, Label: "Turn the tunnel on",
+					Key: KeyTunnelEnabled, Label: "Let ChatGPT connect",
 					Kind: KindBool, Group: "tunnel", Apply: ApplyReconnect,
 					Default: false,
 				},
@@ -122,37 +123,34 @@ func Schema() []Group {
 					Help:        "From your OpenAI account, under Settings, Organization, Tunnels.",
 				},
 				{
-					Key: KeyTunnelAPIKey, Label: "API key", Kind: KindSecret,
+					Key: KeyTunnelAPIKey, Label: "OpenAI key", Kind: KindSecret,
 					Group: "tunnel", Apply: ApplyReconnect, Required: true,
-					Help: "A runtime key from your OpenAI account, not an admin key. " +
-						"Admin keys only create and delete tunnels; they won't connect one. " +
-						"Stored encrypted.",
+					Help: "Needs the Tunnels: Read and Use permission. Stored encrypted, " +
+						"and never shown again once saved.",
 				},
 				{
-					Key: KeyTunnelPrincipal, Label: "Acts as", Kind: KindString,
+					Key: KeyTunnelPrincipal, Label: "Show it as", Kind: KindString,
 					Group: "tunnel", Apply: ApplyReconnect, Default: "svc:chatgpt",
-					Help: "A name for whatever connects through this tunnel. It appears " +
-						"in the history against everything the tunnel does.",
+					Help: "A name for ChatGPT in your history, so you can tell its " +
+						"changes from anyone else's.",
 				},
 				{
-					Key: KeyTunnelRole, Label: "What it's allowed to do", Kind: KindEnum,
+					Key: KeyTunnelRole, Label: "What ChatGPT may do", Kind: KindEnum,
 					Group: "tunnel", Apply: ApplyReconnect, Default: "operator",
 					Options: []string{"viewer", "operator", "approver"},
-					Help: "Viewer can only look things up. Operator can also suggest " +
-						"changes. Approver can approve them too, which means an " +
-						"assistant could approve its own suggestion — pick that " +
-						"deliberately.",
+					Help: "Letting it approve its own changes removes the point of " +
+						"approving them, so pick that deliberately if you do.",
 				},
 				{
-					Key: KeyTunnelPlugins, Label: "Systems it can reach", Kind: KindList,
+					Key: KeyTunnelPlugins, Label: "Systems ChatGPT can reach", Kind: KindList,
 					Group: "tunnel", Apply: ApplyReconnect,
-					Help: "Leave empty for all of them, or name the ones you want. " +
-						"Anything not listed is invisible to it.",
+					Help: "Leave empty for all of them, or list the ones you want, " +
+						"separated by commas. Anything else stays invisible to it.",
 				},
 				{
-					Key: KeyTunnelUpdates, Label: "Tell me about new versions",
+					Key: KeyTunnelUpdates, Label: "Mention new versions",
 					Kind: KindBool, Group: "tunnel", Apply: ApplyLive, Default: true,
-					Help: "Checks daily and mentions it here. Nothing updates itself.",
+					Help: "Checks once a day. Nothing ever updates itself.",
 				},
 			},
 		},
@@ -162,37 +160,34 @@ func Schema() []Group {
 			Help:  "How long a suggested change waits, and who is allowed to approve one.",
 			Fields: []Field{
 				{
-					Key: KeyApprovalDistinct, Label: "Needs a second person from",
+					Key: KeyApprovalDistinct, Label: "Require a second person from",
 					Kind: KindEnum, Group: "approval", Apply: ApplyLive,
 					Options: []string{"", "low", "medium", "high", "critical"},
 					Default: "high",
 					Help: "Changes at this level or above can't be approved by whoever " +
-						"suggested them. This only works when people sign in with " +
-						"their own accounts — with a shared token mcpd can't tell " +
-						"anyone apart, so it refuses those changes instead of " +
-						"pretending.",
+						"asked for them. Only works when people sign in individually — " +
+						"with one shared key mcpd can't tell anyone apart, so it " +
+						"refuses those changes rather than pretending.",
 				},
 				{
 					Key: KeyApprovalProposalTTL, Label: "Suggestions expire after",
 					Kind: KindDuration, Group: "approval", Apply: ApplyLive,
 					Default: 30, Min: intPtr(1), Max: intPtr(10080),
-					Help: "Minutes. After this, a suggestion nobody acted on is dropped.",
+					Help: "A suggestion nobody acted on is dropped after this.",
 				},
 				{
 					Key: KeyApprovalApprovalTTL, Label: "Approvals expire after",
 					Kind: KindDuration, Group: "approval", Apply: ApplyLive,
 					Default: 15, Min: intPtr(1), Max: intPtr(1440),
-					Help: "Minutes. An approval that hasn't been applied by then is " +
-						"dropped, so an old decision can't fire against a system " +
-						"that has since changed.",
+					Help: "An approval that hasn't been applied by then is dropped, so " +
+						"an old decision can't fire against a system that has since changed.",
 				},
 				{
-					Key: KeyApprovalLeaseTTL, Label: "Give up on a stuck change after",
+					Key: KeyApprovalLeaseTTL, Label: "Flag a stuck change after",
 					Kind: KindDuration, Group: "approval", Apply: ApplyLive,
 					Default: 2, Min: intPtr(1), Max: intPtr(60),
-					Help: "Minutes. If mcpd stops partway through applying something, " +
-						"this is how long before it's marked as unknown for someone " +
-						"to check.",
+					Help: "If mcpd stops partway through applying something, this is how " +
+						"long before it's flagged for someone to check.",
 				},
 			},
 		},

@@ -539,29 +539,27 @@ func containsPrefix(values []string, prefix string) bool {
 func bootstrapSettings(cfg *config.Config) []admin.BootstrapSetting {
 	return []admin.BootstrapSetting{
 		{
-			Key: "server.listen", Label: "Assistant address", Value: cfg.Server.Listen,
-			Help: "Where assistants connect. Changing it means restarting mcpd, " +
-				"since it has to be known before anything can listen.",
+			Key: "server.listen", Label: "Where assistants connect", Value: cfg.Server.Listen,
+			Help: "Has to be known before mcpd can listen, so it can't be changed here.",
 		},
 		{
-			Key: "server.frontend_listen", Label: "Dashboard address",
+			Key: "server.frontend_listen", Label: "Where this page lives",
 			Value: cfg.Server.FrontendListen,
-			Help:  "Where this page is served from.",
 		},
 		{
 			Key: "server.public_url", Label: "Address others use",
 			Value: cfg.Server.PublicURL,
-			Help: "The address assistants reach mcpd at from outside. It has to " +
-				"match what they actually use.",
+			Help:  "How mcpd looks from outside. Must match what assistants actually use.",
 		},
 		{
-			Key: "storage.path", Label: "Database file", Value: cfg.Storage.Path,
-			Help: "Everything mcpd remembers. Back this up.",
+			Key: "storage.path", Label: "Where everything is stored",
+			Value: cfg.Storage.Path,
+			Help:  "Everything mcpd remembers lives here. Worth backing up.",
 		},
 		{
 			Key: "auth.mode", Label: "How people sign in", Value: cfg.Auth.Mode,
-			Help: "A shared token, or individual accounts. Individual accounts are " +
-				"what let mcpd require a second person to approve something.",
+			Help: "One shared key, or individual accounts. Individual accounts are what " +
+				"let mcpd require a second person to approve something.",
 		},
 	}
 }

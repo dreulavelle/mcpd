@@ -1,51 +1,34 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  api,
-  ApiError,
-  clearToken,
-  getToken,
-  setToken,
-  type AuditRecord,
-  type HealthReport,
-  type Meta,
-  type Operation,
-  type Plugin,
+  api, ApiError, clearToken, getToken, setToken,
+  type AuditRecord, type HealthReport, type Meta, type Operation, type Plugin,
 } from "./api";
-import { Plugins } from "./Plugins";
+import {
+  ago, CodeBlock, Diff, Dot, Empty, History, Json, Message, Pill,
+  RiskBadge, Skeleton, StateBadge, stateMeaning, usePoll, useToasts, when,
+} from "./components";
+import { Connections } from "./Connections";
 import { Settings } from "./Settings";
 import { Setup } from "./Setup";
-import {
-  AuditTrail,
-  Banner,
-  Diff,
-  Json,
-  RiskChip,
-  StateChip,
-  formatTime,
-  relativeTime,
-  stateMeaning,
-} from "./components";
 
-type Tab = "changes" | "connections" | "settings" | "setup" | "activity";
+type Tab = "changes" | "connections" | "settings" | "setup" | "history";
 
 export default function App() {
-  const [authed, setAuthed] = useState(() => getToken() !== null);
+  const [signedIn, setSignedIn] = useState(() => getToken() !== null);
   const [meta, setMeta] = useState<Meta | null>(null);
 
   useEffect(() => {
     api.meta().then(setMeta).catch(() => setMeta(null));
   }, []);
 
-  if (!authed) {
-    return <Login meta={meta} onAuthenticated={() => setAuthed(true)} />;
-  }
-  return <Dashboard meta={meta} onSignOut={() => { clearToken(); setAuthed(false); }} />;
+  if (!signedIn) return <SignIn meta={meta} onDone={() => setSignedIn(true)} />;
+  return <Console meta={meta} onSignOut={() => { clearToken(); setSignedIn(false); }} />;
 }
 
-/* --- login ---------------------------------------------------------------- */
+/* ── sign in ────────────────────────────────────────────────────────────── */
 
-function Login({ meta, onAuthenticated }: { meta: Meta | null; onAuthenticated: () => void }) {
-  const [token, setTokenValue] = useState("");
+function SignIn({ meta, onDone }: { meta: Meta | null; onDone: () => void }) {
+  const [key, setKey] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -53,19 +36,18 @@ function Login({ meta, onAuthenticated }: { meta: Meta | null; onAuthenticated: 
     e.preventDefault();
     setBusy(true);
     setError("");
-    setToken(token.trim());
+    setToken(key.trim());
     try {
-      // Any authenticated endpoint proves the token works. Using one the
-      // dashboard needs anyway avoids a login-only endpoint that could drift
-      // out of step with real authorization.
+      // Any protected endpoint proves the key works. Using one the console
+      // needs anyway keeps this from drifting out of step with real access.
       await api.health();
-      onAuthenticated();
+      onDone();
     } catch (err) {
       clearToken();
       setError(
         err instanceof ApiError && err.status === 401
-          ? "That token was not accepted."
-          : "Could not reach mcpd.",
+          ? "That key wasn't accepted."
+          : "Couldn't reach mcpd. Is it running?",
       );
     } finally {
       setBusy(false);
@@ -73,208 +55,200 @@ function Login({ meta, onAuthenticated }: { meta: Meta | null; onAuthenticated: 
   }
 
   return (
-    <div className="login-wrap">
-      <div className="card login-card">
-        <div className="card-head">mcpd — sign in</div>
-        <div className="card-body">
-          {error && <Banner tone="error">{error}</Banner>}
-          <form onSubmit={submit}>
-            <div className="field">
-              <label htmlFor="token">Access token</label>
-              <input
-                id="token"
-                type="password"
-                autoComplete="off"
-                autoFocus
-                value={token}
-                onChange={(e) => setTokenValue(e.target.value)}
-                placeholder="Paste a bearer token"
-              />
-            </div>
-            <div className="actions">
-              <button className="btn primary" type="submit" disabled={busy || !token.trim()}>
+    <div className="signin">
+      <div className="signin-card">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">m</span>
+          mcpd
+        </div>
+
+        <div className="card">
+          <div className="card-body">
+            {error && <Message tone="problem">{error}</Message>}
+
+            <form onSubmit={submit}>
+              <div className="field">
+                <label htmlFor="key">Access key</label>
+                <input
+                  id="key" type="password" autoComplete="off" autoFocus
+                  value={key} onChange={(e) => setKey(e.target.value)}
+                  placeholder="Paste your key"
+                />
+                <p className="note">
+                  It's in your <code>.env</code> file, as <code>MCPD_TOKEN_LOCAL</code>.
+                </p>
+              </div>
+
+              <button className="btn primary" type="submit" disabled={busy || !key.trim()}
+                      style={{ width: "100%" }}>
                 {busy ? "Checking…" : "Sign in"}
               </button>
-            </div>
-          </form>
-          {meta && (
-            <p className="muted" style={{ marginTop: 18, fontSize: 13 }}>
-              mcpd {meta.version} · authentication: {meta.auth_mode}
-            </p>
-          )}
+            </form>
+          </div>
         </div>
+
+        {meta && (
+          <p className="note" style={{ textAlign: "center", marginTop: "var(--s4)" }}>
+            mcpd {meta.version}
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
-/* --- shell ---------------------------------------------------------------- */
+/* ── console ────────────────────────────────────────────────────────────── */
 
-function Dashboard({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => void }) {
+function Console({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => void }) {
   const [tab, setTab] = useState<Tab>("changes");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const [waiting, setWaiting] = useState(0);
 
-  useEffect(() => {
-    const poll = () => api.health().then(setHealth).catch(() => setHealth(null));
-    poll();
-    const timer = setInterval(poll, 15_000);
-    return () => clearInterval(timer);
+  const pollHealth = useCallback(() => {
+    api.health().then(setHealth).catch(() => setHealth(null));
   }, []);
+  usePoll(pollHealth, 20_000);
 
-  // Loaded here rather than per tab so the setup guide can show real
-  // addresses without a second round trip.
+  // Loaded once here so Setup can show real addresses without a second trip.
   useEffect(() => {
     api.plugins().then((r) => setPlugins(r.plugins ?? [])).catch(() => setPlugins([]));
   }, []);
+
+  // The count of things waiting on a person belongs in the nav: it's the one
+  // number worth knowing without opening anything.
+  const pollWaiting = useCallback(() => {
+    api.operations("pending_approval")
+      .then((r) => setWaiting(r.count ?? 0))
+      .catch(() => setWaiting(0));
+  }, []);
+  usePoll(pollWaiting, 10_000);
 
   const tabs: [Tab, string][] = [
     ["changes", "Changes"],
     ["connections", "Connections"],
     ["settings", "Settings"],
     ["setup", "Setup"],
-    ["activity", "Activity"],
+    ["history", "History"],
   ];
 
   return (
     <div className="shell">
       <header className="topbar">
-        <span className="brand">mcpd</span>
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">m</span>
+          mcpd
+        </div>
+
         <nav className="tabs">
           {tabs.map(([id, label]) => (
-            <button
-              key={id}
-              onClick={() => { setTab(id); setSelected(null); }}
-              aria-current={tab === id ? "page" : undefined}
-            >
+            <button key={id} aria-current={tab === id ? "page" : undefined}
+                    onClick={() => { setTab(id); setOpenId(null); }}>
               {label}
+              {id === "changes" && waiting > 0 && (
+                <> <Pill tone="attention">{waiting}</Pill></>
+              )}
             </button>
           ))}
         </nav>
-        <span className="spacer" />
+
+        <span className="grow" />
+
         {health && (
-          <span className={`status-dot ${health.status}`} title={describeHealth(health)}>
-            {health.status === "up" ? "All good" : health.status}
+          <span className="health" title={health.checks.map((c) => `${c.name}: ${c.status}`).join("\n")}>
+            <Dot tone={health.status === "up" ? "good" : health.status === "down" ? "problem" : "attention"} />
+            {health.status === "up" ? "All good" : health.status === "down" ? "Problem" : "Degraded"}
           </span>
         )}
-        <button className="btn" onClick={onSignOut}>Sign out</button>
+
+        <button className="btn quiet" onClick={onSignOut}>Sign out</button>
       </header>
 
       <main>
-        {tab === "changes" &&
-          (selected ? (
-            <OperationDetail id={selected} onBack={() => setSelected(null)} />
-          ) : (
-            <Operations onSelect={setSelected} />
-          ))}
-        {tab === "connections" && <Plugins />}
+        {tab === "changes" && (openId
+          ? <ChangeDetail id={openId} onBack={() => setOpenId(null)} />
+          : <Changes onOpen={setOpenId} />)}
+        {tab === "connections" && <Connections />}
         {tab === "settings" && <Settings />}
         {tab === "setup" && <Setup meta={meta} plugins={plugins} />}
-        {tab === "activity" && <Audit />}
+        {tab === "history" && <FullHistory />}
       </main>
     </div>
   );
 }
 
-function describeHealth(h: HealthReport): string {
-  return h.checks.map((c) => `${c.name}: ${c.status}`).join("\n");
-}
+/* ── changes ────────────────────────────────────────────────────────────── */
 
-/* --- operations ----------------------------------------------------------- */
-
-function Operations({ onSelect }: { onSelect: (id: string) => void }) {
-  const [operations, setOperations] = useState<Operation[]>([]);
+function Changes({ onOpen }: { onOpen: (id: string) => void }) {
+  const [ops, setOps] = useState<Operation[] | null>(null);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await api.operations();
-      setOperations(res.operations ?? []);
-      setError("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load operations.");
-    } finally {
-      setLoading(false);
-    }
+  const load = useCallback(() => {
+    api.operations()
+      .then((r) => { setOps(r.operations ?? []); setError(""); })
+      .catch((e) => { setOps([]); setError(e instanceof Error ? e.message : "Couldn't load changes."); });
   }, []);
+  usePoll(load, 6_000);
 
-  useEffect(() => {
-    load();
-    // Operations move through states without the operator doing anything, so
-    // the list refreshes on its own.
-    const timer = setInterval(load, 5_000);
-    return () => clearInterval(timer);
-  }, [load]);
+  if (ops === null) return <><h1>Changes</h1><Skeleton rows={4} /></>;
 
-  // Anything awaiting a decision or needing a human comes first: this page
-  // exists to surface work, not to be a chronological log.
-  const needsAttention = operations.filter(
-    (o) => o.state === "pending_approval" || o.state === "indeterminate",
-  );
-  const rest = operations.filter(
-    (o) => o.state !== "pending_approval" && o.state !== "indeterminate",
-  );
-
-  if (loading) return <p className="empty">Loading…</p>;
+  const waiting = ops.filter((o) => o.state === "pending_approval" || o.state === "indeterminate");
+  const rest = ops.filter((o) => !waiting.includes(o));
 
   return (
     <>
       <h1>Changes</h1>
-      <p className="subtitle">
-        Every change an assistant has suggested, and what happened to it.
-        Nothing here takes effect until someone approves it.
+      <p className="lede">
+        Everything an assistant has suggested, and what became of it. Nothing
+        here takes effect until someone says yes.
       </p>
-      {error && <Banner tone="error">{error}</Banner>}
 
-      {needsAttention.length > 0 && (
+      {error && <Message tone="problem">{error}</Message>}
+
+      {waiting.length > 0 && (
         <>
-          <h2>Waiting on you</h2>
-          <OperationTable operations={needsAttention} onSelect={onSelect} />
+          <h2 style={{ marginTop: 0 }}>Waiting for you</h2>
+          <ChangeTable ops={waiting} onOpen={onOpen} />
         </>
       )}
 
-      <h2>{needsAttention.length > 0 ? "Everything else" : "All changes"}</h2>
-      {rest.length === 0 ? (
-        <div className="card"><p className="empty">No operations yet.</p></div>
-      ) : (
-        <OperationTable operations={rest} onSelect={onSelect} />
+      {rest.length > 0 && (
+        <>
+          <h2>{waiting.length > 0 ? "Everything else" : "Recent"}</h2>
+          <ChangeTable ops={rest} onOpen={onOpen} />
+        </>
+      )}
+
+      {ops.length === 0 && !error && (
+        <Empty mark="✓" title="Nothing to review">
+          When an assistant suggests a change, it'll show up here for you to
+          approve or turn down.
+        </Empty>
       )}
     </>
   );
 }
 
-function OperationTable({
-  operations,
-  onSelect,
-}: {
-  operations: Operation[];
-  onSelect: (id: string) => void;
-}) {
+function ChangeTable({ ops, onOpen }: { ops: Operation[]; onOpen: (id: string) => void }) {
   return (
     <div className="card">
-      <div className="table-wrap">
+      <div className="tablewrap">
         <table>
           <thead>
             <tr>
-              <th>State</th>
-              <th>Risk</th>
-              <th>Plugin</th>
-              <th>Action</th>
-              <th>Requested by</th>
-              <th>When</th>
+              <th>Status</th><th>What</th><th>Impact</th><th>Where</th><th>Suggested</th>
             </tr>
           </thead>
           <tbody>
-            {operations.map((op) => (
-              <tr key={op.id} className="clickable" onClick={() => onSelect(op.id)}>
-                <td><StateChip state={op.state} /></td>
-                <td><RiskChip risk={op.risk} /></td>
-                <td className="mono">{op.plugin}</td>
-                <td className="mono">{op.action}</td>
-                <td className="mono muted">{op.requested_by}</td>
-                <td className="muted num">{relativeTime(op.requested_at)}</td>
+            {ops.map((op) => (
+              <tr key={op.id} className="tappable" onClick={() => onOpen(op.id)}
+                  tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen(op.id)}>
+                <td><StateBadge state={op.state} /></td>
+                <td>{op.action.replace(/[._]/g, " ")}</td>
+                <td><RiskBadge risk={op.risk} /></td>
+                <td className="dim">{op.plugin}</td>
+                <td className="dim num" style={{ whiteSpace: "nowrap" }}>{ago(op.requested_at)}</td>
               </tr>
             ))}
           </tbody>
@@ -284,28 +258,20 @@ function OperationTable({
   );
 }
 
-function OperationDetail({ id, onBack }: { id: string; onBack: () => void }) {
-  const [operation, setOperation] = useState<Operation | null>(null);
-  const [audit, setAudit] = useState<AuditRecord[]>([]);
+function ChangeDetail({ id, onBack }: { id: string; onBack: () => void }) {
+  const [op, setOp] = useState<Operation | null>(null);
+  const [history, setHistory] = useState<AuditRecord[]>([]);
   const [reason, setReason] = useState("");
-  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const { show, view } = useToasts();
 
-  const load = useCallback(async () => {
-    try {
-      const res = await api.operation(id);
-      setOperation(res.operation);
-      setAudit(res.audit ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load the operation.");
-    }
+  const load = useCallback(() => {
+    api.operation(id)
+      .then((r) => { setOp(r.operation); setHistory(r.audit ?? []); })
+      .catch((e) => setError(e instanceof Error ? e.message : "Couldn't load this change."));
   }, [id]);
-
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, 4_000);
-    return () => clearInterval(timer);
-  }, [load]);
+  usePoll(load, 5_000);
 
   async function decide(action: "approve" | "reject") {
     setBusy(true);
@@ -313,199 +279,200 @@ function OperationDetail({ id, onBack }: { id: string; onBack: () => void }) {
     try {
       await (action === "approve" ? api.approve(id, reason) : api.reject(id, reason));
       setReason("");
-      await load();
-    } catch (err) {
-      // A refusal is the system working, so its stable code is shown rather
-      // than a generic failure message.
-      setError(
-        err instanceof ApiError
-          ? `${err.code}: ${err.detail}`
-          : "The decision could not be recorded.",
-      );
+      show("good", action === "approve" ? "Approved — applying now." : "Turned down.");
+      load();
+    } catch (e) {
+      setError(e instanceof ApiError ? explain(e) : "Couldn't record your decision.");
     } finally {
       setBusy(false);
     }
   }
 
-  if (!operation) {
+  if (!op) {
     return (
       <>
-        <button className="btn" onClick={onBack}>← Back</button>
-        {error ? <Banner tone="error">{error}</Banner> : <p className="empty">Loading…</p>}
+        <button className="btn quiet" onClick={onBack}>← Back</button>
+        {error ? <Message tone="problem">{error}</Message> : <Skeleton rows={5} />}
       </>
     );
   }
 
-  const meaning = stateMeaning(operation);
-  const decidable = operation.state === "pending_approval";
+  const meaning = stateMeaning(op);
+  const decidable = op.state === "pending_approval";
 
   return (
     <>
-      <button className="btn" onClick={onBack}>← Back</button>
+      {view}
+      <button className="btn quiet" onClick={onBack}>← Back to changes</button>
 
-      <h1 style={{ marginTop: 18 }}>
-        <span className="mono">{operation.action}</span>
-      </h1>
-      <p className="subtitle">
-        <span className="mono">{operation.id}</span> · {operation.plugin}
-      </p>
-
-      <div className="row" style={{ marginBottom: 16 }}>
-        <StateChip state={operation.state} />
-        <RiskChip risk={operation.risk} />
-        {operation.verified !== undefined && (
-          <span className="muted" style={{ fontSize: 13 }}>
-            {operation.verified ? "verified by observation" : "not verified"}
-          </span>
-        )}
+      <h1 style={{ marginTop: "var(--s4)" }}>{op.action.replace(/[._]/g, " ")}</h1>
+      <div className="row wrap" style={{ marginBottom: "var(--s5)" }}>
+        <StateBadge state={op.state} />
+        <RiskBadge risk={op.risk} />
+        <span className="dim">on {op.plugin}</span>
       </div>
 
-      <Banner tone={meaning.tone}>{meaning.text}</Banner>
+      <Message tone={meaning.tone}>{meaning.text}</Message>
 
-      {operation.impact && (
+      {op.impact && (
         <div className="card">
-          <div className="card-head">Impact</div>
-          <div className="card-body">{operation.impact}</div>
+          <div className="card-body">
+            <p className="eyebrow">What this does</p>
+            <p style={{ margin: 0 }}>{op.impact}</p>
+          </div>
         </div>
       )}
 
       <div className="card">
-        <div className="card-head">Requested change</div>
-        <div className="card-body"><Diff changes={operation.changes} /></div>
+        <div className="card-body">
+          <p className="eyebrow">What changes</p>
+          <Diff changes={op.changes} />
+        </div>
       </div>
 
       {decidable && (
         <div className="card">
-          <div className="card-head">Decision</div>
           <div className="card-body">
-            {error && <Banner tone="error">{error}</Banner>}
+            {error && <Message tone="problem">{error}</Message>}
+
             <div className="field">
-              <label htmlFor="reason">Reason (recorded in the audit trail)</label>
-              <textarea
-                id="reason"
-                rows={2}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Why are you approving or rejecting this?"
-              />
+              <label htmlFor="reason">Add a note (optional)</label>
+              <textarea id="reason" rows={2} value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        placeholder="Why you're approving or turning this down" />
+              <p className="note">Saved with the change, so it's clear later why.</p>
             </div>
+
             <div className="actions">
               <button className="btn primary" disabled={busy} onClick={() => decide("approve")}>
-                Approve
+                {busy ? "Working…" : "Approve"}
               </button>
               <button className="btn danger" disabled={busy} onClick={() => decide("reject")}>
-                Reject
+                Turn down
               </button>
+              <span className="note tight" style={{ marginLeft: "var(--s2)" }}>
+                Expires {ago(op.expires_at)}
+              </span>
             </div>
-            <p className="muted" style={{ marginTop: 14, fontSize: 13 }}>
-              Approving authorises this change exactly as proposed. The stored
-              parameters cannot be edited here — reject it and propose again
-              if something is wrong. Expires {relativeTime(operation.expires_at)}.
+
+            <p className="note" style={{ marginTop: "var(--s4)" }}>
+              Approving applies exactly what's shown above — it can't be edited
+              here. If something's wrong, turn it down and ask for it again.
             </p>
           </div>
         </div>
       )}
 
-      {operation.error_code && (
+      {op.error_code && (
         <div className="card">
-          <div className="card-head">Failure</div>
           <div className="card-body">
-            <p className="mono">{operation.error_code}</p>
-            {operation.error_detail && <p className="muted">{operation.error_detail}</p>}
+            <p className="eyebrow">What went wrong</p>
+            <p style={{ margin: 0 }}>{friendlyError(op.error_code, op.error_detail)}</p>
           </div>
         </div>
       )}
 
-      <div className="grid two" style={{ marginTop: 16 }}>
+      <div className="split two" style={{ marginTop: "var(--s3)" }}>
         <div className="card">
-          <div className="card-head">Before</div>
-          <div className="card-body"><Json value={operation.before} /></div>
+          <div className="card-body">
+            <p className="eyebrow">Before</p>
+            <Json value={op.before} />
+          </div>
         </div>
         <div className="card">
-          <div className="card-head">{operation.observed ? "Observed after" : "Requested"}</div>
           <div className="card-body">
-            <Json value={operation.observed ?? operation.desired} />
+            <p className="eyebrow">{op.observed ? "After" : "Requested"}</p>
+            <Json value={op.observed ?? op.desired} />
           </div>
         </div>
       </div>
 
       <div className="card">
-        <div className="card-head">Timeline</div>
         <div className="card-body">
-          <dl style={{ margin: 0, fontSize: 14 }}>
-            <Row label="Requested" value={`${operation.requested_by} · ${formatTime(operation.requested_at)}`} />
-            {operation.approved_by && (
-              <Row
-                label="Approved"
-                value={`${operation.approved_by} · ${operation.approved_at ? formatTime(operation.approved_at) : ""}`}
-              />
+          <p className="eyebrow">Details</p>
+          <dl className="kv">
+            <div><dt>Suggested by</dt><dd>{op.requested_by.replace(/^(user|svc):/, "")}</dd></div>
+            <div><dt>Suggested</dt><dd>{when(op.requested_at)}</dd></div>
+            {op.approved_by && (
+              <div><dt>Approved by</dt><dd>{op.approved_by.replace(/^(user|svc):/, "")}</dd></div>
             )}
-            {operation.terminal_at && (
-              <Row label="Completed" value={formatTime(operation.terminal_at)} />
-            )}
-            <Row label="Attempts" value={String(operation.attempts)} />
+            {op.terminal_at && <div><dt>Finished</dt><dd>{when(op.terminal_at)}</dd></div>}
+            {op.attempts > 1 && <div><dt>Attempts</dt><dd>{op.attempts}</dd></div>}
           </dl>
         </div>
       </div>
 
       <div className="card">
-        <div className="card-head">Audit trail</div>
-        <AuditTrail records={audit} />
+        <div className="card-head"><h3>What happened</h3></div>
+        <History records={history} />
       </div>
     </>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: "flex", gap: 12, padding: "5px 0" }}>
-      <dt className="muted" style={{ minWidth: 110 }}>{label}</dt>
-      <dd className="mono" style={{ margin: 0 }}>{value}</dd>
-    </div>
-  );
+/** Turns a stable error code into something a person can act on. */
+function friendlyError(code: string, detail?: string): string {
+  switch (code) {
+    case "PRECONDITION_CHANGED":
+      return "The system changed after this was suggested, so applying it would " +
+        "have overwritten someone else's work. Nothing was changed — ask for it again.";
+    case "SELF_APPROVAL_FORBIDDEN":
+      return "Changes at this level need someone other than whoever suggested them.";
+    case "IDENTITY_INDISTINCT":
+      return "This needs a second person to approve, but everyone currently shares " +
+        "one sign-in, so mcpd can't tell who's who. Switch to individual accounts to use this.";
+    case "APPROVAL_EXPIRED":
+      return "The approval ran out of time before it could be applied.";
+    case "INDETERMINATE":
+      return "mcpd couldn't tell whether this went through. Check the system directly.";
+    case "UPSTREAM_FAILED":
+      return detail || "The system being managed refused the change.";
+    default:
+      return detail || code;
+  }
 }
 
-/* --- audit ---------------------------------------------------------------- */
+function explain(e: ApiError): string {
+  return friendlyError(e.code, e.detail);
+}
 
-function Audit() {
-  const [records, setRecords] = useState<AuditRecord[]>([]);
+/* ── history ────────────────────────────────────────────────────────────── */
+
+function FullHistory() {
+  const [records, setRecords] = useState<AuditRecord[] | null>(null);
   const [chain, setChain] = useState<{ intact: boolean; broken_at: number } | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api
-      .audit(200)
+    api.audit(200)
       .then((r) => setRecords(r.records ?? []))
-      .catch((e) => setError(e instanceof Error ? e.message : "Could not load the audit trail."));
-    // Chain verification needs admin rights, so a failure here is expected for
-    // non-admin viewers and is not surfaced as an error.
+      .catch((e) => { setRecords([]); setError(e instanceof Error ? e.message : "Couldn't load the history."); });
+    // Needs admin rights, so failing here is normal for other people.
     api.verifyAudit().then(setChain).catch(() => setChain(null));
   }, []);
 
   return (
     <>
-      <h1>Activity</h1>
-      <p className="subtitle">
-        A permanent record of everything that has happened. Entries can only be
-        added, never edited or removed — if anyone tampers with the history,
-        mcpd notices.
+      <h1>History</h1>
+      <p className="lede">
+        A permanent record of everything that's happened. Entries can only be
+        added — if anything is edited or removed, mcpd notices.
       </p>
 
-      {error && <Banner tone="error">{error}</Banner>}
-      {chain &&
-        (chain.intact ? (
-          <Banner tone="ok">History checked — nothing has been tampered with.</Banner>
-        ) : (
-          <Banner tone="error">
-            The history has been altered outside mcpd, starting at entry{" "}
-            {chain.broken_at}. Someone or something has edited the database
-            directly.
-          </Banner>
-        ))}
+      {error && <Message tone="problem">{error}</Message>}
 
-      <div className="card">
-        <AuditTrail records={records} />
-      </div>
+      {chain && (chain.intact
+        ? <Message tone="good">Checked — nothing has been tampered with.</Message>
+        : <Message tone="problem">
+            <strong>The history has been altered.</strong> Something edited the
+            database directly, starting at entry {chain.broken_at}.
+          </Message>)}
+
+      {records === null ? <Skeleton rows={6} /> : (
+        <div className="card"><History records={records} /></div>
+      )}
     </>
   );
 }
+
+export { CodeBlock };
