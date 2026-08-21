@@ -144,12 +144,28 @@ export interface TunnelInfo {
    *  its own connector has a tunnel of its own. */
   tunnels: TunnelStatus[];
   version?: TunnelVersion;
+  /** Whether tunnels can be created and deleted from here. */
+  can_manage: boolean;
+  /** Every tunnel in the OpenAI account, when an admin key is set. */
+  available?: OpenAITunnel[];
+  /** Why the list above is missing, when it shouldn't be. */
+  problem?: string;
+  /** The systems a tunnel can be pointed at. */
+  plugins: string[];
+}
+
+export interface OpenAITunnel {
+  id: string;
+  name: string;
+  description?: string;
 }
 
 export type SettingKind =
   | "string" | "secret" | "bool" | "int" | "duration" | "enum" | "list";
 
 export type SettingApply = "live" | "reconnect" | "restart";
+
+export type SettingSection = "settings" | "tunnels";
 
 export interface SettingField {
   key: string;
@@ -171,6 +187,8 @@ export interface SettingGroup {
   title: string;
   help?: string;
   enabled_by?: string;
+  /** Which page owns this group. */
+  section: SettingSection;
   fields: SettingField[];
 }
 
@@ -320,6 +338,23 @@ export const api = {
     request<TunnelStatus>("/api/tunnel/start", { method: "POST" }),
 
   tunnelStop: () => request<TunnelStatus>("/api/tunnel/stop", { method: "POST" }),
+
+  createTunnel: (name: string, plugin: string) =>
+    request<OpenAITunnel>("/api/tunnels", {
+      method: "POST",
+      body: JSON.stringify({ name, plugin }),
+    }),
+
+  assignTunnel: (id: string, plugin: string) =>
+    request<{ status: string }>(`/api/tunnels/${encodeURIComponent(id)}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ plugin }),
+    }),
+
+  deleteTunnel: (id: string) =>
+    request<{ status: string }>(`/api/tunnels/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 
   audit: (limit = 100) =>
     request<{ records: AuditRecord[]; count: number }>(`/api/audit?limit=${limit}`),

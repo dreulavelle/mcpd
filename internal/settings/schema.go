@@ -71,9 +71,24 @@ type Group struct {
 	Title string `json:"title"`
 	Help  string `json:"help,omitempty"`
 	// EnabledBy names a bool field that switches the whole group on, if any.
-	EnabledBy string  `json:"enabled_by,omitempty"`
-	Fields    []Field `json:"fields"`
+	EnabledBy string `json:"enabled_by,omitempty"`
+	// Section names the page that owns this group.
+	//
+	// Settings people cannot find are settings that do not work. Tunnel
+	// configuration belongs beside the tunnels it configures, not in a general
+	// list, so the group says where it goes rather than the dashboard guessing
+	// from its name.
+	Section string  `json:"section"`
+	Fields  []Field `json:"fields"`
 }
+
+// Sections a group can belong to.
+const (
+	// SectionSettings is the general settings page.
+	SectionSettings = "settings"
+	// SectionTunnels is the page listing ChatGPT connectors.
+	SectionTunnels = "tunnels"
+)
 
 // Setting keys. They are namespaced by group so a key cannot collide and so
 // history reads clearly.
@@ -81,6 +96,7 @@ const (
 	KeyTunnelEnabled   = "tunnel.enabled"
 	KeyTunnelID        = "tunnel.tunnel_id"
 	KeyTunnelAPIKey    = "tunnel.api_key"
+	KeyTunnelAdminKey  = "tunnel.admin_key"
 	KeyTunnelPrincipal = "tunnel.principal"
 	KeyTunnelRole      = "tunnel.role"
 	KeyTunnelPlugins   = "tunnel.plugins"
@@ -165,6 +181,7 @@ func schema() []Group {
 		{
 			Name:      "tunnel",
 			Title:     "ChatGPT",
+			Section:   SectionTunnels,
 			EnabledBy: KeyTunnelEnabled,
 			Help: "Lets ChatGPT reach mcpd without opening anything to the internet. " +
 				"The connection is made outward from here, so nothing needs to reach in. " +
@@ -186,6 +203,14 @@ func schema() []Group {
 					Group: "tunnel", Apply: ApplyReconnect, Required: true,
 					Help: "Needs the Tunnels: Read and Use permission. Stored encrypted, " +
 						"and never shown again once saved.",
+				},
+				{
+					Key: KeyTunnelAdminKey, Label: "OpenAI admin key", Kind: KindSecret,
+					Group: "tunnel", Apply: ApplyLive,
+					Help: "Optional, and a different key from the one above. It lets you " +
+						"create and delete tunnels from here instead of on OpenAI's site. " +
+						"It is only used when you press a button, never by the running " +
+						"connection.",
 				},
 				{
 					Key: KeyTunnelPrincipal, Label: "Show it as", Kind: KindString,
@@ -214,9 +239,10 @@ func schema() []Group {
 			},
 		},
 		{
-			Name:  "approval",
-			Title: "Approvals",
-			Help:  "How long a suggested change waits, and who is allowed to approve one.",
+			Name:    "approval",
+			Title:   "Approvals",
+			Section: SectionSettings,
+			Help:    "How long a suggested change waits, and who is allowed to approve one.",
 			Fields: []Field{
 				{
 					Key: KeyApprovalDistinct, Label: "Require a second person from",

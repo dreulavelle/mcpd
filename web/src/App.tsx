@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api, ApiError, clearToken, getToken, setToken,
-  type AuditRecord, type HealthReport, type Meta, type Operation, type Plugin,
+  type AuditRecord, type HealthReport, type Meta, type Operation,
 } from "./api";
 import {
   ago, CodeBlock, Diff, Dot, Empty, History, Json, Message, Pill,
   RiskBadge, Skeleton, StateBadge, stateMeaning, usePoll, useToasts, when,
 } from "./components";
-import { Connections } from "./Connections";
+import { Plugins } from "./Plugins";
 import { Settings } from "./Settings";
-import { Setup } from "./Setup";
+import { Tunnels } from "./Tunnels";
 
-type Tab = "changes" | "connections" | "settings" | "setup" | "history";
+type Tab = "changes" | "plugins" | "tunnels" | "settings" | "history";
 
 export default function App() {
   const [signedIn, setSignedIn] = useState(() => getToken() !== null);
@@ -22,7 +22,7 @@ export default function App() {
   }, []);
 
   if (!signedIn) return <SignIn meta={meta} onDone={() => setSignedIn(true)} />;
-  return <Console meta={meta} onSignOut={() => { clearToken(); setSignedIn(false); }} />;
+  return <Console onSignOut={() => { clearToken(); setSignedIn(false); }} />;
 }
 
 /* ── sign in ────────────────────────────────────────────────────────────── */
@@ -99,22 +99,16 @@ function SignIn({ meta, onDone }: { meta: Meta | null; onDone: () => void }) {
 
 /* ── console ────────────────────────────────────────────────────────────── */
 
-function Console({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => void }) {
+function Console({ onSignOut }: { onSignOut: () => void }) {
   const [tab, setTab] = useState<Tab>("changes");
   const [openId, setOpenId] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthReport | null>(null);
-  const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [waiting, setWaiting] = useState(0);
 
   const pollHealth = useCallback(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
   }, []);
   usePoll(pollHealth, 20_000);
-
-  // Loaded once here so Setup can show real addresses without a second trip.
-  useEffect(() => {
-    api.plugins().then((r) => setPlugins(r.plugins ?? [])).catch(() => setPlugins([]));
-  }, []);
 
   // The count of things waiting on a person belongs in the nav: it's the one
   // number worth knowing without opening anything.
@@ -127,9 +121,9 @@ function Console({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => void
 
   const tabs: [Tab, string][] = [
     ["changes", "Changes"],
-    ["connections", "Connections"],
+    ["plugins", "Systems"],
+    ["tunnels", "ChatGPT"],
     ["settings", "Settings"],
-    ["setup", "Setup"],
     ["history", "History"],
   ];
 
@@ -169,9 +163,9 @@ function Console({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => void
         {tab === "changes" && (openId
           ? <ChangeDetail id={openId} onBack={() => setOpenId(null)} />
           : <Changes onOpen={setOpenId} />)}
-        {tab === "connections" && <Connections />}
+        {tab === "plugins" && <Plugins />}
+        {tab === "tunnels" && <Tunnels />}
         {tab === "settings" && <Settings />}
-        {tab === "setup" && <Setup meta={meta} plugins={plugins} />}
         {tab === "history" && <FullHistory />}
       </main>
     </div>
