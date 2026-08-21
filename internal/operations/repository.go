@@ -20,10 +20,16 @@ var (
 	// ordinary outcome: another actor got there first.
 	ErrStateConflict = errors.New("operations: operation is no longer in the expected state")
 
-	// ErrIdempotencyConflict reports an idempotency key reused with a
-	// different request body. Returning the first operation would execute
-	// something the caller did not ask for.
-	ErrIdempotencyConflict = errors.New("operations: idempotency key reused with a different payload")
+	// ErrIdempotencyConflict reports a key that cannot be used for a new
+	// proposal: either it was reused with a different request body, or an
+	// operation for the same intent is still live.
+	//
+	// Both readings are refusals to guess. Returning the first operation for a
+	// changed body would execute something the caller did not ask for, and
+	// proposing a second copy of a live intent would queue the same change
+	// twice. A settled intent is not a conflict -- see 0005 for the index that
+	// decides which is which.
+	ErrIdempotencyConflict = errors.New("operations: idempotency key is in use by a live operation, or was reused with a different payload")
 )
 
 // OutboxEvent is an envelope queued in the outbox as part of a state change. It

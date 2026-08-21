@@ -219,6 +219,19 @@ func attachApprovalTools(srv *mcp.Server, plugin string, svc ApprovalService, ga
 		return nil, viewOf(op), nil
 	})
 
+	// Approving is the one call that lets a change reach live infrastructure,
+	// so it is the one a client should put in front of a person first.
+	// destructiveHint is how a client is told to do that, and it was false
+	// here -- the same variable supplied ReadOnlyHint, where false is correct,
+	// and DestructiveHint, where it asked every client not to bother
+	// confirming the most consequential call in the API.
+	//
+	// The hint does not enforce anything; the approval row in SQLite does. It
+	// decides whether ChatGPT frames this as a confirmation or fires it like a
+	// getter, which is the difference between a human seeing the change and
+	// not.
+	destructive, reachesUpstream := true, true
+
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: plugin + "_approve_operation",
 		Description: "Approve a pending " + plugin + " change so it can be applied. " +
@@ -226,7 +239,8 @@ func attachApprovalTools(srv *mcp.Server, plugin string, svc ApprovalService, ga
 			"parameters cannot be altered here. Only a human should decide to call this.",
 		Annotations: &mcp.ToolAnnotations{
 			Title: "Approve a proposed change", ReadOnlyHint: mutating,
-			DestructiveHint: &mutating, IdempotentHint: false,
+			DestructiveHint: &destructive, IdempotentHint: false,
+			OpenWorldHint: &reachesUpstream,
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in decideArgs) (*mcp.CallToolResult, operationView, error) {
 		if err := gate(ctx, plugin+"_approve_operation", auth.CapApprove); err != nil {
