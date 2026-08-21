@@ -197,10 +197,6 @@ function FirstRun({ meta, onDone }: { meta: Meta | null; onDone: (s: Session) =>
                   value={password} onChange={(e) => setPassword(e.target.value)}
                   placeholder="At least 12 characters"
                 />
-                <p className="note">
-                  Length is the only rule. A passphrase beats a short password
-                  with symbols in it.
-                </p>
               </div>
 
               <div className="field">
