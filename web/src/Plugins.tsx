@@ -3,7 +3,7 @@ import {
   api, ApiError, type Endpoints, type Plugin, type TunnelInfo, type TunnelStatus,
 } from "./api";
 import {
-  CodeBlock, Copyable, Dot, Empty, Message, Pill, Skeleton, useIsAdmin, usePoll, useToasts,
+  CodeBlock, Copyable, Dot, Empty, Message, Pill, Skeleton, useIsAdmin, usePoll, useToasts, type Notify,
 } from "./components";
 
 /**
@@ -85,7 +85,7 @@ function Row({ plugin, tunnels, open, onToggle, onChange, show }: {
   open: boolean;
   onToggle: () => void;
   onChange: () => void;
-  show: (tone: "good" | "problem", text: string) => void;
+  show: Notify;
 }) {
   const lookups = plugin.tools.filter((t) => t.kind === "read");
   const changes = plugin.tools.filter((t) => t.kind !== "read");
@@ -169,7 +169,7 @@ function TunnelControl({ plugin, tunnels, tunnel, onChange, show }: {
   tunnels: TunnelInfo | null;
   tunnel?: TunnelStatus;
   onChange: () => void;
-  show: (tone: "good" | "problem", text: string) => void;
+  show: Notify;
 }) {
   const [busy, setBusy] = useState(false);
   const admin = useIsAdmin();
