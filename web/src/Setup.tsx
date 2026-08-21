@@ -107,7 +107,17 @@ function ChatGPT({ tunnel, plugins, meta }: {
               In ChatGPT, go to <strong>Plugins</strong>, create a developer-mode
               app, and choose <strong>Tunnel</strong>. Yours will be in the list.
             </p>
-            <p className="note tight">No address to copy, no key to paste.</p>
+            <Message tone="attention">
+              <strong>Don't paste an address.</strong> If ChatGPT is asking you
+              for an MCP server URL, you're on the wrong option — pick the
+              tunnel from the list instead. mcpd's address is on your own
+              network, so ChatGPT can't reach it directly no matter what you
+              type. Reaching it anyway is what the tunnel is for.
+            </Message>
+            <p className="note tight">
+              One connector covers everything you're allowed to use. What you
+              can reach through it is set by your sign-in, not by the address.
+            </p>
           </Step>
 
           {meta?.auth_mode !== "static" && (
@@ -203,6 +213,12 @@ function Direct({ endpoints }: { endpoints: Endpoints | null }) {
         Anything that speaks the Model Context Protocol can connect directly.
         Give it an address and a key.
       </p>
+
+      <Message tone="info">
+        These addresses are for things that can already reach this machine.
+        ChatGPT can't — it comes in through the tunnel instead, and picks that
+        from a list rather than an address.
+      </Message>
 
       <div className="card">
         <div className="card-body">
