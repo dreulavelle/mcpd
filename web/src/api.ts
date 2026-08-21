@@ -123,6 +123,8 @@ export interface TunnelStatus {
   principal?: string;
   role?: string;
   plugins?: string[];
+  /** Set when ChatGPT signs people in; absent when everyone shares one identity. */
+  mcp_url?: string;
   message?: string;
   connected_at?: string;
 }

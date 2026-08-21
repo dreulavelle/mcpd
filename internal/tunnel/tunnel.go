@@ -18,12 +18,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	tunnelclient "github.com/openai/tunnel-client"
 	"github.com/spoked/mcpd/internal/auth"
 )
 
@@ -55,13 +55,33 @@ type Config struct {
 	// tunnels and must not be used for the long-running connection.
 	APIKey string
 
-	// Principal is the identity requests arriving through the tunnel act as.
+	// Principal is the identity requests arriving through the tunnel act as,
+	// and applies only to the in-memory binding.
 	//
 	// An in-memory transport carries no HTTP request and therefore no bearer
 	// token, so there is nothing to authenticate. Authorization comes from
 	// here instead: the tunnel is already authenticated to OpenAI by APIKey,
 	// and this decides what that authenticated tunnel may reach.
+	//
+	// With MCPServerURL set the connector's own Authorization header arrives
+	// with every request, so identity comes from the caller and this is
+	// ignored -- which is the better arrangement, because one shared identity
+	// cannot tell two people apart and so cannot enforce a second approver.
 	Principal auth.Principal
+
+	// MCPServerURL points the tunnel at mcpd's own HTTP listener instead of
+	// an in-process MCP server.
+	//
+	// Empty keeps the in-memory binding, which is faster and needs no
+	// credential. Set it when the connector authenticates with OAuth: the
+	// control plane asks the tunnel client to fetch protected-resource
+	// metadata, and the client can only do that against a URL. Without one,
+	// ChatGPT reports that the server does not implement OAuth.
+	//
+	// It must share an origin with the OAuth issuer -- both come from
+	// server.public_url -- or the authorization server's endpoints will not be
+	// reachable from outside the network.
+	MCPServerURL string
 
 	// ControlPlaneBaseURL overrides the OpenAI endpoint. Empty uses the
 	// default.
@@ -94,6 +114,13 @@ func (c *Config) Validate() error {
 	}
 	if err := c.Principal.Validate(); err != nil {
 		problems = append(problems, err.Error())
+	}
+	if raw := strings.TrimSpace(c.MCPServerURL); raw != "" {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			problems = append(problems,
+				"the MCP address must be a full URL, like http://192.168.1.10:9080/mcp")
+		}
 	}
 
 	if len(problems) > 0 {
@@ -132,6 +159,10 @@ type Status struct {
 	Principal string   `json:"principal,omitempty"`
 	Role      string   `json:"role,omitempty"`
 	Plugins   []string `json:"plugins,omitempty"`
+	// MCPURL is the address the tunnel reaches mcpd at. It is empty when the
+	// MCP server runs in this process, which is the difference between the
+	// connector signing people in and everyone sharing one identity.
+	MCPURL string `json:"mcp_url,omitempty"`
 	// Message explains a failure in terms an operator can act on. It never
 	// quotes a credential.
 	Message     string     `json:"message,omitempty"`
@@ -187,6 +218,13 @@ func (m *Manager) Status() Status {
 		s.Principal = m.cfg.Principal.ID
 		s.Role = m.cfg.Principal.Role.String()
 		s.Plugins = m.cfg.Principal.Plugins
+		s.MCPURL = m.cfg.MCPServerURL
+		// Over HTTP the connector's own token decides who the caller is, so
+		// reporting a configured principal would name an identity that never
+		// gets used.
+		if s.MCPURL != "" {
+			s.Principal, s.Role, s.Plugins = "", "", nil
+		}
 	}
 	return s
 }
@@ -213,43 +251,54 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 
-	principal := m.cfg.Principal
-	server, err := m.factory(&principal)
-	if err != nil {
-		m.fail(fmt.Errorf("tunnel: could not build the MCP server: %w", err))
-		return err
-	}
-
-	// The server side of the pair runs the MCP server; the client side goes to
-	// the tunnel. Nothing binds a port and nothing crosses a socket.
-	serverTransport, tunnelTransport := mcp.NewInMemoryTransports()
-
-	client, err := tunnelclient.New(tunnelclient.Config{
-		TunnelID:            m.cfg.TunnelID,
-		APIKey:              m.cfg.APIKey,
-		ControlPlaneBaseURL: m.cfg.ControlPlaneBaseURL,
-		// The client's own output is the only place a 401 or a permission
-		// problem is visible; without it a failure is just "deadline
-		// exceeded", which says nothing an operator can act on.
-		LogLevel:  m.cfg.LogLevel,
-		LogWriter: logWriter{log: m.log},
-	}, tunnelTransport)
-	if err != nil {
-		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, m.cfg.APIKey)))
-		return err
+	// Only the in-memory binding needs a server in this process. Over HTTP the
+	// tunnel reaches the same listener every other client uses, so building a
+	// second server here would give the connector a different set of tools
+	// from the one the endpoint actually serves.
+	var server *mcp.Server
+	if m.cfg.MCPServerURL == "" {
+		principal := m.cfg.Principal
+		built, err := m.factory(&principal)
+		if err != nil {
+			m.fail(fmt.Errorf("tunnel: could not build the MCP server: %w", err))
+			return err
+		}
+		server = built
 	}
 
 	// A context detached from the caller's: the tunnel outlives the request
 	// that started it and is stopped explicitly.
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
-	m.running.Add(1)
-	go func() {
-		defer m.running.Done()
-		if err := server.Run(runCtx, serverTransport); err != nil && runCtx.Err() == nil {
-			m.log.Error("tunnel MCP server stopped", "error", err)
-		}
-	}()
+	// Scoped to this attempt, so a later reconnect reports a fresh rejection.
+	// The client logs the same 401 on every backoff, and one explanation is
+	// the useful number.
+	var rejectOnce sync.Once
+	out := logWriter{log: m.log, rejected: func(code string) {
+		rejectOnce.Do(func() {
+			m.fail(fmt.Errorf("tunnel: %s", diagnose(m.cfg.APIKey, code)))
+			// Stopping is the point. The client would otherwise keep retrying
+			// a credential the control plane has already rejected, filling the
+			// log with a failure nobody is going to see.
+			go func() {
+				stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer stopCancel()
+				if err := m.Stop(stopCtx); err != nil {
+					m.log.Warn("tunnel did not stop cleanly after a rejected key", "error", err)
+				}
+				// Stop resets the state to stopped, which would erase the
+				// explanation the operator needs.
+				m.fail(fmt.Errorf("tunnel: %s", diagnose(m.cfg.APIKey, code)))
+			}()
+		})
+	}}
+
+	client, err := newRuntime(m.cfg, server, runCtx, m.log, out)
+	if err != nil {
+		cancel()
+		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, m.cfg.APIKey)))
+		return err
+	}
 
 	if err := client.Start(runCtx); err != nil {
 		cancel()
@@ -399,13 +448,26 @@ func redactKey(err error, key string) error {
 
 // logWriter routes the tunnel client's own output into mcpd's logger, so a
 // single log stream carries everything rather than half of it going to stderr.
-type logWriter struct{ log *slog.Logger }
+//
+// It also watches for a rejected credential. The client treats a 401 as
+// retryable and backs off for ever, which leaves the dashboard reporting
+// "starting" indefinitely for a tunnel that will never start -- and the one
+// place the reason appears is a log line an operator has no reason to read.
+type logWriter struct {
+	log      *slog.Logger
+	rejected func(string)
+}
 
 func (w logWriter) Write(p []byte) (int, error) {
 	for _, line := range strings.Split(string(p), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
+		}
+		if w.rejected != nil {
+			if code := credentialRejection(line); code != "" {
+				w.rejected(code)
+			}
 		}
 		// Errors from the client matter more than its routine chatter, and an
 		// operator scanning for a cause should not have to read past the rest.
@@ -418,13 +480,36 @@ func (w logWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// credentialRejection names the control plane's verdict on the API key, or
+// returns "" for anything that might yet succeed on a retry.
+//
+// Only the two definitive codes count. A network blip or a 5xx is worth
+// backing off for; a key the control plane says is wrong will still be wrong
+// in ten minutes.
+func credentialRejection(line string) string {
+	switch {
+	case strings.Contains(line, "error_code=invalid_api_key"),
+		strings.Contains(line, `"error_code":"invalid_api_key"`):
+		return "invalid_api_key"
+	case strings.Contains(line, "error_code=token_invalidated"),
+		strings.Contains(line, `"error_code":"token_invalidated"`):
+		return "token_invalidated"
+	}
+	return ""
+}
+
 // diagnose names the likeliest cause of a failure to connect.
 //
 // The two credentials involved look alike and are obtained from adjacent pages,
 // so the mistake is easy to make and nearly impossible to spot from a 401. An
 // admin key is recognisable by its prefix, which turns a guess into a
 // statement.
-func diagnose(apiKey string) string {
+func diagnose(apiKey, code string) string {
+	if code == "token_invalidated" {
+		return "OpenAI has invalidated that API key. Create a new runtime key " +
+			"under Settings, Organization, API keys and paste it in -- rotating a " +
+			"key does not update the copy stored here"
+	}
 	if strings.HasPrefix(apiKey, "sk-admin-") {
 		return "That looks like an admin key (it starts with sk-admin-). Admin keys " +
 			"can only create and delete tunnels, not run one. Use a runtime API key " +

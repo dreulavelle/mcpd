@@ -122,16 +122,6 @@ export function Settings() {
         );
       })}
 
-      <div className="savebar">
-        <button className="btn primary" disabled={!dirty || busy} onClick={save}>
-          {busy ? "Saving…" : "Save changes"}
-        </button>
-        {dirty
-          ? <button className="btn quiet" disabled={busy}
-                    onClick={() => { setDraft({}); setClearing([]); }}>Discard</button>
-          : <span className="note tight">Nothing to save.</span>}
-      </div>
-
       <h2>Set when mcpd starts</h2>
       <div className="card">
         <div className="card-body">
@@ -152,6 +142,16 @@ export function Settings() {
             ))}
           </dl>
         </div>
+      </div>
+
+      <div className="savebar">
+        <button className="btn primary" disabled={!dirty || busy} onClick={save}>
+          {busy ? "Saving…" : "Save changes"}
+        </button>
+        {dirty
+          ? <button className="btn quiet" disabled={busy}
+                    onClick={() => { setDraft({}); setClearing([]); }}>Discard</button>
+          : <span className="note tight">Nothing to save.</span>}
       </div>
     </>
   );

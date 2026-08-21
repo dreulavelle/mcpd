@@ -129,10 +129,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .tabs { display: flex; gap: var(--s1); }
 .tabs button {
+  display: inline-flex; align-items: center; gap: 6px;
   border: 0; background: none; cursor: pointer;
   padding: var(--s2) var(--s3); border-radius: var(--r-sm);
   font-size: 14px; font-weight: 500; color: var(--text-3);
-  transition: background .12s ease, color .12s ease;
+  line-height: 1.4; transition: background .12s ease, color .12s ease;
 }
 .tabs button:hover { background: var(--surface-2); color: var(--text); }
 .tabs button[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
@@ -188,7 +189,8 @@ a.out::after { content: " ↗"; font-size: .85em; opacity: .7; }
 /* ── status ─────────────────────────────────────────────────────────────── */
 
 .dot {
-  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  display: inline-block; flex: none;
+  width: 8px; height: 8px; border-radius: 50%;
   background: var(--text-4); box-shadow: 0 0 0 3px transparent;
 }
 .dot.good { background: var(--good); box-shadow: 0 0 0 3px var(--good-bg); }
@@ -241,7 +243,10 @@ a.out::after { content: " ↗"; font-size: .85em; opacity: .7; }
 /* ── forms ──────────────────────────────────────────────────────────────── */
 
 .field { margin-bottom: var(--s5); max-width: 34rem; }
-.field > label { display: block; font-weight: 550; font-size: 14px; margin-bottom: var(--s1); }
+/* :not(.switch) matters. A bare `.field > label` outranks `.switch` on
+   specificity, so it would win the display property and collapse the toggle
+   into inline flow -- where the knob lands on top of its own label. */
+.field > label:not(.switch) { display: block; font-weight: 550; font-size: 14px; margin-bottom: var(--s1); }
 .field .note { margin-top: 6px; }
 
 input[type=text], input[type=password], input[type=number], select, textarea {
@@ -258,10 +263,13 @@ input:focus, select:focus, textarea:focus {
 input:disabled { background: var(--surface-2); color: var(--text-4); }
 textarea { resize: vertical; min-height: 62px; }
 
-.switch { display: flex; align-items: flex-start; gap: var(--s3); cursor: pointer; }
-.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+/* position: relative so the visually-hidden input stays inside the control
+   instead of resolving against whatever ancestor happens to be positioned. */
+.switch { position: relative; display: flex; align-items: flex-start; gap: var(--s3); cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; }
 .switch-track {
-  position: relative; flex: none; width: 38px; height: 22px; margin-top: 1px;
+  display: block; position: relative; flex: none;
+  width: 38px; height: 22px; margin-top: 1px;
   background: var(--surface-3); border-radius: 999px; transition: background .16s ease;
 }
 .switch-track::after {
@@ -385,7 +393,9 @@ pre.code {
   font-size: 12.5px; line-height: 1.65; color: var(--text-2);
 }
 .codeblock { position: relative; margin-bottom: var(--s3); }
-.codeblock .btn { position: absolute; top: var(--s2); right: var(--s2); }
+.codeblock .btn { position: absolute; top: var(--s2); right: var(--s2); z-index: 1; }
+/* Keep the first line clear of the copy button rather than under it. */
+.codeblock pre.code { padding-right: 80px; }
 
 .diff { font-size: 14px; }
 .diff-row {
