@@ -83,9 +83,9 @@ func (f *fakeAPI) query() url.Values {
 func testClient(t *testing.T, f *fakeAPI, mutate func(*Config)) *Client {
 	t.Helper()
 	cfg := Config{
-		BaseURL:         f.server.URL,
-		ClientIDRef:     "env:X",
-		ClientSecretRef: "env:Y",
+		BaseURL:      f.server.URL,
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
 		// Fast enough that a paging test is not a sleep.
 		RequestsPerSecond: 1000,
 	}

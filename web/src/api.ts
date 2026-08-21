@@ -125,6 +125,8 @@ export interface Setting {
 
 export interface Plugin {
   name: string;
+  /** The integration this is an instance of; equals name unless there are several. */
+  type: string;
   version: string;
   title: string;
   description: string;
@@ -136,6 +138,8 @@ export interface Plugin {
   tools: Tool[];
   mutations: string[];
   required: boolean;
+  /** Names this instance's group in the settings payload, when it has one. */
+  settings_group?: string;
   settings: Setting[];
 }
 

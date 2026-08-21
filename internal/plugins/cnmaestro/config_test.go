@@ -7,9 +7,9 @@ import (
 
 func validConfig() Config {
 	return Config{
-		BaseURL:         "https://cloud.cambiumnetworks.com",
-		ClientIDRef:     "env:MCPD_CNMAESTRO_CLIENT_ID",
-		ClientSecretRef: "env:MCPD_CNMAESTRO_CLIENT_SECRET",
+		BaseURL:      "https://cloud.cambiumnetworks.com",
+		ClientID:     "a-client-id",
+		ClientSecret: "a-client-secret",
 	}
 }
 
@@ -51,8 +51,6 @@ func TestConfig_Validate(t *testing.T) {
 		mutate  func(*Config)
 		wantSub string
 	}{
-		{"no client id", func(c *Config) { c.ClientIDRef = "" }, "client_id_ref"},
-		{"no client secret", func(c *Config) { c.ClientSecretRef = "" }, "client_secret_ref"},
 		{"base url is a bare host", func(c *Config) { c.BaseURL = "cloud.cambiumnetworks.com" }, "full URL"},
 		// The credential manages network infrastructure. There is no
 		// deployment where sending it in the clear is the right trade.
@@ -109,5 +107,31 @@ func TestConfig_AcceptsTenantNames(t *testing.T) {
 		if err := c.Validate(); err != nil {
 			t.Errorf("managed_account %q was refused: %v", name, err)
 		}
+	}
+}
+
+// Credentials are entered in the dashboard, so a plugin without them has to
+// mount anyway -- a host that refused to start without them could never be
+// opened to enter them. Validate stays silent; Configured is what reports it.
+func TestConfig_MissingCredentialsIsNotAValidationFailure(t *testing.T) {
+	c := validConfig()
+	c.ClientID, c.ClientSecret = "", ""
+	c.withDefaults()
+
+	if err := c.Validate(); err != nil {
+		t.Fatalf("missing credentials must not fail validation: %v", err)
+	}
+	if c.Configured() {
+		t.Error("Configured must report that credentials are absent")
+	}
+
+	c.ClientID, c.ClientSecret = "id", "secret"
+	if !c.Configured() {
+		t.Error("Configured must report that credentials are present")
+	}
+	// Half a credential is not a credential.
+	c.ClientSecret = ""
+	if c.Configured() {
+		t.Error("one half of a credential must not count as configured")
 	}
 }

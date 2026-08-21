@@ -190,19 +190,12 @@ plugins:
   # they mean.
 
   # Cambium cnMaestro. Read-only: it lists networks and devices and will not
-  # run commands on hardware. Credentials come from Download Credentials in
-  # cnMaestro under Application > API Clients.
+  # run commands on hardware.
   cnmaestro:
     enabled: false
     required: false
-    settings:
-      base_url: "https://cloud.cambiumnetworks.com"
-      client_id_ref: env:MCPD_CNMAESTRO_CLIENT_ID
-      client_secret_ref: env:MCPD_CNMAESTRO_CLIENT_SECRET
-      # Which account to read from: an MSP tenant name, or "Base Infrastructure"
-      # for the Main Account. Exact and case-sensitive.
-      #
-      # Set it. Omitting it is not the same as naming the Main Account -- the
-      # default depends on whether a request names a network, so two calls
-      # differing only by a filter would read from different accounts.
-      managed_account: "Base Infrastructure"
+    # A plugin's own settings -- credentials, addresses, tuning -- are declared
+    # by the plugin and edited on the Plugins page, where they are validated and
+    # secrets are encrypted at rest. A `settings:` block here is only a starting
+    # value for a host nobody has opened yet; a secret in one should be a
+    # reference, written as <field>_ref.

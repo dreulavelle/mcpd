@@ -76,42 +76,50 @@ func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, er
 	return auth.NewStaticVerifier(tokens...)
 }
 
-// registerPlugins mounts every enabled plugin.
+// builtinTypes is the complete list of integrations this binary can serve.
 //
-// Registration is explicit: this switch is the complete list of integrations
-// this binary can serve. Adding one means adding a case here, which keeps the
-// set auditable and prevents a plugin from mounting itself through an init()
-// side effect.
+// Explicit rather than discovered: a type is added by naming it here, which
+// keeps the set auditable and stops a plugin mounting itself through an init()
+// side effect. It is also what the dashboard offers when someone adds an
+// instance, so a type absent here cannot be configured at all.
+func builtinTypes() (*plugins.Catalog, error) {
+	return plugins.NewCatalog(
+		echoplugin.Type(),
+		cnmaestro.Type(),
+	)
+}
+
+// registerPlugins mounts every enabled plugin.
 func (a *App) registerPlugins(ctx context.Context) error {
 	for _, name := range a.cfg.EnabledPlugins() {
 		pc := a.cfg.Plugins[name]
-		deps := a.pluginDeps(name)
+		typeName := pc.ResolvedType(name)
 
-		// The switch is on the type, not the name. They are the same thing
-		// until someone configures two instances of one integration, at which
-		// point the name is what tells them apart everywhere else.
-		var p plugins.Plugin
-		switch pc.ResolvedType(name) {
-		case "echo":
-			p = echoplugin.New(deps)
-
-		case "cnmaestro":
-			var cnCfg cnmaestro.Config
-			if err := decodeSettings(pc.Settings, &cnCfg); err != nil {
-				return fmt.Errorf("app: plugin %q settings: %w", name, err)
-			}
-			built, err := cnmaestro.New(deps, cnCfg)
-			if err != nil {
-				return err
-			}
-			p = built
-
-		default:
+		t, ok := a.types.Lookup(typeName)
+		if !ok {
 			return fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
-				"configuration but not compiled into this binary",
-				name, pc.ResolvedType(name))
+				"configuration but not compiled into this binary", name, typeName)
 		}
 
+		cfg, err := a.resolveInstanceSettings(ctx, name, t)
+		if err != nil {
+			return err
+		}
+		p, err := t.New(a.pluginDeps(name), cfg)
+		if err != nil {
+			// Same rule as a failed Start: a required plugin failing is the
+			// host failing, and anything else is one integration down. A
+			// plugin that cannot be built from what it has been given is
+			// usually one nobody has finished configuring, and taking the
+			// host down for that would remove the page they would configure
+			// it on.
+			if pc.Required {
+				return fmt.Errorf("app: plugin %q: %w", name, err)
+			}
+			a.log.Error("plugin could not be built; continuing without it",
+				"plugin", name, "type", typeName, "error", err)
+			continue
+		}
 		if err := a.manager.Register(ctx, p, name, pc.Required); err != nil {
 			return err
 		}

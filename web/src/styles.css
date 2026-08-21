@@ -416,6 +416,29 @@ tbody tr.tappable:hover { background: var(--surface-2); }
 }
 .copybox.inline code { font-size: 12.5px; color: var(--text-3); }
 
+/* ── plugins ────────────────────────────────────────────────────────────── */
+
+.plugin-group { margin-bottom: var(--s6); }
+.plugin-group:last-child { margin-bottom: 0; }
+
+/* Only drawn when a type has more than one instance, so it is a divider
+   between groups rather than a label on every card. */
+.type-heading {
+  display: flex; align-items: baseline; gap: var(--s3);
+  margin: 0 0 var(--s3);
+}
+.type-heading .note { margin: 0; }
+
+/* The title beside an instance name, when the two differ. */
+.type-tag { margin-left: var(--s2); font-weight: 400; }
+
+/* Counts and connector state on one line, right-aligned in the header. */
+.plugin-facts {
+  display: inline-flex; align-items: center; gap: var(--s3);
+  white-space: nowrap;
+}
+.plugin-facts .note { margin: 0; }
+
 /* Name above its id, as one cell rather than two stacked things. */
 .tunnel-name { font-weight: 550; margin-bottom: 2px; }
 
