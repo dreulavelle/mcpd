@@ -77,15 +77,15 @@ auth:
   # ChatGPT does not need one: the tunnel authenticates itself to OpenAI's
   # control plane, and carries its identity from the tunnel block below.
   static_tokens:
-    # Scoping is per credential. This agent can reach /mcp/cnmaestro and
-    # nothing else: other endpoints return 404, so it cannot even discover
-    # which other integrations are deployed.
-    - id: chatgpt-cnmaestro
+    # Scoping is per credential. This agent can reach /mcp/echo and nothing
+    # else: other endpoints return 404, so it cannot even discover which other
+    # integrations are deployed.
+    - id: chatgpt-echo
       secret_ref: env:MCPD_TOKEN_CHATGPT
       principal: svc:chatgpt
       role: user
       plugins:
-        - cnmaestro
+        - echo
 
     - id: diagnostics
       secret_ref: credential:diagnostics
@@ -156,7 +156,7 @@ tunnel:
   # settings, which is almost never what you want for a connector.
   role: user
   plugins:
-    - cnmaestro
+    - echo
 
   # Report when a newer tunnel client is released. It only reports -- the
   # client is compiled in, so picking one up means rebuilding mcpd, which is
@@ -168,14 +168,10 @@ plugins:
   # outside mcpd. Turn it on while setting up, then turn it off.
   echo:
     enabled: false
-    required: false
-
-  cnmaestro:
-    enabled: false
     # required: true means a startup failure here fails the whole host.
     # Leave false so an upstream outage marks only this plugin unhealthy.
     required: false
-    settings:
-      base_url: "https://cloud.cambiumnetworks.com"
-      client_id_ref: env:MCPD_CNMAESTRO_CLIENT_ID
-      client_secret_ref: env:MCPD_CNMAESTRO_CLIENT_SECRET
+
+  # Out-of-process plugins are discovered from plugins_dir and named here the
+  # same way. A plugin's own settings go under `settings`, and it decides what
+  # they mean.
