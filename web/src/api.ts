@@ -228,6 +228,12 @@ export interface TunnelInfo {
   problem?: string;
   /** Which credential is needed to manage tunnels, when one is absent. */
   missing?: string;
+  /**
+   * Which system each tunnel is pointed at, by tunnel id, "" meaning every
+   * system. Read from the stored configuration, so a tunnel assigned to a
+   * plugin that has not started is here and absent from `tunnels`.
+   */
+  assignments?: Record<string, string>;
   /** The systems a tunnel can be pointed at. */
   plugins: string[];
   /**

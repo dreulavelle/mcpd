@@ -27,9 +27,15 @@ export function Tunnels() {
   usePoll(load, 8_000);
 
   const running = new Map((info?.tunnels ?? []).map((t) => [t.tunnel_id ?? "", t]));
+  // A list that is absent is treated as an empty one throughout. An older
+  // build sends null for a list with nothing in it, and mapping over that
+  // threw during render -- which, with no error boundary above, left the
+  // whole page blank rather than showing "no tunnels yet".
+  const plugins = info?.plugins ?? [];
+  const assignments = info?.assignments ?? {};
   const rows: Row[] = !info ? [] : info.can_manage
     ? (info.available ?? []).map((t) => ({ ...t, status: running.get(t.id) }))
-    : info.tunnels.map((t) => ({
+    : (info.tunnels ?? []).map((t) => ({
         id: t.tunnel_id ?? "", name: t.plugin || "Everything", status: t,
       }));
 
@@ -56,7 +62,7 @@ export function Tunnels() {
       )}
 
       {info?.can_manage && admin && (
-        <Add plugins={info.plugins} workspaces={info.workspaces ?? []}
+        <Add plugins={plugins} workspaces={info.workspaces ?? []}
              onDone={load} show={show} />
       )}
 
@@ -79,7 +85,9 @@ export function Tunnels() {
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <TunnelRow key={row.id} row={row} info={info} onDone={load} show={show} />
+                  <TunnelRow key={row.id} row={row} info={info} plugins={plugins}
+                             assigned={assignments[row.id]}
+                             onDone={load} show={show} />
                 ))}
               </tbody>
             </table>
@@ -95,14 +103,23 @@ interface Row extends OpenAITunnel {
   status?: TunnelStatus;
 }
 
-function TunnelRow({ row, info, onDone, show }: {
+function TunnelRow({ row, info, plugins, assigned, onDone, show }: {
   row: Row;
   info: TunnelInfo;
+  plugins: string[];
+  /** What this tunnel is pointed at in the configuration: a plugin name, ""
+   *  for everything, or undefined when it is not assigned at all. */
+  assigned?: string;
   onDone: () => void;
   show: Notify;
 }) {
   const state = row.status?.state;
   const admin = useIsAdmin();
+  // Assigned to a plugin that is not mounted. The tunnel is not started --
+  // it would answer ChatGPT with an endpoint that has nothing behind it --
+  // and until this said so, the assignment simply appeared not to have taken.
+  const waitingOn = assigned && !row.status && !plugins.includes(assigned)
+    ? assigned : "";
 
   async function assign(to: string) {
     try {
@@ -136,11 +153,16 @@ function TunnelRow({ row, info, onDone, show }: {
       </td>
       <td>
         {info.can_manage && admin ? (
-          <select value={row.status ? (row.status.plugin || "*") : ""}
+          // The stored assignment rather than the running one: a tunnel
+          // waiting on a plugin is still pointed at it, and showing "Not
+          // used" made the choice look like it had reverted.
+          <select value={selected(row, assigned)}
                   onChange={(e) => assign(e.target.value)}>
             <option value="">Not used</option>
             <option value="*">Everything</option>
-            {info.plugins.map((p) => <option key={p} value={p}>{p}</option>)}
+            {optionsFor(plugins, waitingOn).map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
           </select>
         ) : (
           <code>{row.status?.plugin || "Everything"}</code>
@@ -148,9 +170,17 @@ function TunnelRow({ row, info, onDone, show }: {
       </td>
       <td>
         <span className="row">
-          <Dot tone={tone(state)} />
-          <span className="note tight">{describe(state)}</span>
+          <Dot tone={waitingOn ? "attention" : tone(state)} />
+          <span className="note tight">
+            {waitingOn ? "Waiting" : describe(state)}
+          </span>
         </span>
+        {waitingOn && (
+          <p className="note tight" style={{ marginTop: 4 }}>
+            {waitingOn} is not running, so this tunnel is not started. It
+            connects on its own once that plugin has what it needs.
+          </p>
+        )}
         {state === "failed" && row.status?.message && (
           <p className="note tight" style={{ marginTop: 4 }}>{row.status.message}</p>
         )}
@@ -232,6 +262,21 @@ function Add({ plugins, workspaces, onDone, show }: {
       </button>
     </div>
   );
+}
+
+/** What the "Reaches" select shows: the running tunnel, else the stored
+ *  assignment, else nothing. */
+function selected(row: Row, assigned?: string): string {
+  if (row.status) return row.status.plugin || "*";
+  if (assigned === undefined) return "";
+  return assigned || "*";
+}
+
+/** The plugins offered, plus one a tunnel is already waiting on so its own
+ *  assignment is not missing from the list that shows it. */
+function optionsFor(plugins: string[], waitingOn: string): string[] {
+  if (!waitingOn || plugins.includes(waitingOn)) return plugins;
+  return [...plugins, waitingOn].sort();
 }
 
 function tone(state?: TunnelStatus["state"]) {

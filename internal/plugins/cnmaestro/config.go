@@ -33,17 +33,22 @@ type Config struct {
 	ClientID     string `yaml:"client_id" json:"client_id"`
 	ClientSecret string `yaml:"client_secret" json:"client_secret"`
 
-	// ManagedAccount selects the account every request reads from.
+	// ManagedAccount is the account requests read from when a tool call does
+	// not name one. It is a default, not a confinement: every read tool takes
+	// an account argument, so one instance serves questions about any tenant
+	// the credential can see.
 	//
 	// Either an MSP managed account (tenant) name, or the reserved value
 	// "Base Infrastructure" meaning the Main Account. Matching upstream is
 	// exact and case-sensitive.
 	//
-	// Set it. Omitting it is not the same as naming the Main Account: the
-	// default depends on whether a request names a network, so GET /devices
-	// spans every account while GET /devices?network=X returns Main Account
-	// devices alone. Two tool calls that differ only by a filter would
-	// otherwise read from different accounts.
+	// Empty is a real choice and the one to make on an MSP installation:
+	// nothing is sent, so an unfiltered listing spans every account and the
+	// assistant can narrow to one by naming it. It costs the guarantee that
+	// two calls read from the same place -- omitting the parameter means
+	// different things per request, so GET /devices spans every account while
+	// GET /devices?network=X quietly returns Main Account devices alone. The
+	// tools say which account answered rather than leaving that to be assumed.
 	//
 	// Objects in the Main Account report managed_account: "" when read back,
 	// and that empty string is never valid to send -- sending it is treated as
@@ -91,6 +96,14 @@ const (
 
 // withDefaults fills anything the operator left unset.
 func (c *Config) withDefaults() {
+	// Credentials are trimmed because they are pasted. Cambium hands them over
+	// in a downloaded file, and a trailing newline that survives the paste is
+	// invisible in the form and fatal at the token endpoint, which answers
+	// invalid_client -- indistinguishable from a wrong secret.
+	c.ClientID = strings.TrimSpace(c.ClientID)
+	c.ClientSecret = strings.TrimSpace(c.ClientSecret)
+	c.ManagedAccount = strings.TrimSpace(c.ManagedAccount)
+
 	if strings.TrimSpace(c.BaseURL) == "" {
 		c.BaseURL = defaultBaseURL
 	}
@@ -153,4 +166,17 @@ func (c *Config) Validate() error {
 // present. Absent is an ordinary state for a plugin nobody has filled in yet.
 func (c *Config) Configured() bool {
 	return strings.TrimSpace(c.ClientID) != "" && strings.TrimSpace(c.ClientSecret) != ""
+}
+
+// Account resolves which account one request reads from: the one the caller
+// named, or the configured default when it named none.
+//
+// Empty is the answer when neither is set, and it means no managed_account is
+// sent at all rather than "the Main Account" -- see the field's comment for
+// why those differ.
+func (c *Config) Account(named string) string {
+	if v := strings.TrimSpace(named); v != "" {
+		return v
+	}
+	return strings.TrimSpace(c.ManagedAccount)
 }

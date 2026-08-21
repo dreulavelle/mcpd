@@ -25,9 +25,9 @@ import (
 //     remote-command endpoints even by constructing a path directly.
 //   - Calls go to the host the token response named, not the one tokens were
 //     obtained from, because cloud accounts are regionally sharded.
-//   - managed_account is attached to every request when configured, because
-//     omitting it means different things depending on whether a request names
-//     a network.
+//   - managed_account is attached to every request when the caller named an
+//     account or one is configured, because omitting it means different things
+//     depending on whether a request names a network.
 //   - Listing supports both pagination schemes, because which one an endpoint
 //     uses is a per-endpoint fact rather than an API-wide one.
 type Client struct {
@@ -222,8 +222,17 @@ func (c *Client) do(ctx context.Context, path string, params url.Values) (envelo
 	}
 
 	q := cloneValues(params)
-	if acct := strings.TrimSpace(c.cfg.ManagedAccount); acct != "" {
+	// The caller's account wins, and the configured one is the default it
+	// falls back to. A tool that takes an account argument can then answer a
+	// question about one tenant without the instance being reconfigured --
+	// which is what an assistant asked about "the other site" needs to do.
+	if acct := c.cfg.Account(q.Get(managedAccountKV)); acct != "" {
 		q.Set(managedAccountKV, acct)
+	} else {
+		// Never send it empty: the API treats an empty value as if the
+		// parameter were absent, and sending it that way only invites the
+		// belief that an account was selected.
+		q.Del(managedAccountKV)
 	}
 
 	target := host + apiPrefix + path
