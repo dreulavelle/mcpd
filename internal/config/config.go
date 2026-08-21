@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	"strings"
 )
 
 // Config is the complete application configuration.
@@ -253,12 +254,35 @@ type Logging struct {
 
 // PluginConfig is the host-level configuration common to every plugin.
 type PluginConfig struct {
+	// Type names the integration this is an instance of. It defaults to the
+	// key, so a single instance is configured by naming it after its type and
+	// nothing else changes.
+	//
+	// Separating the two is what lets one integration be configured more than
+	// once. Two Synology devices are two plugins as far as the host is
+	// concerned -- two endpoints, two entries in a credential's plugin list,
+	// two connectors, and a history that says which one acted -- because the
+	// name is already the identity everywhere downstream.
+	Type string `yaml:"type"`
+
 	Enabled bool `yaml:"enabled"`
 	// Required determines whether a startup failure in this plugin fails the
 	// host, or only marks the plugin unhealthy.
 	Required bool `yaml:"required"`
 	// Settings holds plugin-specific configuration, decoded by the plugin.
 	Settings map[string]any `yaml:"settings"`
+}
+
+// ResolvedType returns the integration this instance is of.
+//
+// An unset type means the instance is named after its type, which is the
+// ordinary single-instance case and what every configuration written before
+// instances existed looks like.
+func (p PluginConfig) ResolvedType(name string) string {
+	if t := strings.TrimSpace(p.Type); t != "" {
+		return t
+	}
+	return name
 }
 
 // Load reads, expands, and validates a configuration file.

@@ -280,3 +280,23 @@ func TestWarnings_LoopbackNamesDoNotWarn(t *testing.T) {
 		}
 	}
 }
+
+// A plugin's name and its type are the same thing until someone configures two
+// instances of one integration, which is what every configuration written
+// before instances existed relies on.
+func TestPluginConfig_ResolvedType(t *testing.T) {
+	for _, tc := range []struct {
+		name, typ, want string
+	}{
+		{"echo", "", "echo"},
+		{"nas-primary", "synology", "synology"},
+		{"nas-backup", "  synology  ", "synology"},
+		{"cnmaestro", "cnmaestro", "cnmaestro"},
+	} {
+		got := PluginConfig{Type: tc.typ}.ResolvedType(tc.name)
+		if got != tc.want {
+			t.Errorf("PluginConfig{Type:%q}.ResolvedType(%q) = %q, want %q",
+				tc.typ, tc.name, got, tc.want)
+		}
+	}
+}

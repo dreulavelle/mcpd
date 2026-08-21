@@ -163,6 +163,19 @@ tunnel:
   # the point: the code that runs is the code that was built and reviewed.
   check_for_updates: true
 
+# Each key is an instance name, and `type` says what it is an instance of.
+# Leave `type` out and the two are the same, which is the ordinary case.
+#
+# Two instances of one integration are two plugins to the host: two endpoints,
+# two entries in a credential's `plugins` list, two connectors, and a history
+# that says which one acted.
+#
+#   nas-primary:
+#     type: synology
+#     settings: { host: 10.0.0.10 }
+#   nas-backup:
+#     type: synology
+#     settings: { host: 10.0.0.11 }
 plugins:
   # A test connection for checking that everything works. It touches nothing
   # outside mcpd. Turn it on while setting up, then turn it off.
