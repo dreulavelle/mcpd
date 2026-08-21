@@ -345,6 +345,14 @@ type tunnelResponse struct {
 	Missing string `json:"missing,omitempty"`
 	// Plugins names the systems a tunnel can be pointed at.
 	Plugins []string `json:"plugins"`
+	// Workspaces are the ChatGPT workspaces already in use by a tunnel in this
+	// organisation.
+	//
+	// OpenAI publishes no endpoint that lists workspaces, so these are read off
+	// the tunnels that have one rather than fetched. That covers every case
+	// except a organisation whose first tunnel is being made right now, where
+	// the id still has to be supplied once.
+	Workspaces []string `json:"workspaces"`
 }
 
 func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +375,7 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 			resp.Problem = err.Error()
 		} else {
 			resp.Available = list
+			resp.Workspaces = workspacesIn(list)
 		}
 	}
 	if s.opts.TunnelInfo != nil {
@@ -1043,7 +1052,7 @@ func (s *Server) handleCACertificate(w http.ResponseWriter, r *http.Request) {
 // directory returns the tunnel manager, never nil.
 func (s *Server) directory() *tunnel.Directory {
 	if s.opts.Directory == nil {
-		return tunnel.NewDirectory("", "", "", "")
+		return tunnel.NewDirectory("", "", "")
 	}
 	return s.opts.Directory()
 }
@@ -1051,8 +1060,9 @@ func (s *Server) directory() *tunnel.Directory {
 // handleCreateTunnel makes a tunnel at OpenAI and points it at a system.
 func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name   string `json:"name"`
-		Plugin string `json:"plugin"`
+		Name      string `json:"name"`
+		Plugin    string `json:"plugin"`
+		Workspace string `json:"workspace_id"`
 	}
 	if !s.decode(w, r, &body) {
 		return
@@ -1068,7 +1078,8 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := dir.Create(r.Context(), tunnelName(body.Name, body.Plugin), "Created by mcpd")
+	created, err := dir.Create(r.Context(),
+		tunnelName(body.Name, body.Plugin), "Created by mcpd", body.Workspace)
 	if err != nil {
 		s.writeError(w, r, http.StatusBadGateway, err.Error())
 		return
@@ -1158,6 +1169,24 @@ func (s *Server) assign(r *http.Request, id, plugin string) error {
 	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, []settings.Change{
 		{Key: key, Value: string(encoded)},
 	})
+}
+
+// workspacesIn collects the distinct workspaces the listed tunnels belong to,
+// in a stable order so the dashboard's default does not move between polls.
+func workspacesIn(tunnels []tunnel.TunnelInfo) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, t := range tunnels {
+		for _, w := range t.WorkspaceIDs {
+			if w == "" || seen[w] {
+				continue
+			}
+			seen[w] = true
+			out = append(out, w)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // tunnelName settles what a new tunnel is called.

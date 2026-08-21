@@ -21,10 +21,9 @@ import (
 // every tunnel in the organisation, so it is used only for the request an
 // operator explicitly asked for and never held by the running client.
 type Directory struct {
-	adminKey    string
-	orgID       string
-	workspaceID string
-	baseURL     string
+	adminKey string
+	orgID    string
+	baseURL  string
 }
 
 // ErrNoAdminKey means tunnel management is unavailable, not that it failed.
@@ -32,12 +31,11 @@ var ErrNoAdminKey = errors.New("tunnel: no admin key is configured")
 
 // NewDirectory returns a directory. Missing credentials leave it unavailable
 // rather than failing, so the dashboard can offer paste-an-id instead.
-func NewDirectory(adminKey, orgID, workspaceID, baseURL string) *Directory {
+func NewDirectory(adminKey, orgID, baseURL string) *Directory {
 	return &Directory{
-		adminKey:    strings.TrimSpace(adminKey),
-		orgID:       strings.TrimSpace(orgID),
-		workspaceID: strings.TrimSpace(workspaceID),
-		baseURL:     baseURL,
+		adminKey: strings.TrimSpace(adminKey),
+		orgID:    strings.TrimSpace(orgID),
+		baseURL:  baseURL,
 	}
 }
 
@@ -69,6 +67,12 @@ type TunnelInfo struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// WorkspaceIDs are the ChatGPT workspaces this tunnel is listed in.
+	//
+	// Carried through because there is no endpoint that lists workspaces --
+	// not in the SDK and not in the documentation -- and an existing tunnel is
+	// the only place a workspace id can be read from rather than typed.
+	WorkspaceIDs []string `json:"workspace_ids,omitempty"`
 }
 
 // List returns every tunnel in the organisation.
@@ -83,13 +87,22 @@ func (d *Directory) List(ctx context.Context) ([]TunnelInfo, error) {
 	}
 	out := make([]TunnelInfo, 0, len(resp.Tunnels))
 	for _, t := range resp.Tunnels {
-		out = append(out, TunnelInfo{ID: t.ID, Name: t.Name, Description: t.Description})
+		out = append(out, TunnelInfo{
+			ID: t.ID, Name: t.Name, Description: t.Description,
+			WorkspaceIDs: append([]string(nil), t.WorkspaceIDs...),
+		})
 	}
 	return out, nil
 }
 
 // Create makes a new tunnel and returns it.
-func (d *Directory) Create(ctx context.Context, name, description string) (*TunnelInfo, error) {
+// Create makes a tunnel, optionally listed in a ChatGPT workspace.
+//
+// The workspace matters more than it looks. A tunnel associated only with a
+// Platform organisation does not appear in an Enterprise or Edu workspace, so
+// a connector created without one is invisible in exactly the accounts that
+// have workspaces at all.
+func (d *Directory) Create(ctx context.Context, name, description, workspaceID string) (*TunnelInfo, error) {
 	client, err := d.client()
 	if err != nil {
 		return nil, err
@@ -97,23 +110,22 @@ func (d *Directory) Create(ctx context.Context, name, description string) (*Tunn
 	if strings.TrimSpace(name) == "" {
 		return nil, errors.New("tunnel: a name is required")
 	}
-	// A workspace is sent alongside the organisation when one is configured.
-	// OpenAI's own CLI requires at least one of the two and passes both when
-	// it has them, and a tunnel scoped only to the organisation is not
-	// necessarily visible where ChatGPT is looking.
 	req := tcadmin.TunnelCreateRequest{
 		Name:            name,
 		Description:     description,
 		OrganizationIDs: []string{d.orgID},
 	}
-	if d.workspaceID != "" {
-		req.WorkspaceIDs = []string{d.workspaceID}
+	if w := strings.TrimSpace(workspaceID); w != "" {
+		req.WorkspaceIDs = []string{w}
 	}
 	t, err := client.CreateTunnel(ctx, req)
 	if err != nil {
 		return nil, d.explain(err)
 	}
-	return &TunnelInfo{ID: t.ID, Name: t.Name, Description: t.Description}, nil
+	return &TunnelInfo{
+		ID: t.ID, Name: t.Name, Description: t.Description,
+		WorkspaceIDs: append([]string(nil), t.WorkspaceIDs...),
+	}, nil
 }
 
 // Delete removes a tunnel from the organisation.
