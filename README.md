@@ -171,6 +171,18 @@ image is 24 MB, distroless, non-root, with a read-only root filesystem.
 Terminate TLS at a reverse proxy and bind mcpd to loopback, or let mcpd issue
 its own certificate with `server.tls.mode: self-signed`.
 
+## Managing it
+
+Everything an operator sets lives in the dashboard: accounts, tunnels,
+approval policy, and each plugin's own configuration. A plugin declares the
+settings it needs and the dashboard renders them, validates what is typed, and
+stores secrets encrypted — so credentials never go in a file or an environment
+variable.
+
+The configuration file still works, and is the right place for provisioning a
+host nobody has opened yet. Anything set there is a starting value the
+dashboard can change, and a secret in it is a reference rather than a value.
+
 ## Integrations
 
 | Plugin | What it manages | State |

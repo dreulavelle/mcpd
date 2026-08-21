@@ -269,10 +269,38 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Accounts:   a.accounts,
 			Catalog:    a.settingsCatalog,
 			PluginType: func(instance string) string {
-				return a.cfg.Plugins[instance].ResolvedType(instance)
+				for _, inst := range a.instances(context.Background()) {
+					if inst.Name == instance {
+						return inst.Type
+					}
+				}
+				return instance
 			},
-			SessionTTL: cfg.Auth.Accounts.SessionTTL,
-			Plugins:    func() []string { return a.manager.Names() },
+			PluginTypes: func() []admin.PluginTypeInfo {
+				out := make([]admin.PluginTypeInfo, 0)
+				for _, t := range a.types.Types() {
+					out = append(out, admin.PluginTypeInfo{
+						Name: t.Name, Title: t.Title, Description: t.Description,
+						Configurable: len(t.Settings) > 0,
+					})
+				}
+				return out
+			},
+			Instances: func(ctx context.Context) []admin.PluginInstanceInfo {
+				out := make([]admin.PluginInstanceInfo, 0)
+				for _, inst := range a.instances(ctx) {
+					out = append(out, admin.PluginInstanceInfo{
+						Name: inst.Name, Type: inst.Type,
+						FromFile: inst.FromFile, Enabled: inst.Enabled,
+					})
+				}
+				return out
+			},
+			AddPlugin:        a.AddInstance,
+			RemovePlugin:     a.RemoveInstance,
+			SetPluginEnabled: a.SetInstanceEnabled,
+			SessionTTL:       cfg.Auth.Accounts.SessionTTL,
+			Plugins:          func() []string { return a.manager.Names() },
 			Directory: func() *tunnel.Directory {
 				// Read at call time: the admin key is a setting, and one
 				// captured at startup would be the key the deployment began
