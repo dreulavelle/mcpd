@@ -81,6 +81,35 @@ POST /cnwave60/devices/{mac}/links/{id}/iperf
 POST /cnwave60/devices/{mac}/topology_scan
 ```
 
+## What mcpd exposes
+
+Seventeen read tools, no writes. Grouped by the question they answer rather
+than by the endpoint they call, because a model picks a tool by what it wants
+to know:
+
+| tool | endpoint |
+|---|---|
+| `networks`, `devices`, `device` | `/networks`, `/devices`, `/devices/{mac}` |
+| `managed_accounts` | `/msp/managed_accounts` |
+| `sites`, `towers` | `/networks/{network}/sites`, `/networks/{network}/towers` |
+| `alarms`, `alarm_history`, `events` | `/alarms`, `/alarms/history`, `/events` |
+| `clients`, `wired_clients`, `mesh_peers` | `/devices/clients` or `/devices/{mac}/clients`, `/devices/wired_clients`, `/devices/mesh/peers` |
+| `statistics`, `device_statistics`, `device_performance` | `/devices/statistics`, `/devices/{mac}/statistics`, `/devices/{mac}/performance` |
+| `wlans`, `ap_groups` | `/wifi_enterprise/wlans`, `/wifi_enterprise/ap_groups` |
+
+Four parameter facts that are not guessable from the reference, each of which
+costs a wrong answer rather than an error:
+
+- **The spec's parameter names are not always the wire names.** `event_severity`
+  is sent as `severity`, and `deviceType` is sent as `type`. A client that sends
+  the reference's name filters nothing and returns everything.
+- **`/devices/{mac}/performance` requires `start_time` and `stop_time`.** They
+  are not defaulted.
+- **`/devices/clients` filters by `client_type` and nothing else** — no network,
+  no site. Narrowing means asking a single access point instead.
+- **A malformed timestamp returns an empty result rather than an error**, which
+  reads as "nothing happened then". Timestamps are parsed before the call.
+
 ## Pagination
 
 Two schemes, and which one applies is per endpoint rather than global. An

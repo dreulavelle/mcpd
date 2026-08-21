@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -68,6 +69,14 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 		Idempotent: true,
 	}, p.getDevice)
 
+	// Grouped by what they answer rather than all listed here: alarms and
+	// events, who is connected, how devices are performing, and where things
+	// are. Registration order is not display order, so this is for readers.
+	p.registerAlarmTools(r)
+	p.registerClientTools(r)
+	p.registerStatsTools(r)
+	p.registerTopologyTools(r)
+
 	return nil
 }
 
@@ -110,7 +119,7 @@ func (p *Plugin) listNetworks(ctx context.Context, in NetworksInput) (NetworksOu
 		Warnings:  page.Warnings,
 		Truncated: page.Truncated,
 		Account:   account,
-		Note:      spanningNote(account, false),
+		Note:      spanningNote(account, scopeEstate),
 	}, nil
 }
 
@@ -192,8 +201,7 @@ func (p *Plugin) listDevices(ctx context.Context, in DevicesInput) (DevicesOutpu
 				"site, tower, type, or search rather than treating this as the "+
 				"whole estate.", len(page.Items)))
 	}
-	hierarchy := in.Network != "" || in.Site != "" || in.Tower != ""
-	if n := spanningNote(account, hierarchy); n != "" {
+	if n := spanningNote(account, placeScope(in.Network, in.Tower, in.Site)); n != "" {
 		notes = append(notes, n)
 	}
 	out.Note = strings.Join(notes, " ")
@@ -241,10 +249,9 @@ type DeviceOutput struct {
 }
 
 func (p *Plugin) getDevice(ctx context.Context, in DeviceInput) (DeviceOutput, error) {
-	mac := strings.TrimSpace(in.MAC)
-	if !macPattern.MatchString(mac) {
-		return DeviceOutput{}, fmt.Errorf(
-			"%q is not a MAC address; expected something like AA:BB:CC:DD:EE:FF", in.MAC)
+	mac, err := deviceMAC(in.MAC)
+	if err != nil {
+		return DeviceOutput{}, err
 	}
 
 	// The device record arrives as a single-element array on this endpoint,
@@ -270,19 +277,37 @@ func accountParams(account string) url.Values {
 	return params
 }
 
+// scope is how much of the installation a request could reach, which decides
+// what an unnamed account means.
+type scope int
+
+const (
+	// scopeEstate is a listing with no place and no device named.
+	scopeEstate scope = iota
+	// scopeHierarchy is a listing filtered by network, site or tower.
+	scopeHierarchy
+	// scopeDevice is a read about one identified device or its clients.
+	scopeDevice
+)
+
 // spanningNote says which accounts a result covered, when that is not what a
 // reader would assume.
 //
-// Two cases, and they are opposites. Without a hierarchy filter an unnamed
+// Estate and hierarchy are opposites. Without a place filter an unnamed
 // account spans the whole installation, which is easy to mistake for one
 // tenant. With one, cnMaestro quietly answers from the main account alone --
 // the same tool call, the same configuration, a narrower answer, and nothing
 // in the response says so.
-func spanningNote(account string, hierarchyFiltered bool) string {
-	if account != "" {
+//
+// A device-scoped read says nothing. The answer is about the one device that
+// was named, and telling a caller who asked about a single access point that
+// the result "spans every account" is worse than saying nothing: it is not
+// true of what they asked for.
+func spanningNote(account string, s scope) string {
+	if account != "" || s == scopeDevice {
 		return ""
 	}
-	if hierarchyFiltered {
+	if s == scopeHierarchy {
 		return "No account was named and this request filters by network, " +
 			"site, or tower, so cnMaestro answered from the main account " +
 			"alone rather than every account. Name an account to read a " +
@@ -299,4 +324,83 @@ func setIf(params url.Values, key, value string) {
 	if v := strings.TrimSpace(value); v != "" {
 		params.Set(key, v)
 	}
+}
+
+// collect runs a listing and composes what every listing tool reports about it.
+//
+// The two notes it can produce are the ones a model would otherwise get wrong:
+// a truncated result read as the whole estate, and an unnamed account read as
+// one account. Both are silent in the API's own response.
+func (p *Plugin) collect(
+	ctx context.Context, path string, params url.Values,
+	account string, s scope, noun, narrowBy string,
+) (Page, string, error) {
+	page, err := p.client.List(ctx, path, params)
+	p.note(err)
+	if err != nil {
+		return Page{}, "", err
+	}
+
+	notes := make([]string, 0, 2)
+	if page.Truncated {
+		notes = append(notes, fmt.Sprintf(
+			"Stopped at %d %s; there are more. Narrow with %s rather than "+
+				"treating this as everything.", len(page.Items), noun, narrowBy))
+	}
+	if n := spanningNote(account, s); n != "" {
+		notes = append(notes, n)
+	}
+	return page, strings.Join(notes, " "), nil
+}
+
+// placeScope reports whether a request names a place, which is what decides
+// the meaning of an absent account. See spanningNote.
+func placeScope(network, tower, site string) scope {
+	if strings.TrimSpace(network) != "" ||
+		strings.TrimSpace(tower) != "" ||
+		strings.TrimSpace(site) != "" {
+		return scopeHierarchy
+	}
+	return scopeEstate
+}
+
+// deviceMAC validates a MAC before it becomes a path segment.
+//
+// Checked before the call rather than after, so a mistyped address is a clear
+// message instead of a 404 that reads as "no such device" and invites the
+// model to conclude the estate is missing something.
+func deviceMAC(raw string) (string, error) {
+	mac := strings.TrimSpace(raw)
+	if !macPattern.MatchString(mac) {
+		return "", fmt.Errorf(
+			"%q is not a MAC address; expected something like AA:BB:CC:DD:EE:FF", raw)
+	}
+	return mac, nil
+}
+
+// isoTime accepts a timestamp the API will accept, or says why not.
+//
+// Parsed rather than passed through: the API answers a malformed time with an
+// empty result rather than an error, which reads as "nothing happened then".
+func isoTime(field, value string) (string, error) {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return "", nil
+	}
+	if _, err := time.Parse(time.RFC3339, v); err != nil {
+		return "", fmt.Errorf(
+			"%s must be an ISO 8601 timestamp such as 2026-08-01T00:00:00Z; got %q",
+			field, value)
+	}
+	return v, nil
+}
+
+// requiredISOTime is isoTime where the API will not default the value.
+func requiredISOTime(field, value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf(
+			"%s is required and must be an ISO 8601 timestamp such as 2026-08-01T00:00:00Z",
+			field)
+	}
+	return isoTime(field, value)
 }
