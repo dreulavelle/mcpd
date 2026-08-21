@@ -147,6 +147,13 @@ func newHTTPRuntime(cfg Config, log *slog.Logger, out logWriter) (runtime, error
 		}
 	}
 
+	level := cfg.LogLevel
+	if cfg.Debug {
+		level = slog.LevelDebug
+		log.Warn("tunnel debug logging is on; requests and responses are logged " +
+			"in full, credentials included. Turn it off when you are done.")
+	}
+
 	r := &httpRuntime{ready: make(chan struct{})}
 
 	tcCfg := &tcconfig.Config{
@@ -159,8 +166,9 @@ func newHTTPRuntime(cfg Config, log *slog.Logger, out logWriter) (runtime, error
 			MaxInFlightRequests: maxInFlightRequests,
 		},
 		Logging: tcconfig.LoggingConfig{
-			Level:  cfg.LogLevel,
-			Format: tcconfig.LogFormatStructText,
+			Level:         level,
+			Format:        tcconfig.LogFormatStructText,
+			HTTPRawUnsafe: cfg.Debug,
 		},
 		Health: tcconfig.HealthConfig{ListenAddr: cfg.DiagnosticsAddr},
 		// The client restricts /api/* to loopback by its own reckoning, which

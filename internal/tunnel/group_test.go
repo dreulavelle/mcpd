@@ -207,3 +207,34 @@ func TestApplyConfiguresWithoutConnecting(t *testing.T) {
 		t.Fatalf("state = %q, want it configured but not connected", statuses[0].State)
 	}
 }
+
+// SameAs decides whether a saved setting reaches the running tunnel. A field
+// missing from it is a setting that reports success and changes nothing --
+// which is worse than one that fails, because it looks like it worked.
+func TestSameAsComparesEveryFieldThatChangesBehaviour(t *testing.T) {
+	base := groupConfig("echo", "tunnel_1123456789abcdef0123456789abcdef")
+	m := NewManager(base, testFactory(), discardLogger())
+
+	changed := []struct {
+		name  string
+		apply func(*Config)
+	}{
+		{"enabled", func(c *Config) { c.Enabled = !c.Enabled }},
+		{"plugin", func(c *Config) { c.Plugin = "other" }},
+		{"tunnel id", func(c *Config) { c.TunnelID = "tunnel_2123456789abcdef0123456789abcdef" }},
+		{"api key", func(c *Config) { c.APIKey = "sk-different" }},
+		{"mcp url", func(c *Config) { c.MCPServerURL = "https://elsewhere/mcp" }},
+		{"trusted CA", func(c *Config) { c.TrustedCAFile = "/somewhere/else.pem" }},
+		{"control plane", func(c *Config) { c.ControlPlaneBaseURL = "https://elsewhere" }},
+		{"diagnostics", func(c *Config) { c.DiagnosticsAddr = "127.0.0.1:1234" }},
+		{"debug", func(c *Config) { c.Debug = !c.Debug }},
+		{"role", func(c *Config) { c.Principal.Role = auth.RoleViewer }},
+	}
+	for _, tc := range changed {
+		cfg := base
+		tc.apply(&cfg)
+		if m.SameAs(cfg) {
+			t.Errorf("changing %s was not noticed, so the tunnel would keep the old value", tc.name)
+		}
+	}
+}

@@ -620,6 +620,7 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 	// unauthenticated, and it exists for someone already on the host running
 	// curl against it.
 	cfg.DiagnosticsAddr = a.cfg.Tunnel.DiagnosticsAddr
+	cfg.Debug = a.settings.Bool(ctx, settings.KeyTunnelDebug, false)
 
 	// The key comes from the store when it is there, and otherwise from the
 	// reference in the file, so an existing deployment keeps working.
