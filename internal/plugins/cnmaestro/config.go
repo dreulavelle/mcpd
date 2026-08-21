@@ -25,10 +25,13 @@ type Config struct {
 	// target, so this is the front door rather than the final address.
 	BaseURL string `yaml:"base_url" json:"base_url"`
 
-	// ClientIDRef and ClientSecretRef name secrets, never values. Both come
-	// from Download Credentials in cnMaestro's API Clients page.
-	ClientIDRef     string `yaml:"client_id_ref" json:"client_id_ref"`
-	ClientSecretRef string `yaml:"client_secret_ref" json:"client_secret_ref"`
+	// ClientID and ClientSecret are the resolved credential, not a reference
+	// to one. Where it came from -- a dashboard field, an env: reference in a
+	// file, a systemd credential -- is the host's problem, and asking every
+	// plugin to understand each form would be asking each of them to get it
+	// right.
+	ClientID     string `yaml:"client_id" json:"client_id"`
+	ClientSecret string `yaml:"client_secret" json:"client_secret"`
 
 	// ManagedAccount selects the account every request reads from.
 	//
@@ -109,16 +112,15 @@ func (c *Config) withDefaults() {
 	}
 }
 
-// Validate reports configuration that cannot work, before anything starts.
+// Validate reports configuration that cannot work.
+//
+// Credentials are deliberately not checked here. They are entered in the
+// dashboard, so a host that refused to start without them could never be
+// opened to enter them -- the plugin mounts unconfigured instead, shows its
+// form, and says it is not ready. See Configured.
 func (c *Config) Validate() error {
 	var problems []string
 
-	if strings.TrimSpace(c.ClientIDRef) == "" {
-		problems = append(problems, "client_id_ref is required")
-	}
-	if strings.TrimSpace(c.ClientSecretRef) == "" {
-		problems = append(problems, "client_secret_ref is required")
-	}
 	// A URL rather than a host, because the token request is built from it and
 	// a bare hostname produces a request to a relative path that fails much
 	// later and much less clearly.
@@ -145,4 +147,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("cnmaestro: %s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// Configured reports whether the credentials needed to reach cnMaestro are
+// present. Absent is an ordinary state for a plugin nobody has filled in yet.
+func (c *Config) Configured() bool {
+	return strings.TrimSpace(c.ClientID) != "" && strings.TrimSpace(c.ClientSecret) != ""
 }
