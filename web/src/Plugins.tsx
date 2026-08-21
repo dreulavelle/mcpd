@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Plugin } from "./api";
+import { api, type Endpoints, type Plugin } from "./api";
 import { Banner } from "./components";
 
 /**
@@ -16,6 +16,11 @@ export function Plugins() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<string | null>(null);
+  const [endpoints, setEndpoints] = useState<Endpoints | null>(null);
+
+  useEffect(() => {
+    api.endpoints().then(setEndpoints).catch(() => setEndpoints(null));
+  }, []);
 
   useEffect(() => {
     const load = () =>
@@ -44,6 +49,25 @@ export function Plugins() {
       </p>
 
       {error && <Banner tone="error">{error}</Banner>}
+
+      {endpoints && plugins.length > 0 && (
+        <div className="card all-at-once">
+          <div className="card-body">
+            <h3>Everything at once</h3>
+            <p className="hint">
+              This one address gives an assistant everything its token is
+              allowed to reach. Use it when whatever you're connecting can only
+              point at a single address — ChatGPT's tunnel works this way.
+            </p>
+            <Copyable value={endpoints.aggregate} />
+            <p className="hint" style={{ marginTop: 10, marginBottom: 0 }}>
+              Prefer one system at a time? Every connection below has its own
+              address. Pair it with a token limited to that system and an
+              assistant can't reach anything else, even by accident.
+            </p>
+          </div>
+        </div>
+      )}
 
       {plugins.length === 0 && !error && (
         <div className="card">

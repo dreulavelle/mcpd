@@ -100,8 +100,24 @@ func (h *Host) routes() {
 		h.opts.OAuth.Routes(h.mux)
 	}
 
+	// One endpoint per plugin. A credential scoped to one integration reaches
+	// only that path; everything else is 404, so it cannot discover what else
+	// is deployed.
 	h.mux.Handle("/mcp/{plugin}", h.authenticate(streamable))
 	h.mux.Handle("/mcp/{plugin}/", h.authenticate(streamable))
+
+	// And one endpoint for everything the caller is granted.
+	//
+	// This exists because a transport may only be able to target a single
+	// address -- OpenAI's tunnel binds one MCP server URL per tunnel, so
+	// per-plugin endpoints would mean one tunnel per integration. Tool names
+	// already carry their plugin prefix, so combining them cannot collide.
+	//
+	// It is not a way around scoping: the tool catalogue here is exactly the
+	// plugins the presented credential grants, so a token limited to one
+	// integration sees one integration's tools whichever path it uses.
+	h.mux.Handle("/mcp", h.authenticate(streamable))
+	h.mux.Handle("/mcp/", h.authenticate(streamable))
 }
 
 // ServeHTTP implements http.Handler.
@@ -119,15 +135,29 @@ func (h *Host) Handler() http.Handler {
 // resolved plugin in the request context. Returning nil here means the
 // principal may not reach this endpoint.
 func (h *Host) resolveServer(r *http.Request) *sdk.Server {
-	name := pluginFromContext(r.Context())
-	if name == "" {
+	ctx := r.Context()
+
+	if name := pluginFromContext(ctx); name != "" {
+		mounted := h.opts.Manager.Lookup(name)
+		if mounted == nil {
+			return nil
+		}
+		return mounted.Server
+	}
+
+	// The aggregate endpoint. The plugin set comes from the credential, not
+	// from the path, so the catalogue is bounded by the grant either way.
+	granted := grantedFromContext(ctx)
+	if len(granted) == 0 {
 		return nil
 	}
-	mounted := h.opts.Manager.Lookup(name)
-	if mounted == nil {
+	srv, err := h.opts.Manager.AggregateServer(granted)
+	if err != nil {
+		observability.Logger(ctx).Error("could not build the aggregate endpoint",
+			"plugins", granted, "error", err)
 		return nil
 	}
-	return mounted.Server
+	return srv
 }
 
 // authenticate verifies the bearer credential and checks that the principal is
@@ -141,11 +171,6 @@ func (h *Host) authenticate(next http.Handler) http.Handler {
 		log := observability.Logger(ctx)
 
 		name := r.PathValue("plugin")
-		if name == "" {
-			h.writeError(w, r, http.StatusNotFound, "unknown endpoint")
-			return
-		}
-
 		token, ok := auth.BearerToken(r)
 		if !ok {
 			// The WWW-Authenticate challenge points the client at the
@@ -166,6 +191,25 @@ func (h *Host) authenticate(next http.Handler) http.Handler {
 			return
 		}
 
+		ctx = auth.WithPrincipal(ctx, principal)
+
+		if name == "" {
+			// The aggregate endpoint: resolve the credential's grants to the
+			// plugins that are actually mounted.
+			granted := h.opts.Authorizer.VisiblePlugins(principal, h.opts.Manager.Names())
+			if !principal.Can(auth.CapRead) || len(granted) == 0 {
+				log.Warn("aggregate access denied",
+					"principal", principal.ID, "granted", granted)
+				h.writeError(w, r, http.StatusNotFound, "unknown endpoint")
+				return
+			}
+			ctx = withGranted(ctx, granted)
+			ctx = observability.WithLogger(ctx, log.With(
+				"endpoint", "aggregate", "principal", principal.ID))
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
 		// A principal that exists but is not granted this plugin gets 404
 		// rather than 403: whether a plugin is mounted is itself information,
 		// and an agent scoped to one integration has no business learning
@@ -182,7 +226,6 @@ func (h *Host) authenticate(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx = auth.WithPrincipal(ctx, principal)
 		ctx = withPlugin(ctx, name)
 		ctx = observability.WithLogger(ctx, log.With(
 			"plugin", name, "principal", principal.ID))
@@ -251,4 +294,17 @@ func withPlugin(ctx context.Context, name string) context.Context {
 func pluginFromContext(ctx context.Context) string {
 	name, _ := ctx.Value(pluginKey{}).(string)
 	return name
+}
+
+type grantedKey struct{}
+
+// withGranted records the plugins the aggregate endpoint may expose for this
+// request, resolved from the credential rather than the path.
+func withGranted(ctx context.Context, names []string) context.Context {
+	return context.WithValue(ctx, grantedKey{}, names)
+}
+
+func grantedFromContext(ctx context.Context) []string {
+	names, _ := ctx.Value(grantedKey{}).([]string)
+	return names
 }

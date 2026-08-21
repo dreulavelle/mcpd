@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { Meta, Plugin } from "./api";
+import { useEffect, useState } from "react";
+import { api, type Endpoints, type Meta, type Plugin } from "./api";
 
 /**
  * Setup guide.
@@ -11,6 +11,11 @@ import type { Meta, Plugin } from "./api";
  */
 export function Setup({ meta, plugins }: { meta: Meta | null; plugins: Plugin[] }) {
   const [tab, setTab] = useState<"chatgpt" | "other" | "adding">("chatgpt");
+  const [endpoints, setEndpoints] = useState<Endpoints | null>(null);
+
+  useEffect(() => {
+    api.endpoints().then(setEndpoints).catch(() => setEndpoints(null));
+  }, []);
 
   return (
     <>
@@ -32,15 +37,19 @@ export function Setup({ meta, plugins }: { meta: Meta | null; plugins: Plugin[] 
         </button>
       </div>
 
-      {tab === "chatgpt" && <ChatGPTGuide plugins={plugins} meta={meta} />}
+      {tab === "chatgpt" && <ChatGPTGuide plugins={plugins} meta={meta} endpoints={endpoints} />}
       {tab === "other" && <OtherGuide plugins={plugins} />}
       {tab === "adding" && <AddingGuide />}
     </>
   );
 }
 
-function ChatGPTGuide({ plugins, meta }: { plugins: Plugin[]; meta: Meta | null }) {
-  const example = plugins[0];
+function ChatGPTGuide({ plugins, meta, endpoints }: {
+  plugins: Plugin[];
+  meta: Meta | null;
+  endpoints: Endpoints | null;
+}) {
+  const aggregate = endpoints?.aggregate ?? plugins[0]?.connect_url ?? "http://your-mcpd:9080/mcp";
 
   return (
     <>
@@ -69,15 +78,21 @@ function ChatGPTGuide({ plugins, meta }: { plugins: Plugin[]; meta: Meta | null 
         </p>
         <Code>{`brew install openai/tools/tunnel-client
 
-export CONTROL_PLANE_API_KEY='your-api-key'
+export CONTROL_PLANE_API_KEY='your-runtime-api-key'
 export CONTROL_PLANE_TUNNEL_ID='your-tunnel-id'
 
 tunnel-client run \\
-  --mcp.server-url ${example?.connect_url ?? "http://your-mcpd:9080/mcp/example"} \\
+  --mcp.server-url ${aggregate} \\
   --mcp.extra-headers "Authorization: Bearer YOUR_TOKEN"`}</Code>
         <p className="hint">
-          Replace <code>YOUR_TOKEN</code> with a token from your config file.
-          It's the same kind of token you used to sign in here.
+          Replace <code>YOUR_TOKEN</code> with a token from your config file —
+          the same kind you used to sign in here. The address above covers
+          everything that token is allowed to reach.
+        </p>
+        <p className="hint">
+          The API key is a <strong>runtime</strong> key from your OpenAI
+          account, not an admin key. Admin keys are only for creating and
+          deleting tunnels.
         </p>
       </Step>
 
@@ -94,10 +109,12 @@ tunnel-client run \\
       </Step>
 
       <div className="callout subtle">
-        <strong>One tunnel per system.</strong> Each tunnel points at one
-        address. If you want ChatGPT to reach two different systems, make two
-        tunnels — and give each one a token limited to just that system. That
-        way a mistake in one conversation can't touch the other.
+        <strong>Want to keep systems apart?</strong> The address above covers
+        everything the token can reach. If you'd rather one assistant only ever
+        touched one system, point the tunnel at that system's own address
+        instead — you'll find it on the Connections tab — and give it a token
+        limited to the same thing. Then a mistake in one conversation can't
+        touch anything else.
       </div>
 
       {meta?.auth_mode === "static" && (
@@ -125,8 +142,9 @@ function OtherGuide({ plugins }: { plugins: Plugin[] }) {
 
       <Step n={1} title="Get the address">
         <p>
-          Open the Connections tab, expand the system you want, and copy its
-          address.
+          Open the Connections tab. The address at the top covers everything
+          your token can reach; each system below also has its own, if you'd
+          rather keep them separate.
         </p>
         {example && <Code>{example.connect_url}</Code>}
       </Step>

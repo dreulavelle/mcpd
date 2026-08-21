@@ -24,6 +24,13 @@ COPY . .
 # The dashboard bundle must sit inside the package for go:embed to reach it.
 COPY --from=web /web/dist ./internal/admin/dist
 
+# The state directory has to exist in the image, owned by the user that will
+# run. A named volume inherits its ownership from the image's directory on
+# first use, so without this the volume is root-owned and a nonroot process
+# cannot open the database. Distroless has no shell, so it cannot be fixed at
+# runtime with an entrypoint chown.
+RUN mkdir -p /out/state
+
 ARG VERSION=dev
 # CGO_ENABLED=0 is not an optimisation here, it is the point: the SQLite driver
 # is pure Go, so the result is a static binary that runs on a distroless static
@@ -41,6 +48,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 # Distroless static carries no shell and no package manager, so there is
 # nothing in the image to exploit beyond mcpd itself.
 COPY --from=build /out/mcpd /usr/local/bin/mcpd
+COPY --from=build --chown=65532:65532 /out/state /var/lib/mcpd
 COPY --from=build /src/configs/example.yaml /etc/mcpd/config.yaml
 
 # 65532 is distroless's nonroot user; the data volume must be writable by it.

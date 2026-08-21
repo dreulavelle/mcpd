@@ -355,3 +355,77 @@ func TestSplitToolName(t *testing.T) {
 		}
 	}
 }
+
+// One endpoint serving everything a credential is granted. It exists because
+// a transport may only be able to target a single address -- OpenAI's tunnel
+// binds one MCP server URL per tunnel -- so per-plugin endpoints would mean
+// one tunnel per integration.
+func TestHost_AggregateEndpoint(t *testing.T) {
+	a := newTestApp(t)
+	h := a.Handler()
+
+	listTools := map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": map[string]any{},
+	}
+
+	// A wildcard credential sees every mounted plugin's tools.
+	w := mcpRequest(t, h, "/mcp", tokenWildcard, listTools)
+	if w.Code != http.StatusOK {
+		t.Fatalf("aggregate endpoint = %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "echo_echo") {
+		t.Fatalf("the aggregate catalogue is missing echo's tools: %s", w.Body.String())
+	}
+
+	// And a call routes through to the right plugin.
+	w = mcpRequest(t, h, "/mcp", tokenWildcard, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "echo_echo",
+			"arguments": map[string]any{"message": "via aggregate"},
+		},
+	})
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "via aggregate") {
+		t.Fatalf("tool call through the aggregate endpoint failed: %s", w.Body.String())
+	}
+}
+
+// The aggregate endpoint is not a way around scoping. Its catalogue is exactly
+// the plugins the presented credential grants.
+func TestHost_AggregateRespectsScoping(t *testing.T) {
+	a := newTestApp(t)
+	h := a.Handler()
+
+	// The scoped token grants only echo, which is the one mounted plugin, so
+	// it sees echo and would see nothing more if others were mounted.
+	w := mcpRequest(t, h, "/mcp", tokenScoped, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": map[string]any{},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "echo_echo") {
+		t.Fatal("a granted plugin should appear in the aggregate catalogue")
+	}
+	// Nothing from a plugin the token does not grant may appear.
+	for _, forbidden := range []string{"proxmox_", "netbox_", "cnmaestro_"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("the aggregate catalogue leaked %s tools to a scoped token", forbidden)
+		}
+	}
+}
+
+func TestHost_AggregateRequiresCredentials(t *testing.T) {
+	a := newTestApp(t)
+	h := a.Handler()
+
+	for _, token := range []string{"", "not-a-real-token"} {
+		w := mcpRequest(t, h, "/mcp", token, map[string]any{
+			"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+		})
+		if w.Code == http.StatusOK {
+			t.Fatalf("the aggregate endpoint accepted token %q", token)
+		}
+	}
+}

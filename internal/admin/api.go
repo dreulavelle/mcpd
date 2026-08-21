@@ -110,6 +110,7 @@ func (s *Server) routes() {
 	api("POST /api/operations/{id}/reject", s.handleReject, auth.CapApprove)
 	api("POST /api/operations/{id}/cancel", s.handleCancel, auth.CapPropose)
 	api("GET /api/plugins", s.handleListPlugins, auth.CapRead)
+	api("GET /api/endpoints", s.handleEndpoints, auth.CapRead)
 	api("GET /api/audit", s.handleAudit, auth.CapRead)
 	api("GET /api/audit/verify", s.handleVerifyAudit, auth.CapAdmin)
 	api("GET /api/health", s.handleHealth, auth.CapRead)
@@ -172,6 +173,15 @@ type metaResponse struct {
 	AuthMode string `json:"auth_mode"`
 }
 
+// endpointsResponse describes the two ways to connect.
+type endpointsResponse struct {
+	// Aggregate serves every integration the credential is granted, from one
+	// address. It is what a transport that binds a single URL needs.
+	Aggregate string `json:"aggregate"`
+	// PerPlugin is the address style that serves exactly one integration.
+	PerPlugin string `json:"per_plugin_example"`
+}
+
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	// Deliberately thin. This endpoint is unauthenticated, so it names the
 	// authentication scheme and nothing else -- not the plugins, not the
@@ -179,6 +189,14 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, metaResponse{
 		Version:  s.opts.Version,
 		AuthMode: s.opts.Verifier.Scheme(),
+	})
+}
+
+// handleEndpoints reports the addresses a client can connect to.
+func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, r, http.StatusOK, endpointsResponse{
+		Aggregate: s.connectURL("/mcp"),
+		PerPlugin: s.connectURL("/mcp/{name}"),
 	})
 }
 

@@ -17,3 +17,7 @@
 !/internal/admin/dist/index.html
 /web/bun.lock
 /web/tsconfig.tsbuildinfo
+
+# A deployment's own config and secrets.
+/config.yaml
+/.env

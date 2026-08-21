@@ -18,9 +18,7 @@ services:
   mcpd:
     build:
       context: .
-      args:
-        VERSION: ${MCPD_VERSION:-dev}
-    image: ghcr.io/dreulavelle/mcpd:${MCPD_VERSION:-dev}
+    image: ghcr.io/dreulavelle/mcpd:local
     restart: unless-stopped
 
     # The whole file is passed through, so any `env:` reference in config.yaml
@@ -36,9 +34,10 @@ services:
       MCPD_FRONTEND_LISTEN: ":8081"
 
     ports:
-      # MCP endpoint, loopback only. mcpd speaks plain HTTP and carries bearer
-      # tokens, so it must sit behind TLS or a tunnel.
-      - "127.0.0.1:${MCPD_PORT:-8080}:8080"
+      # MCP endpoint. Loopback by default: mcpd speaks plain HTTP and carries
+      # bearer tokens, so it belongs behind TLS or a tunnel. Set MCPD_BIND to
+      # a LAN address to reach it directly during development.
+      - "${MCPD_BIND:-127.0.0.1}:${MCPD_PORT:-8080}:8080"
 
       # Admin dashboard. Bind it to a specific interface if this host faces
       # anything untrusted:  - "10.0.0.5:80:8081"
@@ -49,7 +48,9 @@ services:
       # nonroot container user owns it without host-side chown.
       - mcpd-data:/var/lib/mcpd
 
-      - ./configs/example.yaml:/etc/mcpd/config.yaml:ro
+      # Your own config, not the repo's example. Start from it:
+      #   cp configs/example.yaml config.yaml
+      - ./config.yaml:/etc/mcpd/config.yaml:ro
 
       # Out-of-process plugins. Read-only: mcpd only ever executes what is
       # here, and a writable mount would let anything that can write to the
@@ -107,19 +108,26 @@ services:
         required: false
 
     environment:
-      CONTROL_PLANE_API_KEY: ${OPENAI_TUNNEL_API_KEY:?set OPENAI_TUNNEL_API_KEY in .env}
-      CONTROL_PLANE_TUNNEL_ID: ${OPENAI_TUNNEL_ID:?set OPENAI_TUNNEL_ID in .env}
+      # Deliberately not guarded with `:?`. Compose interpolates every service
+      # even when its profile is inactive, so a required-variable guard here
+      # would block `docker compose up` for anyone who never wants a tunnel.
+      # tunnel-client reports a missing key clearly on its own.
+      CONTROL_PLANE_API_KEY: ${OPENAI_TUNNEL_API_KEY:-}
+      CONTROL_PLANE_TUNNEL_ID: ${OPENAI_TUNNEL_ID:-}
 
-      # One tunnel maps to one MCP server URL, and mcpd serves one endpoint per
-      # plugin. That is a good fit with per-plugin scoping: give this tunnel a
-      # token scoped to exactly this plugin and the connector cannot reach any
-      # other, whatever it asks for.
-      MCP_SERVER_URL: http://mcpd:8080/mcp/${MCPD_TUNNEL_PLUGIN:-echo}
+      # The aggregate endpoint, so one tunnel serves every integration the
+      # token is granted rather than needing one tunnel per plugin.
+      #
+      # Scoping still comes from the token, not the path: point this at a
+      # credential limited to one integration and the connector sees exactly
+      # that one. To split them deliberately, use /mcp/<plugin> and a token
+      # scoped to match.
+      MCP_SERVER_URL: http://mcpd:8080/mcp
 
       # tunnel-client injects this on every forwarded request, so mcpd's
       # ordinary bearer authentication works through the tunnel with no OAuth
       # and nothing public. Header values accept env: and file: references.
-      MCP_EXTRA_HEADERS: "Authorization: Bearer ${MCPD_TOKEN_LOCAL:?set MCPD_TOKEN_LOCAL in .env}"
+      MCP_EXTRA_HEADERS: "Authorization: Bearer ${MCPD_TOKEN_LOCAL:-}"
 
       # mcpd binds after the tunnel container may start, so hold the first
       # poll until the listener is reachable.

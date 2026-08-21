@@ -110,6 +110,13 @@ export interface Meta {
   auth_mode: string;
 }
 
+export interface Endpoints {
+  /** One address serving everything the token is allowed to reach. */
+  aggregate: string;
+  /** The shape of a single-system address. */
+  per_plugin_example: string;
+}
+
 /** ApiError carries the server's stable error code so callers can branch on it. */
 export class ApiError extends Error {
   constructor(
@@ -210,6 +217,8 @@ export const api = {
     }),
 
   plugins: () => request<{ plugins: Plugin[]; count: number }>("/api/plugins"),
+
+  endpoints: () => request<Endpoints>("/api/endpoints"),
 
   audit: (limit = 100) =>
     request<{ records: AuditRecord[]; count: number }>(`/api/audit?limit=${limit}`),

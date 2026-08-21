@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,7 +52,10 @@ type Manager struct {
 
 	mu      sync.RWMutex
 	mounted map[string]*Mounted
-	order   []string // registration order, for reverse-order shutdown
+
+	aggMu      sync.RWMutex
+	aggregates map[string]*mcp.Server
+	order      []string // registration order, for reverse-order shutdown
 }
 
 // NewManager returns an empty manager. middleware is the host gate applied to
@@ -133,6 +137,8 @@ func (m *Manager) Register(ctx context.Context, p Plugin, required bool) error {
 	m.order = append(m.order, d.Name)
 	m.mu.Unlock()
 
+	m.invalidateAggregates()
+
 	m.log.Info("plugin registered",
 		"plugin", d.Name,
 		"version", d.Version,
@@ -198,6 +204,98 @@ func (m *Manager) CheckHealth(ctx context.Context) map[string]Health {
 		out[name] = mp.Health()
 	}
 	return out
+}
+
+// AggregateServer returns one MCP server exposing every named plugin.
+//
+// It exists so a single endpoint can serve everything a caller is granted,
+// rather than requiring one connection per integration. Tool names already
+// carry their plugin prefix, so combining them cannot collide.
+//
+// Servers are cached by the exact set of plugins, because building one
+// re-registers every tool and a request must not pay that. The set is the
+// cache key rather than the principal: two credentials granted the same
+// plugins get the same server, and a credential whose grants change gets a
+// different one.
+func (m *Manager) AggregateServer(names []string) (*mcp.Server, error) {
+	if len(names) == 0 {
+		return nil, fmt.Errorf("plugins: no plugins to aggregate")
+	}
+	key := aggregateKey(names)
+
+	m.aggMu.RLock()
+	cached := m.aggregates[key]
+	m.aggMu.RUnlock()
+	if cached != nil {
+		return cached, nil
+	}
+
+	m.aggMu.Lock()
+	defer m.aggMu.Unlock()
+	// Re-check: another request may have built it while we waited.
+	if cached := m.aggregates[key]; cached != nil {
+		return cached, nil
+	}
+
+	srv := mcp.NewServer(&mcp.Implementation{
+		Name:    "mcpd",
+		Title:   "mcpd",
+		Version: m.version,
+	}, &mcp.ServerOptions{
+		Instructions: m.aggregateInstructions(names),
+		Logger:       m.log.With("endpoint", "aggregate"),
+	})
+
+	for _, name := range names {
+		mounted := m.Lookup(name)
+		if mounted == nil {
+			continue
+		}
+		if err := attachAll(srv, mounted.Registry, m.middleware, m.approvals); err != nil {
+			return nil, fmt.Errorf("plugins: aggregate %s: %w", name, err)
+		}
+	}
+
+	if m.aggregates == nil {
+		m.aggregates = make(map[string]*mcp.Server)
+	}
+	m.aggregates[key] = srv
+	m.log.Info("built aggregate endpoint", "plugins", names)
+	return srv, nil
+}
+
+// aggregateInstructions tells a model what it is looking at, since the tool
+// list spans several systems rather than one.
+func (m *Manager) aggregateInstructions(names []string) string {
+	var b strings.Builder
+	b.WriteString("This endpoint manages several systems. Tool names are prefixed " +
+		"with the system they belong to." + "\n\n")
+	for _, name := range names {
+		mounted := m.Lookup(name)
+		if mounted == nil {
+			continue
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", name, mounted.Descriptor.Description)
+	}
+	b.WriteString("\nChanges are never applied directly. A tool that changes " +
+		"something records a proposal and returns an operation id; a person " +
+		"must approve it before anything happens.")
+	return b.String()
+}
+
+// aggregateKey builds a stable cache key from a plugin set.
+func aggregateKey(names []string) string {
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+	return strings.Join(sorted, "\x00")
+}
+
+// invalidateAggregates drops cached servers, so a plugin registered after one
+// was built is not missing from it.
+func (m *Manager) invalidateAggregates() {
+	m.aggMu.Lock()
+	m.aggregates = nil
+	m.aggMu.Unlock()
 }
 
 // Lookup returns a mounted plugin, or nil.
