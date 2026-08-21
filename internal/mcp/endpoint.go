@@ -48,8 +48,14 @@ type protectedResourceMetadata struct {
 	Resource               string   `json:"resource"`
 	AuthorizationServers   []string `json:"authorization_servers,omitempty"`
 	BearerMethodsSupported []string `json:"bearer_methods_supported"`
-	ResourceName           string   `json:"resource_name,omitempty"`
-	ResourceDocumentation  string   `json:"resource_documentation,omitempty"`
+	// ScopesSupported tells a client what to ask for when it has nothing else
+	// to go on. RFC 9728 makes it optional; the MCP specification then names
+	// it as the fallback when no scope arrives in a challenge, and a client
+	// that never sees a challenge -- one reading this document directly, as a
+	// tunnel does -- has only this.
+	ScopesSupported       []string `json:"scopes_supported,omitempty"`
+	ResourceName          string   `json:"resource_name,omitempty"`
+	ResourceDocumentation string   `json:"resource_documentation,omitempty"`
 }
 
 // handleResourceMetadata serves the protected-resource document.
@@ -81,6 +87,9 @@ func (h *Host) handleResourceMetadata(w http.ResponseWriter, r *http.Request) {
 		Resource:               resource,
 		BearerMethodsSupported: []string{"header"},
 		ResourceName:           "mcpd",
+	}
+	if h.opts.AuthorizationServer != "" {
+		meta.ScopesSupported = strings.Fields(h.challengeScope(strings.TrimPrefix(resource, base)))
 	}
 	// authorization_servers is omitted entirely when no authorization server
 	// is mounted. A client reading this document -- OpenAI's tunnel-client
