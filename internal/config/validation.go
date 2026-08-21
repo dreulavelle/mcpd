@@ -129,10 +129,17 @@ func (c *Config) Validate() error {
 	}
 
 	// --- tunnel ---
+	//
+	// The identity fields are checked whenever they are set, not only when the
+	// file also enables the tunnel. A tunnel is normally turned on and given
+	// its id from the dashboard, so a file that says enabled: false still
+	// supplies the defaults every tunnel runs with -- and a stale value there
+	// passed -check and then failed at connect time, which is the wrong end of
+	// the process to find out.
+	if strings.TrimSpace(c.Tunnel.Role) != "" && !slices.Contains(validRoles, c.Tunnel.Role) {
+		add("config: tunnel.role must be one of %v (got %q)", validRoles, c.Tunnel.Role)
+	}
 	if c.Tunnel.Enabled {
-		if strings.TrimSpace(c.Tunnel.TunnelID) == "" {
-			add("config: tunnel.tunnel_id is required when the tunnel is enabled")
-		}
 		if strings.TrimSpace(c.Tunnel.APIKeyRef) == "" {
 			add("config: tunnel.api_key_ref is required when the tunnel is enabled")
 		} else if !strings.Contains(c.Tunnel.APIKeyRef, ":") {
@@ -142,9 +149,6 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(c.Tunnel.Principal) == "" {
 			add("config: tunnel.principal is required; it names the identity requests " +
 				"through the tunnel act as")
-		}
-		if !slices.Contains(validRoles, c.Tunnel.Role) {
-			add("config: tunnel.role must be one of %v (got %q)", validRoles, c.Tunnel.Role)
 		}
 		if len(c.Tunnel.Plugins) == 0 {
 			add(`config: tunnel.plugins is empty; the tunnel would reach nothing. ` +
