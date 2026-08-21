@@ -380,7 +380,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	resp := settingsResponse{
-		Groups:     settings.Schema(s.opts.Manager.Names()...),
+		Groups:     settings.Schema(),
 		Values:     map[string]any{},
 		SecretsSet: map[string]bool{},
 		Encryption: s.opts.Settings.HasCipher(),

@@ -1,33 +1,40 @@
 import { useCallback, useState } from "react";
-import { api, type Endpoints, type Plugin } from "./api";
 import {
-  CodeBlock, Copyable, Dot, Empty, Message, Pill, Skeleton, usePoll,
+  api, ApiError, type Endpoints, type Plugin, type TunnelInfo, type TunnelStatus,
+} from "./api";
+import {
+  CodeBlock, Copyable, Dot, Empty, Message, Pill, Skeleton, usePoll, useToasts,
 } from "./components";
 
 /**
- * The systems mcpd can work with.
+ * Plugins.
  *
- * One row each, collapsed to the two things worth knowing at a glance: whether
- * it is healthy, and whether it can change anything. Opening a row shows what
- * it can actually do and where to point something at it.
+ * One row each. The route is on the row because it is the thing people come
+ * here to copy, and a tunnel is made from the row because a tunnel serves
+ * exactly one route -- deciding which plugin gets a connector is a decision
+ * about a plugin, so it is made where the plugin is.
  */
 export function Plugins() {
   const [plugins, setPlugins] = useState<Plugin[] | null>(null);
   const [endpoints, setEndpoints] = useState<Endpoints | null>(null);
+  const [tunnels, setTunnels] = useState<TunnelInfo | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const { show, view } = useToasts();
 
   const load = useCallback(() => {
     api.plugins()
       .then((r) => { setPlugins(r.plugins ?? []); setError(""); })
-      .catch(() => setError("Couldn't load your systems. Is mcpd still running?"));
+      .catch(() => setError("Couldn't load plugins."));
     api.endpoints().then(setEndpoints).catch(() => setEndpoints(null));
+    api.tunnel().then(setTunnels).catch(() => setTunnels(null));
   }, []);
   usePoll(load, 15_000);
 
   return (
     <>
-      <h1>Systems</h1>
+      {view}
+      <h1>Plugins</h1>
       <p className="lede">What mcpd can work with.</p>
 
       {error && <Message tone="problem">{error}</Message>}
@@ -35,16 +42,17 @@ export function Plugins() {
       {!plugins ? (
         <Skeleton rows={3} />
       ) : plugins.length === 0 ? (
-        <Empty mark="○" title="No systems yet">
+        <Empty mark="○" title="No plugins yet">
           Add one to your startup file and restart.
         </Empty>
       ) : (
         <>
           <div className="stack">
             {plugins.map((p) => (
-              <Row key={p.name} plugin={p}
+              <Row key={p.name} plugin={p} tunnels={tunnels}
                    open={open === p.name}
-                   onToggle={() => setOpen(open === p.name ? null : p.name)} />
+                   onToggle={() => setOpen(open === p.name ? null : p.name)}
+                   onChange={load} show={show} />
             ))}
           </div>
 
@@ -71,13 +79,17 @@ export function Plugins() {
   );
 }
 
-function Row({ plugin, open, onToggle }: {
+function Row({ plugin, tunnels, open, onToggle, onChange, show }: {
   plugin: Plugin;
+  tunnels: TunnelInfo | null;
   open: boolean;
   onToggle: () => void;
+  onChange: () => void;
+  show: (tone: "good" | "problem", text: string) => void;
 }) {
   const lookups = plugin.tools.filter((t) => t.kind === "read");
   const changes = plugin.tools.filter((t) => t.kind !== "read");
+  const tunnel = tunnels?.tunnels.find((t) => t.plugin === plugin.name);
 
   return (
     <div className={`expander${open ? " open" : ""}`}>
@@ -85,13 +97,17 @@ function Row({ plugin, open, onToggle }: {
         <Dot tone={plugin.health === "healthy" ? "good"
           : plugin.health === "degraded" ? "attention" : "problem"} />
         <span className="expander-title">
-          <div className="name">{plugin.title}</div>
+          <div className="name">
+            {plugin.title} <code style={{ fontSize: 12 }}>{plugin.endpoint}</code>
+          </div>
           <div className="sub">{plugin.description}</div>
         </span>
         <span className="dim" style={{ fontSize: 13, whiteSpace: "nowrap" }}>
-          {lookups.length} {lookups.length === 1 ? "lookup" : "lookups"}
-          {changes.length > 0 &&
-            ` · ${changes.length} ${changes.length === 1 ? "change" : "changes"}`}
+          {tunnel
+            ? <Pill tone={tunnel.state === "connected" ? "good" : "attention"}>
+                ChatGPT
+              </Pill>
+            : `${lookups.length + changes.length} tools`}
         </span>
         <span className="chevron" aria-hidden="true">›</span>
       </button>
@@ -132,13 +148,102 @@ function Row({ plugin, open, onToggle }: {
           </div>
 
           <div className="section">
-            <p className="eyebrow">Its own address</p>
+            <p className="eyebrow">Address</p>
             <Copyable value={plugin.connect_url} label="address" />
+          </div>
+
+          <div className="section">
+            <p className="eyebrow">ChatGPT</p>
+            <TunnelControl plugin={plugin} tunnels={tunnels} tunnel={tunnel}
+                           onChange={onChange} show={show} />
           </div>
         </div>
       )}
     </div>
   );
+}
+
+/** Make or remove the connector that serves this one plugin. */
+function TunnelControl({ plugin, tunnels, tunnel, onChange, show }: {
+  plugin: Plugin;
+  tunnels: TunnelInfo | null;
+  tunnel?: TunnelStatus;
+  onChange: () => void;
+  show: (tone: "good" | "problem", text: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function create() {
+    setBusy(true);
+    try {
+      await api.createTunnel(plugin.title, plugin.name);
+      show("good", "Tunnel made.");
+    } catch (e) {
+      show("problem", e instanceof ApiError ? e.detail : "Couldn't make it.");
+    } finally {
+      setBusy(false);
+      onChange();
+    }
+  }
+
+  async function remove() {
+    if (!confirm(`Delete the ${plugin.name} tunnel? Its connector stops working.`)) return;
+    setBusy(true);
+    try {
+      await api.deleteTunnel(tunnel!.tunnel_id!);
+      show("good", "Deleted.");
+    } catch (e) {
+      show("problem", e instanceof ApiError ? e.detail : "Couldn't delete it.");
+    } finally {
+      setBusy(false);
+      onChange();
+    }
+  }
+
+  if (tunnel) {
+    return (
+      <div className="row">
+        <Dot tone={tunnel.state === "connected" ? "good"
+          : tunnel.state === "failed" ? "problem" : "busy"} />
+        <span className="note tight" style={{ flex: 1 }}>
+          Its own connector, {describe(tunnel.state)}.
+        </span>
+        <button className="btn sm danger" disabled={busy} onClick={remove}>
+          {busy ? "Working…" : "Remove"}
+        </button>
+      </div>
+    );
+  }
+
+  if (!tunnels?.can_manage) {
+    return (
+      <p className="note tight">
+        Add {tunnels?.missing ?? "an OpenAI admin key"} in Settings to give this
+        plugin its own connector.
+      </p>
+    );
+  }
+
+  return (
+    <div className="row">
+      <span className="note tight" style={{ flex: 1 }}>
+        Reachable through any connector that covers everything.
+      </span>
+      <button className="btn sm primary" disabled={busy} onClick={create}>
+        {busy ? "Making…" : "Give it its own connector"}
+      </button>
+    </div>
+  );
+}
+
+function describe(state: TunnelStatus["state"]): string {
+  switch (state) {
+    case "connected": return "ready";
+    case "starting": return "connecting";
+    case "failed": return "not connecting";
+    case "stopped": return "switched off";
+    default: return "not set up";
+  }
 }
 
 /** cnmaestro_list_devices → "list devices" */
