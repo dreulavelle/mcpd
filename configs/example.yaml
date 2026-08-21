@@ -11,19 +11,15 @@ server:
   listen: "127.0.0.1:8080"
 
   # The address assistants reach the MCP endpoint at -- the `listen` port
-  # above, not the dashboard. It identifies this resource in OAuth metadata
-  # and is what the dashboard shows as a connection address, so it must match
-  # what clients actually use or a connector handshake fails at the redirect.
+  # above, not the dashboard. It is what the dashboard shows as a connection
+  # address, so it must match what clients actually use.
   public_url: "https://mcp.example.net"
 
   tls:
     # off | self-signed
     #
-    # Self-signed matters for a private deployment reached through a tunnel.
-    # An OAuth issuer must be an https URL (RFC 8414) and a ChatGPT connector
-    # refuses one that is not -- reporting only that the server "does not
-    # implement OAuth", after fetching the metadata successfully, which makes
-    # it a hard failure to read.
+    # Self-signed matters for a private deployment: a bearer token has no
+    # business crossing even a private network in the clear.
     #
     # A publicly trusted certificate cannot be issued for an address like
     # 192.168.1.10, so mcpd issues its own from a CA it keeps beside the
@@ -71,14 +67,21 @@ storage:
 secret_key_ref: env:MCPD_SECRET_KEY
 
 auth:
-  # static | oauth | mixed
-  #
-  # A ChatGPT connector needs oauth or mixed. The connector asks mcpd for
-  # protected-resource metadata before it will be created at all, and under
-  # static auth there is none to give -- ChatGPT reports that the server does
-  # not implement OAuth and stops there.
-  mode: static
+  # People sign in to the dashboard with their own email and password. Roles
+  # and plugin grants are per account, so two people sharing a connector are
+  # still two identities in the history.
+  accounts:
+    session_ttl: 12h
 
+    # Creates the first administrator, and only on a genuinely empty database.
+    # Ignored once any account exists, so it cannot reset a live one.
+    bootstrap:
+      email: admin@example.com
+      password_ref: env:MCPD_BOOTSTRAP_PASSWORD
+
+  # Bearer tokens for machine callers that cannot complete a sign-in form.
+  # ChatGPT does not need one: the tunnel authenticates itself to OpenAI's
+  # control plane, and carries its identity from the tunnel block below.
   static_tokens:
     # Scoping is per credential. This agent can reach /mcp/cnmaestro and
     # nothing else: other endpoints return 404, so it cannot even discover
@@ -96,33 +99,6 @@ auth:
       role: viewer
       plugins:
         - echo
-
-  # mcpd is its own OAuth authorization server. Set mode to "oauth" for the
-  # ChatGPT connector, or "mixed" to keep static tokens working alongside it.
-  oauth:
-    # Defaults to server.public_url, which is almost always right.
-    issuer: ""
-
-    access_token_ttl: 1h
-    refresh_token_ttl: 720h
-    auth_code_ttl: 1m
-    session_ttl: 30m
-
-    # ChatGPT registers itself via RFC 7591. This is safe to leave on:
-    # registering confers nothing by itself, since a client still cannot get a
-    # token without a user completing the consent screen, and the token it
-    # receives is bounded by that user's own role and plugin grants.
-    allow_dynamic_registration: true
-
-    # Client ID Metadata Documents, which supersede dynamic registration in the
-    # 2026-07-28 MCP revision.
-    allow_cimd: true
-
-    # Creates the first administrator, and only on a genuinely empty database.
-    # Ignored once any identity exists, so it cannot reset a live account.
-    bootstrap:
-      username: admin
-      password_ref: env:MCPD_BOOTSTRAP_PASSWORD
 
 approval:
 
@@ -158,15 +134,13 @@ logging:
 tunnel:
   enabled: false
 
-  # How the tunnel reaches mcpd follows from auth.mode above, and is not
-  # configured here.
+  # The tunnel runs the MCP server in this process over an in-memory
+  # transport: no port, no socket, no credential, and mcpd stays private.
   #
-  # Under static auth it runs the MCP server in this process over an in-memory
-  # transport: no port, no socket, no credential. With OAuth mounted it binds
-  # to server.public_url instead, because protected-resource discovery is a
-  # command the tunnel client executes against a URL and an in-memory binding
-  # has none. That also puts every OAuth endpoint on one origin, which is what
-  # lets the tunnel reach an authorization server on a private address.
+  # There is no option to bind it to a public address so a connector can sign
+  # people in. That needed an authorization server reachable from the internet,
+  # which is the one thing a tunnel exists to avoid -- OpenAI's documentation
+  # is explicit that the authorization server "is not automatically tunneled".
 
   # From platform.openai.com -> Settings -> Organization -> Tunnels.
   tunnel_id: ""

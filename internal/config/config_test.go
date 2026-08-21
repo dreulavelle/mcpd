@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validConfig() *Config {
@@ -32,9 +33,6 @@ func TestValidate_Rejects(t *testing.T) {
 		wantSub string
 	}{
 		{"relative storage path", func(c *Config) { c.Storage.Path = "mcpd.db" }, "must be absolute"},
-		{"plaintext public url", func(c *Config) { c.Server.PublicURL = "http://mcp.example.net" }, "must use https"},
-		{"unknown auth mode", func(c *Config) { c.Auth.Mode = "magic" }, "auth.mode"},
-		{"static mode with no tokens", func(c *Config) { c.Auth.StaticTokens = nil }, "no static_tokens"},
 		{"token without secret ref", func(c *Config) { c.Auth.StaticTokens[0].SecretRef = "" }, "secret_ref is required"},
 		{"token with no plugins", func(c *Config) { c.Auth.StaticTokens[0].Plugins = nil }, "plugins is empty"},
 		{"token granting unknown plugin", func(c *Config) { c.Auth.StaticTokens[0].Plugins = []string{"ghost"} }, "not configured"},
@@ -45,15 +43,12 @@ func TestValidate_Rejects(t *testing.T) {
 		{"approval outliving proposal", func(c *Config) {
 			c.Approval.ApprovalTTL = c.Approval.ProposalTTL * 2
 		}, "outlive"},
-		{"oauth with no reachable base url", func(c *Config) {
-			c.Auth.Mode = "oauth"
-			c.Auth.OAuth.Issuer = ""
-			c.Server.PublicURL = ""
-		}, "auth.oauth.issuer or server.public_url is required"},
 		{"bootstrap without password reference", func(c *Config) {
-			c.Auth.Mode = "oauth"
-			c.Auth.OAuth.Bootstrap.Username = "admin"
+			c.Auth.Accounts.Bootstrap.Email = "admin@example.com"
 		}, "password_ref is required"},
+		{"negative session ttl", func(c *Config) {
+			c.Auth.Accounts.SessionTTL = -time.Minute
+		}, "session_ttl"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

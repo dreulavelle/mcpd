@@ -128,9 +128,8 @@ server:
   frontend_enabled: true
 
   # The address assistants reach the MCP endpoint at -- the "listen" port
-  # above, not the dashboard. It identifies this resource in OAuth metadata
-  # and is what the dashboard shows as a connection address, so it must match
-  # what clients actually use or a connector handshake fails at the redirect.
+  # above, not the dashboard. It is what the dashboard shows as a connection
+  # address, so it must match what clients actually use.
   public_url: "http://localhost:9080"
 
   read_header_timeout: 10s
@@ -157,13 +156,15 @@ storage:
 secret_key_ref: env:MCPD_SECRET_KEY
 
 auth:
-  # static: bearer tokens, for machine callers and for OpenAI's Secure MCP
-  #         Tunnel, which injects the header itself.
-  # oauth:  the built-in authorization server, for ChatGPT connectors that
-  #         authenticate a human.
-  # mixed:  both.
-  mode: static
+  # People sign in to the dashboard with an email and password. This creates
+  # the first administrator, and only on an empty database.
+  accounts:
+    session_ttl: 12h
+    bootstrap:
+      email: you@example.com
+      password_ref: env:MCPD_BOOTSTRAP_PASSWORD
 
+  # Bearer tokens, for machine callers that cannot complete a sign-in form.
   static_tokens:
     - id: local
       secret_ref: env:MCPD_TOKEN_LOCAL
@@ -233,7 +234,8 @@ func initialEnv(token, secretKey string) string {
 # Real environment variables take precedence over anything here, so an
 # orchestrator injecting a rotated secret is not overridden by a stale value.
 
-# Bearer token for the dashboard and for machine callers.
+# Bearer token for machine callers. People sign in to the dashboard with an
+# email and password instead.
 MCPD_TOKEN_LOCAL=%s
 
 # Encrypts secrets stored in the database, so they can be set from the
@@ -244,7 +246,8 @@ MCPD_SECRET_KEY=%s
 # MCPD_CNMAESTRO_CLIENT_ID=
 # MCPD_CNMAESTRO_CLIENT_SECRET=
 
-# Password for the administrator created on first start under auth.mode: oauth.
-# MCPD_BOOTSTRAP_PASSWORD=
+# Password for the administrator created on first start. Set it before the
+# first run: it is read only while the account table is empty.
+MCPD_BOOTSTRAP_PASSWORD=
 `, token, secretKey)
 }

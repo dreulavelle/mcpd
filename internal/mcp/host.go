@@ -14,7 +14,6 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/auth"
-	"github.com/spoked/mcpd/internal/auth/oauth"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -31,17 +30,9 @@ type Options struct {
 	// say which scopes the endpoint being called actually needs.
 	Plugins func() []string
 
-	// PublicURL is the externally reachable base URL, used to build OAuth
-	// protected-resource metadata. ChatGPT reads that document to discover
-	// where to authenticate.
+	// PublicURL is the externally reachable base URL. It is what the
+	// dashboard renders as a connection address.
 	PublicURL string
-
-	// AuthorizationServer is the OAuth issuer URL advertised in the
-	// protected-resource metadata. Empty when running with static tokens only.
-	AuthorizationServer string
-
-	// OAuth mounts the built-in authorization server. Nil in static mode.
-	OAuth interface{ Routes(*http.ServeMux) }
 
 	// SessionTimeout bounds idle MCP sessions. It has no effect in stateless
 	// mode.
@@ -79,11 +70,6 @@ func (h *Host) routes() {
 	h.mux.HandleFunc("GET /health/live", h.handleLive)
 	h.mux.HandleFunc("GET /health/ready", h.handleReady)
 
-	// RFC 9728 protected-resource metadata. ChatGPT fetches this to discover
-	// the authorization server for an endpoint.
-	h.mux.HandleFunc("GET /.well-known/oauth-protected-resource", h.handleResourceMetadata)
-	h.mux.HandleFunc("GET /.well-known/oauth-protected-resource/{path...}", h.handleResourceMetadata)
-
 	// One streamable HTTP handler serves every plugin. getServer resolves the
 	// path segment to a plugin's MCP server, and returns nil when the caller
 	// may not reach it — which the SDK renders as a clean protocol error
@@ -97,13 +83,6 @@ func (h *Host) routes() {
 		Logger:         h.opts.Log,
 		SessionTimeout: h.opts.SessionTimeout,
 	})
-
-	// The authorization server, when enabled. Its endpoints are
-	// unauthenticated by necessity: they are how a caller obtains a
-	// credential in the first place.
-	if h.opts.OAuth != nil {
-		h.opts.OAuth.Routes(h.mux)
-	}
 
 	// One endpoint per plugin. A credential scoped to one integration reaches
 	// only that path; everything else is 404, so it cannot discover what else
@@ -178,9 +157,6 @@ func (h *Host) authenticate(next http.Handler) http.Handler {
 		name := r.PathValue("plugin")
 		token, ok := auth.BearerToken(r)
 		if !ok {
-			// The WWW-Authenticate challenge points the client at the
-			// protected-resource metadata document, which is how an MCP
-			// client discovers where to obtain a token.
 			h.challenge(w, r)
 			return
 		}
@@ -238,40 +214,16 @@ func (h *Host) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// challenge emits a 401 with the RFC 9728 resource-metadata pointer.
+// challenge emits a 401 asking for a bearer credential.
 //
-// The pointer names the endpoint that was called, not the host. Each MCP
-// endpoint is a separate protected resource: a client presenting a token to
-// /mcp/echo is using a different resource from one presenting to /mcp, and
-// pointing both at one document tells them otherwise. It also makes two
-// tunnels serving different endpoints indistinguishable to whatever is reading
-// their metadata, which is how one connector ends up standing in for both.
+// It carries no resource_metadata pointer. mcpd is no longer an authorization
+// server, so there is nowhere for a client to be sent to obtain a token: the
+// tunnel authenticates itself to the control plane, and a machine caller is
+// issued a static token out of band. A pointer to a document describing no
+// authorization server would only send a client somewhere that cannot help it.
 func (h *Host) challenge(w http.ResponseWriter, r *http.Request) {
-	if h.opts.PublicURL != "" {
-		challenge := fmt.Sprintf(`Bearer resource_metadata=%q`, h.metadataURL(r.URL.Path))
-		if scope := h.challengeScope(r.URL.Path); scope != "" {
-			challenge += fmt.Sprintf(`, scope=%q`, scope)
-		}
-		w.Header().Set("WWW-Authenticate", challenge)
-	} else {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-	}
+	w.Header().Set("WWW-Authenticate", "Bearer")
 	h.writeError(w, r, http.StatusUnauthorized, "authentication required")
-}
-
-// metadataURL builds the RFC 9728 metadata address for one resource path.
-//
-// The path is inserted after the well-known segment, which is what section 3.1
-// specifies and what clients derive independently when no pointer is given.
-// The two must agree or a client following the pointer and a client guessing
-// reach different documents.
-func (h *Host) metadataURL(resourcePath string) string {
-	base := strings.TrimRight(h.opts.PublicURL, "/")
-	suffix := strings.Trim(resourcePath, "/")
-	if suffix == "" {
-		return base + "/.well-known/oauth-protected-resource"
-	}
-	return base + "/.well-known/oauth-protected-resource/" + suffix
 }
 
 // recover turns a panic in a handler into a 500 rather than a dropped
@@ -336,32 +288,6 @@ func withGranted(ctx context.Context, names []string) context.Context {
 func grantedFromContext(ctx context.Context) []string {
 	names, _ := ctx.Value(grantedKey{}).([]string)
 	return names
-}
-
-// challengeScope names the scopes needed to use one endpoint.
-//
-// The specification says to include this, and here it is load-bearing rather
-// than polite: reaching a plugin requires a scope naming that plugin, and a
-// client with nothing to go on asks for whatever the authorization server
-// advertises -- which for the aggregate endpoint is every plugin, and for one
-// plugin's endpoint is more than it needs.
-//
-// Saying it per endpoint makes the request specific: a connector for /mcp/echo
-// asks for echo and gets a token that reaches echo, rather than one that
-// reaches everything or nothing depending on how its client guesses.
-func (h *Host) challengeScope(path string) string {
-	scopes := []string{oauth.ScopeRead, oauth.ScopePropose, oauth.ScopeApprove}
-
-	if plugin := pluginFromPath(path); plugin != "" {
-		return strings.Join(append(scopes, oauth.PluginScope(plugin)), " ")
-	}
-	if h.opts.Plugins == nil {
-		return strings.Join(scopes, " ")
-	}
-	for _, name := range h.opts.Plugins() {
-		scopes = append(scopes, oauth.PluginScope(name))
-	}
-	return strings.Join(scopes, " ")
 }
 
 // pluginFromPath returns the plugin an endpoint serves, or "" for the

@@ -17,7 +17,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/admin"
 	"github.com/spoked/mcpd/internal/auth"
-	"github.com/spoked/mcpd/internal/auth/oauth"
+	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/config"
 	mcphost "github.com/spoked/mcpd/internal/mcp"
 	"github.com/spoked/mcpd/internal/messaging"
@@ -44,8 +44,7 @@ type App struct {
 	manager *plugins.Manager
 	health  *observability.HealthRegistry
 
-	oauthStore    *oauth.Store
-	oauthServer   *oauth.Server
+	accounts      *users.Store
 	approval      *operations.ApprovalPolicy
 	opsService    *operations.Service
 	executor      *operations.Executor
@@ -112,51 +111,21 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		health:  observability.NewHealthRegistry(2 * time.Second),
 	}
 
-	// The OAuth store backs both the authorization server and the
-	// resource-server verifier, so it exists even in static mode where only
-	// the admin interface uses it.
-	a.oauthStore = oauth.NewStore(db, time.Now)
-	if err := bootstrapAdmin(ctx, cfg, a.oauthStore, log); err != nil {
+	// Accounts back the dashboard's sign-in. They are unrelated to the token
+	// verifier below: a person signs in with a password and gets a session, a
+	// script presents a static token, and neither excludes the other.
+	a.accounts = users.NewStore(db, time.Now)
+	if err := bootstrapAdmin(ctx, cfg, a.accounts, log); err != nil {
 		db.Close()
 		return nil, err
 	}
 
-	verifier, err := buildVerifier(cfg, log, a.oauthStore)
+	verifier, err := buildVerifier(cfg, log)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
 
-	// The issuer is only meaningful when the authorization server is actually
-	// mounted. Advertising one that is not there points every client at a
-	// 404 -- and a tunnel or connector that treats the advertised issuer as
-	// its source of truth will fail discovery rather than fall back.
-	issuer := ""
-	oauthMounted := cfg.Auth.Mode == "oauth" || cfg.Auth.Mode == "mixed"
-	if oauthMounted {
-		issuer = cfg.Auth.OAuth.Issuer
-		if issuer == "" {
-			issuer = cfg.Server.PublicURL
-		}
-	}
-	if oauthMounted {
-		a.oauthServer, err = oauth.NewServer(oauth.Config{
-			Issuer:                   issuer,
-			AccessTokenTTL:           cfg.Auth.OAuth.AccessTokenTTL,
-			RefreshTokenTTL:          cfg.Auth.OAuth.RefreshTokenTTL,
-			AuthCodeTTL:              cfg.Auth.OAuth.AuthCodeTTL,
-			SessionTTL:               cfg.Auth.OAuth.SessionTTL,
-			AllowDynamicRegistration: cfg.Auth.OAuth.AllowDynamicRegistration,
-			AllowCIMD:                cfg.Auth.OAuth.AllowCIMD,
-			// Read at call time: plugins mount after this is built, and a list
-			// captured here would always be empty.
-			Plugins: func() []string { return a.manager.Names() },
-		}, a.oauthStore, log, time.Now, newPluginHTTPClient())
-		if err != nil {
-			db.Close()
-			return nil, err
-		}
-	}
 	authorizer := auth.NewAuthorizer()
 	a.approval = operations.NewApprovalPolicy(authorizer)
 
@@ -258,16 +227,14 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	a.registerHealthChecks()
 
 	host, err := mcphost.NewHost(mcphost.Options{
-		Log:                 log,
-		Manager:             a.manager,
-		Verifier:            verifier,
-		Authorizer:          authorizer,
-		Health:              a.health,
-		Plugins:             func() []string { return a.manager.Names() },
-		PublicURL:           cfg.Server.PublicURL,
-		AuthorizationServer: issuer,
-		OAuth:               oauthRoutes(a.oauthServer),
-		SessionTimeout:      cfg.Server.SessionTimeout,
+		Log:            log,
+		Manager:        a.manager,
+		Verifier:       verifier,
+		Authorizer:     authorizer,
+		Health:         a.health,
+		Plugins:        func() []string { return a.manager.Names() },
+		PublicURL:      cfg.Server.PublicURL,
+		SessionTimeout: cfg.Server.SessionTimeout,
 	})
 	if err != nil {
 		db.Close()
@@ -292,7 +259,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Audit:      a.audit,
 			Pruner:     a.audit,
 			PublicURL:  cfg.Server.PublicURL,
-			AuthMode:   cfg.Auth.Mode,
+			Accounts:   a.accounts,
+			SessionTTL: cfg.Auth.Accounts.SessionTTL,
 			Plugins:    func() []string { return a.manager.Names() },
 			Directory: func() *tunnel.Directory {
 				// Read at call time: the admin key is a setting, and one
@@ -449,20 +417,6 @@ func (a *App) dataDir() string { return filepath.Dir(a.cfg.Storage.Path) }
 // nowMillis returns the current time in Unix milliseconds.
 func nowMillis() int64 { return time.Now().UnixMilli() }
 
-// oauthRoutes converts a possibly-nil *oauth.Server into a genuinely nil
-// interface.
-//
-// Assigning a nil pointer to an interface field produces a non-nil interface
-// holding a nil pointer, so a `!= nil` check downstream passes and the first
-// method call panics. Returning an untyped nil is the only way to make the
-// downstream check mean what it reads as.
-func oauthRoutes(s *oauth.Server) interface{ Routes(*http.ServeMux) } {
-	if s == nil {
-		return nil
-	}
-	return s
-}
-
 // instanceID identifies this process in leases and attempt records. It is
 // derived from the hostname so that a multi-instance deployment attributes
 // work correctly without any additional configuration.
@@ -566,13 +520,9 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 		scoped := base
 		scoped.Plugin = name
 		scoped.TunnelID = id
-		// Bound to this plugin's endpoint, which is the whole point: the
-		// connector reaches this plugin and cannot discover any other. Over
-		// the in-process binding the same scoping comes from the principal
-		// below, so it holds either way.
-		if base.MCPServerURL != "" {
-			scoped.MCPServerURL = strings.TrimRight(a.cfg.Server.PublicURL, "/") + "/mcp/" + name
-		}
+		// Scoped by the principal it carries, which is the whole point: the
+		// connector reaches this plugin and cannot discover any other. Every
+		// tunnel binds in process, so there is no URL to scope instead.
 		scoped.Principal.Plugins = []string{name}
 		// Only one client may bind the diagnostics port.
 		scoped.DiagnosticsAddr = ""
@@ -603,29 +553,18 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 		},
 	}
 
-	// Binding over HTTP is what lets the connector sign people in, and it is
-	// off unless asked for.
+	// The tunnel talks to an MCP server in this process: no port, no socket,
+	// no credential, and mcpd stays entirely private. The tunnel is then the
+	// credential, which is what it already is -- the organisation owns it and a
+	// runtime key authenticates it.
 	//
-	// A tunnel carries the MCP server, not the authorization server. OpenAI's
+	// There is no longer an option to bind over HTTP so the connector can sign
+	// people in. It required an authorization server reachable from the public
+	// internet, which is the one thing a tunnel exists to avoid: OpenAI's
 	// documentation is explicit that the authorization server "is not
-	// automatically tunneled" and must be reachable from the public internet;
-	// Harpoon is "not a general-purpose proxy". So against a private mcpd the
-	// connector fetches the protected-resource metadata, finds an
-	// authorization server it cannot reach, and reports that the server does
-	// not implement OAuth -- which is a true statement about what it can see.
-	//
-	// Left off, the tunnel talks to an MCP server in this process: no port, no
-	// socket, no credential, and mcpd stays entirely private. The tunnel is
-	// then the credential, which is what it already is -- the organisation
-	// owns it and a runtime key authenticates it.
-	//
-	// The aggregate endpoint is deliberate when this is on. The caller's own
-	// token decides which plugins they see, so scoping the tunnel as well
-	// would only hide plugins from people who were granted them.
-	signIn := a.settings.Bool(ctx, settings.KeyTunnelSignIn, false)
-	if signIn && a.oauthServer != nil && a.cfg.Server.PublicURL != "" {
-		cfg.MCPServerURL = strings.TrimRight(a.cfg.Server.PublicURL, "/") + "/mcp"
-	}
+	// automatically tunneled" and that Harpoon is "not a general-purpose
+	// proxy", so the connector fetched the protected-resource metadata, found
+	// an authorization server it could not reach, and stopped.
 	if a.tls != nil {
 		cfg.TrustedCAFile = a.tls.CAPath
 	}
@@ -696,7 +635,7 @@ func bootstrapSettings(cfg *config.Config) []admin.BootstrapSetting {
 			Help:  "Everything mcpd remembers lives here. Worth backing up.",
 		},
 		{
-			Key: "auth.mode", Label: "How people sign in", Value: cfg.Auth.Mode,
+			Key: "auth.accounts", Label: "How people sign in", Value: "email and password",
 			Help: "One shared key, or individual accounts. Individual accounts are what " +
 				"let mcpd require a second person to approve something.",
 		},

@@ -45,6 +45,14 @@ type Options struct {
 	// from AuditReader because reading and removing are different rights.
 	Pruner AuditPruner
 
+	// Accounts backs the sign-in form and the Users page. It is separate from
+	// Verifier because the two authenticate different callers: a person with a
+	// password and a session, or a script with a bearer token.
+	Accounts Accounts
+
+	// SessionTTL bounds a signed-in browser. Zero leaves the store's default.
+	SessionTTL time.Duration
+
 	// PublicURL is the address clients reach, used to render a connect URL an
 	// operator can copy rather than assemble.
 	PublicURL string
@@ -168,6 +176,14 @@ func (s *Server) routes() {
 	// it can authenticate.
 	s.mux.HandleFunc("GET /api/meta", s.handleMeta)
 
+	// Signing in cannot require being signed in. Signing out is deliberately
+	// here too: it authenticates by presenting the cookie it is about to
+	// destroy, and refusing an already-invalid session would leave the browser
+	// holding a cookie it cannot get rid of.
+	s.mux.HandleFunc("POST /api/session", s.handleSignIn)
+	s.mux.HandleFunc("DELETE /api/session", s.handleSignOut)
+	s.mux.HandleFunc("GET /api/session", s.handleCurrentSession)
+
 	// Unauthenticated by necessity and harmless by nature: a CA certificate is
 	// a public document, and requiring a sign-in to fetch it would mean
 	// needing the browser to trust it before it can be trusted.
@@ -201,6 +217,12 @@ func (s *Server) routes() {
 	// Clearing the record is administrative, and is itself recorded.
 	api("DELETE /api/audit", s.handleClearAudit, auth.CapAdmin)
 	api("GET /api/health", s.handleHealth, auth.CapRead)
+	// Accounts decide who can reach anything else here, so administering them
+	// is an administrator's right.
+	api("GET /api/users", s.handleListUsers, auth.CapAdmin)
+	api("POST /api/users", s.handleCreateUser, auth.CapAdmin)
+	api("PATCH /api/users/{id}", s.handleUpdateUser, auth.CapAdmin)
+	api("DELETE /api/users/{id}", s.handleDeleteUser, auth.CapAdmin)
 
 	// Everything else is the single-page application.
 	s.mux.Handle("/", s.staticHandler())
@@ -230,19 +252,16 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// authenticate verifies a bearer token and checks one capability.
+// authenticate resolves the request's credential and checks one capability.
+//
+// Two credentials are accepted because two kinds of caller exist: a person in
+// a browser holding a session cookie, and a script holding a bearer token.
+// principalFor decides between them and writes its own refusal, including the
+// CSRF check that only applies to the cookie.
 func (s *Server) authenticate(required auth.Capability, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := auth.BearerToken(r)
+		principal, ok := s.principalFor(w, r)
 		if !ok {
-			s.writeError(w, r, http.StatusUnauthorized, "authentication required")
-			return
-		}
-		principal, err := s.opts.Verifier.Verify(r.Context(), token, r)
-		if err != nil {
-			s.opts.Log.Warn("dashboard authentication failed",
-				"path", r.URL.Path, "token_fingerprint", auth.Fingerprint(token))
-			s.writeError(w, r, http.StatusUnauthorized, "authentication required")
 			return
 		}
 		if !principal.Can(required) {

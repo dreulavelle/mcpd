@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -141,75 +140,13 @@ func TestApprovalPolicyIsReadLive(t *testing.T) {
 	}
 }
 
-// A tunnel carries the MCP server, not the authorization server, so signing
-// people in through one only works when mcpd is publicly reachable. Binding
-// over HTTP is therefore asked for rather than assumed: mounting OAuth for
-// direct clients must not quietly change how the tunnel works.
-func TestTunnelStaysInProcessUnlessSignInIsAskedFor(t *testing.T) {
-	ctx := context.Background()
-
-	if got := newSettingsApp(t).tunnelConfig(ctx).MCPServerURL; got != "" {
-		t.Fatalf("MCPServerURL = %q, want in-process under static auth", got)
+// A tunnel carries the MCP server, not the sign-in, so mcpd never binds over
+// HTTP for a connector's benefit. Every tunnel talks to an MCP server in this
+// process, and the scoping comes from the principal it carries.
+func TestTunnelAlwaysStaysInProcess(t *testing.T) {
+	if got := newSettingsApp(t).tunnelConfig(context.Background()).MCPServerURL; got != "" {
+		t.Fatalf("MCPServerURL = %q, want in-process", got)
 	}
-
-	a := newOAuthSettingsApp(t)
-	if got := a.tunnelConfig(ctx).MCPServerURL; got != "" {
-		t.Fatalf("MCPServerURL = %q, want in-process until sign-in is turned on", got)
-	}
-
-	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
-		{Key: settings.KeyTunnelSignIn, Value: "true"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if got := a.tunnelConfig(ctx).MCPServerURL; got != "https://localhost:9080/mcp" {
-		t.Fatalf("MCPServerURL = %q, want mcpd's own MCP endpoint", got)
-	}
-}
-
-// The origin has to match the OAuth issuer, or the tunnel refuses to reach the
-// authorization server's endpoints on a private address and the token exchange
-// fails after the person has already approved.
-func TestTunnelMCPURLSharesTheIssuerOrigin(t *testing.T) {
-	a := newOAuthSettingsApp(t)
-	ctx := context.Background()
-	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
-		{Key: settings.KeyTunnelSignIn, Value: "true"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	mcpURL := a.tunnelConfig(ctx).MCPServerURL
-	if !strings.HasPrefix(mcpURL, a.cfg.Server.PublicURL) {
-		t.Fatalf("MCP URL %q must share an origin with the issuer %q",
-			mcpURL, a.cfg.Server.PublicURL)
-	}
-}
-
-func newOAuthSettingsApp(t *testing.T) *App {
-	t.Helper()
-	t.Setenv("MCPD_SECRET_KEY", "test-encryption-key-at-least-32-chars-long")
-
-	cfg := config.Default()
-	cfg.Storage.Path = filepath.Join(t.TempDir(), "mcpd.db")
-	cfg.Storage.RelaxedDurability = true
-	// https because an OAuth issuer must be one; the validator now refuses the
-	// combination that produced "does not implement OAuth".
-	cfg.Server.PublicURL = "https://localhost:9080"
-	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
-	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
-	cfg.Auth.Mode = "oauth"
-	cfg.Tunnel.Enabled = false
-
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("config invalid: %v", err)
-	}
-	a, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { a.db.Close() })
-	return a
 }
 
 // Ordering bug this guards: the tunnel was constructed before the certificate
@@ -227,7 +164,6 @@ func TestTheTunnelIsToldAboutOurCertificate(t *testing.T) {
 	cfg.Server.TLS = config.TLS{Mode: "self-signed", Dir: filepath.Join(dir, "tls")}
 	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
 	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
-	cfg.Auth.Mode = "oauth"
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config invalid: %v", err)
@@ -250,11 +186,11 @@ func TestTheTunnelIsToldAboutOurCertificate(t *testing.T) {
 	}
 }
 
-// The point of a per-plugin tunnel: its connector reaches that system's
-// endpoint and cannot discover any other. If it bound the aggregate instead,
-// the separation would be cosmetic.
+// The point of a per-plugin tunnel: its connector reaches that system and
+// cannot discover any other. In process that separation is the principal's,
+// so it is the principal this asserts.
 func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
-	a := newOAuthSettingsApp(t)
+	a := newSettingsApp(t)
 	ctx := context.Background()
 
 	const (
@@ -263,7 +199,6 @@ func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
 	)
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.KeyTunnelSignIn, Value: "true"},
 		{Key: settings.KeyTunnelID, Value: `"` + main + `"`},
 		{Key: settings.PluginTunnelKey("echo"), Value: `"` + echo + `"`},
 	}); err != nil {
@@ -284,9 +219,6 @@ func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
 	if scoped == nil {
 		t.Fatal("no tunnel was built for echo")
 	}
-	if !strings.HasSuffix(scoped.MCPServerURL, "/mcp/echo") {
-		t.Errorf("MCPServerURL = %q, want echo's own endpoint", scoped.MCPServerURL)
-	}
 	if scoped.TunnelID != echo {
 		t.Errorf("TunnelID = %q, want the id stored for echo", scoped.TunnelID)
 	}
@@ -298,7 +230,7 @@ func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
 // Two clients on one tunnel id compete for the same commands, so the reuse has
 // to be refused rather than silently halving throughput.
 func TestAPerPluginTunnelCannotReuseTheMainTunnelID(t *testing.T) {
-	a := newOAuthSettingsApp(t)
+	a := newSettingsApp(t)
 	ctx := context.Background()
 
 	const id = "tunnel_0123456789abcdef0123456789abcdef"
@@ -351,7 +283,7 @@ func TestHistoryIsReadableAndPrunable(t *testing.T) {
 // too, or turning sign-in off would quietly widen every per-plugin connector
 // to everything.
 func TestAPerPluginTunnelIsScopedWithoutSignIn(t *testing.T) {
-	a := newOAuthSettingsApp(t)
+	a := newSettingsApp(t)
 	ctx := context.Background()
 
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
