@@ -53,6 +53,27 @@ func summarise(status int, body []byte) string {
 	return fmt.Sprintf("HTTP %d: %s", status, text)
 }
 
+// mainAccountName mirrors MainAccount, kept here so errors.go does not depend
+// on declaration order in config.go.
+const mainAccountName = MainAccount
+
+// mentionsManagedAccount reports the API's own message when a failure is about
+// the managed account, so a generic status can be turned into a specific
+// explanation. Matching the message rather than the status is deliberate: the
+// same statuses arrive for entirely unrelated reasons.
+func mentionsManagedAccount(body []byte) string {
+	var e apiError
+	if err := json.Unmarshal(body, &e); err != nil {
+		return ""
+	}
+	msg := e.message()
+	if strings.Contains(strings.ToLower(msg), "managed_account") ||
+		strings.Contains(strings.ToLower(msg), "msp feature") {
+		return msg
+	}
+	return ""
+}
+
 // redactURL strips any credential embedded in a URL before it reaches a log
 // or an error a model will read back.
 func redactURL(raw string) string {
@@ -68,6 +89,27 @@ func redactURL(raw string) string {
 // explainRequestFailure turns an API failure into something a person can act
 // on, and a model can repeat without leaking anything.
 func explainRequestFailure(status int, path string, body []byte) error {
+	// The managed_account failures are worth naming individually. All three
+	// arrive as a bare status against an ordinary read, and each has a
+	// different fix that the status alone does not suggest.
+	if msg := mentionsManagedAccount(body); msg != "" {
+		switch status {
+		case http.StatusBadRequest:
+			return fmt.Errorf("cnmaestro: this account does not have the MSP "+
+				"feature, so the only managed_account it accepts is %q. "+
+				"Clear managed_account, or set it to that", mainAccountName)
+		case http.StatusForbidden:
+			return fmt.Errorf("cnmaestro: that managed account is disabled. " +
+				"cnmaestro_managed_accounts reports each tenant's status; a " +
+				"disabled tenant can own visible data and still reject every " +
+				"call naming it")
+		case http.StatusNotFound:
+			return fmt.Errorf("cnmaestro: no managed account by that name. "+
+				"Matching is exact and case-sensitive -- cnmaestro_managed_accounts "+
+				"lists the tenants, and the Main Account is %q", mainAccountName)
+		}
+	}
+
 	switch status {
 	case http.StatusUnauthorized:
 		return fmt.Errorf("cnmaestro: the API rejected our credentials. " +

@@ -41,7 +41,7 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 	if clientID == "" || secret == "" {
 		return nil, fmt.Errorf("cnmaestro: client_id_ref and client_secret_ref " +
 			"must resolve to values; both come from Download Credentials in " +
-			"cnMaestro under Application > API Clients")
+			"cnMaestro under Services > API Clients")
 	}
 
 	http := deps.HTTP
