@@ -8,7 +8,7 @@ deploy
 *.db-shm
 /bin
 /dist
-/data
+/.data
 web/node_modules
 web/dist
 internal/admin/dist
