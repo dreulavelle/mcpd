@@ -132,8 +132,23 @@ discriminator. There is no common device shape to decode into.
 ## Getting API credentials
 
 **Services → API Clients → Add API Client**, then *Download Credentials* for
-the client id and secret. It needs a Super Admin account, and the API is a
-cnMaestro X feature — on Essentials the page is not there to find.
+the client id and secret. Two things gate the page:
+
+- **A Super Admin account.** Lesser roles do not see it.
+- **cnMaestro X.** The RESTful API is an X capability. On Essentials the page
+  is not hidden, it is not there, so "I cannot find it" and "I am on the free
+  tier" look identical from inside the UI.
+
+If the menu is missing, those are the two things to check, in that order.
+
+**MSP multi-tenancy is also an X feature**, which makes the two facts useful
+against each other. An installation genuinely running MSP tenants already has
+X, and therefore already has the API — so a missing API Clients page on an MSP
+installation points at the role, or at being signed in to a managed account
+rather than the parent, rather than at the subscription. Conversely, if the
+page really is absent for a Super Admin on the parent account, what is in use
+is probably several separate accounts or one account with several networks,
+rather than MSP tenancy.
 
 On an MSP installation the API client belongs to the parent account. One client
 reaches every tenant, and which tenant a request reads from is decided by
