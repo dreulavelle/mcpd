@@ -53,6 +53,37 @@ func summarise(status int, body []byte) string {
 	return fmt.Sprintf("HTTP %d: %s", status, text)
 }
 
+// oauthProblem extracts the OAuth-style error from a token rejection.
+//
+// The token endpoint does not use the envelope the rest of the API uses: it
+// answers {"error":"invalid_client"}, where "error" is a string rather than an
+// object. Unmarshalling that into apiError fails outright, which is why a
+// token failure used to carry no upstream detail at all -- and "check your
+// credentials" is a poor thing to say to someone whose credentials are right.
+func oauthProblem(body []byte) string {
+	var e struct {
+		Error       string `json:"error"`
+		Description string `json:"error_description"`
+	}
+	if err := json.Unmarshal(body, &e); err == nil {
+		code, desc := strings.TrimSpace(e.Error), strings.TrimSpace(e.Description)
+		switch {
+		case code != "" && desc != "":
+			return code + ": " + desc
+		case code != "":
+			return code
+		case desc != "":
+			return desc
+		}
+	}
+	// The envelope form, for a deployment that answers with it here.
+	var env apiError
+	if err := json.Unmarshal(body, &env); err == nil {
+		return env.message()
+	}
+	return ""
+}
+
 // mainAccountName mirrors MainAccount, kept here so errors.go does not depend
 // on declaration order in config.go.
 const mainAccountName = MainAccount

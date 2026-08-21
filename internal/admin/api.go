@@ -111,6 +111,16 @@ type Options struct {
 	// Plugins names the mounted systems, so a tunnel can be assigned to one.
 	Plugins func() []string
 
+	// Assignments reports which system each tunnel is pointed at, by tunnel
+	// id, with "" meaning every system at once.
+	//
+	// Read from the stored configuration rather than from what is running,
+	// because those differ: a tunnel assigned to a plugin that is not mounted
+	// does not run, and a page that showed only running tunnels reported the
+	// assignment as absent -- so the choice appeared to revert, and the reason
+	// it was not honoured was nowhere.
+	Assignments func() map[string]string
+
 	// Settings is the runtime configuration store.
 	Settings *settings.Store
 
@@ -387,6 +397,10 @@ type tunnelResponse struct {
 	Missing string `json:"missing,omitempty"`
 	// Plugins names the systems a tunnel can be pointed at.
 	Plugins []string `json:"plugins"`
+	// Assignments maps a tunnel id to the system it is pointed at, "" meaning
+	// every system. A tunnel here but absent from Tunnels is configured and
+	// not running, which is what a plugin that has not started yet looks like.
+	Assignments map[string]string `json:"assignments"`
 	// Workspaces are the ChatGPT workspaces already in use by a tunnel in this
 	// organisation.
 	//
@@ -398,14 +412,28 @@ type tunnelResponse struct {
 }
 
 func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	resp := tunnelResponse{Tunnels: []tunnel.Status{}, Plugins: []string{}}
+	// Empty rather than nil, and kept that way below: a nil slice encodes as
+	// null, and the dashboard maps over these to build its selects. A host
+	// with nothing mounted yet is the ordinary state of a new install, not an
+	// error, and it should not be the one that blanks the page.
+	resp := tunnelResponse{
+		Tunnels: []tunnel.Status{}, Plugins: []string{}, Workspaces: []string{},
+		Assignments: map[string]string{},
+	}
 	if s.opts.Tunnel != nil {
 		if list := s.opts.Tunnel.Status(); len(list) > 0 {
 			resp.Tunnels = list
 		}
 	}
 	if s.opts.Plugins != nil {
-		resp.Plugins = s.opts.Plugins()
+		if names := s.opts.Plugins(); len(names) > 0 {
+			resp.Plugins = names
+		}
+	}
+	if s.opts.Assignments != nil {
+		if assigned := s.opts.Assignments(); len(assigned) > 0 {
+			resp.Assignments = assigned
+		}
 	}
 	dir := s.directory()
 	resp.Missing = dir.Missing()
@@ -417,7 +445,9 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 			resp.Problem = err.Error()
 		} else {
 			resp.Available = list
-			resp.Workspaces = workspacesIn(list)
+			if ws := workspacesIn(list); len(ws) > 0 {
+				resp.Workspaces = ws
+			}
 		}
 	}
 	if s.opts.TunnelInfo != nil {

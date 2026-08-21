@@ -34,6 +34,13 @@ export function Plugins() {
   const { show, view } = useToasts();
   const admin = useIsAdmin();
 
+  // Mounted plugins and configured-but-unmounted instances together, because
+  // the emptiness that matters is "nothing configured" rather than "nothing
+  // running". Deciding that from the mounted list alone hid the card of the
+  // first plugin someone added -- and its settings form with it, which is the
+  // only place the credentials it is waiting for can be typed.
+  const configured = plugins ? withUnmounted(plugins, instances, types) : null;
+
   const load = useCallback(() => {
     api.plugins()
       .then((r) => { setPlugins(r.plugins ?? []); setError(""); })
@@ -75,15 +82,15 @@ export function Plugins() {
         />
       )}
 
-      {!plugins ? (
+      {!configured ? (
         <Skeleton rows={3} />
-      ) : plugins.length === 0 ? (
+      ) : configured.length === 0 ? (
         <Empty mark="○" title="No plugins yet">
-          Enable one in your startup file and restart.
+          Add one above, or enable it in your startup file and restart.
         </Empty>
       ) : (
         <>
-          {groupByType(withUnmounted(plugins, instances, types)).map(({ type, members }) => (
+          {groupByType(configured).map(({ type, members }) => (
             <section key={type} className="plugin-group">
               {members.length > 1 && (
                 <h2 className="type-heading">

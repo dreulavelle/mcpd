@@ -120,7 +120,7 @@ func (t *tokenManager) refresh(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("cnmaestro: read token response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", "", explainTokenFailure(resp.StatusCode, body)
+		return "", "", explainTokenFailure(resp.StatusCode, t.tokenURL, body)
 	}
 
 	var tr tokenResponse
@@ -191,18 +191,37 @@ func (t *tokenManager) host() string {
 // The distinction that matters is whether the credentials are wrong or the
 // account cannot use the API at all, because those have different fixes and
 // the raw response says neither clearly.
-func explainTokenFailure(status int, body []byte) error {
+//
+// The address is named and the upstream reason is quoted, because the most
+// confusing form of this failure is the one where the credentials are right:
+// a credential is only valid against the installation that issued it, and
+// cloud accounts are regionally sharded behind different hostnames. "Check
+// your credentials" sends someone to re-copy a client_id that was never the
+// problem.
+func explainTokenFailure(status int, tokenURL string, body []byte) error {
+	where := redactURL(tokenURL)
+	upstream := ""
+	if p := oauthProblem(body); p != "" {
+		upstream = fmt.Sprintf(" It said: %s.", p)
+	}
+
 	switch status {
 	case http.StatusUnauthorized, http.StatusBadRequest:
-		return fmt.Errorf("cnmaestro: those API credentials were rejected. " +
-			"Check client_id and client_secret against Download Credentials " +
-			"in cnMaestro under Services > API Clients")
+		return fmt.Errorf("cnmaestro: %s rejected these API credentials.%s "+
+			"Either they do not match Download Credentials in cnMaestro under "+
+			"Services > API Clients -- check for a stray space or newline from "+
+			"the copy -- or they belong to a different installation than that "+
+			"address: an On-Premises controller and each regional cloud shard "+
+			"issue their own, and only accept their own. If cnMaestro is "+
+			"reached at another hostname, that hostname is the address to set",
+			where, upstream)
 	case http.StatusForbidden:
-		return fmt.Errorf("cnmaestro: those credentials are valid but not " +
-			"permitted to use the API. The API requires an appropriate " +
-			"cnMaestro subscription")
+		return fmt.Errorf("cnmaestro: %s accepted these credentials but does "+
+			"not permit them to use the API.%s The API is a cnMaestro X "+
+			"feature and the client needs a Super Admin role", where, upstream)
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("cnmaestro: rate limited while obtaining a token")
+		return fmt.Errorf("cnmaestro: rate limited by %s while obtaining a token", where)
 	}
-	return fmt.Errorf("cnmaestro: token request failed: %s", summarise(status, body))
+	return fmt.Errorf("cnmaestro: %s did not issue a token: %s",
+		where, summarise(status, body))
 }

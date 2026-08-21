@@ -156,8 +156,16 @@ reaches every tenant, and which tenant a request reads from is decided by
 
 ## managed_account
 
-Set it explicitly on every request. This is the parameter most likely to
-produce a plausible wrong answer rather than an error.
+Every request either names an account or does not, and the difference is the
+parameter most likely to produce a plausible wrong answer rather than an error.
+
+mcpd sends it when a tool call names an account, and otherwise when the
+instance has one configured as its default. The configured value is a default
+rather than a confinement: `cnmaestro_devices`, `cnmaestro_networks` and
+`cnmaestro_device` each take an `account` argument, so one instance answers
+questions about any tenant its credential can see. Leaving the setting empty is
+the arrangement for an MSP installation -- reads then span every account, and
+the assistant narrows by naming one. Each result reports which account answered.
 
 It takes an MSP tenant name, or the reserved value `Base Infrastructure`
 meaning the Main Account. Matching is exact and case-sensitive;
@@ -174,7 +182,8 @@ on whether the request names a network, not on which endpoint is called:
 `site` and `tower` are rejected unless `network` is supplied, so every
 hierarchy-filtered request takes the Main Account default. Two tool calls
 differing only by a filter would otherwise read from different accounts, which
-is not a failure anyone notices.
+is not a failure anyone notices -- so when no account was named, the device
+listing says in its `note` which of the two happened.
 
 **Reading differs from writing.** Objects in the Main Account report
 `"managed_account": ""`, and that empty string is never valid to send — sending

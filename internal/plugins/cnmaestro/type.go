@@ -33,13 +33,19 @@ func Type() plugins.Type {
 				Help:     "The other half of the same download. Stored encrypted.",
 			},
 			{
-				Key: "managed_account", Label: "Account to read", Kind: settings.KindString,
-				Default:     MainAccount,
-				Placeholder: MainAccount,
-				Help: "An MSP tenant name, or " + MainAccount + " for the main " +
-					"account. Exact and case-sensitive. Leaving it empty is not " +
-					"the same as naming the main account: without it, what a " +
-					"request returns depends on whether it names a network.",
+				// No default. An MSP operator wants every tenant readable, and
+				// a default here cannot be cleared: an empty field falls back
+				// to it, so pinning one account would be the only thing this
+				// form could express.
+				Key: "managed_account", Label: "Account to read by default",
+				Kind:        settings.KindString,
+				Placeholder: "every account",
+				Help: "Leave it empty on an MSP installation: reads then span " +
+					"every account the credential can see, and an assistant can " +
+					"ask about one by name. Fill it in to pin every read to one " +
+					"account -- an MSP tenant name, or " + MainAccount + " for " +
+					"the main account, matched exactly and case-sensitively. " +
+					"Either way a tool call may name an account of its own.",
 			},
 			{
 				Key: "base_url", Label: "Address", Kind: settings.KindString,

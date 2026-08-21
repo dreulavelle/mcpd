@@ -209,8 +209,8 @@ func (m *Manager) Remount(ctx context.Context, instance string, p Plugin, requir
 			// The old one is still mounted and still serving. Reporting the
 			// failure is the whole point: an operator who has just saved a
 			// wrong credential needs to know it was not taken up.
-			return fmt.Errorf("plugins: %s did not start with the new settings: %w",
-				instance, err)
+			return fmt.Errorf("%s did not start with the new settings: %w",
+				instance, ownName(instance, err))
 		}
 	}
 
@@ -521,3 +521,31 @@ func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals Appr
 	}
 	return nil
 }
+
+// ownName drops a plugin's own name from the front of its error.
+//
+// A plugin prefixes its errors with what it is, and so does the host when it
+// says which plugin failed. Together they produced "plugins: cnmaestro did not
+// start with the new settings: cnmaestro: ..." -- a sentence that says the
+// name twice and buries the part an operator needs. The original error is
+// still wrapped, so errors.Is and errors.As are unaffected.
+func ownName(instance string, err error) error {
+	if err == nil {
+		return nil
+	}
+	prefix := instance + ": "
+	msg := err.Error()
+	if !strings.HasPrefix(msg, prefix) {
+		return err
+	}
+	return trimmedError{err: err, msg: strings.TrimPrefix(msg, prefix)}
+}
+
+// trimmedError reads as its trimmed message and unwraps to the original.
+type trimmedError struct {
+	err error
+	msg string
+}
+
+func (e trimmedError) Error() string { return e.msg }
+func (e trimmedError) Unwrap() error { return e.err }

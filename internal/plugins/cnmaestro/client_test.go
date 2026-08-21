@@ -446,3 +446,57 @@ func TestOrdinaryFailuresAreNotMistakenForManagedAccountOnes(t *testing.T) {
 		t.Fatalf("a device 404 was explained as a managed-account problem: %v", err)
 	}
 }
+
+// An account named for one request beats the configured default, so an
+// assistant can be asked about a tenant the instance is not pinned to.
+func TestManagedAccount_NamedPerRequestWins(t *testing.T) {
+	f := newFakeAPI(t)
+	f.handle("/networks", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"data":[],"paging":{"total":0}}`)
+	})
+	c := testClient(t, f, func(cfg *Config) { cfg.ManagedAccount = MainAccount })
+
+	params := url.Values{"managed_account": {"Acme Networks"}}
+	if _, err := c.List(context.Background(), "/networks", params); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got := f.query().Get("managed_account"); got != "Acme Networks" {
+		t.Fatalf("managed_account = %q, want the one the caller named", got)
+	}
+}
+
+// With no account configured and none named, the parameter is absent rather
+// than empty. The API treats an empty value as if it were not there, so
+// sending it would only suggest an account had been chosen.
+func TestManagedAccount_AbsentWhenThereIsNone(t *testing.T) {
+	f := newFakeAPI(t)
+	f.handle("/networks", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"data":[],"paging":{"total":0}}`)
+	})
+	c := testClient(t, f, func(cfg *Config) { cfg.ManagedAccount = "" })
+
+	params := url.Values{"managed_account": {""}}
+	if _, err := c.List(context.Background(), "/networks", params); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if _, present := f.query()["managed_account"]; present {
+		t.Fatal("managed_account was sent empty; it must be absent instead")
+	}
+}
+
+// "Check your credentials" is the wrong advice when the credentials are right,
+// which is what an expired API client, an On-Premises host, or the wrong
+// regional shard all look like. The address and the API's own words are what
+// separate those from a mistyped secret.
+func TestTokenFailure_NamesTheAddressAndTheReason(t *testing.T) {
+	err := explainTokenFailure(http.StatusUnauthorized,
+		"https://cloud.cambiumnetworks.com/api/v2/access/token",
+		[]byte(`{"error":"invalid_client"}`))
+
+	msg := err.Error()
+	for _, want := range []string{"cloud.cambiumnetworks.com", "invalid_client", "On-Premises"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q does not mention %q", msg, want)
+		}
+	}
+}

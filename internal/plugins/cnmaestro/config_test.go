@@ -135,3 +135,54 @@ func TestConfig_MissingCredentialsIsNotAValidationFailure(t *testing.T) {
 		t.Error("one half of a credential must not count as configured")
 	}
 }
+
+// Cambium hands credentials over in a downloaded file, so they arrive by
+// paste. A trailing newline is invisible in the form and fatal at the token
+// endpoint, which answers invalid_client -- the same thing it says about a
+// genuinely wrong secret.
+func TestConfig_TrimsPastedCredentials(t *testing.T) {
+	c := validConfig()
+	c.ClientID = "  abc123\n"
+	c.ClientSecret = "\tsh-secret \n"
+	c.ManagedAccount = " Acme Networks "
+	c.withDefaults()
+
+	if c.ClientID != "abc123" {
+		t.Errorf("client_id = %q, want it trimmed", c.ClientID)
+	}
+	if c.ClientSecret != "sh-secret" {
+		t.Errorf("client_secret = %q, want it trimmed", c.ClientSecret)
+	}
+	if c.ManagedAccount != "Acme Networks" {
+		t.Errorf("managed_account = %q, want it trimmed", c.ManagedAccount)
+	}
+}
+
+// The configured account is a default, not a confinement: one instance answers
+// questions about any tenant its credential can see, so a tool call may name
+// its own. An empty configuration stays empty rather than becoming the main
+// account, which is what lets a read span every account.
+func TestConfig_AccountPrefersTheOneNamed(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured string
+		named      string
+		want       string
+	}{
+		{"neither sends nothing", "", "", ""},
+		{"configured is the default", "Acme Networks", "", "Acme Networks"},
+		{"named wins over configured", "Acme Networks", "Other Tenant", "Other Tenant"},
+		{"named alone is used", "", MainAccount, MainAccount},
+		{"blank named falls back", "Acme Networks", "   ", "Acme Networks"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig()
+			c.ManagedAccount = tc.configured
+			c.withDefaults()
+			if got := c.Account(tc.named); got != tc.want {
+				t.Fatalf("Account(%q) = %q, want %q", tc.named, got, tc.want)
+			}
+		})
+	}
+}

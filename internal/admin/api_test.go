@@ -196,3 +196,70 @@ func TestWorkspacesIn(t *testing.T) {
 		t.Fatalf("workspacesIn(nil) = %v, want empty", got)
 	}
 }
+
+// Lists in the tunnel response are always lists.
+//
+// A nil slice encodes as null, and the dashboard maps over these to build the
+// selects that point a tunnel at a plugin. A host with nothing mounted yet --
+// the ordinary state of a new install -- sent "plugins": null, which threw
+// during render and left the Tunnels page blank.
+func TestTunnelStatus_ListsAreNeverNull(t *testing.T) {
+	s := NewServer(Options{
+		// What a manager with nothing mounted returns.
+		Plugins: func() []string { return nil },
+	})
+
+	w := httptest.NewRecorder()
+	s.handleTunnelStatus(w, httptest.NewRequest(http.MethodGet, "/api/tunnel", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, field := range []string{"tunnels", "plugins", "workspaces"} {
+		raw, ok := got[field]
+		if !ok {
+			t.Fatalf("%q is absent; the dashboard reads it unconditionally", field)
+		}
+		if string(raw) == "null" {
+			t.Fatalf("%q = null, want []", field)
+		}
+	}
+}
+
+// An assignment to a plugin that is not running is still an assignment.
+//
+// The tunnel does not start -- it would answer ChatGPT with an endpoint that
+// has nothing behind it -- and the page used to derive "what is this tunnel
+// pointed at" from the running tunnels alone. So the choice looked like it had
+// reverted to "Not used", with nothing saying why it had not taken effect.
+func TestTunnelStatus_ReportsAssignmentsThatAreNotRunning(t *testing.T) {
+	s := NewServer(Options{
+		// Nothing mounted, and a tunnel pointed at a plugin all the same.
+		Plugins: func() []string { return nil },
+		Assignments: func() map[string]string {
+			return map[string]string{"tunnel_abc": "cnmaestro"}
+		},
+	})
+
+	w := httptest.NewRecorder()
+	s.handleTunnelStatus(w, httptest.NewRequest(http.MethodGet, "/api/tunnel", nil))
+
+	var got struct {
+		Tunnels     []tunnel.Status   `json:"tunnels"`
+		Assignments map[string]string `json:"assignments"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Tunnels) != 0 {
+		t.Fatalf("tunnels = %v, want none running", got.Tunnels)
+	}
+	if got.Assignments["tunnel_abc"] != "cnmaestro" {
+		t.Fatalf("assignments = %v, want the stored assignment reported", got.Assignments)
+	}
+}
