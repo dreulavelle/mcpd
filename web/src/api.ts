@@ -163,6 +163,8 @@ export interface PluginInstance {
   mounted: boolean;
   /** Required settings still to be filled in. Empty when it is ready. */
   missing?: string[];
+  /** Why a fully configured instance still is not serving. */
+  problem?: string;
 }
 
 export interface HealthCheck {

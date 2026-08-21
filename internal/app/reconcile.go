@@ -55,6 +55,29 @@ func isEmpty(v any) bool {
 	return ok && strings.TrimSpace(s) == ""
 }
 
+// noteReconcile records why an instance is not serving, or clears the note
+// when it is. Kept beside the instance rather than on the plugin because the
+// case that matters is the one where there is no plugin to hang it on.
+func (a *App) noteReconcile(name string, err error) {
+	a.reconcileMu.Lock()
+	defer a.reconcileMu.Unlock()
+	if err == nil {
+		delete(a.lastReconcileErr, name)
+		return
+	}
+	if a.lastReconcileErr == nil {
+		a.lastReconcileErr = map[string]string{}
+	}
+	a.lastReconcileErr[name] = err.Error()
+}
+
+// reconcileProblem returns the recorded reason, if there is one.
+func (a *App) reconcileProblem(name string) string {
+	a.reconcileMu.Lock()
+	defer a.reconcileMu.Unlock()
+	return a.lastReconcileErr[name]
+}
+
 // buildInstance constructs one instance from its current settings.
 func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin, plugins.Type, error) {
 	t, ok := a.types.Lookup(inst.Type)
@@ -88,7 +111,12 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 //   - not configured, or disabled: unmount it if it is running
 //   - a build that fails: leave whatever is mounted alone and report
 //   - not mounted and not ready: nothing to do
-func (a *App) reconcileInstance(ctx context.Context, name string) error {
+func (a *App) reconcileInstance(ctx context.Context, name string) (err error) {
+	// Whatever the outcome, it is what the Plugins page will show. Recorded
+	// here so every return path is covered, including the ones that succeed
+	// and must clear a previous failure.
+	defer func() { a.noteReconcile(name, err) }()
+
 	var inst *Instance
 	for _, candidate := range a.instances(ctx) {
 		if candidate.Name == name {

@@ -124,6 +124,7 @@ func (a *App) registerPlugins(ctx context.Context) error {
 			}
 			a.log.Error("plugin could not be built; continuing without it",
 				"plugin", name, "type", inst.Type, "error", err)
+			a.noteReconcile(name, err)
 			continue
 		}
 		if err := a.manager.Register(ctx, p, name, pc.Required); err != nil {

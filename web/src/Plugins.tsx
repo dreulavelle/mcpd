@@ -83,7 +83,7 @@ export function Plugins() {
         </Empty>
       ) : (
         <>
-          {groupByType(plugins).map(({ type, members }) => (
+          {groupByType(withUnmounted(plugins, instances, types)).map(({ type, members }) => (
             <section key={type} className="plugin-group">
               {members.length > 1 && (
                 <h2 className="type-heading">
@@ -129,6 +129,48 @@ export function Plugins() {
 }
 
 /**
+ * Every configured instance, mounted or not.
+ *
+ * A plugin that has not been configured is not mounted, so it is absent from
+ * the plugins endpoint -- and a card is exactly where its settings form lives.
+ * Without this, adding an integration produced a notice saying what it needed
+ * and nowhere to type it.
+ *
+ * The stand-in carries what is knowable before a plugin exists: its type's
+ * title and description, and the name of its settings group. Everything else
+ * is empty, which is the truth about something that is not running.
+ */
+function withUnmounted(
+  plugins: Plugin[], instances: PluginInstance[], types: PluginType[],
+): Plugin[] {
+  const mounted = new Set(plugins.map((p) => p.name));
+  const pending = instances
+    .filter((i) => !mounted.has(i.name))
+    .map((i): Plugin => {
+      const t = types.find((candidate) => candidate.name === i.type);
+      return {
+        name: i.name,
+        type: i.type,
+        version: "",
+        title: t?.title ?? i.type,
+        description: t?.description ?? "",
+        endpoint: "",
+        connect_url: "",
+        health: "unhealthy",
+        health_message: i.missing?.length
+          ? `Waiting on ${i.missing.join(", ")}.`
+          : i.problem || (i.enabled ? "Not running yet." : "Switched off."),
+        tools: [],
+        mutations: [],
+        required: false,
+        settings_group: `plugin:${i.name}`,
+        settings: [],
+      };
+    });
+  return [...plugins, ...pending];
+}
+
+/**
  * Instances waiting on their settings.
  *
  * A plugin is not mounted until every required setting has a value, and starts
@@ -146,7 +188,9 @@ function PendingNotice({ instances }: { instances: PluginInstance[] }) {
             <strong>{i.name}</strong>
             {i.missing?.length
               ? ` needs ${i.missing.join(", ")}.`
-              : " is not running yet."}
+              : i.problem
+                ? ` ${i.problem}`
+                : " is not running yet."}
           </span>
         ))}
         {" "}It starts serving as soon as it has what it needs — nothing to restart.
@@ -255,6 +299,11 @@ function PluginCard({ plugin, tunnels, settings, instances, open, onToggle, onCh
   show: Notify;
 }) {
   const admin = useIsAdmin();
+  // An instance that is not mounted has no endpoint, no tools and nothing to
+  // connect to. Its card exists for one reason -- the settings form -- and
+  // showing "0 read" beside an address that goes nowhere invites the reading
+  // that the integration is broken rather than unfinished.
+  const running = plugin.endpoint !== "";
   const reads = plugin.tools.filter((t) => t.kind === "read");
   const writes = plugin.tools.filter((t) => t.kind !== "read");
   const tunnel = tunnels?.tunnels.find((t) => t.plugin === plugin.name);
@@ -282,9 +331,15 @@ function PluginCard({ plugin, tunnels, settings, instances, open, onToggle, onCh
         {/* Counts and connector state together. Showing one or the other meant
             a plugin with a connector stopped saying what it could do. */}
         <span className="plugin-facts">
-          <span className="note tight">{reads.length} read</span>
-          {writes.length > 0 && (
-            <span className="note tight">{writes.length} write</span>
+          {running ? (
+            <>
+              <span className="note tight">{reads.length} read</span>
+              {writes.length > 0 && (
+                <span className="note tight">{writes.length} write</span>
+              )}
+            </>
+          ) : (
+            <Pill tone="attention">Not running</Pill>
           )}
           {tunnel && (
             <Pill tone={tunnel.state === "connected" ? "good" : "attention"}>
@@ -317,6 +372,7 @@ function PluginCard({ plugin, tunnels, settings, instances, open, onToggle, onCh
             </div>
           )}
 
+          {running && (
           <div className="section split two">
             <div>
               <p className="eyebrow">Read</p>
@@ -328,17 +384,22 @@ function PluginCard({ plugin, tunnels, settings, instances, open, onToggle, onCh
                         tools={writes.map((t) => plain(t.name, plugin.name))} />
             </div>
           </div>
+          )}
 
-          <div className="section">
-            <p className="eyebrow">Address</p>
-            <Copyable value={plugin.connect_url} label="address" />
-          </div>
+          {running && (
+            <>
+              <div className="section">
+                <p className="eyebrow">Address</p>
+                <Copyable value={plugin.connect_url} label="address" />
+              </div>
 
-          <div className="section">
-            <p className="eyebrow">ChatGPT</p>
-            <TunnelControl plugin={plugin} tunnels={tunnels} tunnel={tunnel}
-                           onChange={onChange} show={show} />
-          </div>
+              <div className="section">
+                <p className="eyebrow">ChatGPT</p>
+                <TunnelControl plugin={plugin} tunnels={tunnels} tunnel={tunnel}
+                               onChange={onChange} show={show} />
+              </div>
+            </>
+          )}
 
           <RemoveControl plugin={plugin} instances={instances}
                          onChange={onChange} show={show} />

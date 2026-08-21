@@ -62,6 +62,13 @@ type App struct {
 	// -- can wait rather than fail against a port nothing is on yet.
 	serving chan struct{}
 
+	// lastReconcileErr holds why an instance is not mounted, when the reason
+	// is not "it has not been configured yet". A plugin that failed to start
+	// has no health record to carry the message, and the operator who just
+	// pasted the credential is the person who needs it.
+	reconcileMu      sync.Mutex
+	lastReconcileErr map[string]string
+
 	workers     sync.WaitGroup
 	stopWorkers context.CancelFunc
 	server      *http.Server
@@ -299,6 +306,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 						Name: inst.Name, Type: inst.Type,
 						FromFile: inst.FromFile, Enabled: inst.Enabled,
 						Missing: missing,
+						Problem: a.reconcileProblem(inst.Name),
 					})
 				}
 				return out
