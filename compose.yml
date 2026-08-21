@@ -1,17 +1,3 @@
-# mcpd via Docker Compose.
-#
-#   cp .env.example .env
-#   $EDITOR .env            # at minimum, set MCPD_TOKEN_LOCAL
-#   docker compose up -d
-#
-# Secrets live in .env and are read two ways: Compose interpolates the few it
-# needs for ports and image tags, and env_file passes the whole file into the
-# container, where mcpd resolves the `env:` references in its config.
-#
-# Nothing here publishes the MCP endpoint beyond loopback. To reach it from
-# ChatGPT, turn on the tunnel in config.yaml: it runs inside mcpd, connects
-# outbound, and needs no inbound port, no public DNS, and no second container.
-
 name: mcpd
 
 services:
@@ -20,61 +6,29 @@ services:
       context: .
     image: ghcr.io/dreulavelle/mcpd:local
     restart: unless-stopped
-
-    # The whole file is passed through, so any `env:` reference in config.yaml
-    # resolves without naming each variable here.
     env_file:
       - path: .env
         required: false
-
     environment:
-      # Overrides server.frontend_listen so the container binds an
-      # unprivileged port while the host publishes 80. Keeps the container's
-      # capability set empty.
       MCPD_FRONTEND_LISTEN: ":8081"
-
     ports:
-      # MCP endpoint. Loopback by default: mcpd speaks plain HTTP and carries
-      # bearer tokens, so it belongs behind TLS or a tunnel. Set MCPD_BIND to
-      # a LAN address to reach it directly during development.
       - "${MCPD_BIND:-127.0.0.1}:${MCPD_PORT:-8080}:8080"
-
-      # Admin dashboard. Bind it to a specific interface if this host faces
-      # anything untrusted:  - "10.0.0.5:80:8081"
       - "${MCPD_FRONTEND_BIND:-127.0.0.1}:${MCPD_FRONTEND_PORT:-80}:8081"
-
-      # The tunnel client's own diagnostics, when tunnel.diagnostics_addr is
-      # set. Loopback on the host and not optional about it: the listener is
-      # unauthenticated.
       - "127.0.0.1:${MCPD_TUNNEL_DIAGNOSTICS_PORT:-9099}:9099"
-
     volumes:
-      # Database and all mutable state. Named rather than bind-mounted so the
-      # nonroot container user owns it without host-side chown.
-      - mcpd-data:/var/lib/mcpd
-
-      # Your own config, not the repo's example. Start from it:
-      #   cp configs/example.yaml config.yaml
+      # Must be owned by 65532 -- the image is distroless nonroot, and a
+      # directory owned by the host user is not writable by it:
+      #   mkdir -p data && docker run --rm -v "$PWD/data":/d alpine chown -R 65532:65532 /d
+      - ./data:/var/lib/mcpd
       - ./config.yaml:/etc/mcpd/config.yaml:ro
-
-      # Out-of-process plugins. Read-only: mcpd only ever executes what is
-      # here, and a writable mount would let anything that can write to the
-      # host replace a reviewed integration.
       - ./plugins:/var/lib/mcpd/plugins:ro
-
     healthcheck:
-      # mcpd answers its own readiness probe, so the check needs no shell and
-      # no curl in an image that has neither.
       test: ["CMD", "/usr/local/bin/mcpd", "-config", "/etc/mcpd/config.yaml", "-check"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
-
     stop_grace_period: 60s
-
-    # The container writes to exactly one place. Everything else is read-only,
-    # which removes the usual foothold after a compromise.
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -82,17 +36,13 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-
     deploy:
       resources:
         limits:
           memory: 1g
-
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
-volumes:
-  mcpd-data:
