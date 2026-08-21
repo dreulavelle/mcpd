@@ -612,3 +612,134 @@ func TestIntegrity_PassesOnAHealthyDatabase(t *testing.T) {
 		t.Fatalf("a fresh database should pass: %v", err)
 	}
 }
+
+// A settled intent can be proposed again. This is the case ChatGPT hit: an
+// earlier label.set proposal expired unapproved, and every later attempt to
+// propose the same change was refused with an idempotency conflict that
+// misdescribed itself as a payload mismatch.
+//
+// The two mechanisms disagreed about time. idempotency_records carries a TTL
+// and the pre-check in Propose honours it, so once the record aged out the
+// proposal was waved through -- straight into a permanent unique index that
+// had no notion of the first operation being long dead.
+func TestIdempotency_SettledIntentCanBeProposedAgain(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	clock := testClock
+	s := NewOperationStore(db, func() time.Time { return clock })
+
+	first := proposeOp(t, s, "op_settle_first")
+
+	// The proposal expires unapproved, exactly as the reaper would leave it.
+	if _, err := s.Transition(ctx, operations.TransitionRequest{
+		OperationID: first.ID,
+		From:        operations.StatePendingApproval,
+		To:          operations.StateExpired,
+		Actor:       "system:reaper",
+		Reason:      "proposal deadline passed",
+		Terminal:    true,
+		Audit:       operations.AuditEntry{EventID: "a-x", Kind: "x", Actor: "sys", CorrelationID: "c"},
+		Event:       operations.OutboxEvent{ID: "e-x", Subject: "s", Payload: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatalf("expire the first proposal: %v", err)
+	}
+
+	// Past the idempotency record's TTL, so the pre-check no longer collapses
+	// the retry onto the original. This is the state the reported bug was
+	// found in.
+	clock = testClock.Add(25 * time.Hour)
+
+	retry := *first
+	retry.ID = "op_settle_retry"
+	retry.RequestedAt = clock
+	retry.ExpiresAt = clock.Add(time.Hour)
+	got, err := s.Propose(ctx, operations.RepoProposeRequest{
+		Operation:   &retry,
+		RequestHash: first.PayloadHash,
+		Audit:       operations.AuditEntry{EventID: "a-2", Kind: "x", Actor: "u", CorrelationID: "c2"},
+		Event:       operations.OutboxEvent{ID: "e-2", Subject: "s", Payload: json.RawMessage(`{}`)},
+	})
+	if err != nil {
+		t.Fatalf("re-proposing a settled intent must succeed: %v", err)
+	}
+	if got.ID != retry.ID {
+		t.Fatalf("got operation %s, want the new one %s", got.ID, retry.ID)
+	}
+	if got.State != operations.StatePendingApproval {
+		t.Fatalf("state = %s, want pending_approval", got.State)
+	}
+}
+
+// A live intent still collapses. The index went from permanent to
+// state-scoped, and the half that was load-bearing has to survive that: two
+// proposals of the same change, neither settled, must not both be queued.
+func TestIdempotency_LiveIntentIsStillRefused(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	clock := testClock
+	s := NewOperationStore(db, func() time.Time { return clock })
+
+	first := proposeOp(t, s, "op_live_first")
+
+	// Past the record's TTL, so only the index stands between the two. The
+	// first operation is still pending approval.
+	clock = testClock.Add(25 * time.Hour)
+
+	second := *first
+	second.ID = "op_live_second"
+	_, err := s.Propose(ctx, operations.RepoProposeRequest{
+		Operation:   &second,
+		RequestHash: first.PayloadHash,
+		Audit:       operations.AuditEntry{EventID: "a-3", Kind: "x", Actor: "u", CorrelationID: "c3"},
+		Event:       operations.OutboxEvent{ID: "e-3", Subject: "s", Payload: json.RawMessage(`{}`)},
+	})
+	if !errors.Is(err, operations.ErrIdempotencyConflict) {
+		t.Fatalf("a second live proposal must be refused, got %v", err)
+	}
+}
+
+// Indeterminate is not settled. IsTerminal excludes it because it is
+// resolvable by observation, and re-proposing an intent that may already have
+// taken effect is the one retry that must stay blocked.
+func TestIdempotency_IndeterminateBlocksRetry(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	clock := testClock
+	s := NewOperationStore(db, func() time.Time { return clock })
+
+	first := proposeOp(t, s, "op_indet_retry")
+	if _, err := approve(t, s, first.ID, "user:bob"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Claim(ctx, operations.ClaimRequest{
+		OperationID: first.ID, ExpectedHash: first.PayloadHash,
+		InstanceID: "mcpd-01", LeaseExpiresAt: clock.Add(time.Minute),
+		AttemptID: "att-i",
+		Audit:     operations.AuditEntry{EventID: "a-ci", Kind: "x", Actor: "sys", CorrelationID: "c"},
+		Event:     operations.OutboxEvent{ID: "e-ci", Subject: "s", Payload: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Settle(ctx, operations.SettleRequest{
+		OperationID: first.ID, AttemptID: "att-i",
+		To:    operations.StateIndeterminate,
+		Audit: operations.AuditEntry{EventID: "a-si", Kind: "x", Actor: "sys", CorrelationID: "c"},
+		Event: operations.OutboxEvent{ID: "e-si", Subject: "s", Payload: json.RawMessage(`{}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clock = testClock.Add(25 * time.Hour)
+
+	retry := *first
+	retry.ID = "op_indet_retry_2"
+	_, err := s.Propose(ctx, operations.RepoProposeRequest{
+		Operation:   &retry,
+		RequestHash: first.PayloadHash,
+		Audit:       operations.AuditEntry{EventID: "a-4", Kind: "x", Actor: "u", CorrelationID: "c4"},
+		Event:       operations.OutboxEvent{ID: "e-4", Subject: "s", Payload: json.RawMessage(`{}`)},
+	})
+	if !errors.Is(err, operations.ErrIdempotencyConflict) {
+		t.Fatalf("an indeterminate outcome must block a retry, got %v", err)
+	}
+}

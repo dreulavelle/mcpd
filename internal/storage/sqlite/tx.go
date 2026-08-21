@@ -133,15 +133,22 @@ func IsConstraint(err error) bool {
 		strings.Contains(msg, "SQLITE_CONSTRAINT")
 }
 
-// isUniqueViolation reports whether err is a UNIQUE constraint failure on a
-// named index. Matching the index name is what separates "this exact proposal
-// already exists" from any other constraint the table enforces.
-func isUniqueViolation(err error, index string) bool {
+// isUniqueViolation reports whether err is a UNIQUE constraint failure over a
+// particular set of columns. Identifying which constraint fired is what
+// separates "this exact proposal already exists" from any other constraint the
+// table enforces.
+//
+// The match is on the column list rather than the index name because
+// modernc.org/sqlite reports the failure as
+// "UNIQUE constraint failed: operations.plugin, operations.action, ..." and
+// never names the index. Matching an index name here silently matched nothing,
+// which sent every duplicate-proposal insert down the generic error path.
+func isUniqueViolation(err error, columns string) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "UNIQUE constraint failed") && strings.Contains(msg, index)
+	return strings.Contains(msg, "UNIQUE constraint failed") && strings.Contains(msg, columns)
 }
 
 // IsImmutabilityViolation reports whether err came from one of the append-only
