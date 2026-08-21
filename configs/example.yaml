@@ -186,6 +186,10 @@ plugins:
       base_url: "https://cloud.cambiumnetworks.com"
       client_id_ref: env:MCPD_CNMAESTRO_CLIENT_ID
       client_secret_ref: env:MCPD_CNMAESTRO_CLIENT_SECRET
-      # Sent on every request. Omitting it means different things depending on
-      # whether a request names a network, so it is set explicitly or not at all.
-      managed_account: ""
+      # Which account to read from: an MSP tenant name, or "Base Infrastructure"
+      # for the Main Account. Exact and case-sensitive.
+      #
+      # Set it. Omitting it is not the same as naming the Main Account -- the
+      # default depends on whether a request names a network, so two calls
+      # differing only by a filter would read from different accounts.
+      managed_account: "Base Infrastructure"

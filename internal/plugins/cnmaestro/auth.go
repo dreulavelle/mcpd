@@ -196,7 +196,7 @@ func explainTokenFailure(status int, body []byte) error {
 	case http.StatusUnauthorized, http.StatusBadRequest:
 		return fmt.Errorf("cnmaestro: those API credentials were rejected. " +
 			"Check client_id and client_secret against Download Credentials " +
-			"in cnMaestro under Application > API Clients")
+			"in cnMaestro under Services > API Clients")
 	case http.StatusForbidden:
 		return fmt.Errorf("cnmaestro: those credentials are valid but not " +
 			"permitted to use the API. The API requires an appropriate " +

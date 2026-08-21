@@ -30,11 +30,23 @@ type Config struct {
 	ClientIDRef     string `yaml:"client_id_ref" json:"client_id_ref"`
 	ClientSecretRef string `yaml:"client_secret_ref" json:"client_secret_ref"`
 
-	// ManagedAccount scopes every request to one managed account.
+	// ManagedAccount selects the account every request reads from.
 	//
-	// Sent on every request when set. Omitting it means different things
-	// depending on whether a request names a network, which makes "leave it
-	// off unless needed" a rule with an exception nobody remembers.
+	// Either an MSP managed account (tenant) name, or the reserved value
+	// "Base Infrastructure" meaning the Main Account. Matching upstream is
+	// exact and case-sensitive.
+	//
+	// Set it. Omitting it is not the same as naming the Main Account: the
+	// default depends on whether a request names a network, so GET /devices
+	// spans every account while GET /devices?network=X returns Main Account
+	// devices alone. Two tool calls that differ only by a filter would
+	// otherwise read from different accounts.
+	//
+	// Objects in the Main Account report managed_account: "" when read back,
+	// and that empty string is never valid to send -- sending it is treated as
+	// omitting the parameter. The value that selects the Main Account is not
+	// the value read off objects in it, which is the trap this comment exists
+	// for.
 	ManagedAccount string `yaml:"managed_account" json:"managed_account"`
 
 	// PageSize is how many items a page asks for. It bounds one response, not
@@ -67,6 +79,11 @@ const (
 	tokenPath        = "/api/v2/access/token"
 	apiPrefix        = "/api/v2"
 	managedAccountKV = "managed_account"
+
+	// MainAccount is the reserved value naming the Main Account, as opposed to
+	// an MSP tenant. Spelled exactly this way: matching upstream is
+	// case-sensitive and "base infrastructure" is rejected.
+	MainAccount = "Base Infrastructure"
 )
 
 // withDefaults fills anything the operator left unset.
@@ -113,6 +130,15 @@ func (c *Config) Validate() error {
 		// infrastructure. There is no deployment where sending it in the clear
 		// is the right trade.
 		problems = append(problems, "base_url must use https")
+	}
+
+	// The single most likely typo, and it fails at request time with a 404
+	// that reads as "no such account" rather than "wrong case".
+	if acct := strings.TrimSpace(c.ManagedAccount); acct != "" &&
+		acct != MainAccount && strings.EqualFold(acct, MainAccount) {
+		problems = append(problems, fmt.Sprintf(
+			"managed_account is matched exactly and is case-sensitive: write %q, not %q",
+			MainAccount, acct))
 	}
 
 	if len(problems) > 0 {

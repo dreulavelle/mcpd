@@ -43,6 +43,18 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, p.listDevices)
 
 	plugins.Tool(r, plugins.ToolSpec{
+		Name:  "managed_accounts",
+		Title: "List managed accounts",
+		Description: "Lists the MSP managed accounts (tenants) in this " +
+			"installation, with each one's status. Use this to find the exact " +
+			"name to configure, since matching is case-sensitive, and to see " +
+			"whether a tenant is disabled -- a disabled tenant can own visible " +
+			"data and still reject every call that names it. Only available " +
+			"when the account has the MSP feature.",
+		Idempotent: true,
+	}, p.listManagedAccounts)
+
+	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "device",
 		Title: "Get one device",
 		Description: "Returns the full record for a single device by MAC " +
@@ -157,6 +169,34 @@ func (p *Plugin) listDevices(ctx context.Context, in DevicesInput) (DevicesOutpu
 				"whole estate.", len(page.Items))
 	}
 	return out, nil
+}
+
+// ManagedAccountsInput takes no arguments.
+type ManagedAccountsInput struct{}
+
+// ManagedAccountsOutput is the authoritative tenant list.
+type ManagedAccountsOutput struct {
+	Accounts []json.RawMessage `json:"accounts"`
+	Count    int               `json:"count"`
+	Warnings []string          `json:"warnings,omitempty"`
+	// Note carries the reserved name, because it is not in the list and is
+	// the value a single-account installation actually needs.
+	Note string `json:"note"`
+}
+
+func (p *Plugin) listManagedAccounts(ctx context.Context, _ ManagedAccountsInput) (ManagedAccountsOutput, error) {
+	page, err := p.client.List(ctx, "/msp/managed_accounts", nil)
+	p.note(err)
+	if err != nil {
+		return ManagedAccountsOutput{}, err
+	}
+	return ManagedAccountsOutput{
+		Accounts: page.Items,
+		Count:    len(page.Items),
+		Warnings: page.Warnings,
+		Note: fmt.Sprintf("These are MSP tenants. The Main Account is named %q, "+
+			"which is a reserved value and does not appear in this list.", MainAccount),
+	}, nil
 }
 
 // DeviceInput names one device.
