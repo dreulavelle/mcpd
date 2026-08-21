@@ -234,11 +234,29 @@ function TunnelPanel() {
             </p>
           ) : (
             <dl className="kv">
-              <div><dt>Signed in as</dt><dd><code>{status.principal}</code><Pill>{roleLabel(status.role)}</Pill></dd></div>
-              <div>
-                <dt>Can reach</dt>
-                <dd><code>{status.plugins?.includes("*") ? "everything" : status.plugins?.join(", ")}</code></dd>
-              </div>
+              {status.mcp_url ? (
+                <div>
+                  <dt>Who's asking</dt>
+                  <dd>
+                    <Pill tone="good">Each person signs in</Pill>
+                    <span className="note tight">
+                      ChatGPT asks whoever uses it to sign in, so what they can
+                      do here is their own.
+                    </span>
+                  </dd>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <dt>Who's asking</dt>
+                    <dd><code>{status.principal}</code><Pill>{roleLabel(status.role)}</Pill></dd>
+                  </div>
+                  <div>
+                    <dt>Can reach</dt>
+                    <dd><code>{status.plugins?.includes("*") ? "everything" : status.plugins?.join(", ")}</code></dd>
+                  </div>
+                </>
+              )}
             </dl>
           )}
 

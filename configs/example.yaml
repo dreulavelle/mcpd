@@ -56,6 +56,15 @@ secret_key_ref: env:MCPD_SECRET_KEY
 
 auth:
   # static | oauth | mixed
+  #
+  # A ChatGPT connector needs oauth or mixed. The connector asks mcpd for
+  # protected-resource metadata before it will be created at all, and under
+  # static auth there is none to give -- ChatGPT reports that the server does
+  # not implement OAuth and stops there.
+  #
+  # It is also what makes require_distinct_approver_at_or_above below mean
+  # anything: one shared token is one identity, and one identity cannot be two
+  # people.
   mode: static
 
   static_tokens:
@@ -146,6 +155,16 @@ logging:
 # is decided here rather than by a bearer token.
 tunnel:
   enabled: false
+
+  # How the tunnel reaches mcpd follows from auth.mode above, and is not
+  # configured here.
+  #
+  # Under static auth it runs the MCP server in this process over an in-memory
+  # transport: no port, no socket, no credential. With OAuth mounted it binds
+  # to server.public_url instead, because protected-resource discovery is a
+  # command the tunnel client executes against a URL and an in-memory binding
+  # has none. That also puts every OAuth endpoint on one origin, which is what
+  # lets the tunnel reach an authorization server on a private address.
 
   # From platform.openai.com -> Settings -> Organization -> Tunnels.
   tunnel_id: ""

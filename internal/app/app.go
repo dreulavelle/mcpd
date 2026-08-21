@@ -496,6 +496,23 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 		},
 	}
 
+	// With OAuth mounted the tunnel binds over HTTP rather than in memory.
+	//
+	// It has to: the control plane asks the tunnel client to fetch
+	// protected-resource metadata, and an in-memory binding has no address to
+	// fetch it from -- so ChatGPT reports that mcpd does not implement OAuth
+	// and refuses to create the connector. Both this and the OAuth issuer come
+	// from server.public_url, which is what puts every OAuth endpoint on one
+	// origin; the tunnel will not reach an authorization server on a private
+	// address otherwise.
+	//
+	// The aggregate endpoint is deliberate. Under OAuth the caller's own token
+	// decides which plugins they see, so scoping the tunnel as well would only
+	// hide plugins from people who were granted them.
+	if a.oauthServer != nil && a.cfg.Server.PublicURL != "" {
+		cfg.MCPServerURL = strings.TrimRight(a.cfg.Server.PublicURL, "/") + "/mcp"
+	}
+
 	// The key comes from the store when it is there, and otherwise from the
 	// reference in the file, so an existing deployment keeps working.
 	cfg.APIKey = a.settings.Secret(ctx, settings.KeyTunnelAPIKey, "")

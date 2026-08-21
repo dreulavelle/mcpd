@@ -109,6 +109,19 @@ function ChatGPT({ tunnel, plugins, meta }: {
             </p>
             <p className="note tight">No address to copy, no key to paste.</p>
           </Step>
+
+          {meta?.auth_mode !== "static" && (
+            <Step n={5} title="Sign in when it asks">
+              <p>
+                ChatGPT will send you here to sign in and confirm what it may do.
+                That's how mcpd knows who's asking — everyone using the connector
+                gets their own sign-in rather than sharing one.
+              </p>
+              <p className="note tight">
+                You'll approve this once. After that it stays connected.
+              </p>
+            </Step>
+          )}
         </div>
       </div>
 
@@ -129,6 +142,15 @@ function ChatGPT({ tunnel, plugins, meta }: {
                 Make it on <Out href={OPENAI_API_KEYS}>the API keys page</Out>,
                 with Tunnels: Read and Use. Keys from elsewhere look right and
                 won't work.
+              </dd>
+            </div>
+            <div>
+              <dt>It says mcpd doesn't do sign-ins</dt>
+              <dd>
+                ChatGPT checks for a sign-in method before it will create the
+                connector at all. mcpd offers one whenever it isn't set to a
+                single shared key — check <strong>How people sign in</strong> at
+                the bottom of Settings.
               </dd>
             </div>
             <div>

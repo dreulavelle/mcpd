@@ -147,7 +147,7 @@ function Console({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => void
                     onClick={() => { setTab(id); setOpenId(null); }}>
               {label}
               {id === "changes" && waiting > 0 && (
-                <> <Pill tone="attention">{waiting}</Pill></>
+                <Pill tone="attention">{waiting}</Pill>
               )}
             </button>
           ))}

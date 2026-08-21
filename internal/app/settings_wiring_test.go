@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,4 +143,60 @@ func TestApprovalPolicyIsReadLive(t *testing.T) {
 	if after != 90*time.Minute {
 		t.Fatalf("policy TTL = %s, want 90m", after)
 	}
+}
+
+// ChatGPT refuses to create an OAuth connector unless protected-resource
+// discovery succeeds, and discovery is a tunnel command the client can only
+// run against a URL. So an OAuth deployment must hand the tunnel mcpd's own
+// address; in-memory leaves the connector unusable with no clue why.
+func TestTunnelBindsOverHTTPWhenOAuthIsMounted(t *testing.T) {
+	ctx := context.Background()
+
+	static := newSettingsApp(t)
+	if got := static.tunnelConfig(ctx).MCPServerURL; got != "" {
+		t.Fatalf("MCPServerURL = %q, want in-memory under static auth", got)
+	}
+
+	oauth := newOAuthSettingsApp(t)
+	got := oauth.tunnelConfig(ctx).MCPServerURL
+	if got != "http://localhost:9080/mcp" {
+		t.Fatalf("MCPServerURL = %q, want mcpd's own MCP endpoint", got)
+	}
+}
+
+// The origin has to match the OAuth issuer, or the tunnel refuses to reach the
+// authorization server's endpoints on a private address and the token exchange
+// fails after the person has already approved.
+func TestTunnelMCPURLSharesTheIssuerOrigin(t *testing.T) {
+	a := newOAuthSettingsApp(t)
+
+	mcpURL := a.tunnelConfig(context.Background()).MCPServerURL
+	if !strings.HasPrefix(mcpURL, a.cfg.Server.PublicURL) {
+		t.Fatalf("MCP URL %q must share an origin with the issuer %q",
+			mcpURL, a.cfg.Server.PublicURL)
+	}
+}
+
+func newOAuthSettingsApp(t *testing.T) *App {
+	t.Helper()
+	t.Setenv("MCPD_SECRET_KEY", "test-encryption-key-at-least-32-chars-long")
+
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "mcpd.db")
+	cfg.Storage.RelaxedDurability = true
+	cfg.Server.PublicURL = "http://localhost:9080"
+	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
+	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
+	cfg.Auth.Mode = "oauth"
+	cfg.Tunnel.Enabled = false
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("config invalid: %v", err)
+	}
+	a, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { a.db.Close() })
+	return a
 }
