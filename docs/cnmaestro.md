@@ -129,11 +129,59 @@ partial result rather than failing when part of an estate is unreachable.
 enterprise Wi-Fi, NSE and others — each with its own fields and a `type`
 discriminator. There is no common device shape to decode into.
 
+## Getting API credentials
+
+**Services → API Clients → Add API Client**, then *Download Credentials* for
+the client id and secret. It needs a Super Admin account, and the API is a
+cnMaestro X feature — on Essentials the page is not there to find.
+
+On an MSP installation the API client belongs to the parent account. One client
+reaches every tenant, and which tenant a request reads from is decided by
+`managed_account` rather than by having separate credentials per tenant.
+
 ## managed_account
 
-Attach it to every request. Omitting it means different things depending on
-whether the request names a network, which makes "leave it off unless needed" a
-rule with an exception nobody remembers.
+Set it explicitly on every request. This is the parameter most likely to
+produce a plausible wrong answer rather than an error.
+
+It takes an MSP tenant name, or the reserved value `Base Infrastructure`
+meaning the Main Account. Matching is exact and case-sensitive;
+`base infrastructure` is rejected.
+
+**Omitting it is not the same as naming the Main Account.** The default depends
+on whether the request names a network, not on which endpoint is called:
+
+| request | reads from |
+|---|---|
+| `GET /devices` | every account |
+| `GET /devices?network=Campus-1` | Main Account only |
+
+`site` and `tower` are rejected unless `network` is supplied, so every
+hierarchy-filtered request takes the Main Account default. Two tool calls
+differing only by a filter would otherwise read from different accounts, which
+is not a failure anyone notices.
+
+**Reading differs from writing.** Objects in the Main Account report
+`"managed_account": ""`, and that empty string is never valid to send — sending
+it is treated as omitting the parameter. So the value that selects the Main
+Account is not the value read back from objects in it.
+
+Failures, all against ordinary reads:
+
+| status | means |
+|---|---|
+| `404 managed_account not found` | no tenant by that name, or wrong case |
+| `403 managed_account is disabled` | the tenant exists and rejects every call |
+| `400 MSP feature is disabled` | not an MSP account; only `Base Infrastructure` is accepted |
+
+`GET /msp/managed_accounts` is the authoritative tenant list and the only place
+each tenant's `status` is exposed. A tenant can own visible data and still
+reject every call that names it, so a listing that looks right is not evidence
+the tenant is usable.
+
+Path-style MSP filtering — `/msp/managed_accounts/{name}/…` — is deprecated for
+GET, POST and PUT, and will be removed. The query parameter is the form with a
+future.
 
 ## Unverified
 

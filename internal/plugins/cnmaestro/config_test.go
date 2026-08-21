@@ -81,3 +81,33 @@ func TestConfig_ValidAccepted(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 }
+
+// Matching upstream is exact and case-sensitive, and this is the likely typo.
+// Left alone it fails at request time with a 404 that reads as "no such
+// account" rather than "wrong case".
+func TestConfig_CatchesMainAccountMiscased(t *testing.T) {
+	c := validConfig()
+	c.ManagedAccount = "base infrastructure"
+	c.withDefaults()
+
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("a miscased Main Account name must be refused")
+	}
+	if !strings.Contains(err.Error(), MainAccount) {
+		t.Fatalf("error = %q, want it to show the correct spelling", err)
+	}
+}
+
+// A real tenant name that merely differs in case from nothing in particular is
+// none of our business: only the reserved value is checked.
+func TestConfig_AcceptsTenantNames(t *testing.T) {
+	for _, name := range []string{MainAccount, "Acme Networks", "acme", ""} {
+		c := validConfig()
+		c.ManagedAccount = name
+		c.withDefaults()
+		if err := c.Validate(); err != nil {
+			t.Errorf("managed_account %q was refused: %v", name, err)
+		}
+	}
+}

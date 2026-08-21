@@ -394,3 +394,55 @@ func TestErrorsDoNotLeakCredentials(t *testing.T) {
 		}
 	}
 }
+
+// The three managed_account failures arrive as bare statuses against an
+// ordinary read, and each has a different fix the status alone does not
+// suggest. Matching the API's own message rather than the status is
+// deliberate: the same statuses arrive for entirely unrelated reasons.
+func TestManagedAccountFailuresAreExplained(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		wantSub string
+	}{
+		{
+			name: "MSP feature is off", status: http.StatusBadRequest,
+			body:    `{"error":{"message":"MSP feature is disabled"}}`,
+			wantSub: "does not have the MSP",
+		},
+		{
+			name: "tenant is disabled", status: http.StatusForbidden,
+			body:    `{"error":{"message":"managed_account is disabled"}}`,
+			wantSub: "disabled",
+		},
+		{
+			name: "no such tenant", status: http.StatusNotFound,
+			body:    `{"error":{"message":"managed_account not found"}}`,
+			wantSub: "case-sensitive",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := explainRequestFailure(tc.status, "/devices", []byte(tc.body))
+			if err == nil {
+				t.Fatal("expected a failure")
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("error = %q, want it to mention %q", err, tc.wantSub)
+			}
+		})
+	}
+}
+
+// The same statuses arrive for unrelated reasons, so a body that says nothing
+// about managed accounts must not be explained as though it did.
+func TestOrdinaryFailuresAreNotMistakenForManagedAccountOnes(t *testing.T) {
+	err := explainRequestFailure(http.StatusNotFound, "/devices/AA:BB:CC:DD:EE:FF",
+		[]byte(`{"error":{"message":"device not found"}}`))
+	if err == nil {
+		t.Fatal("expected a failure")
+	}
+	if strings.Contains(err.Error(), "managed account") {
+		t.Fatalf("a device 404 was explained as a managed-account problem: %v", err)
+	}
+}
