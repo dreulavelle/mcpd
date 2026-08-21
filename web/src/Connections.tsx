@@ -205,13 +205,18 @@ function TunnelPanel() {
   if (!info) return null;
   const { tunnels, version } = info;
   const anyConnected = tunnels.some((t) => t.state === "connected");
+  // With one connector the heading already carries its state, so listing it
+  // again below would say the same thing twice. Rows earn their place only
+  // once there is more than one to tell apart.
+  const single = tunnels.length === 1 ? tunnels[0]! : null;
+  const problem = single?.state === "failed" ? single.message : undefined;
 
   return (
     <>
       {view}
       <div className="card" style={{ marginBottom: "var(--s3)" }}>
         <div className="card-body">
-          <div className="row" style={{ marginBottom: tunnels.length ? "var(--s4)" : 0 }}>
+          <div className="row" style={{ marginBottom: single && !problem ? 0 : "var(--s4)" }}>
             <Dot tone={overallTone(tunnels)} />
             <div style={{ flex: 1 }}>
               <h3 style={{ marginBottom: 2 }}>ChatGPT</h3>
@@ -225,13 +230,17 @@ function TunnelPanel() {
             )}
           </div>
 
-          {tunnels.length === 0 ? (
+          {tunnels.length === 0 && (
             <p className="note" style={{ marginTop: "var(--s2)" }}>
               Set this up in Settings and ChatGPT can reach mcpd without you
               opening anything to the internet. You'll need a tunnel from{" "}
               <Out href={OPENAI_TUNNELS}>your OpenAI account</Out>.
             </p>
-          ) : (
+          )}
+
+          {problem && <Message tone="problem">{problem}</Message>}
+
+          {tunnels.length > 1 && (
             <div className="stack">
               {tunnels.map((t) => <TunnelRow key={t.plugin || "*"} status={t} />)}
             </div>
@@ -239,9 +248,12 @@ function TunnelPanel() {
 
           {tunnels.length > 0 && (
             <p className="note" style={{ marginTop: "var(--s4)" }}>
-              Each of these is one connector in ChatGPT. A tunnel carries a
-              single address, so giving a system a connector of its own means
-              giving it a tunnel of its own — add one per system in Settings.
+              {tunnels.length > 1
+                ? "Each of these is one connector in ChatGPT."
+                : "Want one system to have a connector of its own? "}
+              A tunnel carries a single address, so a system with its own
+              connector needs a tunnel of its own — add one per system in
+              Settings.
             </p>
           )}
 
