@@ -20,8 +20,9 @@ import (
 // Four things it does that a naive client would not, each because the API
 // makes the naive choice wrong:
 //
-//   - Every request path is checked against the deny-list, so nothing can
-//     reach the remote-command endpoints even by constructing a path directly.
+//   - Every request passes a guard that refuses anything but a GET and checks
+//     the decoded path against the deny-list, so nothing can reach the
+//     remote-command endpoints even by constructing a path directly.
 //   - Calls go to the host the token response named, not the one tokens were
 //     obtained from, because cloud accounts are regionally sharded.
 //   - managed_account is attached to every request when configured, because
@@ -38,10 +39,15 @@ type Client struct {
 }
 
 // NewClient builds an API client. cfg is assumed already defaulted.
+//
+// The read-only guard is applied here rather than by the caller, so there is
+// no way to construct a client without it -- including in a test, which is
+// where an unguarded one would otherwise be most likely to appear.
 func NewClient(httpClient *http.Client, cfg Config, clientID, secret string, log *slog.Logger, now func() time.Time) *Client {
+	guarded := readOnly(httpClient)
 	return &Client{
-		http:   httpClient,
-		tokens: newTokenManager(httpClient, cfg.BaseURL, clientID, secret, now),
+		http:   guarded,
+		tokens: newTokenManager(guarded, cfg.BaseURL, clientID, secret, now),
 		// Burst of one: listing walks pages in a tight loop, and a burst
 		// allowance would let the first few pages ignore the limit entirely,
 		// which is the shape most likely to trip an upstream limit.
