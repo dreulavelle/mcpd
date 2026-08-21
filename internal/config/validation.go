@@ -57,6 +57,35 @@ func (c *Config) Validate() error {
 			add("config: server.public_url must use http or https (got %q)", u.Scheme)
 		}
 	}
+	switch c.Server.TLS.Mode {
+	case "", "off", "self-signed":
+	default:
+		add("config: server.tls.mode must be off or self-signed (got %q)", c.Server.TLS.Mode)
+	}
+
+	// OAuth and plaintext are not compatible, and the failure is otherwise
+	// very hard to read: the metadata is fetched successfully and then
+	// rejected, which ChatGPT reports as "does not implement OAuth".
+	//
+	// RFC 8414 requires an authorization server's issuer identifier to use the
+	// https scheme, and the MCP specification requires authorization servers
+	// to implement OAuth 2.1. Refusing to start says so once, here, instead of
+	// leaving an operator to work it out from a connector dialog.
+	if oauthMounted(c.Auth.Mode) && c.Server.PublicURL != "" {
+		if u, err := url.Parse(c.Server.PublicURL); err == nil && u.Scheme == "http" {
+			add("config: server.public_url must use https when auth.mode is %q, "+
+				"because an OAuth issuer must be an https URL and a connector "+
+				"will refuse one that is not. Set server.tls.mode to self-signed "+
+				"and change public_url to https://%s", c.Auth.Mode, u.Host)
+		}
+	}
+	if c.Server.TLS.Enabled() && c.Server.PublicURL != "" {
+		if u, err := url.Parse(c.Server.PublicURL); err == nil && u.Scheme == "http" {
+			add("config: server.public_url is http but the listener serves https; " +
+				"clients would be sent to a port that does not speak plaintext")
+		}
+	}
+
 	if c.Server.ShutdownTimeout <= 0 {
 		add("config: server.shutdown_timeout must be positive")
 	}
@@ -335,3 +364,6 @@ func isPrivateHost(host string) bool {
 }
 
 func sortStrings(s []string) { sort.Strings(s) }
+
+// oauthMounted reports whether the built-in authorization server is served.
+func oauthMounted(mode string) bool { return mode == "oauth" || mode == "mixed" }

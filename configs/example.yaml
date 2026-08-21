@@ -16,6 +16,22 @@ server:
   # what clients actually use or a connector handshake fails at the redirect.
   public_url: "https://mcp.example.net"
 
+  tls:
+    # off | self-signed
+    #
+    # Self-signed matters for a private deployment reached through a tunnel.
+    # An OAuth issuer must be an https URL (RFC 8414) and a ChatGPT connector
+    # refuses one that is not -- reporting only that the server "does not
+    # implement OAuth", after fetching the metadata successfully, which makes
+    # it a hard failure to read.
+    #
+    # A publicly trusted certificate cannot be issued for an address like
+    # 192.168.1.10, so mcpd issues its own from a CA it keeps beside the
+    # database. The CA is downloadable from the dashboard; the embedded tunnel
+    # client is told about it directly. Leave this off when a reverse proxy in
+    # front already terminates TLS.
+    mode: off
+
   # Admin dashboard listener, separate from the MCP endpoint above.
   #
   # Agents reach MCP over a tunnel; operators reach the dashboard on an

@@ -148,7 +148,13 @@ func (a *App) Run(ctx context.Context) error {
 			"addr", a.cfg.Server.Listen,
 			"public_url", a.cfg.Server.PublicURL,
 			"plugins", a.manager.Names())
-		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		serve := a.server.ListenAndServe
+		if a.server.TLSConfig != nil {
+			// The certificate is already in TLSConfig, so the file arguments
+			// are deliberately empty.
+			serve = func() error { return a.server.ListenAndServeTLS("", "") }
+		}
+		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("app: http server: %w", err)
 			return
 		}
