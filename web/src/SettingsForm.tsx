@@ -203,17 +203,17 @@ function Field({ field, value, link, isSet, clearing, readOnly, onChange, onTogg
   );
 }
 
+/**
+ * Presents a stored enum value.
+ *
+ * Only roles need it, and only to capitalise them: the stored values are
+ * lowercase and a dropdown reading "user" looks like a bug. The branches this
+ * used to carry -- risk levels, and an empty option meaning "never require a
+ * second person" -- described settings that no longer exist.
+ */
 function optionLabel(key: string, option: string): string {
-  if (option === "") return "Never require a second person";
-  if (key.endsWith("role")) {
-    return {
-      viewer: "Look things up only",
-      operator: "Look things up and suggest changes",
-      approver: "Also approve its own changes",
-    }[option] ?? option;
-  }
-  return { low: "Minor", medium: "Moderate", high: "Significant", critical: "Major" }[option]
-    ?? option;
+  if (!key.endsWith("role")) return option;
+  return { user: "User", admin: "Admin" }[option] ?? option;
 }
 
 /** Strips the internal prefix off a validation message. */
