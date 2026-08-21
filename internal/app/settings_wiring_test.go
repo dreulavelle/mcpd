@@ -141,21 +141,28 @@ func TestApprovalPolicyIsReadLive(t *testing.T) {
 	}
 }
 
-// ChatGPT refuses to create an OAuth connector unless protected-resource
-// discovery succeeds, and discovery is a tunnel command the client can only
-// run against a URL. So an OAuth deployment must hand the tunnel mcpd's own
-// address; in-memory leaves the connector unusable with no clue why.
-func TestTunnelBindsOverHTTPWhenOAuthIsMounted(t *testing.T) {
+// A tunnel carries the MCP server, not the authorization server, so signing
+// people in through one only works when mcpd is publicly reachable. Binding
+// over HTTP is therefore asked for rather than assumed: mounting OAuth for
+// direct clients must not quietly change how the tunnel works.
+func TestTunnelStaysInProcessUnlessSignInIsAskedFor(t *testing.T) {
 	ctx := context.Background()
 
-	static := newSettingsApp(t)
-	if got := static.tunnelConfig(ctx).MCPServerURL; got != "" {
-		t.Fatalf("MCPServerURL = %q, want in-memory under static auth", got)
+	if got := newSettingsApp(t).tunnelConfig(ctx).MCPServerURL; got != "" {
+		t.Fatalf("MCPServerURL = %q, want in-process under static auth", got)
 	}
 
-	oauth := newOAuthSettingsApp(t)
-	got := oauth.tunnelConfig(ctx).MCPServerURL
-	if got != "https://localhost:9080/mcp" {
+	a := newOAuthSettingsApp(t)
+	if got := a.tunnelConfig(ctx).MCPServerURL; got != "" {
+		t.Fatalf("MCPServerURL = %q, want in-process until sign-in is turned on", got)
+	}
+
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelSignIn, Value: "true"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.tunnelConfig(ctx).MCPServerURL; got != "https://localhost:9080/mcp" {
 		t.Fatalf("MCPServerURL = %q, want mcpd's own MCP endpoint", got)
 	}
 }
@@ -165,8 +172,14 @@ func TestTunnelBindsOverHTTPWhenOAuthIsMounted(t *testing.T) {
 // fails after the person has already approved.
 func TestTunnelMCPURLSharesTheIssuerOrigin(t *testing.T) {
 	a := newOAuthSettingsApp(t)
+	ctx := context.Background()
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelSignIn, Value: "true"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	mcpURL := a.tunnelConfig(context.Background()).MCPServerURL
+	mcpURL := a.tunnelConfig(ctx).MCPServerURL
 	if !strings.HasPrefix(mcpURL, a.cfg.Server.PublicURL) {
 		t.Fatalf("MCP URL %q must share an origin with the issuer %q",
 			mcpURL, a.cfg.Server.PublicURL)
@@ -250,6 +263,7 @@ func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
 	)
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.KeyTunnelSignIn, Value: "true"},
 		{Key: settings.KeyTunnelID, Value: `"` + main + `"`},
 		{Key: settings.PluginTunnelKey("echo"), Value: `"` + echo + `"`},
 	}); err != nil {
@@ -330,5 +344,38 @@ func TestHistoryIsReadableAndPrunable(t *testing.T) {
 	}
 	if broken, err := a.audit.VerifyChain(ctx); err != nil || broken != 0 {
 		t.Fatalf("VerifyChain = %d, %v", broken, err)
+	}
+}
+
+// Scoping a connector to one plugin has to hold over the in-process binding
+// too, or turning sign-in off would quietly widen every per-plugin connector
+// to everything.
+func TestAPerPluginTunnelIsScopedWithoutSignIn(t *testing.T) {
+	a := newOAuthSettingsApp(t)
+	ctx := context.Background()
+
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.PluginTunnelKey("echo"),
+			Value: `"tunnel_1123456789abcdef0123456789abcdef"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var scoped *tunnel.Config
+	for i, c := range a.tunnelConfigs(ctx) {
+		if c.Plugin == "echo" {
+			scoped = &a.tunnelConfigs(ctx)[i]
+		}
+	}
+	if scoped == nil {
+		t.Fatal("no tunnel was built for echo")
+	}
+	if scoped.MCPServerURL != "" {
+		t.Errorf("MCPServerURL = %q, want the in-process binding", scoped.MCPServerURL)
+	}
+	if len(scoped.Principal.Plugins) != 1 || scoped.Principal.Plugins[0] != "echo" {
+		t.Errorf("Plugins = %v, want echo alone -- that is what scopes it in process",
+			scoped.Principal.Plugins)
 	}
 }

@@ -103,6 +103,7 @@ const (
 	KeyTunnelPlugins   = "tunnel.plugins"
 	KeyTunnelUpdates   = "tunnel.check_for_updates"
 	KeyTunnelDebug     = "tunnel.debug"
+	KeyTunnelSignIn    = "tunnel.each_person_signs_in"
 
 	KeyHistoryRetentionDays = "history.retention_days"
 
@@ -179,6 +180,14 @@ func schema() []Group {
 					Key: KeyTunnelOrgID, Label: "OpenAI organization ID", Kind: KindString,
 					Group: "tunnel", Apply: ApplyLive, Placeholder: "org_...",
 					Help: "Needed alongside the admin key. Settings, Organization, General.",
+				},
+				{
+					Key: KeyTunnelSignIn, Label: "Ask each person to sign in",
+					Kind: KindBool, Group: "tunnel", Apply: ApplyReconnect, Default: false,
+					Help: "Only works if mcpd is reachable from the internet. A tunnel " +
+						"carries the connection but not the sign-in, so ChatGPT cannot " +
+						"complete one against a private address. Leave off and the " +
+						"tunnel itself is the credential.",
 				},
 				{
 					Key: KeyTunnelPrincipal, Label: "Show it as", Kind: KindString,

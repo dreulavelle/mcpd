@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { api, ApiError, type OpenAITunnel, type TunnelInfo, type TunnelStatus } from "./api";
-import { Dot, Message, Out, Skeleton, usePoll, useToasts } from "./components";
+import { Copyable, Dot, Message, Out, Skeleton, usePoll, useToasts } from "./components";
 
 const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
 
@@ -123,8 +123,10 @@ function TunnelRow({ row, info, onDone, show }: {
   return (
     <tr>
       <td>
-        <div style={{ fontWeight: 550 }}>{row.name}</div>
-        <code style={{ fontSize: 12 }}>{short(row.id)}</code>
+        <div style={{ fontWeight: 550, marginBottom: 4 }}>{row.name}</div>
+        {/* Whole, and copyable: ChatGPT will accept a tunnel ID typed in, and
+            an ID shown with the middle missing cannot be typed anywhere. */}
+        <Copyable value={row.id} label="tunnel ID" />
       </td>
       <td>
         {info.can_manage ? (
@@ -219,7 +221,3 @@ function describe(state?: TunnelStatus["state"]): string {
   }
 }
 
-/** tunnel_6a87ab02… — enough to tell two apart. */
-function short(id: string): string {
-  return id.length > 20 ? `${id.slice(0, 16)}…` : id;
-}

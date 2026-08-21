@@ -563,8 +563,10 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 		scoped.Plugin = name
 		scoped.TunnelID = id
 		// Bound to this plugin's endpoint, which is the whole point: the
-		// connector reaches this system and cannot discover any other.
-		if a.oauthServer != nil && a.cfg.Server.PublicURL != "" {
+		// connector reaches this plugin and cannot discover any other. Over
+		// the in-process binding the same scoping comes from the principal
+		// below, so it holds either way.
+		if base.MCPServerURL != "" {
 			scoped.MCPServerURL = strings.TrimRight(a.cfg.Server.PublicURL, "/") + "/mcp/" + name
 		}
 		scoped.Principal.Plugins = []string{name}
@@ -597,20 +599,27 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 		},
 	}
 
-	// With OAuth mounted the tunnel binds over HTTP rather than in memory.
+	// Binding over HTTP is what lets the connector sign people in, and it is
+	// off unless asked for.
 	//
-	// It has to: the control plane asks the tunnel client to fetch
-	// protected-resource metadata, and an in-memory binding has no address to
-	// fetch it from -- so ChatGPT reports that mcpd does not implement OAuth
-	// and refuses to create the connector. Both this and the OAuth issuer come
-	// from server.public_url, which is what puts every OAuth endpoint on one
-	// origin; the tunnel will not reach an authorization server on a private
-	// address otherwise.
+	// A tunnel carries the MCP server, not the authorization server. OpenAI's
+	// documentation is explicit that the authorization server "is not
+	// automatically tunneled" and must be reachable from the public internet;
+	// Harpoon is "not a general-purpose proxy". So against a private mcpd the
+	// connector fetches the protected-resource metadata, finds an
+	// authorization server it cannot reach, and reports that the server does
+	// not implement OAuth -- which is a true statement about what it can see.
 	//
-	// The aggregate endpoint is deliberate. Under OAuth the caller's own token
-	// decides which plugins they see, so scoping the tunnel as well would only
-	// hide plugins from people who were granted them.
-	if a.oauthServer != nil && a.cfg.Server.PublicURL != "" {
+	// Left off, the tunnel talks to an MCP server in this process: no port, no
+	// socket, no credential, and mcpd stays entirely private. The tunnel is
+	// then the credential, which is what it already is -- the organisation
+	// owns it and a runtime key authenticates it.
+	//
+	// The aggregate endpoint is deliberate when this is on. The caller's own
+	// token decides which plugins they see, so scoping the tunnel as well
+	// would only hide plugins from people who were granted them.
+	signIn := a.settings.Bool(ctx, settings.KeyTunnelSignIn, false)
+	if signIn && a.oauthServer != nil && a.cfg.Server.PublicURL != "" {
 		cfg.MCPServerURL = strings.TrimRight(a.cfg.Server.PublicURL, "/") + "/mcp"
 	}
 	if a.tls != nil {
