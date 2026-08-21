@@ -36,21 +36,17 @@ export function Settings() {
     <>
       {view}
       <h1>Settings</h1>
-      <p className="lede">
-        How mcpd behaves. Changes apply straight away unless a field says
-        otherwise.
-      </p>
+      <p className="lede">Changes apply straight away unless a field says otherwise.</p>
 
       {error && <Message tone="problem">{error}</Message>}
 
       {meta?.auth_mode === "static" && (
         <Message tone="attention">
           <span>
-            <strong>Everyone shares one sign-in right now.</strong> mcpd can't
-            tell two people apart, so it can't require that someone other than
-            the suggester approves a change — it refuses those rather than
-            pretending. Switch <code>auth.mode</code> to <code>mixed</code> in
-            your startup file to give people their own accounts.
+            <strong>Everyone shares one sign-in.</strong> mcpd can't tell two
+            people apart, so it refuses changes that need a second approver.
+            Set <code>auth.mode</code> to <code>mixed</code> to give people
+            their own accounts.
           </span>
         </Message>
       )}
