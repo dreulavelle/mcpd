@@ -175,3 +175,17 @@ plugins:
   # Out-of-process plugins are discovered from plugins_dir and named here the
   # same way. A plugin's own settings go under `settings`, and it decides what
   # they mean.
+
+  # Cambium cnMaestro. Read-only: it lists networks and devices and will not
+  # run commands on hardware. Credentials come from Download Credentials in
+  # cnMaestro under Application > API Clients.
+  cnmaestro:
+    enabled: false
+    required: false
+    settings:
+      base_url: "https://cloud.cambiumnetworks.com"
+      client_id_ref: env:MCPD_CNMAESTRO_CLIENT_ID
+      client_secret_ref: env:MCPD_CNMAESTRO_CLIENT_SECRET
+      # Sent on every request. Omitting it means different things depending on
+      # whether a request names a network, so it is set explicitly or not at all.
+      managed_account: ""

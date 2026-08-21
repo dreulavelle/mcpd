@@ -176,7 +176,7 @@ its own certificate with `server.tls.mode: self-signed`.
 | Plugin | What it manages | State |
 |---|---|---|
 | `echo` | Nothing real — a worked example, including an approval-gated write | Bundled |
-| `cnmaestro` | Cambium cnMaestro: Wi-Fi and fixed-wireless estates | In progress |
+| `cnmaestro` | Cambium cnMaestro: Wi-Fi and fixed-wireless estates | Read-only |
 
 Anything else is a plugin you write. See below.
 

@@ -13,6 +13,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/plugins/cnmaestro"
 	"github.com/spoked/mcpd/internal/plugins/echoplugin"
 	"github.com/spoked/mcpd/internal/plugins/external"
 )
@@ -90,6 +91,17 @@ func (a *App) registerPlugins(ctx context.Context) error {
 		switch name {
 		case "echo":
 			p = echoplugin.New(deps)
+
+		case "cnmaestro":
+			var cnCfg cnmaestro.Config
+			if err := decodeSettings(pc.Settings, &cnCfg); err != nil {
+				return fmt.Errorf("app: plugin %q settings: %w", name, err)
+			}
+			built, err := cnmaestro.New(deps, cnCfg)
+			if err != nil {
+				return err
+			}
+			p = built
 
 		default:
 			return fmt.Errorf("app: plugin %q is enabled in configuration "+
