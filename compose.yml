@@ -43,6 +43,11 @@ services:
       # anything untrusted:  - "10.0.0.5:80:8081"
       - "${MCPD_FRONTEND_BIND:-127.0.0.1}:${MCPD_FRONTEND_PORT:-80}:8081"
 
+      # The tunnel client's own diagnostics, when tunnel.diagnostics_addr is
+      # set. Loopback on the host and not optional about it: the listener is
+      # unauthenticated.
+      - "127.0.0.1:${MCPD_TUNNEL_DIAGNOSTICS_PORT:-9099}:9099"
+
     volumes:
       # Database and all mutable state. Named rather than bind-mounted so the
       # nonroot container user owns it without host-side chown.

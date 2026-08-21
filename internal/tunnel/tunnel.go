@@ -83,6 +83,18 @@ type Config struct {
 	// reachable from outside the network.
 	MCPServerURL string
 
+	// DiagnosticsAddr binds the tunnel client's own health and admin listener.
+	//
+	// Empty leaves it off, which is the right default: it is a second HTTP
+	// surface in the process and mcpd already reports the tunnel's state. It
+	// earns its place when a connector is being refused for reasons only the
+	// client can see -- /readyz distinguishes "still discovering" from
+	// "discovery failed", and /api/oauth reports what was actually discovered,
+	// neither of which is visible from mcpd's side.
+	//
+	// Bind it to loopback. It is unauthenticated.
+	DiagnosticsAddr string
+
 	// TrustedCAFile is a PEM bundle added to the tunnel client's trust roots.
 	//
 	// Without it, a self-signed mcpd is unreachable over HTTPS by the very
