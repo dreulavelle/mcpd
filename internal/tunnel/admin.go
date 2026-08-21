@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -21,20 +22,45 @@ import (
 // operator explicitly asked for and never held by the running client.
 type Directory struct {
 	adminKey string
+	orgID    string
 	baseURL  string
 }
 
 // ErrNoAdminKey means tunnel management is unavailable, not that it failed.
 var ErrNoAdminKey = errors.New("tunnel: no admin key is configured")
 
-// NewDirectory returns a directory. An empty key leaves it unavailable rather
-// than failing, so the dashboard can offer paste-an-id instead.
-func NewDirectory(adminKey, baseURL string) *Directory {
-	return &Directory{adminKey: strings.TrimSpace(adminKey), baseURL: baseURL}
+// NewDirectory returns a directory. Missing credentials leave it unavailable
+// rather than failing, so the dashboard can offer paste-an-id instead.
+func NewDirectory(adminKey, orgID, baseURL string) *Directory {
+	return &Directory{
+		adminKey: strings.TrimSpace(adminKey),
+		orgID:    strings.TrimSpace(orgID),
+		baseURL:  baseURL,
+	}
 }
 
 // Available reports whether tunnels can be listed and created.
-func (d *Directory) Available() bool { return d != nil && d.adminKey != "" }
+//
+// Both credentials are needed. The API scopes every tunnel request to exactly
+// one organisation and rejects a request that names none, so an admin key on
+// its own cannot list anything.
+func (d *Directory) Available() bool {
+	return d != nil && d.adminKey != "" && d.orgID != ""
+}
+
+// Missing names which credential is absent, for a dashboard that would
+// otherwise say only that the feature is off.
+func (d *Directory) Missing() string {
+	switch {
+	case d == nil, d.adminKey == "" && d.orgID == "":
+		return "an OpenAI admin key and organization ID"
+	case d.adminKey == "":
+		return "an OpenAI admin key"
+	case d.orgID == "":
+		return "your OpenAI organization ID"
+	}
+	return ""
+}
 
 // TunnelInfo is one tunnel as OpenAI knows it.
 type TunnelInfo struct {
@@ -49,7 +75,7 @@ func (d *Directory) List(ctx context.Context) ([]TunnelInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.ListTunnels(ctx, "", "", "")
+	resp, err := client.ListTunnels(ctx, d.orgID, "", "")
 	if err != nil {
 		return nil, d.explain(err)
 	}
@@ -70,8 +96,9 @@ func (d *Directory) Create(ctx context.Context, name, description string) (*Tunn
 		return nil, errors.New("tunnel: a name is required")
 	}
 	t, err := client.CreateTunnel(ctx, tcadmin.TunnelCreateRequest{
-		Name:        name,
-		Description: description,
+		Name:            name,
+		Description:     description,
+		OrganizationIDs: []string{d.orgID},
 	})
 	if err != nil {
 		return nil, d.explain(err)
@@ -110,27 +137,44 @@ func (d *Directory) client() (*tcadmin.AdminTunnelClient, error) {
 		return nil, fmt.Errorf("tunnel: %q is not a usable control-plane URL", base)
 	}
 	return tcadmin.NewAdminTunnelClient(&tcconfig.AdminConfig{
-		BaseURL:  parsed,
-		AdminKey: d.adminKey,
+		BaseURL:         parsed,
+		AdminKey:        d.adminKey,
+		OrganizationIDs: []string{d.orgID},
 	})
 }
 
 // explain turns the control plane's rejection into something an operator can
-// act on. The two keys look alike and are made on adjacent pages, so "401" on
-// its own sends people to check the wrong one.
+// act on.
+//
+// It reads the typed error rather than searching the message, because the
+// message ends with a request id -- and a request id is hex, so one containing
+// "403" would otherwise be diagnosed as a permissions problem.
 func (d *Directory) explain(err error) error {
 	if err == nil {
 		return nil
 	}
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "401"), strings.Contains(msg, "invalid_api_key"):
-		return errors.New("OpenAI rejected that admin key. Admin keys are made under " +
-			"Settings, Organization, Admin keys -- a runtime API key will not work here, " +
-			"even though it is the right key for running the tunnel")
-	case strings.Contains(msg, "403"):
-		return errors.New("that admin key is valid but not allowed to manage tunnels. " +
-			"It needs the Tunnels: Manage permission")
+
+	var req *tcadmin.RequestError
+	if errors.As(err, &req) {
+		switch req.StatusCode {
+		case http.StatusUnauthorized:
+			return errors.New("OpenAI rejected that admin key. Admin keys are made " +
+				"under Settings, Organization, Admin keys -- the runtime key that " +
+				"runs the tunnel will not work here")
+		case http.StatusForbidden:
+			// The permission sits on the principal that made the key, not on
+			// the key, so this is fixed under Organization, People, Roles --
+			// not by making another key.
+			return errors.New("that key is not allowed to manage tunnels. The " +
+				"person who created it needs a role with Tunnels: Manage, under " +
+				"Settings, Organization, People, Roles")
+		case http.StatusBadRequest:
+			if strings.Contains(req.ResponseBody, "organization_id") ||
+				strings.Contains(req.Message, "organization_id") {
+				return errors.New("that organization ID was not accepted. Find it " +
+					"under Settings, Organization, General -- it starts with org_")
+			}
+		}
 	}
 	return redactKey(err, d.adminKey)
 }

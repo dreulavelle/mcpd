@@ -150,6 +150,8 @@ export interface TunnelInfo {
   available?: OpenAITunnel[];
   /** Why the list above is missing, when it shouldn't be. */
   problem?: string;
+  /** Which credential is needed to manage tunnels, when one is absent. */
+  missing?: string;
   /** The systems a tunnel can be pointed at. */
   plugins: string[];
 }

@@ -28,10 +28,7 @@ export function Plugins() {
   return (
     <>
       <h1>Systems</h1>
-      <p className="lede">
-        What mcpd can work with. Each one brings its own set of things an
-        assistant can look up or change.
-      </p>
+      <p className="lede">What mcpd can work with.</p>
 
       {error && <Message tone="problem">{error}</Message>}
 
@@ -39,9 +36,7 @@ export function Plugins() {
         <Skeleton rows={3} />
       ) : plugins.length === 0 ? (
         <Empty mark="○" title="No systems yet">
-          Add one to your startup file and restart. The echo system is a good
-          first one — it touches nothing, so it only checks that everything
-          works.
+          Add one to your startup file and restart.
         </Empty>
       ) : (
         <>
@@ -53,38 +48,23 @@ export function Plugins() {
             ))}
           </div>
 
-          <h2>Connecting something directly</h2>
-          <div className="card">
-            <div className="card-body">
-              <p className="note">
-                For anything that can already reach this machine. ChatGPT can't
-                — it comes in through a tunnel instead, which you set up on the
-                Tunnels page.
-              </p>
-
-              {endpoints && (
-                <>
+          {endpoints && (
+            <>
+              <h2>Connecting directly</h2>
+              <div className="card">
+                <div className="card-body">
+                  <p className="note">
+                    For clients that can reach this machine. ChatGPT uses a
+                    tunnel instead.
+                  </p>
+                  <Copyable value={endpoints.aggregate} label="address" />
                   <div className="section">
-                    <p className="eyebrow">Everything at once</p>
-                    <Copyable value={endpoints.aggregate} label="address" />
-                    <p className="note" style={{ marginTop: "var(--s2)" }}>
-                      Gives an assistant everything its key allows. Each system
-                      also has its own address, shown in its row above.
-                    </p>
-                  </div>
-
-                  <div className="section">
-                    <p className="eyebrow">Send your key with every request</p>
                     <CodeBlock>{`Authorization: Bearer YOUR_KEY`}</CodeBlock>
-                    <p className="note tight">
-                      The same key you signed in here with — it's in your{" "}
-                      <code>.env</code> file.
-                    </p>
                   </div>
-                </>
-              )}
-            </div>
-          </div>
+                </div>
+              </div>
+            </>
+          )}
         </>
       )}
     </>
@@ -129,7 +109,6 @@ function Row({ plugin, open, onToggle }: {
           <div className="section split two">
             <div>
               <p className="eyebrow">Can look up</p>
-              <p className="note">Happens straight away. Nothing changes.</p>
               <div className="row wrap">
                 {lookups.length === 0
                   ? <span className="note tight">Nothing.</span>
@@ -139,8 +118,7 @@ function Row({ plugin, open, onToggle }: {
               </div>
             </div>
             <div>
-              <p className="eyebrow">Can suggest</p>
-              <p className="note">Needs someone to say yes before it happens.</p>
+              <p className="eyebrow">Can change, with approval</p>
               <div className="row wrap">
                 {changes.length === 0
                   ? <span className="note tight">Nothing.</span>
@@ -155,10 +133,6 @@ function Row({ plugin, open, onToggle }: {
 
           <div className="section">
             <p className="eyebrow">Its own address</p>
-            <p className="note">
-              For something connecting directly with a key that's been given
-              access to this system.
-            </p>
             <Copyable value={plugin.connect_url} label="address" />
           </div>
         </div>

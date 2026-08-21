@@ -194,8 +194,7 @@ function Changes({ onOpen }: { onOpen: (id: string) => void }) {
     <>
       <h1>Changes</h1>
       <p className="lede">
-        Everything an assistant has suggested, and what became of it. Nothing
-        here takes effect until someone says yes.
+        What assistants have suggested. Nothing takes effect until approved.
       </p>
 
       {error && <Message tone="problem">{error}</Message>}
@@ -334,7 +333,6 @@ function ChangeDetail({ id, onBack }: { id: string; onBack: () => void }) {
               <textarea id="reason" rows={2} value={reason}
                         onChange={(e) => setReason(e.target.value)}
                         placeholder="Why you're approving or turning this down" />
-              <p className="note">Saved with the change, so it's clear later why.</p>
             </div>
 
             <div className="actions">
@@ -350,8 +348,8 @@ function ChangeDetail({ id, onBack }: { id: string; onBack: () => void }) {
             </div>
 
             <p className="note" style={{ marginTop: "var(--s4)" }}>
-              Approving applies exactly what's shown above — it can't be edited
-              here. If something's wrong, turn it down and ask for it again.
+              Approving applies exactly what's shown above. To change it, turn
+              it down and ask again.
             </p>
           </div>
         </div>
@@ -448,10 +446,7 @@ function FullHistory() {
   return (
     <>
       <h1>History</h1>
-      <p className="lede">
-        A permanent record of everything that's happened. Entries can only be
-        added — if anything is edited or removed, mcpd notices.
-      </p>
+      <p className="lede">Append-only. mcpd notices if anything is altered.</p>
 
       {error && <Message tone="problem">{error}</Message>}
 

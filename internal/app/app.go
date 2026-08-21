@@ -291,6 +291,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 				ctx := context.Background()
 				return tunnel.NewDirectory(
 					a.settings.Secret(ctx, settings.KeyTunnelAdminKey, ""),
+					a.settings.String(ctx, settings.KeyTunnelOrgID, ""),
 					a.cfg.Tunnel.ControlPlaneBaseURL)
 			},
 			CACertificate: func() []byte {

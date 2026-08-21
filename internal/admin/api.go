@@ -291,6 +291,9 @@ type tunnelResponse struct {
 	Available []tunnel.TunnelInfo `json:"available,omitempty"`
 	// Problem explains why Available is missing, when it should not be.
 	Problem string `json:"problem,omitempty"`
+	// Missing names the credential needed to manage tunnels, when one is not
+	// set. "The feature is off" is not something anyone can act on.
+	Missing string `json:"missing,omitempty"`
 	// Plugins names the systems a tunnel can be pointed at.
 	Plugins []string `json:"plugins"`
 }
@@ -305,7 +308,9 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Plugins != nil {
 		resp.Plugins = s.opts.Plugins()
 	}
-	if dir := s.directory(); dir.Available() {
+	dir := s.directory()
+	resp.Missing = dir.Missing()
+	if dir.Available() {
 		resp.CanManage = true
 		// A listing failure is reported rather than fatal: the tunnels mcpd is
 		// running are known locally and stay visible either way.
@@ -989,7 +994,7 @@ func (s *Server) handleCACertificate(w http.ResponseWriter, r *http.Request) {
 // directory returns the tunnel manager, never nil.
 func (s *Server) directory() *tunnel.Directory {
 	if s.opts.Directory == nil {
-		return tunnel.NewDirectory("", "")
+		return tunnel.NewDirectory("", "", "")
 	}
 	return s.opts.Directory()
 }
@@ -1007,7 +1012,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	dir := s.directory()
 	if !dir.Available() {
 		s.writeError(w, r, http.StatusBadRequest,
-			"add an OpenAI admin key first, or create the tunnel on OpenAI's site and paste its ID")
+			"add "+dir.Missing()+" in Settings first")
 		return
 	}
 	if err := s.checkPlugin(body.Plugin); err != nil {
@@ -1052,8 +1057,7 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	dir := s.directory()
 	if !dir.Available() {
-		s.writeError(w, r, http.StatusBadRequest,
-			"deleting a tunnel needs an OpenAI admin key")
+		s.writeError(w, r, http.StatusBadRequest, "deleting a tunnel needs "+dir.Missing())
 		return
 	}
 	id := r.PathValue("id")

@@ -97,6 +97,7 @@ const (
 	KeyTunnelID        = "tunnel.tunnel_id"
 	KeyTunnelAPIKey    = "tunnel.api_key"
 	KeyTunnelAdminKey  = "tunnel.admin_key"
+	KeyTunnelOrgID     = "tunnel.organization_id"
 	KeyTunnelPrincipal = "tunnel.principal"
 	KeyTunnelRole      = "tunnel.role"
 	KeyTunnelPlugins   = "tunnel.plugins"
@@ -167,10 +168,7 @@ func pluginTunnelFields(plugins []string) []Field {
 			Group:       "tunnel",
 			Apply:       ApplyReconnect,
 			Placeholder: "tunnel_0123456789abcdef0123456789abcdef",
-			Help: "Optional. Create a second tunnel in your OpenAI account and " +
-				"paste its ID here to give " + name + " a connector of its own, " +
-				"which can reach nothing else. Leave empty and it stays part of " +
-				"the main connection above.",
+			Help:        "Optional. Gives " + name + " a connector of its own.",
 		})
 	}
 	return fields
@@ -181,11 +179,9 @@ func schema() []Group {
 		{
 			Name:      "tunnel",
 			Title:     "ChatGPT",
-			Section:   SectionTunnels,
+			Section:   SectionSettings,
 			EnabledBy: KeyTunnelEnabled,
-			Help: "Lets ChatGPT reach mcpd without opening anything to the internet. " +
-				"The connection is made outward from here, so nothing needs to reach in. " +
-				"See the Setup tab for where to get these.",
+			Help:      "Lets ChatGPT reach mcpd without opening anything to the internet.",
 			Fields: []Field{
 				{
 					Key: KeyTunnelEnabled, Label: "Let ChatGPT connect",
@@ -201,40 +197,39 @@ func schema() []Group {
 				{
 					Key: KeyTunnelAPIKey, Label: "OpenAI key", Kind: KindSecret,
 					Group: "tunnel", Apply: ApplyReconnect, Required: true,
-					Help: "Needs the Tunnels: Read and Use permission. Stored encrypted, " +
-						"and never shown again once saved.",
+					Help: "Needs Tunnels: Read and Use. Stored encrypted.",
 				},
 				{
 					Key: KeyTunnelAdminKey, Label: "OpenAI admin key", Kind: KindSecret,
 					Group: "tunnel", Apply: ApplyLive,
-					Help: "Optional, and a different key from the one above. It lets you " +
-						"create and delete tunnels from here instead of on OpenAI's site. " +
-						"It is only used when you press a button, never by the running " +
-						"connection.",
+					Help: "Optional, and a different key from the one above. Lets you " +
+						"make tunnels from the Tunnels page.",
+				},
+				{
+					Key: KeyTunnelOrgID, Label: "OpenAI organization ID", Kind: KindString,
+					Group: "tunnel", Apply: ApplyLive, Placeholder: "org_...",
+					Help: "Needed alongside the admin key. Settings, Organization, General.",
 				},
 				{
 					Key: KeyTunnelPrincipal, Label: "Show it as", Kind: KindString,
 					Group: "tunnel", Apply: ApplyReconnect, Default: "svc:chatgpt",
-					Help: "A name for ChatGPT in your history, so you can tell its " +
-						"changes from anyone else's.",
+					Help: "How ChatGPT appears in your history.",
 				},
 				{
 					Key: KeyTunnelRole, Label: "What ChatGPT may do", Kind: KindEnum,
 					Group: "tunnel", Apply: ApplyReconnect, Default: "operator",
 					Options: []string{"viewer", "operator", "approver"},
-					Help: "Letting it approve its own changes removes the point of " +
-						"approving them, so pick that deliberately if you do.",
+					Help:    "Approving its own changes removes the point of approving them.",
 				},
 				{
 					Key: KeyTunnelPlugins, Label: "Systems ChatGPT can reach", Kind: KindList,
 					Group: "tunnel", Apply: ApplyReconnect,
-					Help: "Leave empty for all of them, or list the ones you want, " +
-						"separated by commas. Anything else stays invisible to it.",
+					Help: "Comma separated. Empty means all of them.",
 				},
 				{
 					Key: KeyTunnelUpdates, Label: "Mention new versions",
 					Kind: KindBool, Group: "tunnel", Apply: ApplyLive, Default: true,
-					Help: "Checks once a day. Nothing ever updates itself.",
+					Help: "Nothing updates itself.",
 				},
 			},
 		},
@@ -242,7 +237,7 @@ func schema() []Group {
 			Name:    "approval",
 			Title:   "Approvals",
 			Section: SectionSettings,
-			Help:    "How long a suggested change waits, and who is allowed to approve one.",
+			Help:    "How long a change waits, and who may approve one.",
 			Fields: []Field{
 				{
 					Key: KeyApprovalDistinct, Label: "Require a second person from",
@@ -250,9 +245,7 @@ func schema() []Group {
 					Options: []string{"", "low", "medium", "high", "critical"},
 					Default: "high",
 					Help: "Changes at this level or above can't be approved by whoever " +
-						"asked for them. Only works when people sign in individually — " +
-						"with one shared key mcpd can't tell anyone apart, so it " +
-						"refuses those changes rather than pretending.",
+						"asked for them. Needs individual sign-ins.",
 				},
 				{
 					Key: KeyApprovalProposalTTL, Label: "Suggestions expire after",
@@ -264,15 +257,13 @@ func schema() []Group {
 					Key: KeyApprovalApprovalTTL, Label: "Approvals expire after",
 					Kind: KindDuration, Group: "approval", Apply: ApplyLive,
 					Default: 15, Min: intPtr(1), Max: intPtr(1440),
-					Help: "An approval that hasn't been applied by then is dropped, so " +
-						"an old decision can't fire against a system that has since changed.",
+					Help: "Stops an old decision firing against a system that has changed.",
 				},
 				{
 					Key: KeyApprovalLeaseTTL, Label: "Flag a stuck change after",
 					Kind: KindDuration, Group: "approval", Apply: ApplyLive,
 					Default: 2, Min: intPtr(1), Max: intPtr(60),
-					Help: "If mcpd stops partway through applying something, this is how " +
-						"long before it's flagged for someone to check.",
+					Help: "How long before a half-applied change is flagged for checking.",
 				},
 			},
 		},
