@@ -45,6 +45,18 @@ type Options struct {
 	// from AuditReader because reading and removing are different rights.
 	Pruner AuditPruner
 
+	// PluginTypes lists the integrations this build has, so the dashboard can
+	// offer them when someone adds an instance.
+	PluginTypes func() []PluginTypeInfo
+	// AddPlugin, RemovePlugin and SetPluginEnabled manage instances. They
+	// record intent; mounting happens at startup, which is what the response
+	// says rather than leaving someone to wonder why the tools never appear.
+	AddPlugin        func(ctx context.Context, actor, name, typeName string) error
+	RemovePlugin     func(ctx context.Context, actor, name string) error
+	SetPluginEnabled func(ctx context.Context, actor, name string, enabled bool) error
+	// Instances lists what is configured, mounted or not.
+	Instances func(ctx context.Context) []PluginInstanceInfo
+
 	// PluginType reports what integration an instance is of, which is not the
 	// instance's own name once someone configures two of something.
 	PluginType func(instance string) string
@@ -229,6 +241,14 @@ func (s *Server) routes() {
 	// Clearing the record is administrative, and is itself recorded.
 	api("DELETE /api/audit", s.handleClearAudit, auth.CapAdmin)
 	api("GET /api/health", s.handleHealth, auth.CapRead)
+	// Integrations this build has, and the instances configured from them.
+	api("GET /api/plugin-types", s.handlePluginTypes, auth.CapRead)
+	api("GET /api/instances", s.handleInstances, auth.CapRead)
+	// Adding an integration decides what an assistant can reach, so it is
+	// administrative rather than operational.
+	api("POST /api/instances", s.handleAddInstance, auth.CapAdmin)
+	api("PATCH /api/instances/{name}", s.handleSetInstanceEnabled, auth.CapAdmin)
+	api("DELETE /api/instances/{name}", s.handleRemoveInstance, auth.CapAdmin)
 	// Accounts decide who can reach anything else here, so administering them
 	// is an administrator's right.
 	api("GET /api/users", s.handleListUsers, auth.CapAdmin)

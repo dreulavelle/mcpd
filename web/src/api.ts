@@ -143,6 +143,26 @@ export interface Plugin {
   settings: Setting[];
 }
 
+/** An integration this build has, offered when adding an instance. */
+export interface PluginType {
+  name: string;
+  title: string;
+  description: string;
+  /** Whether adding one will ask for settings. */
+  configurable: boolean;
+}
+
+/** One configured instance, mounted or not. */
+export interface PluginInstance {
+  name: string;
+  type: string;
+  /** Defined in the config file, so the dashboard cannot remove it. */
+  from_file: boolean;
+  enabled: boolean;
+  /** Serving now. An instance added since the last start is not. */
+  mounted: boolean;
+}
+
 export interface HealthCheck {
   name: string;
   status: "up" | "degraded" | "down";
@@ -448,4 +468,24 @@ export const api = {
     request<{ removed: number }>("/api/audit", { method: "DELETE" }),
 
   health: () => request<HealthReport>("/api/health"),
+
+  pluginTypes: () =>
+    request<{ types: PluginType[]; count: number }>("/api/plugin-types"),
+
+  instances: () =>
+    request<{ instances: PluginInstance[]; count: number }>("/api/instances"),
+
+  addInstance: (name: string, type: string) =>
+    request<{ status: string; restart_required: boolean; note?: string }>(
+      "/api/instances", { method: "POST", body: JSON.stringify({ name, type }) }),
+
+  setInstanceEnabled: (name: string, enabled: boolean) =>
+    request<{ status: string }>(`/api/instances/${encodeURIComponent(name)}`, {
+      method: "PATCH", body: JSON.stringify({ enabled }),
+    }),
+
+  removeInstance: (name: string) =>
+    request<{ status: string }>(`/api/instances/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
 };

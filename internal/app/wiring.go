@@ -91,9 +91,9 @@ func builtinTypes() (*plugins.Catalog, error) {
 
 // registerPlugins mounts every enabled plugin.
 func (a *App) registerPlugins(ctx context.Context) error {
-	for _, name := range a.cfg.EnabledPlugins() {
-		pc := a.cfg.Plugins[name]
-		typeName := pc.ResolvedType(name)
+	for _, inst := range a.enabledInstances(ctx) {
+		name, typeName := inst.Name, inst.Type
+		pc := a.pluginConfigFor(name)
 
 		t, ok := a.types.Lookup(typeName)
 		if !ok {

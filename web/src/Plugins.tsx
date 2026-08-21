@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import {
-  api, ApiError, type Endpoints, type Plugin, type SettingsPayload,
-  type TunnelInfo, type TunnelStatus,
+  api, ApiError, type Endpoints, type Plugin, type PluginInstance,
+  type PluginType, type SettingsPayload, type TunnelInfo, type TunnelStatus,
 } from "./api";
 import {
   CodeBlock, Copyable, Dot, Empty, Message, Pill, Skeleton, useIsAdmin, usePoll,
@@ -26,9 +26,13 @@ export function Plugins() {
   const [endpoints, setEndpoints] = useState<Endpoints | null>(null);
   const [tunnels, setTunnels] = useState<TunnelInfo | null>(null);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
+  const [types, setTypes] = useState<PluginType[]>([]);
+  const [instances, setInstances] = useState<PluginInstance[]>([]);
   const [open, setOpen] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const { show, view } = useToasts();
+  const admin = useIsAdmin();
 
   const load = useCallback(() => {
     api.plugins()
@@ -37,16 +41,39 @@ export function Plugins() {
     api.endpoints().then(setEndpoints).catch(() => setEndpoints(null));
     api.tunnel().then(setTunnels).catch(() => setTunnels(null));
     api.settings().then(setSettings).catch(() => setSettings(null));
+    api.pluginTypes().then((r) => setTypes(r.types ?? [])).catch(() => setTypes([]));
+    api.instances().then((r) => setInstances(r.instances ?? [])).catch(() => setInstances([]));
   }, []);
   usePoll(load, 15_000);
 
   return (
     <>
       {view}
-      <h1>Plugins</h1>
+      <div className="row">
+        <h1 className="grow">Plugins</h1>
+        {admin && plugins && (
+          <button className="btn primary" onClick={() => setAdding(true)}>Add plugin</button>
+        )}
+      </div>
       <p className="lede">What mcpd can work with, and what each one is set up to reach.</p>
 
       {error && <Message tone="problem">{error}</Message>}
+
+      {/* An instance added since the last start is configured and not serving.
+          Saying so is the difference between "waiting" and "broken". */}
+      <PendingNotice instances={instances} />
+
+      {adding && (
+        <AddPlugin
+          types={types} onClose={() => setAdding(false)}
+          onAdded={(name) => {
+            setAdding(false);
+            load();
+            setOpen(name);
+            show("good", `Added ${name}. Configure it, then restart mcpd.`);
+          }}
+        />
+      )}
 
       {!plugins ? (
         <Skeleton rows={3} />
@@ -56,18 +83,19 @@ export function Plugins() {
         </Empty>
       ) : (
         <>
-          {groupByType(plugins).map(({ type, instances }) => (
+          {groupByType(plugins).map(({ type, members }) => (
             <section key={type} className="plugin-group">
-              {instances.length > 1 && (
+              {members.length > 1 && (
                 <h2 className="type-heading">
-                  {instances[0]!.title}
-                  <span className="note tight">{instances.length} instances</span>
+                  {members[0]!.title}
+                  <span className="note tight">{members.length} instances</span>
                 </h2>
               )}
               <div className="stack">
-                {instances.map((p) => (
+                {members.map((p) => (
                   <PluginCard
                     key={p.name} plugin={p} tunnels={tunnels} settings={settings}
+                    instances={instances}
                     open={open === p.name}
                     onToggle={() => setOpen(open === p.name ? null : p.name)}
                     onChange={load} show={show}
@@ -100,8 +128,97 @@ export function Plugins() {
   );
 }
 
+/** Instances configured but not yet serving, which a restart resolves. */
+function PendingNotice({ instances }: { instances: PluginInstance[] }) {
+  const pending = instances.filter((i) => i.enabled && !i.mounted);
+  if (pending.length === 0) return null;
+  return (
+    <Message tone="attention">
+      <span>
+        {pending.map((i) => i.name).join(", ")}
+        {pending.length === 1 ? " is configured but not running." : " are configured but not running."}
+        {" "}A plugin is built when mcpd starts, so restart it to pick
+        {pending.length === 1 ? " it" : " them"} up.
+      </span>
+    </Message>
+  );
+}
+
+function AddPlugin({ types, onClose, onAdded }: {
+  types: PluginType[];
+  onClose: () => void;
+  onAdded: (name: string) => void;
+}) {
+  const [type, setType] = useState(types[0]?.name ?? "");
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Named after its type by default, which is right until there are two.
+  const effective = name.trim() || type;
+
+  async function add() {
+    setBusy(true);
+    setError("");
+    try {
+      await api.addInstance(effective, type);
+      onAdded(effective);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Couldn't add it.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (types.length === 0) {
+    return (
+      <Message tone="attention">
+        This build has no integrations compiled in.
+      </Message>
+    );
+  }
+
+  return (
+    <div className="card">
+      <div className="card-head"><h3>Add a plugin</h3></div>
+      <div className="card-body">
+        {error && <Message tone="problem">{error}</Message>}
+
+        <div className="field">
+          <label htmlFor="ptype">Integration</label>
+          <select id="ptype" value={type} onChange={(e) => setType(e.target.value)}>
+            {types.map((t) => <option key={t.name} value={t.name}>{t.title}</option>)}
+          </select>
+          <p className="note">
+            {types.find((t) => t.name === type)?.description}
+          </p>
+        </div>
+
+        <div className="field">
+          <label htmlFor="pname">Name (optional)</label>
+          <input id="pname" type="text" value={name} placeholder={type}
+                 onChange={(e) => setName(e.target.value)} />
+          <p className="note">
+            Its endpoint, its tool prefix, and what the history calls it. Name
+            it only when you have more than one of the same integration —
+            <code>nas-primary</code> and <code>nas-backup</code> rather than
+            two things both called {type}.
+          </p>
+        </div>
+
+        <div className="row">
+          <button className="btn primary" disabled={busy || !type} onClick={add}>
+            {busy ? "Adding…" : "Add"}
+          </button>
+          <button className="btn quiet" type="button" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Instances of one integration, kept together and in a stable order. */
-function groupByType(plugins: Plugin[]): { type: string; instances: Plugin[] }[] {
+function groupByType(plugins: Plugin[]): { type: string; members: Plugin[] }[] {
   const byType = new Map<string, Plugin[]>();
   for (const p of plugins) {
     const list = byType.get(p.type) ?? [];
@@ -109,17 +226,18 @@ function groupByType(plugins: Plugin[]): { type: string; instances: Plugin[] }[]
     byType.set(p.type, list);
   }
   return [...byType.entries()]
-    .map(([type, instances]) => ({
+    .map(([type, members]) => ({
       type,
-      instances: [...instances].sort((a, b) => a.name.localeCompare(b.name)),
+      members: [...members].sort((a, b) => a.name.localeCompare(b.name)),
     }))
     .sort((a, b) => a.type.localeCompare(b.type));
 }
 
-function PluginCard({ plugin, tunnels, settings, open, onToggle, onChange, show }: {
+function PluginCard({ plugin, tunnels, settings, instances, open, onToggle, onChange, show }: {
   plugin: Plugin;
   tunnels: TunnelInfo | null;
   settings: SettingsPayload | null;
+  instances: PluginInstance[];
   open: boolean;
   onToggle: () => void;
   onChange: () => void;
@@ -209,8 +327,63 @@ function PluginCard({ plugin, tunnels, settings, open, onToggle, onChange, show 
             <TunnelControl plugin={plugin} tunnels={tunnels} tunnel={tunnel}
                            onChange={onChange} show={show} />
           </div>
+
+          <RemoveControl plugin={plugin} instances={instances}
+                         onChange={onChange} show={show} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Removing an instance, where it can be done and where it cannot. */
+function RemoveControl({ plugin, instances, onChange, show }: {
+  plugin: Plugin;
+  instances: PluginInstance[];
+  onChange: () => void;
+  show: Notify;
+}) {
+  const admin = useIsAdmin();
+  const [busy, setBusy] = useState(false);
+  const inst = instances.find((i) => i.name === plugin.name);
+
+  if (!admin || !inst) return null;
+
+  // An instance from the file would come back on the next start, so offering
+  // to remove it here would be offering something that does not stick.
+  if (inst.from_file) {
+    return (
+      <div className="section">
+        <p className="note tight">
+          Defined in the configuration file. Remove it there rather than here,
+          or it returns on the next start.
+        </p>
+      </div>
+    );
+  }
+
+  async function remove() {
+    if (!confirm(`Remove ${plugin.name}? Its settings, including credentials, go with it.`)) return;
+    setBusy(true);
+    try {
+      await api.removeInstance(plugin.name);
+      show("good", `Removed ${plugin.name}. Restart mcpd to stop serving it.`);
+    } catch (e) {
+      show("problem", e instanceof ApiError ? e.detail : "Couldn't remove it.");
+    } finally {
+      setBusy(false);
+      onChange();
+    }
+  }
+
+  return (
+    <div className="section row">
+      <span className="note tight grow">
+        Removing this forgets its settings, including any credentials.
+      </span>
+      <button className="btn sm danger" disabled={busy} onClick={remove}>
+        {busy ? "Removing…" : "Remove"}
+      </button>
     </div>
   );
 }
