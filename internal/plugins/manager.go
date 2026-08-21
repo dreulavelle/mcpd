@@ -107,42 +107,11 @@ func (m *Manager) Register(ctx context.Context, p Plugin, instance string, requi
 	}
 	m.mu.Unlock()
 
-	reg := newRegistry(d)
-	if err := p.Register(ctx, reg); err != nil {
-		return fmt.Errorf("plugins: %s registration failed: %w", d.Name, err)
-	}
-	if err := reg.err(); err != nil {
+	mounted, err := m.build(ctx, d, p, required)
+	if err != nil {
 		return err
 	}
-	if len(reg.tools) == 0 && len(reg.mutations) == 0 &&
-		len(reg.resources) == 0 && len(reg.prompts) == 0 {
-		return fmt.Errorf("plugins: %s registered nothing", d.Name)
-	}
-
-	srv := mcp.NewServer(&mcp.Implementation{
-		Name:    d.Name,
-		Title:   d.Title,
-		Version: d.Version,
-	}, &mcp.ServerOptions{
-		Instructions: d.Description,
-		Logger:       m.log.With("plugin", d.Name),
-	})
-	// The SDK panics on a malformed tool definition rather than returning an
-	// error. A plugin -- especially an out-of-process one the operator dropped
-	// in -- must not be able to take the host down that way, so registration
-	// is recovered and reported as a failed mount.
-	if err := attachAll(srv, reg, m.middleware, m.approvals, m.inline); err != nil {
-		return fmt.Errorf("plugins: %s: %w", d.Name, err)
-	}
-
-	mounted := &Mounted{
-		Descriptor: d,
-		Server:     srv,
-		Registry:   reg,
-		Required:   required,
-		plugin:     p,
-		health:     Health{State: HealthyState, CheckedAt: time.Now()},
-	}
+	reg := mounted.Registry
 
 	m.mu.Lock()
 	m.mounted[d.Name] = mounted
@@ -158,6 +127,144 @@ func (m *Manager) Register(ctx context.Context, p Plugin, instance string, requi
 		"tools", len(reg.tools),
 		"mutations", len(reg.mutations),
 		"required", required)
+	return nil
+}
+
+// build turns a plugin into something mountable, without mounting it.
+//
+// Shared by Register and Remount so the two cannot drift: a plugin rebuilt
+// while the host runs has to be assembled exactly as one built at startup, or
+// remounting becomes a second code path with its own bugs.
+func (m *Manager) build(ctx context.Context, d Descriptor, p Plugin, required bool) (*Mounted, error) {
+	reg := newRegistry(d)
+	if err := p.Register(ctx, reg); err != nil {
+		return nil, fmt.Errorf("plugins: %s registration failed: %w", d.Name, err)
+	}
+	if err := reg.err(); err != nil {
+		return nil, err
+	}
+	if len(reg.tools) == 0 && len(reg.mutations) == 0 &&
+		len(reg.resources) == 0 && len(reg.prompts) == 0 {
+		return nil, fmt.Errorf("plugins: %s registered nothing", d.Name)
+	}
+
+	srv := mcp.NewServer(&mcp.Implementation{
+		Name:    d.Name,
+		Title:   d.Title,
+		Version: d.Version,
+	}, &mcp.ServerOptions{
+		Instructions: d.Description,
+		Logger:       m.log.With("plugin", d.Name),
+	})
+	// The SDK panics on a malformed tool definition rather than returning an
+	// error. A plugin -- especially an out-of-process one the operator dropped
+	// in -- must not be able to take the host down that way, so registration
+	// is recovered and reported as a failed mount.
+	if err := attachAll(srv, reg, m.middleware, m.approvals, m.inline); err != nil {
+		return nil, fmt.Errorf("plugins: %s: %w", d.Name, err)
+	}
+
+	return &Mounted{
+		Descriptor: d,
+		Server:     srv,
+		Registry:   reg,
+		Required:   required,
+		plugin:     p,
+		health:     Health{State: HealthyState, CheckedAt: time.Now()},
+	}, nil
+}
+
+// Remount replaces a running plugin with a freshly built one.
+//
+// This is what makes a settings change take effect without restarting the
+// host. A plugin holds whatever it was constructed with -- a client, a token,
+// an address -- so changing its configuration means building it again rather
+// than telling it to reread anything.
+//
+// The new plugin is built and started before the old one is touched. A build
+// that fails, or a start that fails, leaves the old one serving: a mistyped
+// credential should not cost an integration that was working a moment ago.
+//
+// Requests already in flight hold the old server and finish against it. The
+// old plugin is shut down after the swap, so a call that is mid-flight when an
+// operator saves a change can still fail -- narrow, and the alternative is
+// leaving the old one's connections open indefinitely.
+func (m *Manager) Remount(ctx context.Context, instance string, p Plugin, required bool) error {
+	m.mu.RLock()
+	existing := m.mounted[instance]
+	m.mu.RUnlock()
+
+	d := p.Descriptor()
+	d.Name = instance
+	if err := d.Validate(); err != nil {
+		return err
+	}
+
+	rebuilt, err := m.build(ctx, d, p, required)
+	if err != nil {
+		return err
+	}
+	if starter, ok := p.(Starter); ok {
+		if err := starter.Start(ctx); err != nil {
+			// The old one is still mounted and still serving. Reporting the
+			// failure is the whole point: an operator who has just saved a
+			// wrong credential needs to know it was not taken up.
+			return fmt.Errorf("plugins: %s did not start with the new settings: %w",
+				instance, err)
+		}
+	}
+
+	m.mu.Lock()
+	m.mounted[instance] = rebuilt
+	if existing == nil {
+		m.order = append(m.order, instance)
+	}
+	m.mu.Unlock()
+
+	m.invalidateAggregates()
+
+	if existing != nil {
+		if stopper, ok := existing.plugin.(Stopper); ok {
+			if err := stopper.Shutdown(ctx); err != nil {
+				m.log.Warn("previous plugin did not shut down cleanly after a remount",
+					"plugin", instance, "error", err)
+			}
+		}
+	}
+
+	m.log.Info("plugin remounted",
+		"plugin", instance,
+		"tools", len(rebuilt.Registry.tools),
+		"mutations", len(rebuilt.Registry.mutations))
+	return nil
+}
+
+// Unmount stops a plugin and removes it.
+func (m *Manager) Unmount(ctx context.Context, instance string) error {
+	m.mu.Lock()
+	existing := m.mounted[instance]
+	if existing == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("plugins: %q is not mounted", instance)
+	}
+	delete(m.mounted, instance)
+	for i, name := range m.order {
+		if name == instance {
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			break
+		}
+	}
+	m.mu.Unlock()
+
+	m.invalidateAggregates()
+
+	if stopper, ok := existing.plugin.(Stopper); ok {
+		if err := stopper.Shutdown(ctx); err != nil {
+			m.log.Warn("plugin did not shut down cleanly when unmounted",
+				"plugin", instance, "error", err)
+		}
+	}
+	m.log.Info("plugin unmounted", "plugin", instance)
 	return nil
 }
 
@@ -330,6 +437,22 @@ func (m *Manager) invalidateAggregates() {
 	m.aggMu.Lock()
 	m.aggregates = nil
 	m.aggMu.Unlock()
+}
+
+// SetHealth records a plugin's state from outside its own Check.
+//
+// Used when the host, rather than the plugin, knows something is wrong: a
+// rebuild that failed after a settings change leaves the old plugin serving,
+// and the operator who just saved needs to see why their change was not taken
+// up rather than a green dot.
+func (m *Manager) SetHealth(instance string, h Health) {
+	m.mu.RLock()
+	mounted := m.mounted[instance]
+	m.mu.RUnlock()
+	if mounted == nil {
+		return
+	}
+	mounted.setHealth(h)
 }
 
 // Lookup returns a mounted plugin, or nil.

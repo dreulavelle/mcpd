@@ -46,9 +46,10 @@ const (
 	// ApplyReconnect means a component is restarted to pick it up, which the
 	// host does itself.
 	ApplyReconnect Apply = "reconnect"
-	// ApplyRestart means mcpd must be restarted. Plugins are mounted into MCP
-	// servers at startup, so turning one on is not something that can be done
-	// underneath a live connection.
+	// ApplyRestart means mcpd must be restarted. Listeners and storage are
+	// established once at startup, so changing where the host binds or where
+	// its database lives is not something that can be done underneath a live
+	// connection.
 	ApplyRestart Apply = "restart"
 )
 

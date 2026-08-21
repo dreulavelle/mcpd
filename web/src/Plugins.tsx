@@ -70,7 +70,7 @@ export function Plugins() {
             setAdding(false);
             load();
             setOpen(name);
-            show("good", `Added ${name}. Configure it, then restart mcpd.`);
+            show("good", `Added ${name}. Fill in its settings and it starts.`);
           }}
         />
       )}
@@ -128,17 +128,28 @@ export function Plugins() {
   );
 }
 
-/** Instances configured but not yet serving, which a restart resolves. */
+/**
+ * Instances waiting on their settings.
+ *
+ * A plugin is not mounted until every required setting has a value, and starts
+ * serving on its own the moment the last one is filled in. Naming what is
+ * missing is the difference between "not finished" and "broken".
+ */
 function PendingNotice({ instances }: { instances: PluginInstance[] }) {
-  const pending = instances.filter((i) => i.enabled && !i.mounted);
-  if (pending.length === 0) return null;
+  const waiting = instances.filter((i) => i.enabled && !i.mounted);
+  if (waiting.length === 0) return null;
   return (
     <Message tone="attention">
       <span>
-        {pending.map((i) => i.name).join(", ")}
-        {pending.length === 1 ? " is configured but not running." : " are configured but not running."}
-        {" "}A plugin is built when mcpd starts, so restart it to pick
-        {pending.length === 1 ? " it" : " them"} up.
+        {waiting.map((i) => (
+          <span key={i.name} className="pending-row">
+            <strong>{i.name}</strong>
+            {i.missing?.length
+              ? ` needs ${i.missing.join(", ")}.`
+              : " is not running yet."}
+          </span>
+        ))}
+        {" "}It starts serving as soon as it has what it needs — nothing to restart.
       </span>
     </Message>
   );
@@ -243,6 +254,7 @@ function PluginCard({ plugin, tunnels, settings, instances, open, onToggle, onCh
   onChange: () => void;
   show: Notify;
 }) {
+  const admin = useIsAdmin();
   const reads = plugin.tools.filter((t) => t.kind === "read");
   const writes = plugin.tools.filter((t) => t.kind !== "read");
   const tunnel = tunnels?.tunnels.find((t) => t.plugin === plugin.name);
@@ -300,7 +312,7 @@ function PluginCard({ plugin, tunnels, settings, instances, open, onToggle, onCh
               <p className="eyebrow">Settings</p>
               <SettingsForm
                 groups={[group]} settings={settings}
-                onSaved={onChange} show={show}
+                onSaved={onChange} show={show} readOnly={!admin}
               />
             </div>
           )}
@@ -367,7 +379,7 @@ function RemoveControl({ plugin, instances, onChange, show }: {
     setBusy(true);
     try {
       await api.removeInstance(plugin.name);
-      show("good", `Removed ${plugin.name}. Restart mcpd to stop serving it.`);
+      show("good", `Removed ${plugin.name}.`);
     } catch (e) {
       show("problem", e instanceof ApiError ? e.detail : "Couldn't remove it.");
     } finally {

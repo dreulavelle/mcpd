@@ -159,8 +159,10 @@ export interface PluginInstance {
   /** Defined in the config file, so the dashboard cannot remove it. */
   from_file: boolean;
   enabled: boolean;
-  /** Serving now. An instance added since the last start is not. */
+  /** Serving now. False until every required setting has a value. */
   mounted: boolean;
+  /** Required settings still to be filled in. Empty when it is ready. */
+  missing?: string[];
 }
 
 export interface HealthCheck {
@@ -248,7 +250,7 @@ export type SettingKind =
 
 export type SettingApply = "live" | "reconnect" | "restart";
 
-export type SettingSection = "settings" | "tunnels";
+export type SettingSection = "settings" | "plugins" | "tunnels";
 
 export interface SettingField {
   key: string;
@@ -476,7 +478,7 @@ export const api = {
     request<{ instances: PluginInstance[]; count: number }>("/api/instances"),
 
   addInstance: (name: string, type: string) =>
-    request<{ status: string; restart_required: boolean; note?: string }>(
+    request<{ status: string; note?: string }>(
       "/api/instances", { method: "POST", body: JSON.stringify({ name, type }) }),
 
   setInstanceEnabled: (name: string, enabled: boolean) =>

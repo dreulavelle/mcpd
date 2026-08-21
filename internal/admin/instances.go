@@ -24,10 +24,13 @@ type PluginInstanceInfo struct {
 	// would return on the next start and look like the removal failed.
 	FromFile bool `json:"from_file"`
 	Enabled  bool `json:"enabled"`
-	// Mounted reports whether it is serving now. An instance added since the
-	// last start is configured but not yet running, and saying so is the
-	// difference between "waiting for a restart" and "broken".
+	// Mounted reports whether it is serving now. An instance is not mounted
+	// until every required setting has a value, so this being false alongside
+	// Missing is the ordinary state of one nobody has finished configuring.
 	Mounted bool `json:"mounted"`
+	// Missing names the required settings still to be filled in. Empty on an
+	// instance that is ready.
+	Missing []string `json:"missing,omitempty"`
 }
 
 func (s *Server) handlePluginTypes(w http.ResponseWriter, r *http.Request) {
@@ -116,9 +119,7 @@ func (s *Server) handleSetInstanceEnabled(w http.ResponseWriter, r *http.Request
 	}
 	s.opts.Log.Info("plugin instance toggled",
 		"instance", name, "enabled", *req.Enabled, "by", actor)
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"status": "saved", "restart_required": true,
-	})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"status": "saved"})
 }
 
 func (s *Server) handleRemoveInstance(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +134,5 @@ func (s *Server) handleRemoveInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.opts.Log.Info("plugin instance removed", "instance", name, "by", actor)
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"status": "removed", "restart_required": true,
-	})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"status": "removed"})
 }

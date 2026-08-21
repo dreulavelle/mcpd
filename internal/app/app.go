@@ -176,6 +176,11 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService,
 		inlinePolicyFunc(policyFn))
 
+	// A settings change rebuilds the plugin it belongs to, so the form takes
+	// effect rather than writing somewhere nothing reads until a restart.
+	// Registered before plugins mount, so a change during startup is not lost.
+	a.watchPluginSettings()
+
 	if err := a.registerPlugins(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -289,9 +294,11 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Instances: func(ctx context.Context) []admin.PluginInstanceInfo {
 				out := make([]admin.PluginInstanceInfo, 0)
 				for _, inst := range a.instances(ctx) {
+					_, missing := a.ready(ctx, inst)
 					out = append(out, admin.PluginInstanceInfo{
 						Name: inst.Name, Type: inst.Type,
 						FromFile: inst.FromFile, Enabled: inst.Enabled,
+						Missing: missing,
 					})
 				}
 				return out

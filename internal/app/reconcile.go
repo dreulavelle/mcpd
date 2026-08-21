@@ -1,0 +1,168 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/settings"
+)
+
+// reconcileTimeout bounds one instance's rebuild. Generous, because Start may
+// reach an upstream system, and bounded so a hung upstream cannot leave the
+// reconcile goroutine alive for the life of the process.
+const reconcileTimeout = 2 * time.Minute
+
+// ready reports whether an instance has everything it needs to run.
+//
+// Derived from the schema the type already declares: every field marked
+// Required must resolve to a value. That means the host can answer "is this
+// configured" without asking the plugin, and a plugin gets the behaviour by
+// saying which of its settings are required -- which it had to say anyway for
+// the form to validate.
+//
+// An instance that is not ready is not mounted. It exists, it appears on the
+// Plugins page with its form, and it serves nothing -- which is better than
+// mounting something that will fail every call, and much better than refusing
+// to start the host.
+func (a *App) ready(ctx context.Context, inst Instance) (bool, []string) {
+	t, ok := a.types.Lookup(inst.Type)
+	if !ok {
+		return false, []string{"unknown integration " + inst.Type}
+	}
+
+	cfg, err := a.resolveInstanceSettings(ctx, inst.Name, t)
+	if err != nil {
+		return false, []string{err.Error()}
+	}
+
+	var missing []string
+	for _, f := range t.Settings {
+		if !f.Required {
+			continue
+		}
+		if v, ok := cfg[f.Key]; !ok || isEmpty(v) {
+			missing = append(missing, f.Label)
+		}
+	}
+	return len(missing) == 0, missing
+}
+
+func isEmpty(v any) bool {
+	s, ok := v.(string)
+	return ok && strings.TrimSpace(s) == ""
+}
+
+// buildInstance constructs one instance from its current settings.
+func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin, plugins.Type, error) {
+	t, ok := a.types.Lookup(inst.Type)
+	if !ok {
+		return nil, t, fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
+			"configuration but not compiled into this binary", inst.Name, inst.Type)
+	}
+	cfg, err := a.resolveInstanceSettings(ctx, inst.Name, t)
+	if err != nil {
+		return nil, t, err
+	}
+	p, err := t.New(a.pluginDeps(inst.Name), cfg)
+	if err != nil {
+		return nil, t, fmt.Errorf("app: plugin %q: %w", inst.Name, err)
+	}
+	return p, t, nil
+}
+
+// reconcileInstance brings one instance's mounted state in line with its
+// configuration, without restarting the host.
+//
+// A plugin holds whatever it was constructed with -- a client, a token, an
+// address -- so a settings change means building it again rather than telling
+// it to reread anything. That is the whole reason this exists: an operator who
+// pastes a credential should see the integration start working, not a note
+// asking them to restart.
+//
+// Four cases, and each is the obvious one:
+//
+//   - configured and enabled: mount it, or replace what is mounted
+//   - not configured, or disabled: unmount it if it is running
+//   - a build that fails: leave whatever is mounted alone and report
+//   - not mounted and not ready: nothing to do
+func (a *App) reconcileInstance(ctx context.Context, name string) error {
+	var inst *Instance
+	for _, candidate := range a.instances(ctx) {
+		if candidate.Name == name {
+			inst = &candidate
+			break
+		}
+	}
+
+	mounted := a.manager.Lookup(name) != nil
+
+	// Gone from configuration entirely.
+	if inst == nil {
+		if mounted {
+			return a.manager.Unmount(ctx, name)
+		}
+		return nil
+	}
+
+	ready, missing := a.ready(ctx, *inst)
+	if !inst.Enabled || !ready {
+		if mounted {
+			why := "switched off"
+			if len(missing) > 0 {
+				why = "missing " + strings.Join(missing, ", ")
+			}
+			a.log.Info("unmounting a plugin that is no longer serving",
+				"plugin", name, "reason", why)
+			return a.manager.Unmount(ctx, name)
+		}
+		return nil
+	}
+
+	p, _, err := a.buildInstance(ctx, *inst)
+	if err != nil {
+		return err
+	}
+	return a.manager.Remount(ctx, name, p, a.pluginConfigFor(name).Required)
+}
+
+// watchPluginSettings remounts an instance when its configuration changes.
+//
+// Without this the settings form writes to a store nothing reads until the
+// next restart, which is the same failure the tunnel had: a form that reports
+// success and changes nothing.
+func (a *App) watchPluginSettings() {
+	a.settings.Watch(func(changed []string) {
+		touched := map[string]bool{}
+		for _, key := range changed {
+			if instance, _ := settings.PluginFromSettingKey(key); instance != "" {
+				touched[instance] = true
+				continue
+			}
+			if name := strings.TrimPrefix(key, instanceKeyPrefix); name != key {
+				touched[name] = true
+			}
+		}
+		if len(touched) == 0 {
+			return
+		}
+		// Detached from the write that triggered it: the reconcile outlives
+		// the request, and a plugin's Start may reach an upstream system that
+		// is slower than the operator's browser is willing to wait.
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), reconcileTimeout)
+			defer cancel()
+			for name := range touched {
+				if err := a.reconcileInstance(ctx, name); err != nil {
+					// Reported on the plugin's own health rather than thrown
+					// away, since the operator who just saved is looking at it.
+					a.log.Warn("plugin did not take up its new settings",
+						"plugin", name, "error", err)
+					a.manager.SetHealth(name, plugins.Unhealthy(err.Error()))
+				}
+			}
+		}()
+	})
+}
