@@ -65,6 +65,14 @@ type Tunnel struct {
 	// mcpd -- which is the point: the code that runs is the code that was
 	// built and reviewed.
 	CheckForUpdates bool `yaml:"check_for_updates"`
+
+	// DiagnosticsAddr binds the tunnel client's own health and admin listener,
+	// which reports OAuth discovery state mcpd cannot see: /readyz separates
+	// "still discovering" from "discovery failed", and /api/oauth reports what
+	// was actually discovered. Empty leaves it off, which is the default.
+	//
+	// Bind it to loopback. It is unauthenticated.
+	DiagnosticsAddr string `yaml:"diagnostics_addr"`
 }
 
 // PluginsDir is where out-of-process plugins are discovered.

@@ -546,6 +546,10 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 	if a.tls != nil {
 		cfg.TrustedCAFile = a.tls.CAPath
 	}
+	// Loopback only, and only inside this process's network namespace: it is
+	// unauthenticated, and it exists for someone already on the host running
+	// curl against it.
+	cfg.DiagnosticsAddr = a.cfg.Tunnel.DiagnosticsAddr
 
 	// The key comes from the store when it is there, and otherwise from the
 	// reference in the file, so an existing deployment keeps working.

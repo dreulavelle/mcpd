@@ -162,6 +162,13 @@ func newHTTPRuntime(cfg Config, log *slog.Logger, out logWriter) (runtime, error
 			Level:  cfg.LogLevel,
 			Format: tcconfig.LogFormatStructText,
 		},
+		Health: tcconfig.HealthConfig{ListenAddr: cfg.DiagnosticsAddr},
+		// The client restricts /api/* to loopback by its own reckoning, which
+		// inside a container nothing outside it can ever satisfy -- the
+		// request arrives from the bridge. Exposure is controlled by where
+		// DiagnosticsAddr is published instead, which is the only control that
+		// means anything here.
+		AdminUI: tcconfig.AdminUIConfig{AllowRemote: cfg.DiagnosticsAddr != ""},
 		MCP: tcconfig.MCPConfig{
 			ServerURL:             serverURL,
 			TransportKind:         tcconfig.MCPTransportHTTPStreamable,
@@ -198,7 +205,7 @@ func newHTTPRuntime(cfg Config, log *slog.Logger, out logWriter) (runtime, error
 	}
 
 	r.app = tcapp.NewWithRuntime(tcCfg,
-		tcapp.RuntimeOptions{DisableHealthAdmin: true},
+		tcapp.RuntimeOptions{DisableHealthAdmin: cfg.DiagnosticsAddr == ""},
 		fx.Provide(func() io.Writer { return out }),
 		// The client reports no readiness of its own once it is assembled this
 		// way, so it is taken from the same place the SDK takes it: the first
