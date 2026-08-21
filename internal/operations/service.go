@@ -20,6 +20,9 @@ type Policy struct {
 	ApprovalTTL time.Duration
 	// LeaseTTL bounds an execution claim before the reaper reclaims it.
 	LeaseTTL time.Duration
+	// InlineApproval bounds which changes may be approved from a conversation
+	// rather than the dashboard.
+	InlineApproval InlineApprovalPolicy
 	// RiskOverrides raises the risk of specific actions beyond what the plugin
 	// declared, keyed "plugin.action". It can only raise.
 	RiskOverrides map[string]RiskLevel
@@ -181,10 +184,39 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, operationID, r
 	if err != nil {
 		return nil, err
 	}
+	return s.approve(ctx, p, op, reason, "dashboard")
+}
 
+// ApproveInline records an approval given through the client rather than the
+// dashboard.
+//
+// It is a distinct method from Approve because the audit trail should say
+// which it was. The two carry different evidence: a dashboard approval was
+// made by someone looking at the full before-and-after, while an inline one
+// was a confirmation in a conversation. Both are human decisions; they are not
+// the same decision.
+func (s *Service) ApproveInline(ctx context.Context, p *auth.Principal, operationID string) (*Operation, error) {
+	op, err := s.repo.Get(ctx, operationID)
+	if err != nil {
+		return nil, err
+	}
+	if !s.policy.InlineApproval.Allows(op.Risk) {
+		return nil, &GuardError{
+			ErrCode: CodeNotAuthorized,
+			Detail: fmt.Sprintf(
+				"a %s-risk change cannot be approved from a conversation; "+
+					"approve it in the dashboard", op.Risk),
+		}
+	}
+	return s.approve(ctx, p, op, "approved in conversation", "inline")
+}
+
+// Approve authorizes a pending operation from the dashboard or the approve
+// tool.
+func (s *Service) approve(ctx context.Context, p *auth.Principal, op *Operation, reason, channel string) (*Operation, error) {
 	if d := s.authz.AuthorizeApproval(p, op); !d.Allowed {
 		s.log.Warn("approval denied",
-			"operation_id", operationID, "principal", p.ID,
+			"operation_id", op.ID, "principal", p.ID, "channel", channel,
 			"code", d.Code, "reason", d.Reason)
 		return nil, &GuardError{ErrCode: d.Code, Detail: d.Reason}
 	}
@@ -209,7 +241,13 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, operationID, r
 			ApprovalExpiresAt: approvalExpiry,
 		},
 		Audit: s.audit("operation.approved", op, p.ID, StatePendingApproval, StateApproved,
-			map[string]any{"reason": reason, "execute_by": approvalExpiry}),
+			map[string]any{
+				"reason":     reason,
+				"execute_by": approvalExpiry,
+				// Recorded so the trail distinguishes a decision made at a
+				// dashboard from one made in a chat window.
+				"channel": channel,
+			}),
 		Event: s.event(subjectFor(StateApproved), op),
 	})
 	if err != nil {
@@ -220,8 +258,44 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, operationID, r
 	s.log.Info("mutation approved",
 		"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 		"risk", op.Risk, "approver", p.ID, "requester", op.RequestedBy,
-		"execute_by", approvalExpiry)
+		"channel", channel, "execute_by", approvalExpiry)
 	return stored, nil
+}
+
+// AwaitOutcome waits for an operation to leave the approved and executing
+// states, so an inline approval can report what actually happened.
+//
+// It polls rather than subscribing because the caller is a single tool
+// invocation with a short deadline, and a missed event would leave it hanging
+// where a poll simply reports "still running".
+func (s *Service) AwaitOutcome(ctx context.Context, operationID string, timeout time.Duration) (*Operation, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+
+	var last *Operation
+	for {
+		op, err := s.repo.Get(ctx, operationID)
+		if err != nil {
+			return last, err
+		}
+		last = op
+		if op.State != StateApproved && op.State != StateExecuting {
+			return op, nil
+		}
+		select {
+		case <-ctx.Done():
+			// Not an error: the change is still running, and saying so is
+			// more useful than failing.
+			return last, nil
+		case <-ticker.C:
+		}
+	}
 }
 
 // Reject refuses a pending operation.

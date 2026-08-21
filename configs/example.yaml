@@ -121,6 +121,16 @@ approval:
   # How long an execution claim is held before the reaper reclaims it.
   lease_ttl: 2m
 
+  # Highest risk a user may approve from inside a conversation -- through the
+  # client's own confirmation prompt -- rather than opening the dashboard.
+  #
+  # Approving routine changes inline is what stops the gate being worked
+  # around: an operator who must switch windows for every trivial edit
+  # eventually stops using it. Anything above this goes to the dashboard,
+  # where the full before-and-after, the audit trail, and a second person are
+  # available. Empty sends every approval there.
+  inline_max_risk: medium
+
 logging:
   level: info
   format: json

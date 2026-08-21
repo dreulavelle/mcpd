@@ -227,6 +227,16 @@ type Approval struct {
 	ApprovalTTL time.Duration `yaml:"approval_ttl"`
 	// LeaseTTL bounds an execution claim before the reaper reclaims it.
 	LeaseTTL time.Duration `yaml:"lease_ttl"`
+
+	// InlineMaxRisk is the highest risk a user may approve from inside a
+	// conversation, through the client's own confirmation prompt, rather than
+	// in the dashboard.
+	//
+	// Empty means every approval goes to the dashboard. Setting it too high
+	// trades away what the dashboard offers -- the full before-and-after, the
+	// audit trail alongside, and a second person where identities are real --
+	// for the convenience of not switching windows.
+	InlineMaxRisk string `yaml:"inline_max_risk"`
 }
 
 // Logging configures output.
@@ -299,9 +309,12 @@ func Default() *Config {
 		},
 		Approval: Approval{
 			RequireDistinctApproverAtOrAbove: "high",
-			ProposalTTL:                      30 * time.Minute,
-			ApprovalTTL:                      15 * time.Minute,
-			LeaseTTL:                         2 * time.Minute,
+			// Routine changes are confirmed in the conversation; anything
+			// weightier goes to the dashboard.
+			InlineMaxRisk: "medium",
+			ProposalTTL:   30 * time.Minute,
+			ApprovalTTL:   15 * time.Minute,
+			LeaseTTL:      2 * time.Minute,
 		},
 		Tunnel:  Tunnel{CheckForUpdates: true},
 		Logging: Logging{Level: "info", Format: "json"},

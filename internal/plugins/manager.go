@@ -49,6 +49,7 @@ type Manager struct {
 	version    string
 
 	approvals ApprovalService
+	inline    InlinePolicy
 
 	mu      sync.RWMutex
 	mounted map[string]*Mounted
@@ -60,7 +61,7 @@ type Manager struct {
 
 // NewManager returns an empty manager. middleware is the host gate applied to
 // every tool call; version identifies the host in MCP handshakes.
-func NewManager(log *slog.Logger, version string, middleware ToolMiddleware, approvals ApprovalService) *Manager {
+func NewManager(log *slog.Logger, version string, middleware ToolMiddleware, approvals ApprovalService, inline InlinePolicy) *Manager {
 	if middleware == nil {
 		// A nil gate would mean unauthenticated tool access, so refuse to
 		// operate rather than defaulting to permissive.
@@ -73,6 +74,7 @@ func NewManager(log *slog.Logger, version string, middleware ToolMiddleware, app
 		version:    version,
 		middleware: middleware,
 		approvals:  approvals,
+		inline:     inline,
 		mounted:    make(map[string]*Mounted),
 	}
 }
@@ -119,7 +121,7 @@ func (m *Manager) Register(ctx context.Context, p Plugin, required bool) error {
 	// error. A plugin -- especially an out-of-process one the operator dropped
 	// in -- must not be able to take the host down that way, so registration
 	// is recovered and reported as a failed mount.
-	if err := attachAll(srv, reg, m.middleware, m.approvals); err != nil {
+	if err := attachAll(srv, reg, m.middleware, m.approvals, m.inline); err != nil {
 		return fmt.Errorf("plugins: %s: %w", d.Name, err)
 	}
 
@@ -251,7 +253,7 @@ func (m *Manager) AggregateServer(names []string) (*mcp.Server, error) {
 		if mounted == nil {
 			continue
 		}
-		if err := attachAll(srv, mounted.Registry, m.middleware, m.approvals); err != nil {
+		if err := attachAll(srv, mounted.Registry, m.middleware, m.approvals, m.inline); err != nil {
 			return nil, fmt.Errorf("plugins: aggregate %s: %w", name, err)
 		}
 	}
@@ -332,7 +334,7 @@ func (m *Manager) All() []*Mounted {
 
 // attachAll wires every tool and mutation onto an MCP server, converting a
 // panic from the SDK into an error.
-func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals ApprovalService) (err error) {
+func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals ApprovalService, inline InlinePolicy) (err error) {
 	defer func() {
 		if v := recover(); v != nil {
 			err = fmt.Errorf("tool registration failed: %v", v)
@@ -352,7 +354,7 @@ func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals Appr
 			return fmt.Errorf("registers mutations but no approval service is configured")
 		}
 		for _, mu := range reg.mutations {
-			mu.attach(srv, mw, approvals)
+			mu.attach(srv, mw, approvals, inline)
 		}
 		attachApprovalTools(srv, reg.descriptor.Name, approvals, mw)
 	}

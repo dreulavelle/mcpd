@@ -11,6 +11,19 @@ import (
 	"github.com/spoked/mcpd/internal/operations"
 )
 
+// InlinePolicy decides whether a change may be approved in the conversation.
+//
+// It is a ceiling rather than a switch. Approving a routine change inline is
+// what keeps the gate from being worked around, but a high-risk change
+// deserves the dashboard: the full before-and-after, the audit trail, and --
+// where identities are real -- a second person. Those are things a one-line
+// confirmation in a chat window cannot give.
+type InlinePolicy interface {
+	// AllowsInline reports whether a risk level may be approved through the
+	// client rather than the dashboard.
+	AllowsInline(risk operations.RiskLevel) bool
+}
+
 // ApprovalService is the subset of the operations service the tools need.
 type ApprovalService interface {
 	Propose(ctx context.Context, p *auth.Principal, req operations.ProposeRequest) (*operations.Operation, error)
@@ -18,6 +31,14 @@ type ApprovalService interface {
 	Reject(ctx context.Context, p *auth.Principal, operationID, reason string) (*operations.Operation, error)
 	Cancel(ctx context.Context, p *auth.Principal, operationID, reason string) (*operations.Operation, error)
 	Get(ctx context.Context, p *auth.Principal, operationID string) (*operations.Operation, error)
+	// ApproveInline records an approval given through the client rather than
+	// the dashboard. It is a separate method so the audit trail can say which
+	// it was: the two carry different evidence about who decided.
+	ApproveInline(ctx context.Context, p *auth.Principal, operationID string) (*operations.Operation, error)
+	// AwaitOutcome waits for an approved operation to finish executing, so an
+	// inline approval can report what actually happened rather than leaving
+	// the user to ask.
+	AwaitOutcome(ctx context.Context, operationID string, timeout time.Duration) (*operations.Operation, error)
 	List(ctx context.Context, p *auth.Principal, plugin string, states []operations.OperationState, limit int) ([]*operations.Operation, error)
 }
 

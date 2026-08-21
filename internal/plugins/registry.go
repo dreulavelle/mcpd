@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/auth"
@@ -188,8 +189,8 @@ func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S])
 		plugin:    r.descriptor.Name,
 		qualified: qualified,
 		adapter:   adapter,
-		attach: func(s *mcp.Server, gate ToolMiddleware, svc ApprovalService) {
-			attachProposeTool[P](s, r.descriptor.Name, qualified, spec, adapter, gate, svc)
+		attach: func(s *mcp.Server, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy) {
+			attachProposeTool[P](s, r.descriptor.Name, qualified, spec, adapter, gate, svc, inline)
 		},
 	})
 }
@@ -200,7 +201,7 @@ func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S])
 // the annotations say so, and the returned operation says so in a note field,
 // because a model that reads only a state string can still mistake "proposed"
 // for "done".
-func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec MutationSpec, adapter *handlerAdapter, gate ToolMiddleware, svc ApprovalService) {
+func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec MutationSpec, adapter *handlerAdapter, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy) {
 	mutating := false
 	description := spec.Description + "\n\n" +
 		"IMPORTANT: this only records a proposal. Nothing changes until a human " +
@@ -225,7 +226,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 		tool.InputSchema = spec.InputSchema
 	}
 
-	mcp.AddTool(srv, tool, func(ctx context.Context, _ *mcp.CallToolRequest, in P) (*mcp.CallToolResult, operationView, error) {
+	mcp.AddTool(srv, tool, func(ctx context.Context, req *mcp.CallToolRequest, in P) (*mcp.CallToolResult, operationView, error) {
 		if err := gate(ctx, qualified, auth.CapPropose); err != nil {
 			return nil, operationView{}, err
 		}
@@ -260,8 +261,63 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 		if err != nil {
 			return nil, operationView{}, err
 		}
-		return nil, viewOf(op), nil
+
+		// The operation is recorded before anyone is asked, so a change that
+		// is declined -- or one where the client vanishes mid-question --
+		// still leaves a durable record of what was proposed.
+		return nil, resolveApproval(ctx, req, svc, inline, op), nil
 	})
+}
+
+// resolveApproval asks the user in the conversation when that is possible and
+// permitted, and otherwise leaves the operation for the dashboard.
+//
+// Whichever path is taken, execution requires an approval recorded here.
+// A client that cannot ask does not get an unguarded write; it gets the
+// two-step flow.
+func resolveApproval(ctx context.Context, req *mcp.CallToolRequest, svc ApprovalService, inline InlinePolicy, op *operations.Operation) operationView {
+	if inline == nil || !inline.AllowsInline(op.Risk) {
+		view := viewOf(op)
+		if inline != nil {
+			view.Note = "NOTHING HAS CHANGED YET. This change is too consequential to " +
+				"approve from a conversation, so it needs approving in the mcpd " +
+				"dashboard, where the full before-and-after is shown. " + view.Note
+		}
+		return view
+	}
+
+	decision, err := askUser(ctx, req, op)
+	switch {
+	case err != nil, decision == decisionUnavailable:
+		// The client could not ask. Leave it pending rather than assuming
+		// either answer.
+		return viewOf(op)
+
+	case decision == decisionDeclined:
+		if rejected, rErr := svc.Reject(ctx, auth.FromContext(ctx), op.ID,
+			"declined by the user when asked"); rErr == nil {
+			return viewOf(rejected)
+		}
+		return viewOf(op)
+	}
+
+	approved, err := svc.ApproveInline(ctx, auth.FromContext(ctx), op.ID)
+	if err != nil {
+		view := viewOf(op)
+		// A refusal here is the system working -- separation of duties, an
+		// expired proposal -- and the reason matters more than the state.
+		view.Note = "Could not approve: " + err.Error()
+		return view
+	}
+
+	// Waiting turns "approved" into "done" for the user, who otherwise has to
+	// ask whether it worked. The wait is bounded; a slow change reports as
+	// still running rather than hanging the conversation.
+	final, err := svc.AwaitOutcome(ctx, approved.ID, 30*time.Second)
+	if err != nil || final == nil {
+		return viewOf(approved)
+	}
+	return viewOf(final)
 }
 
 func derefRisk(r *operations.RiskLevel) operations.RiskLevel {
@@ -290,7 +346,7 @@ type registeredMutation struct {
 	plugin    string
 	qualified string
 	adapter   *handlerAdapter
-	attach    func(*mcp.Server, ToolMiddleware, ApprovalService)
+	attach    func(*mcp.Server, ToolMiddleware, ApprovalService, InlinePolicy)
 }
 
 func (r *Registry) hasTool(name string) bool {

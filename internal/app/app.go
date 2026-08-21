@@ -156,13 +156,17 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		messaging.PublisherConfig{}, time.Now)
 
 	ids := operations.NewULIDGenerator(time.Now)
+	inlinePolicy := operations.InlineApprovalPolicy{
+		MaxRisk: operations.RiskLevel(cfg.Approval.InlineMaxRisk),
+	}
 	a.opsService = operations.NewService(a.ops, a.approval, operations.Policy{
-		ProposalTTL: cfg.Approval.ProposalTTL,
-		ApprovalTTL: cfg.Approval.ApprovalTTL,
-		LeaseTTL:    cfg.Approval.LeaseTTL,
+		ProposalTTL:    cfg.Approval.ProposalTTL,
+		ApprovalTTL:    cfg.Approval.ApprovalTTL,
+		LeaseTTL:       cfg.Approval.LeaseTTL,
+		InlineApproval: inlinePolicy,
 	}, log, time.Now, ids, a.publisher.Notify)
 
-	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService)
+	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService, inlinePolicy)
 
 	if err := a.registerPlugins(ctx); err != nil {
 		db.Close()

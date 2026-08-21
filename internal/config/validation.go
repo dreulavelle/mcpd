@@ -112,6 +112,10 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateTokens()...)
 
 	// --- approval ---
+	if r := c.Approval.InlineMaxRisk; r != "" && !slices.Contains(validRisks, r) {
+		add("config: approval.inline_max_risk must be one of %v or empty (got %q)",
+			validRisks, r)
+	}
 	if r := c.Approval.RequireDistinctApproverAtOrAbove; r != "" && !slices.Contains(validRisks, r) {
 		add("config: approval.require_distinct_approver_at_or_above must be one of %v (got %q)",
 			validRisks, r)

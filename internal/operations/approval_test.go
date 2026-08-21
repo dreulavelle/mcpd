@@ -101,3 +101,40 @@ func TestRequiresDistinctApprover(t *testing.T) {
 		}
 	}
 }
+
+// Inline approval is a ceiling, not a switch. A routine change can be
+// confirmed in a conversation; a consequential one goes to the dashboard,
+// where the full before-and-after and a second person are available.
+func TestInlineApprovalPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		maxRisk RiskLevel
+		risk    RiskLevel
+		allowed bool
+	}{
+		{"medium ceiling allows low", RiskMedium, RiskLow, true},
+		{"medium ceiling allows medium", RiskMedium, RiskMedium, true},
+		{"medium ceiling refuses high", RiskMedium, RiskHigh, false},
+		{"medium ceiling refuses critical", RiskMedium, RiskCritical, false},
+		{"low ceiling refuses medium", RiskLow, RiskMedium, false},
+		{"critical ceiling allows everything", RiskCritical, RiskCritical, true},
+		// The zero value permits nothing, so a deployment that never
+		// configures this keeps every approval at the dashboard.
+		{"unset ceiling refuses everything", "", RiskLow, false},
+		// An unrecognised classification is exactly the case to put in front
+		// of a person.
+		{"unknown risk is never inline", RiskCritical, RiskLevel("weird"), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := InlineApprovalPolicy{MaxRisk: tc.maxRisk}
+			if got := p.Allows(tc.risk); got != tc.allowed {
+				t.Fatalf("ceiling %q, risk %q: got %v, want %v",
+					tc.maxRisk, tc.risk, got, tc.allowed)
+			}
+			if p.AllowsInline(tc.risk) != p.Allows(tc.risk) {
+				t.Fatal("AllowsInline must agree with Allows")
+			}
+		})
+	}
+}
