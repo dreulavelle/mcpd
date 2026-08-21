@@ -136,6 +136,11 @@ tunnel:
   # which is the one thing a tunnel exists to avoid -- OpenAI's documentation
   # is explicit that the authorization server "is not automatically tunneled".
 
+  # Tunnels are normally made and assigned on the dashboard's Tunnels page,
+  # which needs an admin key and an organization id set there. This is the
+  # fallback for a deployment that would rather not give mcpd an admin key:
+  # make the tunnel in the OpenAI console and name it here.
+  #
   # From platform.openai.com -> Settings -> Organization -> Tunnels.
   tunnel_id: ""
 
@@ -143,13 +148,13 @@ tunnel:
   # creating and deleting tunnels and must not be used for the connection.
   api_key_ref: env:OPENAI_TUNNEL_API_KEY
 
-  # The identity requests through the tunnel act as. This is the whole of its
-  # authorization, so be specific: everyone using the connector shares it.
+  # How ChatGPT is labelled in the history. Everyone using the connector
+  # shares it, so it names the connector rather than a person.
   principal: svc:chatgpt
-  # approver, because approval happens in the conversation and this is what
-  # carries the answer back. Without it a change can be proposed and then
-  # never applied by anyone.
-  role: approver
+  # user, because approval happens in the conversation and this is what carries
+  # the answer back. admin would additionally let it change this host's own
+  # settings, which is almost never what you want for a connector.
+  role: user
   plugins:
     - cnmaestro
 

@@ -291,9 +291,10 @@ func TestValidate(t *testing.T) {
 	}{
 		{KeyTunnelEnabled, "true", true},
 		{KeyTunnelEnabled, "yes please", false},
-		{KeyTunnelID, "tunnel_0123456789abcdef0123456789abcdef", true},
-		{KeyTunnelID, "tunnel_short", false},
-		{KeyTunnelID, "0123456789abcdef0123456789abcdef", false},
+		// Not editable settings: the Tunnels page writes the tunnel id, and
+		// the principal only labels ChatGPT in the history.
+		{KeyTunnelID, "tunnel_0123456789abcdef0123456789abcdef", false},
+		{KeyTunnelPrincipal, "svc:chatgpt", false},
 		{KeyTunnelRole, "user", true},
 		{KeyTunnelRole, "superuser", false},
 		{KeyApprovalProposalTTL, "30", true},
