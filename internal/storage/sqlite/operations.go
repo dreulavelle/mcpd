@@ -39,6 +39,10 @@ const opColumns = `
 	terminal_at, outcome_verified, observed_json, error_code, error_detail,
 	correlation_id, idempotency_key`
 
+// idempotencyColumns is how the driver names ux_operations_idem when it fires.
+// See isUniqueViolation for why the column list stands in for the index name.
+const idempotencyColumns = "operations.plugin, operations.action, operations.idempotency_key"
+
 // Propose implements TX-1: insert the operation, its idempotency record, its
 // first transition, its audit entry and its outbox event, atomically.
 func (s *OperationStore) Propose(ctx context.Context, req operations.RepoProposeRequest) (*operations.Operation, error) {
@@ -77,7 +81,7 @@ func (s *OperationStore) Propose(ctx context.Context, req operations.RepoPropose
 			// other constraint -- a CHECK, a foreign key, a NOT NULL -- is a
 			// different bug, and reporting them all as an idempotency conflict
 			// hides the real cause behind a plausible-sounding message.
-			if isUniqueViolation(err, "ux_operations_idem") {
+			if isUniqueViolation(err, idempotencyColumns) {
 				return operations.ErrIdempotencyConflict
 			}
 			return fmt.Errorf("sqlite: insert operation: %w", err)
@@ -87,12 +91,32 @@ func (s *OperationStore) Propose(ctx context.Context, req operations.RepoPropose
 		if ttl <= 0 {
 			ttl = 24 * time.Hour
 		}
-		if _, err := u.exec(`
+		// The record is keyed on (scope, key) and outlives its own expiry --
+		// nothing deletes it when expires_at passes. So a second proposal of a
+		// settled intent has to take the row over rather than insert beside
+		// it, or the primary key refuses what the operations index just
+		// allowed.
+		//
+		// The guard is what keeps this from being a way around idempotency: a
+		// record that has not expired is left alone and the upsert touches no
+		// rows, which is a conflict. The only path that overwrites is one
+		// where the pre-check already found nothing to replay.
+		affected, err := u.ExecAffected(`
 			INSERT INTO idempotency_records (scope, key, request_hash, operation_id, created_at, expires_at)
-			VALUES (?,?,?,?,?,?)`,
+			VALUES (?,?,?,?,?,?)
+			ON CONFLICT (scope, key) DO UPDATE SET
+				request_hash = excluded.request_hash,
+				operation_id = excluded.operation_id,
+				created_at   = excluded.created_at,
+				expires_at   = excluded.expires_at
+			WHERE idempotency_records.expires_at <= ?`,
 			op.Plugin, op.IdempotencyKey, req.RequestHash, op.ID,
-			now, s.now().Add(ttl).UnixMilli()); err != nil {
+			now, s.now().Add(ttl).UnixMilli(), now)
+		if err != nil {
 			return fmt.Errorf("sqlite: insert idempotency record: %w", err)
+		}
+		if affected == 0 {
+			return operations.ErrIdempotencyConflict
 		}
 
 		if err := u.recordTransition(op.ID, "", string(op.State), op.RequestedBy, "proposed", op.CorrelationID); err != nil {
