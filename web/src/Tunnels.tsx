@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { api, ApiError, type OpenAITunnel, type TunnelInfo, type TunnelStatus } from "./api";
-import { Copyable, Dot, Message, Out, Skeleton, usePoll, useToasts } from "./components";
+import { Copyable, Dot, Message, Out, Skeleton, useIsAdmin, usePoll, useToasts } from "./components";
 
 const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
 
@@ -16,6 +16,7 @@ export function Tunnels() {
   const [info, setInfo] = useState<TunnelInfo | null>(null);
   const [error, setError] = useState("");
   const { show, view } = useToasts();
+  const admin = useIsAdmin();
 
   const load = useCallback(() => {
     api.tunnel()
@@ -55,7 +56,7 @@ export function Tunnels() {
         </Message>
       )}
 
-      {info.can_manage && <Add plugins={info.plugins} onDone={load} show={show} />}
+      {info.can_manage && admin && <Add plugins={info.plugins} onDone={load} show={show} />}
 
       <div className="card" style={{ marginTop: "var(--s4)" }}>
         {rows.length === 0 ? (
@@ -97,6 +98,7 @@ function TunnelRow({ row, info, onDone, show }: {
   show: (tone: "good" | "problem", text: string) => void;
 }) {
   const state = row.status?.state;
+  const admin = useIsAdmin();
 
   async function assign(to: string) {
     try {
@@ -129,7 +131,7 @@ function TunnelRow({ row, info, onDone, show }: {
         <Copyable value={row.id} label="tunnel ID" />
       </td>
       <td>
-        {info.can_manage ? (
+        {info.can_manage && admin ? (
           <select value={row.status ? (row.status.plugin || "*") : ""}
                   onChange={(e) => assign(e.target.value)}>
             <option value="">Not used</option>
@@ -150,7 +152,7 @@ function TunnelRow({ row, info, onDone, show }: {
         )}
       </td>
       <td>
-        {info.can_manage && (
+        {info.can_manage && admin && (
           <button className="btn sm danger" onClick={remove}>Remove</button>
         )}
       </td>

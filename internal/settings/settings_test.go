@@ -294,7 +294,7 @@ func TestValidate(t *testing.T) {
 		{KeyTunnelID, "tunnel_0123456789abcdef0123456789abcdef", true},
 		{KeyTunnelID, "tunnel_short", false},
 		{KeyTunnelID, "0123456789abcdef0123456789abcdef", false},
-		{KeyTunnelRole, "operator", true},
+		{KeyTunnelRole, "user", true},
 		{KeyTunnelRole, "superuser", false},
 		{KeyApprovalProposalTTL, "30", true},
 		{KeyApprovalProposalTTL, "0", false},

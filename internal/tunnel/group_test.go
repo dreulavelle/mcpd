@@ -228,7 +228,7 @@ func TestSameAsComparesEveryFieldThatChangesBehaviour(t *testing.T) {
 		{"control plane", func(c *Config) { c.ControlPlaneBaseURL = "https://elsewhere" }},
 		{"diagnostics", func(c *Config) { c.DiagnosticsAddr = "127.0.0.1:1234" }},
 		{"debug", func(c *Config) { c.Debug = !c.Debug }},
-		{"role", func(c *Config) { c.Principal.Role = auth.RoleViewer }},
+		{"role", func(c *Config) { c.Principal.Role = auth.RoleAdmin }},
 	}
 	for _, tc := range changed {
 		cfg := base

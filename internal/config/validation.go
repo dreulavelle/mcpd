@@ -15,7 +15,7 @@ import (
 
 var (
 	tokenIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,63}$`)
-	validRoles     = []string{"viewer", "operator", "approver", "admin"}
+	validRoles     = []string{"user", "admin"}
 	validRisks     = []string{"low", "medium", "high", "critical"}
 	validModes     = []string{"static", "oauth", "mixed"}
 )
@@ -103,10 +103,6 @@ func (c *Config) Validate() error {
 	// --- auth ---
 	if c.Auth.Accounts.SessionTTL < 0 {
 		add("config: auth.accounts.session_ttl cannot be negative")
-	}
-	if b := c.Auth.Accounts.Bootstrap; b.Email != "" && b.PasswordRef == "" {
-		add("config: auth.accounts.bootstrap.password_ref is required when a " +
-			"bootstrap email is set")
 	}
 	errs = append(errs, c.validateTokens()...)
 

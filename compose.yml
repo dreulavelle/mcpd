@@ -18,8 +18,8 @@ services:
     volumes:
       # Must be owned by 65532 -- the image is distroless nonroot, and a
       # directory owned by the host user is not writable by it:
-      #   mkdir -p data && docker run --rm -v "$PWD/data":/d alpine chown -R 65532:65532 /d
-      - ./data:/var/lib/mcpd
+      #   mkdir -p .data && docker run --rm -v "$PWD/.data":/d alpine chown -R 65532:65532 /d
+      - ./.data:/var/lib/mcpd
       - ./config.yaml:/etc/mcpd/config.yaml:ro
       - ./plugins:/var/lib/mcpd/plugins:ro
     healthcheck:

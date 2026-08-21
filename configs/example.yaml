@@ -73,12 +73,6 @@ auth:
   accounts:
     session_ttl: 12h
 
-    # Creates the first administrator, and only on a genuinely empty database.
-    # Ignored once any account exists, so it cannot reset a live one.
-    bootstrap:
-      email: admin@example.com
-      password_ref: env:MCPD_BOOTSTRAP_PASSWORD
-
   # Bearer tokens for machine callers that cannot complete a sign-in form.
   # ChatGPT does not need one: the tunnel authenticates itself to OpenAI's
   # control plane, and carries its identity from the tunnel block below.
@@ -89,14 +83,14 @@ auth:
     - id: chatgpt-cnmaestro
       secret_ref: env:MCPD_TOKEN_CHATGPT
       principal: svc:chatgpt
-      role: operator
+      role: user
       plugins:
         - cnmaestro
 
     - id: diagnostics
       secret_ref: credential:diagnostics
       principal: svc:diagnostics
-      role: viewer
+      role: user
       plugins:
         - echo
 

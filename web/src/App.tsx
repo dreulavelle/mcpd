@@ -3,7 +3,7 @@ import {
   api, ApiError, setCSRFToken,
   type AuditRecord, type HealthReport, type Meta, type Session,
 } from "./api";
-import { CodeBlock, Dot, History, Message, Skeleton, usePoll, useToasts } from "./components";
+import { CodeBlock, Dot, History, Message, SessionContext, Skeleton, useIsAdmin, usePoll, useToasts } from "./components";
 import { Plugins } from "./Plugins";
 import { Settings } from "./Settings";
 import { Tunnels } from "./Tunnels";
@@ -37,9 +37,16 @@ export default function App() {
     });
   }, []);
 
-  if (!checked) return null;
+  if (!checked || !meta) return null;
+  // An instance nobody has claimed shows a way to claim it. Offering a sign-in
+  // form instead would ask for credentials that cannot exist yet.
+  if (!session && meta.needs_setup) return <FirstRun meta={meta} onDone={adopt} />;
   if (!session) return <SignIn meta={meta} onDone={adopt} />;
-  return <Console session={session} onSignOut={signOut} />;
+  return (
+    <SessionContext.Provider value={{ role: session.role }}>
+      <Console session={session} onSignOut={signOut} />
+    </SessionContext.Provider>
+  );
 }
 
 /* ── sign in ────────────────────────────────────────────────────────────── */
@@ -102,6 +109,115 @@ function SignIn({ meta, onDone }: { meta: Meta | null; onDone: (s: Session) => v
                       disabled={busy || !email.trim() || !password}
                       style={{ width: "100%" }}>
                 {busy ? "Signing in…" : "Sign in"}
+              </button>
+            </form>
+          </div>
+        </div>
+
+        {meta && (
+          <p className="note" style={{ textAlign: "center", marginTop: "var(--s4)" }}>
+            mcpd {meta.version}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── first run ──────────────────────────────────────────────────────────── */
+
+/**
+ * Claiming a new instance.
+ *
+ * The first account is an administrator because there is nobody to grant it
+ * the role afterwards. Registration stops being offered the moment an account
+ * exists, so this is a door that closes behind the first person through it.
+ */
+function FirstRun({ meta, onDone }: { meta: Meta | null; onDone: (s: Session) => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const mismatch = confirm !== "" && password !== confirm;
+  const ready = email.trim() !== "" && password.length >= 12 && !mismatch && confirm !== "";
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      onDone(await api.registerFirst(email.trim(), password));
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? (err.status === 409
+            ? "Someone already claimed this instance. Reload and sign in."
+            : err.detail)
+          : "Couldn't reach mcpd. Is it running?",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="signin">
+      <div className="signin-card">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">m</span>
+          mcpd
+        </div>
+
+        <div className="card">
+          <div className="card-body">
+            <h3 style={{ margin: "0 0 var(--s2)" }}>Create the first account</h3>
+            <p className="note">
+              Nobody has claimed this host yet. This account will be an
+              administrator; you can add others once you are in.
+            </p>
+
+            {error && <Message tone="problem">{error}</Message>}
+
+            <form onSubmit={submit}>
+              <div className="field">
+                <label htmlFor="su-email">Email</label>
+                <input
+                  id="su-email" type="email" autoComplete="username" autoFocus
+                  value={email} onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="su-password">Password</label>
+                <input
+                  id="su-password" type="password" autoComplete="new-password"
+                  value={password} onChange={(e) => setPassword(e.target.value)}
+                  placeholder="At least 12 characters"
+                />
+                <p className="note">
+                  Length is the only rule. A passphrase beats a short password
+                  with symbols in it.
+                </p>
+              </div>
+
+              <div className="field">
+                <label htmlFor="su-confirm">Confirm password</label>
+                <input
+                  id="su-confirm" type="password" autoComplete="new-password"
+                  value={confirm} onChange={(e) => setConfirm(e.target.value)}
+                  placeholder="Type it again"
+                />
+                {mismatch && <p className="note" style={{ color: "var(--problem)" }}>
+                  These do not match.
+                </p>}
+              </div>
+
+              <button className="btn primary" type="submit" disabled={busy || !ready}
+                      style={{ width: "100%" }}>
+                {busy ? "Creating…" : "Create account"}
               </button>
             </form>
           </div>
@@ -191,6 +307,7 @@ function FullHistory() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const { show, view } = useToasts();
+  const admin = useIsAdmin();
 
   const load = useCallback(() => {
     api.audit(200)
@@ -230,9 +347,11 @@ function FullHistory() {
           <h1>History</h1>
           <p className="lede">Append-only. mcpd notices if anything is altered.</p>
         </div>
-        <button className="btn sm" disabled={busy || !records?.length} onClick={clear}>
-          {busy ? "Clearing…" : "Clear"}
-        </button>
+        {admin && (
+          <button className="btn sm" disabled={busy || !records?.length} onClick={clear}>
+            {busy ? "Clearing…" : "Clear"}
+          </button>
+        )}
       </div>
 
       {error && <Message tone="problem">{error}</Message>}

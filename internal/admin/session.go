@@ -23,6 +23,8 @@ type Accounts interface {
 	ResolveSession(ctx context.Context, token string) (*users.User, *users.Session, error)
 	DeleteSession(ctx context.Context, token string) error
 
+	Count(ctx context.Context) (int, error)
+	CreateFirst(ctx context.Context, email, password, displayName string) (*users.User, error)
 	Create(ctx context.Context, req users.CreateRequest) (*users.User, error)
 	List(ctx context.Context) ([]*users.User, error)
 	ByID(ctx context.Context, id string) (*users.User, error)
@@ -135,6 +137,55 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	s.opts.Log.Info("dashboard sign-in", "user", user.Email, "session", sess.ID)
 	setSessionCookie(w, r, token, sess.ExpiresAt)
 	s.writeJSON(w, r, http.StatusOK, sessionView(user, sess))
+}
+
+// handleRegisterFirst claims an unclaimed instance.
+//
+// Unauthenticated, and it has to be: there is no account to authenticate as
+// yet. What bounds it is the store refusing once any account exists, checked
+// inside the write transaction rather than here, so two browsers racing for an
+// unclaimed instance produce one administrator and one refusal.
+//
+// Signing the new administrator straight in is deliberate. Making an account
+// and then presenting its own sign-in form asks someone to prove, one second
+// later, something they just demonstrated.
+func (s *Server) handleRegisterFirst(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Accounts == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
+		return
+	}
+	var req struct {
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		DisplayName string `json:"display_name"`
+	}
+	if !s.decode(w, r, &req) {
+		return
+	}
+
+	user, err := s.opts.Accounts.CreateFirst(r.Context(), req.Email, req.Password, req.DisplayName)
+	switch {
+	case errors.Is(err, users.ErrAlreadyClaimed):
+		s.writeError(w, r, http.StatusConflict,
+			"this instance already has an account; sign in instead")
+		return
+	case err != nil:
+		// Every remaining failure is a statement about the request -- a
+		// malformed address, a short password -- and each is actionable.
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	token, sess, err := s.opts.Accounts.NewSession(r.Context(), user.ID, s.opts.SessionTTL)
+	if err != nil {
+		s.opts.Log.Error("could not start a session for the first account", "error", err)
+		s.writeError(w, r, http.StatusInternalServerError, "account created, but signing in failed")
+		return
+	}
+	s.opts.Log.Info("first account registered; this instance is now claimed",
+		"email", user.Email, "id", user.ID)
+	setSessionCookie(w, r, token, sess.ExpiresAt)
+	s.writeJSON(w, r, http.StatusCreated, sessionView(user, sess))
 }
 
 // handleSignOut ends the current session.

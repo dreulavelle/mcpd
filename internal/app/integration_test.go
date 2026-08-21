@@ -38,7 +38,7 @@ func newTestApp(t *testing.T) *App {
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{
 		{
 			ID: "scoped", SecretRef: "env:MCPD_TOKEN_SCOPED",
-			Principal: "svc:scoped", Role: "operator",
+			Principal: "svc:scoped", Role: "user",
 			Plugins: []string{"echo"},
 		},
 		{
@@ -307,7 +307,7 @@ func TestNew_RefusesUnknownPlugin(t *testing.T) {
 	cfg.Plugins = map[string]config.PluginConfig{"nonexistent": {Enabled: true}}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
 		ID: "scoped", SecretRef: "env:MCPD_TOKEN_SCOPED",
-		Principal: "svc:scoped", Role: "operator", Plugins: []string{"nonexistent"},
+		Principal: "svc:scoped", Role: "user", Plugins: []string{"nonexistent"},
 	}}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

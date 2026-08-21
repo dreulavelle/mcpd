@@ -11,7 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/spoked/mcpd/internal/auth"
-	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/plugins/cnmaestro"
@@ -75,45 +74,6 @@ func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, er
 	// An empty set is legitimate: a deployment reached only through the tunnel
 	// and the dashboard has no machine caller to issue one to.
 	return auth.NewStaticVerifier(tokens...)
-}
-
-// bootstrapAdmin provisions the first administrator on an empty database.
-//
-// It runs only when no account exists, so it cannot be used to reset one: an
-// operator who has lost their password has to act on the database, which is
-// the correct amount of friction for a control that would otherwise let anyone
-// who can edit the config take over the host.
-func bootstrapAdmin(ctx context.Context, cfg *config.Config, store *users.Store, log *slog.Logger) error {
-	b := cfg.Auth.Accounts.Bootstrap
-	if b.Email == "" {
-		return nil
-	}
-
-	n, err := store.Count(ctx)
-	if err != nil {
-		return fmt.Errorf("auth: count accounts: %w", err)
-	}
-	if n > 0 {
-		return nil
-	}
-
-	password, err := config.NewSecretResolver().Resolve(b.PasswordRef)
-	if err != nil {
-		return fmt.Errorf("auth: bootstrap administrator: %w", err)
-	}
-	user, err := store.Create(ctx, users.CreateRequest{
-		Email:       b.Email,
-		Password:    password,
-		DisplayName: b.Email,
-		Role:        auth.RoleAdmin,
-		Plugins:     []string{auth.Wildcard},
-	})
-	if err != nil {
-		return fmt.Errorf("auth: bootstrap administrator: %w", err)
-	}
-	log.Info("bootstrap administrator created; this runs only on an empty database",
-		"email", user.Email, "id", user.ID)
-	return nil
 }
 
 // registerPlugins mounts every enabled plugin.

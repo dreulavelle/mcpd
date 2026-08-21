@@ -114,11 +114,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	// Accounts back the dashboard's sign-in. They are unrelated to the token
 	// verifier below: a person signs in with a password and gets a session, a
 	// script presents a static token, and neither excludes the other.
+	// No account is provisioned here. An instance with none offers to create
+	// the first from the dashboard, and whoever does becomes administrator.
 	a.accounts = users.NewStore(db, time.Now)
-	if err := bootstrapAdmin(ctx, cfg, a.accounts, log); err != nil {
-		db.Close()
-		return nil, err
-	}
 
 	verifier, err := buildVerifier(cfg, log)
 	if err != nil {
@@ -636,8 +634,8 @@ func bootstrapSettings(cfg *config.Config) []admin.BootstrapSetting {
 		},
 		{
 			Key: "auth.accounts", Label: "How people sign in", Value: "email and password",
-			Help: "One shared key, or individual accounts. Individual accounts are what " +
-				"let mcpd require a second person to approve something.",
+			Help: "Everyone has their own account, so the history names a person " +
+				"rather than a shared key. Manage them on the Users page.",
 		},
 	}
 }

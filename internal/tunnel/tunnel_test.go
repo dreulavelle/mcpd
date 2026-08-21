@@ -17,7 +17,7 @@ import (
 
 func testPrincipal() auth.Principal {
 	return auth.Principal{
-		ID: "svc:chatgpt", Role: auth.RoleOperator, Plugins: []string{"echo"},
+		ID: "svc:chatgpt", Role: auth.RoleUser, Plugins: []string{"echo"},
 	}
 }
 
@@ -45,7 +45,7 @@ func TestConfig_Validate(t *testing.T) {
 			APIKey: "k", Principal: testPrincipal()}, "tunnel_"},
 		{"no key", Config{TunnelID: validID, Principal: testPrincipal()}, "API key"},
 		{"no plugin grants", Config{TunnelID: validID, APIKey: "k",
-			Principal: auth.Principal{ID: "svc:x", Role: auth.RoleOperator}}, "plugin"},
+			Principal: auth.Principal{ID: "svc:x", Role: auth.RoleUser}}, "plugin"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
