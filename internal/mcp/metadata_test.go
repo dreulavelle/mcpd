@@ -55,3 +55,48 @@ func TestChallengePointsAtTheEndpointsOwnMetadata(t *testing.T) {
 		}
 	}
 }
+
+// Reaching a plugin needs a scope naming it. A challenge that omits the scope
+// leaves the client guessing, and the MCP specification tells it to guess
+// "everything the authorization server advertises" -- which is more than a
+// per-plugin connector should hold, and nothing at all if plugin scopes are
+// not advertised.
+func TestChallengeAsksForTheScopesTheEndpointNeeds(t *testing.T) {
+	h := &Host{opts: Options{
+		PublicURL: "https://mcpd.test:9080",
+		Plugins:   func() []string { return []string{"echo", "cnmaestro"} },
+	}}
+
+	// One plugin's endpoint asks for that plugin, and no other.
+	echo := h.challengeScope("/mcp/echo")
+	if !strings.Contains(echo, "plugin:echo") {
+		t.Errorf("scope = %q, want it to name echo", echo)
+	}
+	if strings.Contains(echo, "plugin:cnmaestro") {
+		t.Errorf("scope = %q, want nothing about other plugins", echo)
+	}
+
+	// The aggregate endpoint asks for everything mounted, because that is what
+	// it serves.
+	all := h.challengeScope("/mcp")
+	for _, want := range []string{"mcp:read", "mcp:propose", "mcp:approve", "plugin:echo", "plugin:cnmaestro"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("aggregate scope = %q, missing %q", all, want)
+		}
+	}
+}
+
+func TestPluginFromPath(t *testing.T) {
+	for path, want := range map[string]string{
+		"/mcp":            "",
+		"/mcp/":           "",
+		"/mcp/echo":       "echo",
+		"/mcp/echo/":      "echo",
+		"/mcp/echo/extra": "echo",
+		"/health/live":    "",
+	} {
+		if got := pluginFromPath(path); got != want {
+			t.Errorf("pluginFromPath(%q) = %q, want %q", path, got, want)
+		}
+	}
+}

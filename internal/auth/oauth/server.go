@@ -38,6 +38,15 @@ type Config struct {
 	// AllowCIMD enables Client ID Metadata Documents, where the client_id is
 	// an HTTPS URL serving the client's own metadata.
 	AllowCIMD bool
+
+	// Plugins names the mounted plugins, so their scopes can be advertised.
+	//
+	// Reaching a plugin needs a plugin scope, and a client that cannot see one
+	// advertised will not ask for it. The MCP specification tells clients with
+	// no better information to request everything in scopes_supported, so
+	// leaving these out produces a token that authenticates perfectly and then
+	// reaches nothing.
+	Plugins func() []string
 }
 
 func (c *Config) withDefaults() {
@@ -120,7 +129,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, _ *http.Request) {
 		AuthorizationEndpoint:  base + "/oauth/authorize",
 		TokenEndpoint:          base + "/oauth/token",
 		RevocationEndpoint:     base + "/oauth/revoke",
-		ScopesSupported:        []string{ScopeRead, ScopePropose, ScopeApprove},
+		ScopesSupported:        s.supportedScopes(),
 		ResponseTypesSupported: []string{"code"},
 		GrantTypesSupported:    []string{"authorization_code", "refresh_token"},
 		// S256 only. OAuth 2.1 removes "plain", and supporting it would mean
@@ -457,4 +466,21 @@ func (s *Server) renderAuthorizeError(w http.ResponseWriter, r *http.Request, re
 // part of the server's runtime contract.
 func (s *Server) GrantScopeForTest(requested string, user *User) string {
 	return s.grantScope(requested, user)
+}
+
+// supportedScopes lists every scope a client may ask for.
+//
+// Plugin scopes are included because they are not optional: a token without
+// one reaches no endpoint at all. They are still bounded at consent -- a user
+// can only delegate plugins they themselves hold -- so advertising them grants
+// nothing on its own.
+func (s *Server) supportedScopes() []string {
+	scopes := []string{ScopeRead, ScopePropose, ScopeApprove}
+	if s.cfg.Plugins == nil {
+		return scopes
+	}
+	for _, name := range s.cfg.Plugins() {
+		scopes = append(scopes, PluginScope(name))
+	}
+	return scopes
 }

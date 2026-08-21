@@ -148,6 +148,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			SessionTTL:               cfg.Auth.OAuth.SessionTTL,
 			AllowDynamicRegistration: cfg.Auth.OAuth.AllowDynamicRegistration,
 			AllowCIMD:                cfg.Auth.OAuth.AllowCIMD,
+			// Read at call time: plugins mount after this is built, and a list
+			// captured here would always be empty.
+			Plugins: func() []string { return a.manager.Names() },
 		}, a.oauthStore, log, time.Now, newPluginHTTPClient())
 		if err != nil {
 			db.Close()
@@ -260,6 +263,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		Verifier:            verifier,
 		Authorizer:          authorizer,
 		Health:              a.health,
+		Plugins:             func() []string { return a.manager.Names() },
 		PublicURL:           cfg.Server.PublicURL,
 		AuthorizationServer: issuer,
 		OAuth:               oauthRoutes(a.oauthServer),
