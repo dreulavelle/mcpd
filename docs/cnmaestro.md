@@ -7,6 +7,14 @@ document, not architecture — how mcpd is built is in
 
 Reference: <https://docs.cloud.cambiumnetworks.com/api/latest/index.html>
 
+The page is a Swagger UI and renders nothing to a fetch. The spec behind it is
+`yaml/schemas/v2/base.yaml` under that path, with `yaml/responses/v2/…` for
+response shapes and `announcements.json` for what changed per release. Those
+are worth reading directly; the announcements in particular carry deprecations
+the reference itself does not mention.
+
+Base path is `/api/v2`. Current version is 6.3.0.
+
 ## Authentication
 
 OAuth 2.0 client credentials. Credentials come from the cnMaestro UI, under
@@ -75,10 +83,51 @@ POST /cnwave60/devices/{mac}/topology_scan
 
 ## Pagination
 
-Follow continuation tokens. Offset pagination is deprecated upstream and
-removed in 6.4.0, and it is unsound in the meantime: rows shift between pages
-as devices come and go, so a walk over a changing estate silently skips and
-repeats.
+Two schemes, and which one applies is per endpoint rather than global. An
+earlier note here said continuation tokens were the rule; the announcements
+say otherwise, and building on that would have paginated most collections with
+a parameter they do not accept.
+
+**`limit` and `offset`** for most collections — `/devices`, `/networks`,
+`/sites`, `/towers`, `/alarms`.
+
+**`continuation_token`** for four, where `offset` is deprecated in 6.3.0 and
+removed in 6.4.0:
+
+```
+GET /events
+GET /devices/{mac}/performance
+GET /devices/nse/{mac}/threats
+GET /cnwave60/devices/{mac}/links/{link_name}/performance
+```
+
+Send the first request without `continuation_token`, then repeat with it set to
+the previous response's `next_continuation_token` until a response carries
+none. `offset` and `total` are still returned on the first response for
+backward compatibility, so a client that reads them will appear to work right
+up until 6.4.0.
+
+Prefer the continuation token wherever it is offered regardless: offset paging
+is unsound while an estate is changing, because rows shift between pages as
+devices come and go.
+
+## Response envelope
+
+```json
+{
+  "paging":   { "offset": 0, "limit": 100, "total": 42,
+                "next_continuation_token": "…" },
+  "warnings": ["…"],
+  "data":     [ … ]
+}
+```
+
+`warnings` is easy to miss and worth surfacing: the API answers 200 with a
+partial result rather than failing when part of an estate is unreachable.
+
+`data` for `/devices` is a `oneOf` across device types — cnmatrix, cnwave60,
+enterprise Wi-Fi, NSE and others — each with its own fields and a `type`
+discriminator. There is no common device shape to decode into.
 
 ## managed_account
 
