@@ -64,6 +64,47 @@ export interface AuditRecord {
   detail?: unknown;
 }
 
+export type Role = "viewer" | "operator" | "approver" | "admin";
+
+/** The signed-in person, as returned by the session endpoints. */
+export interface Session {
+  email: string;
+  display_name: string;
+  role: Role;
+  plugins: string[];
+  csrf_token: string;
+  expires_at: string;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  display_name: string;
+  role: Role;
+  plugins: string[];
+  disabled: boolean;
+  created_at: string;
+  last_login_at?: string;
+  /** True for the account making the request. */
+  self: boolean;
+}
+
+export interface CreateUser {
+  email: string;
+  password: string;
+  display_name?: string;
+  role: Role;
+  plugins: string[];
+}
+
+export interface UpdateUser {
+  display_name?: string;
+  role?: Role;
+  plugins?: string[];
+  disabled?: boolean;
+  password?: string;
+}
+
 export interface Tool {
   name: string;
   /** "read" looks things up; "propose" suggests a change for approval. */
@@ -236,47 +277,36 @@ export class ApiError extends Error {
   }
 }
 
-const TOKEN_KEY = "mcpd.token";
-
 /**
- * The token lives in sessionStorage rather than localStorage so it does not
- * outlive the browser session. It is a bearer credential for an interface that
- * approves infrastructure changes, and persisting it would leave it on disk for
- * as long as the browser profile exists.
+ * The session itself lives in an HttpOnly cookie the browser sets and this
+ * code cannot read. That is the point: the credential behind a console that
+ * approves infrastructure changes should not be reachable from any script that
+ * finds its way onto the page.
+ *
+ * What is held here is only the CSRF token. It is not a credential -- on its
+ * own it authenticates nothing -- and it has to be readable by this code in
+ * order to be echoed back, which is exactly the property being tested: a
+ * cross-site request can cause the cookie to be sent but cannot read this.
  */
-export function getToken(): string | null {
-  try {
-    return sessionStorage.getItem(TOKEN_KEY);
-  } catch {
-    // Private browsing and some embedded contexts throw on access.
-    return null;
-  }
-}
+let csrfToken: string | null = null;
 
-export function setToken(token: string): void {
-  try {
-    sessionStorage.setItem(TOKEN_KEY, token);
-  } catch {
-    // Nothing useful to do; the session just will not survive a reload.
-  }
-}
-
-export function clearToken(): void {
-  try {
-    sessionStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* ignore */
-  }
+export function setCSRFToken(token: string | null): void {
+  csrfToken = token;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken();
   const headers = new Headers(init?.headers);
   headers.set("Accept", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init?.body) headers.set("Content-Type", "application/json");
 
-  const response = await fetch(path, { ...init, headers });
+  const method = (init?.method ?? "GET").toUpperCase();
+  const safe = method === "GET" || method === "HEAD" || method === "OPTIONS";
+  if (!safe && csrfToken) headers.set("X-CSRF-Token", csrfToken);
+
+  // credentials: "include" so the session cookie travels. Same-origin would
+  // cover the deployed case, but the dashboard is also served through a dev
+  // proxy on another port, where it would not.
+  const response = await fetch(path, { ...init, headers, credentials: "include" });
   if (response.status === 204) return undefined as T;
 
   let body: Record<string, unknown> = {};
@@ -299,6 +329,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   meta: () => request<Meta>("/api/meta"),
+
+  signIn: (email: string, password: string) =>
+    request<Session>("/api/session", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
+
+  session: () => request<Session>("/api/session"),
+
+  signOut: () => request<void>("/api/session", { method: "DELETE" }),
+
+  users: () => request<{ users: User[]; count: number }>("/api/users"),
+
+  createUser: (body: CreateUser) =>
+    request<User>("/api/users", { method: "POST", body: JSON.stringify(body) }),
+
+  updateUser: (id: string, body: UpdateUser) =>
+    request<User>(`/api/users/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  deleteUser: (id: string) =>
+    request<void>(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   operations: (state?: OperationState) =>
     request<{ operations: Operation[]; count: number }>(

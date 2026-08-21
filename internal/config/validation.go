@@ -63,22 +63,6 @@ func (c *Config) Validate() error {
 		add("config: server.tls.mode must be off or self-signed (got %q)", c.Server.TLS.Mode)
 	}
 
-	// OAuth and plaintext are not compatible, and the failure is otherwise
-	// very hard to read: the metadata is fetched successfully and then
-	// rejected, which ChatGPT reports as "does not implement OAuth".
-	//
-	// RFC 8414 requires an authorization server's issuer identifier to use the
-	// https scheme, and the MCP specification requires authorization servers
-	// to implement OAuth 2.1. Refusing to start says so once, here, instead of
-	// leaving an operator to work it out from a connector dialog.
-	if oauthMounted(c.Auth.Mode) && c.Server.PublicURL != "" {
-		if u, err := url.Parse(c.Server.PublicURL); err == nil && u.Scheme == "http" {
-			add("config: server.public_url must use https when auth.mode is %q, "+
-				"because an OAuth issuer must be an https URL and a connector "+
-				"will refuse one that is not. Set server.tls.mode to self-signed "+
-				"and change public_url to https://%s", c.Auth.Mode, u.Host)
-		}
-	}
 	if c.Server.TLS.Enabled() && c.Server.PublicURL != "" {
 		if u, err := url.Parse(c.Server.PublicURL); err == nil && u.Scheme == "http" {
 			add("config: server.public_url is http but the listener serves https; " +
@@ -117,26 +101,12 @@ func (c *Config) Validate() error {
 	}
 
 	// --- auth ---
-	if !slices.Contains(validModes, c.Auth.Mode) {
-		add("config: auth.mode must be one of %v (got %q)", validModes, c.Auth.Mode)
+	if c.Auth.Accounts.SessionTTL < 0 {
+		add("config: auth.accounts.session_ttl cannot be negative")
 	}
-	if c.Auth.Mode == "static" && len(c.Auth.StaticTokens) == 0 {
-		add("config: auth.mode is static but no static_tokens are configured; " +
-			"the host would be unreachable")
-	}
-	if c.Auth.Mode == "oauth" || c.Auth.Mode == "mixed" {
-		// The issuer defaults to public_url, so one of the two must be set.
-		// It ends up in metadata clients fetch, so a wrong value produces a
-		// connector that fails only at the final redirect.
-		if strings.TrimSpace(c.Auth.OAuth.Issuer) == "" &&
-			strings.TrimSpace(c.Server.PublicURL) == "" {
-			add("config: auth.oauth.issuer or server.public_url is required for mode %q; "+
-				"clients need an absolute URL to reach the authorization endpoints", c.Auth.Mode)
-		}
-		if b := c.Auth.OAuth.Bootstrap; b.Username != "" && b.PasswordRef == "" {
-			add("config: auth.oauth.bootstrap.password_ref is required when a bootstrap " +
-				"username is set and auth.mode uses OAuth")
-		}
+	if b := c.Auth.Accounts.Bootstrap; b.Email != "" && b.PasswordRef == "" {
+		add("config: auth.accounts.bootstrap.password_ref is required when a " +
+			"bootstrap email is set")
 	}
 	errs = append(errs, c.validateTokens()...)
 
@@ -295,8 +265,8 @@ func (c *Config) Warnings() []string {
 			"approvals may be lost on power failure. Do not use this in production.")
 	}
 	if c.Server.PublicURL == "" {
-		out = append(out, "server.public_url is unset: OAuth metadata will not be served, "+
-			"so ChatGPT cannot discover how to authenticate.")
+		out = append(out, "server.public_url is unset: the dashboard cannot show "+
+			"an address to connect a client to.")
 	} else if u, err := url.Parse(c.Server.PublicURL); err == nil && u.Scheme == "http" {
 		if !isLoopbackHost(u.Hostname()) {
 			// Loopback never leaves the machine and needs no warning. Anything
@@ -355,4 +325,3 @@ func isPrivateHost(host string) bool {
 func sortStrings(s []string) { sort.Strings(s) }
 
 // oauthMounted reports whether the built-in authorization server is served.
-func oauthMounted(mode string) bool { return mode == "oauth" || mode == "mixed" }

@@ -26,10 +26,9 @@ func (c *Config) applyEnvOverrides() error {
 	overrideString(&c.Server.FrontendListen, "FRONTEND_LISTEN")
 	overrideString(&c.Server.PublicURL, "PUBLIC_URL")
 	overrideString(&c.Storage.Path, "STORAGE_PATH")
-	overrideString(&c.Auth.Mode, "AUTH_MODE")
 	overrideString(&c.Logging.Level, "LOG_LEVEL")
 	overrideString(&c.Logging.Format, "LOG_FORMAT")
-	overrideString(&c.Auth.OAuth.Issuer, "OAUTH_ISSUER")
+	overrideString(&c.Auth.Accounts.Bootstrap.Email, "BOOTSTRAP_EMAIL")
 
 	if err := overrideBool(&c.Server.FrontendEnabled, "FRONTEND_ENABLED"); err != nil {
 		errs = append(errs, err.Error())

@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/spoked/mcpd/internal/auth"
-	"github.com/spoked/mcpd/internal/auth/oauth"
+	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/plugins/cnmaestro"
@@ -39,12 +39,12 @@ func decodeSettings(settings map[string]any, into any) error {
 	return nil
 }
 
-// buildVerifier constructs the token verifier for the configured auth mode.
+// buildVerifier constructs the verifier for machine callers.
 //
 // Secrets are resolved here, once, at startup. A missing credential fails the
 // process rather than producing a host that silently rejects every request
 // from one agent.
-func buildVerifier(cfg *config.Config, log *slog.Logger, oauthStore *oauth.Store) (auth.TokenVerifier, error) {
+func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, error) {
 	resolver := config.NewSecretResolver()
 
 	var tokens []*auth.StaticToken
@@ -68,57 +68,30 @@ func buildVerifier(cfg *config.Config, log *slog.Logger, oauthStore *oauth.Store
 			"role", t.Role, "plugins", t.Plugins)
 	}
 
-	switch cfg.Auth.Mode {
-	case "static":
-		return auth.NewStaticVerifier(tokens...)
-
-	case "oauth":
-		if oauthStore == nil {
-			return nil, fmt.Errorf("auth: oauth mode requires a token store")
-		}
-		return oauth.NewVerifier(oauthStore, time.Now), nil
-
-	case "mixed":
-		// Both schemes at once: OAuth for interactive clients like ChatGPT,
-		// static tokens for machine callers that cannot complete a browser
-		// flow. A credential verifies against one or neither.
-		if oauthStore == nil {
-			return nil, fmt.Errorf("auth: mixed mode requires a token store")
-		}
-		static, err := auth.NewStaticVerifier(tokens...)
-		if err != nil {
-			return nil, err
-		}
-		return oauth.NewMultiVerifier(oauth.NewVerifier(oauthStore, time.Now), static), nil
-
-	default:
-		return nil, fmt.Errorf("auth: unknown mode %q", cfg.Auth.Mode)
-	}
+	// Static tokens are the only bearer credential now. People sign in to the
+	// dashboard with a password and hold a session; a script that cannot
+	// complete a sign-in form presents one of these instead.
+	//
+	// An empty set is legitimate: a deployment reached only through the tunnel
+	// and the dashboard has no machine caller to issue one to.
+	return auth.NewStaticVerifier(tokens...)
 }
 
-// bootstrapAdmin provisions the first administrator when no identity exists.
+// bootstrapAdmin provisions the first administrator on an empty database.
 //
-// It runs only on a genuinely empty user table. Re-running it on an existing
-// deployment would silently reset an account, so the check is for zero users
-// rather than for the absence of this particular one.
-func bootstrapAdmin(ctx context.Context, cfg *config.Config, store *oauth.Store, log *slog.Logger) error {
-	b := cfg.Auth.OAuth.Bootstrap
-	if b.Username == "" {
-		return nil
-	}
-	// A bootstrapped identity only means something when the OAuth consent flow
-	// is mounted. Under static-token authentication there is no way for it to
-	// log in, so creating one is pointless -- and failing startup because its
-	// password reference is unset would be worse.
-	if cfg.Auth.Mode != "oauth" && cfg.Auth.Mode != "mixed" {
-		log.Debug("skipping bootstrap administrator; it can only sign in under oauth or mixed auth",
-			"auth_mode", cfg.Auth.Mode)
+// It runs only when no account exists, so it cannot be used to reset one: an
+// operator who has lost their password has to act on the database, which is
+// the correct amount of friction for a control that would otherwise let anyone
+// who can edit the config take over the host.
+func bootstrapAdmin(ctx context.Context, cfg *config.Config, store *users.Store, log *slog.Logger) error {
+	b := cfg.Auth.Accounts.Bootstrap
+	if b.Email == "" {
 		return nil
 	}
 
-	n, err := store.CountUsers(ctx)
+	n, err := store.Count(ctx)
 	if err != nil {
-		return fmt.Errorf("auth: count users: %w", err)
+		return fmt.Errorf("auth: count accounts: %w", err)
 	}
 	if n > 0 {
 		return nil
@@ -128,18 +101,18 @@ func bootstrapAdmin(ctx context.Context, cfg *config.Config, store *oauth.Store,
 	if err != nil {
 		return fmt.Errorf("auth: bootstrap administrator: %w", err)
 	}
-	user, err := store.CreateUserWithPassword(ctx, oauth.CreateUserRequest{
-		Username:    b.Username,
+	user, err := store.Create(ctx, users.CreateRequest{
+		Email:       b.Email,
 		Password:    password,
-		DisplayName: b.Username,
-		Role:        "admin",
+		DisplayName: b.Email,
+		Role:        auth.RoleAdmin,
 		Plugins:     []string{auth.Wildcard},
 	})
 	if err != nil {
 		return fmt.Errorf("auth: bootstrap administrator: %w", err)
 	}
 	log.Info("bootstrap administrator created; this runs only on an empty database",
-		"username", user.Username, "id", user.ID)
+		"email", user.Email, "id", user.ID)
 	return nil
 }
 

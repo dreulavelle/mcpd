@@ -3,7 +3,6 @@ package mcp
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/spoked/mcpd/internal/observability"
 )
@@ -40,66 +39,4 @@ func (h *Host) handleReady(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(report)
-}
-
-// protectedResourceMetadata is the RFC 9728 document an MCP client fetches to
-// discover where to authenticate. ChatGPT reads it during connector setup.
-type protectedResourceMetadata struct {
-	Resource               string   `json:"resource"`
-	AuthorizationServers   []string `json:"authorization_servers,omitempty"`
-	BearerMethodsSupported []string `json:"bearer_methods_supported"`
-	// ScopesSupported tells a client what to ask for when it has nothing else
-	// to go on. RFC 9728 makes it optional; the MCP specification then names
-	// it as the fallback when no scope arrives in a challenge, and a client
-	// that never sees a challenge -- one reading this document directly, as a
-	// tunnel does -- has only this.
-	ScopesSupported       []string `json:"scopes_supported,omitempty"`
-	ResourceName          string   `json:"resource_name,omitempty"`
-	ResourceDocumentation string   `json:"resource_documentation,omitempty"`
-}
-
-// handleResourceMetadata serves the protected-resource document.
-//
-// It is unauthenticated by specification: a client must be able to read it in
-// order to learn how to authenticate. It therefore carries no plugin names and
-// no configuration, only the issuer pointer.
-func (h *Host) handleResourceMetadata(w http.ResponseWriter, r *http.Request) {
-	base := strings.TrimRight(h.opts.PublicURL, "/")
-	if base == "" {
-		h.writeError(w, r, http.StatusNotFound, "no public url configured")
-		return
-	}
-
-	// The document describes the endpoint it was asked about, not the host.
-	//
-	// Each MCP endpoint is its own protected resource, and RFC 9728 puts that
-	// resource's path after the well-known segment. Returning the same
-	// identifier whatever was asked makes every endpoint look like the same
-	// resource -- which breaks audience binding, and makes two tunnels serving
-	// different endpoints indistinguishable to anything reading their
-	// metadata.
-	resource := base
-	if suffix := strings.Trim(r.PathValue("path"), "/"); suffix != "" {
-		resource = base + "/" + suffix
-	}
-
-	meta := protectedResourceMetadata{
-		Resource:               resource,
-		BearerMethodsSupported: []string{"header"},
-		ResourceName:           "mcpd",
-	}
-	if h.opts.AuthorizationServer != "" {
-		meta.ScopesSupported = strings.Fields(h.challengeScope(strings.TrimPrefix(resource, base)))
-	}
-	// authorization_servers is omitted entirely when no authorization server
-	// is mounted. A client reading this document -- OpenAI's tunnel-client
-	// treats authorization_servers[0] as its only metadata target -- must be
-	// able to tell "this resource takes a bearer token you already have" from
-	// "go here to obtain one".
-	if h.opts.AuthorizationServer != "" {
-		meta.AuthorizationServers = []string{h.opts.AuthorizationServer}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	_ = json.NewEncoder(w).Encode(meta)
 }

@@ -89,10 +89,10 @@ func (c *Config) PluginsDir() string {
 
 // TLS configures HTTPS on the MCP listener.
 //
-// The dashboard listener is deliberately not covered. What forces the issue
-// here is OAuth: RFC 8414 requires an authorization server's issuer to use the
-// https scheme, so a connector pointed at an http:// issuer is refused. The
-// dashboard has no such contract and is reached over an internal interface.
+// The dashboard listener is deliberately not covered. The two have different
+// audiences and different exposure: an MCP client may be reached over a network
+// segment worth encrypting, while the dashboard is served on an internal
+// interface to an operator who can be given the CA instead.
 type TLS struct {
 	// Mode is "off" or "self-signed".
 	//
@@ -120,11 +120,9 @@ type Server struct {
 	// PublicURL is the externally reachable base URL of the MCP endpoint --
 	// the Listen address above, not the dashboard.
 	//
-	// It identifies this resource in OAuth metadata and is what the dashboard
-	// renders as a connection address, so it must match what clients actually
-	// use. A mismatch surfaces late and confusingly: as a connector handshake
-	// that fails at the redirect, or a copied address that reaches the wrong
-	// listener.
+	// It is what the dashboard renders as a connection address, so it must
+	// match what clients actually use. A mismatch surfaces late and
+	// confusingly, as a copied address that reaches the wrong listener.
 	PublicURL string `yaml:"public_url"`
 
 	// FrontendListen is the bind address for the admin dashboard.
@@ -172,16 +170,17 @@ type Storage struct {
 }
 
 // Auth configures authentication.
+//
+// The two halves address different callers and are independent. People sign in
+// to the dashboard with an email and password, which becomes a session;
+// machines present a static token. Neither is a mode the other excludes.
 type Auth struct {
-	// Mode is "static", "oauth", or "mixed".
-	Mode string `yaml:"mode"`
-
 	// StaticTokens are machine credentials. Each names a secret reference
 	// rather than carrying the token itself.
 	StaticTokens []StaticTokenConfig `yaml:"static_tokens"`
 
-	// OAuth configures the resource-server side used by ChatGPT.
-	OAuth OAuth `yaml:"oauth"`
+	// Accounts configures the people who sign in to the dashboard.
+	Accounts Accounts `yaml:"accounts"`
 }
 
 // StaticTokenConfig declares one machine credential and what it may reach.
@@ -202,43 +201,27 @@ type StaticTokenConfig struct {
 	Plugins []string `yaml:"plugins"`
 }
 
-// OAuth configures the built-in authorization server.
+// Accounts configures the local identities that sign in to the dashboard.
 //
-// mcpd is its own authorization server. The alternative is requiring an
-// operator to run Keycloak or buy Auth0 before ChatGPT can reach their own
-// network gear, which is a steep prerequisite for a single-VM deployment.
-type OAuth struct {
-	// Issuer is the authorization server's base URL. It defaults to
-	// server.public_url, which is almost always correct since both describe
-	// the same host.
-	Issuer string `yaml:"issuer"`
+// mcpd is no longer an OAuth authorization server. It reaches ChatGPT through
+// the tunnel, which carries the connection and the credential both, so the
+// authorize/token/consent machinery served no client that exists: signing
+// someone in through a tunnel needs mcpd reachable from the public internet,
+// which is the one thing a tunnel exists to avoid.
+type Accounts struct {
+	// SessionTTL bounds a signed-in browser.
+	SessionTTL time.Duration `yaml:"session_ttl"`
 
-	AccessTokenTTL  time.Duration `yaml:"access_token_ttl"`
-	RefreshTokenTTL time.Duration `yaml:"refresh_token_ttl"`
-	AuthCodeTTL     time.Duration `yaml:"auth_code_ttl"`
-	SessionTTL      time.Duration `yaml:"session_ttl"`
-
-	// AllowDynamicRegistration enables RFC 7591. ChatGPT uses it when Client
-	// ID Metadata Documents are unavailable.
-	//
-	// Open registration is safe here because registering confers nothing on
-	// its own: a client still cannot obtain a token without a user completing
-	// the consent flow, and the resulting token is bounded by that user's own
-	// role and plugin grants.
-	AllowDynamicRegistration bool `yaml:"allow_dynamic_registration"`
-
-	// AllowCIMD enables Client ID Metadata Documents, which supersede dynamic
-	// registration in the 2026-07-28 MCP revision.
-	AllowCIMD bool `yaml:"allow_cimd"`
-
-	// Bootstrap provisions the first administrator when no users exist. It is
-	// ignored once any identity is present.
+	// Bootstrap provisions the first administrator when no accounts exist. It
+	// is ignored once any account is present, so it cannot be used to reset
+	// one.
 	Bootstrap Bootstrap `yaml:"bootstrap"`
 }
 
 // Bootstrap describes the initial administrator.
 type Bootstrap struct {
-	Username string `yaml:"username"`
+	// Email is the address the first administrator signs in with.
+	Email string `yaml:"email"`
 	// PasswordRef is a secret reference, never a password.
 	PasswordRef string `yaml:"password_ref"`
 }
@@ -327,14 +310,11 @@ func Default() *Config {
 			BusyTimeout: 5 * time.Second,
 		},
 		Auth: Auth{
-			Mode: "static",
-			OAuth: OAuth{
-				AccessTokenTTL:           time.Hour,
-				RefreshTokenTTL:          30 * 24 * time.Hour,
-				AuthCodeTTL:              time.Minute,
-				SessionTTL:               30 * time.Minute,
-				AllowDynamicRegistration: true,
-				AllowCIMD:                true,
+			Accounts: Accounts{
+				// Long enough that a working day does not require signing in
+				// twice, short enough that an unattended browser does not stay
+				// signed in indefinitely.
+				SessionTTL: 12 * time.Hour,
 			},
 		},
 		Approval: Approval{

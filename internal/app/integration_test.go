@@ -234,40 +234,32 @@ func TestHost_HealthEndpoints(t *testing.T) {
 	}
 }
 
-// ChatGPT fetches this document during connector setup to discover where to
-// authenticate. It must be readable without credentials.
-func TestHost_ProtectedResourceMetadataIsPublic(t *testing.T) {
+// mcpd is no longer an authorization server, so there is nowhere to point a
+// client at. The metadata document described one, and a client following it
+// would be sent somewhere that cannot issue it a token.
+func TestHost_ProtectedResourceMetadataIsGone(t *testing.T) {
 	a := newTestApp(t)
 	w := httptest.NewRecorder()
 	a.Handler().ServeHTTP(w, httptest.NewRequest(
 		http.MethodGet, "/.well-known/oauth-protected-resource", nil))
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("metadata status = %d: %s", w.Code, w.Body.String())
-	}
-	var meta map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &meta); err != nil {
-		t.Fatal(err)
-	}
-	if meta["resource"] != "https://mcp.test.invalid" {
-		t.Fatalf("resource = %v, want the configured public URL", meta["resource"])
-	}
-	// The document is unauthenticated, so it must not name plugins.
-	if strings.Contains(w.Body.String(), "echo") {
-		t.Fatal("public metadata must not disclose which plugins are mounted")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("metadata status = %d, want 404: %s", w.Code, w.Body.String())
 	}
 }
 
-// A 401 must point the client at the metadata document, which is how an MCP
-// client discovers the authorization server.
-func TestHost_ChallengeAdvertisesResourceMetadata(t *testing.T) {
+// The challenge still asks for a bearer credential; it just no longer claims
+// there is a place to go and obtain one.
+func TestHost_ChallengeAsksForABearerToken(t *testing.T) {
 	a := newTestApp(t)
 	w := mcpRequest(t, a.Handler(), "/mcp/echo", "", map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
 	})
-	challenge := w.Header().Get("WWW-Authenticate")
-	if !strings.Contains(challenge, "resource_metadata=") {
-		t.Fatalf("WWW-Authenticate = %q, want a resource_metadata pointer", challenge)
+	if got := w.Header().Get("WWW-Authenticate"); got != "Bearer" {
+		t.Fatalf("WWW-Authenticate = %q, want a plain Bearer challenge", got)
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
 	}
 }
 
@@ -325,20 +317,6 @@ func TestNew_RefusesUnknownPlugin(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not compiled into this binary") {
 		t.Fatalf("error should explain the cause, got: %v", err)
-	}
-}
-
-// Configuring OAuth must not silently fall back to static verification, which
-// would accept a weaker credential than the configuration promises.
-func TestBuildVerifier_RefusesOAuthWithoutStore(t *testing.T) {
-	cfg := config.Default()
-	cfg.Auth.Mode = "oauth"
-	cfg.Auth.OAuth.Issuer = "https://issuer.test.invalid"
-
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if _, err := buildVerifier(cfg, log, nil); err == nil {
-		t.Fatal("oauth mode without a token store must fail rather than " +
-			"falling back to static tokens")
 	}
 }
 

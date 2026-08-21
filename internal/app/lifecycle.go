@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spoked/mcpd/internal/auth/oauth"
+	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/settings"
 )
 
@@ -93,9 +93,9 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.startWorker("outbox-publisher", workerCtx, a.publisher.Run)
 	a.startWorker("reaper", workerCtx, a.reaper.Run)
-	if a.oauthStore != nil {
-		hk := oauth.NewHousekeeper(a.oauthStore, time.Hour, 7*24*time.Hour)
-		a.startWorker("oauth-housekeeper", workerCtx, hk.Run)
+	if a.accounts != nil {
+		hk := users.NewHousekeeper(a.accounts, time.Hour)
+		a.startWorker("session-housekeeper", workerCtx, hk.Run)
 	}
 
 	a.startWorker("history-retention", workerCtx, a.pruneHistory)

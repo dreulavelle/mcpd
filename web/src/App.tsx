@@ -1,31 +1,52 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, ApiError, clearToken, getToken, setToken,
-  type AuditRecord, type HealthReport, type Meta,
+  api, ApiError, setCSRFToken,
+  type AuditRecord, type HealthReport, type Meta, type Session,
 } from "./api";
 import { CodeBlock, Dot, History, Message, Skeleton, usePoll, useToasts } from "./components";
 import { Plugins } from "./Plugins";
 import { Settings } from "./Settings";
 import { Tunnels } from "./Tunnels";
+import { Users } from "./Users";
 
-type Tab = "plugins" | "tunnels" | "settings" | "history";
+type Tab = "plugins" | "tunnels" | "users" | "settings" | "history";
 
 export default function App() {
-  const [signedIn, setSignedIn] = useState(() => getToken() !== null);
+  const [session, setSession] = useState<Session | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
+  // Undecided until the cookie has been checked. Rendering the sign-in form
+  // first would flash it at everyone whose session is still good.
+  const [checked, setChecked] = useState(false);
+
+  const adopt = useCallback((s: Session) => {
+    setCSRFToken(s.csrf_token);
+    setSession(s);
+  }, []);
 
   useEffect(() => {
     api.meta().then(setMeta).catch(() => setMeta(null));
+    // The cookie survives a reload; the CSRF token does not, so it is fetched
+    // back rather than requiring another sign-in.
+    api.session().then(adopt).catch(() => undefined).finally(() => setChecked(true));
+  }, [adopt]);
+
+  const signOut = useCallback(() => {
+    api.signOut().catch(() => undefined).finally(() => {
+      setCSRFToken(null);
+      setSession(null);
+    });
   }, []);
 
-  if (!signedIn) return <SignIn meta={meta} onDone={() => setSignedIn(true)} />;
-  return <Console onSignOut={() => { clearToken(); setSignedIn(false); }} />;
+  if (!checked) return null;
+  if (!session) return <SignIn meta={meta} onDone={adopt} />;
+  return <Console session={session} onSignOut={signOut} />;
 }
 
 /* ── sign in ────────────────────────────────────────────────────────────── */
 
-function SignIn({ meta, onDone }: { meta: Meta | null; onDone: () => void }) {
-  const [key, setKey] = useState("");
+function SignIn({ meta, onDone }: { meta: Meta | null; onDone: (s: Session) => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -33,17 +54,12 @@ function SignIn({ meta, onDone }: { meta: Meta | null; onDone: () => void }) {
     e.preventDefault();
     setBusy(true);
     setError("");
-    setToken(key.trim());
     try {
-      // Any protected endpoint proves the key works. Using one the console
-      // needs anyway keeps this from drifting out of step with real access.
-      await api.health();
-      onDone();
+      onDone(await api.signIn(email.trim(), password));
     } catch (err) {
-      clearToken();
       setError(
         err instanceof ApiError && err.status === 401
-          ? "That key wasn't accepted."
+          ? "That email and password did not match."
           : "Couldn't reach mcpd. Is it running?",
       );
     } finally {
@@ -65,20 +81,27 @@ function SignIn({ meta, onDone }: { meta: Meta | null; onDone: () => void }) {
 
             <form onSubmit={submit}>
               <div className="field">
-                <label htmlFor="key">Access key</label>
+                <label htmlFor="email">Email</label>
                 <input
-                  id="key" type="password" autoComplete="off" autoFocus
-                  value={key} onChange={(e) => setKey(e.target.value)}
-                  placeholder="Paste your key"
+                  id="email" type="email" autoComplete="username" autoFocus
+                  value={email} onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
                 />
-                <p className="note">
-                  It's in your <code>.env</code> file, as <code>MCPD_TOKEN_LOCAL</code>.
-                </p>
               </div>
 
-              <button className="btn primary" type="submit" disabled={busy || !key.trim()}
+              <div className="field">
+                <label htmlFor="password">Password</label>
+                <input
+                  id="password" type="password" autoComplete="current-password"
+                  value={password} onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Your password"
+                />
+              </div>
+
+              <button className="btn primary" type="submit"
+                      disabled={busy || !email.trim() || !password}
                       style={{ width: "100%" }}>
-                {busy ? "Checking…" : "Sign in"}
+                {busy ? "Signing in…" : "Sign in"}
               </button>
             </form>
           </div>
@@ -96,7 +119,7 @@ function SignIn({ meta, onDone }: { meta: Meta | null; onDone: () => void }) {
 
 /* ── console ────────────────────────────────────────────────────────────── */
 
-function Console({ onSignOut }: { onSignOut: () => void }) {
+function Console({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const [tab, setTab] = useState<Tab>("plugins");
   const [health, setHealth] = useState<HealthReport | null>(null);
 
@@ -105,9 +128,14 @@ function Console({ onSignOut }: { onSignOut: () => void }) {
   }, []);
   usePoll(pollHealth, 20_000);
 
+  // Accounts are an administrator's business. The API refuses the calls
+  // regardless; hiding the tab keeps the console from offering a page that can
+  // only answer 403.
+  const admin = session.role === "admin";
   const tabs: [Tab, string][] = [
     ["plugins", "Plugins"],
     ["tunnels", "Tunnels"],
+    ...(admin ? [["users", "Users"] as [Tab, string]] : []),
     ["settings", "Settings"],
     ["history", "History"],
   ];
@@ -138,12 +166,16 @@ function Console({ onSignOut }: { onSignOut: () => void }) {
           </span>
         )}
 
+        <span className="note" style={{ marginRight: "var(--s3)" }}>
+          {session.display_name || session.email}
+        </span>
         <button className="btn quiet" onClick={onSignOut}>Sign out</button>
       </header>
 
       <main>
         {tab === "plugins" && <Plugins />}
         {tab === "tunnels" && <Tunnels />}
+        {tab === "users" && <Users />}
         {tab === "settings" && <Settings />}
         {tab === "history" && <FullHistory />}
       </main>
