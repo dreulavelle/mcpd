@@ -79,12 +79,6 @@ type Principal struct {
 	// exactly one plugin while another sees a different set.
 	Plugins []string
 
-	// Distinguishable reports whether the authentication mode can tell this
-	// principal apart from others. A shared static token cannot: every caller
-	// presenting it is the same principal. Separation of duties consults this
-	// and refuses rather than silently degrading.
-	Distinguishable bool
-
 	// TokenID identifies the credential used, for revocation and audit. It is
 	// never the credential itself.
 	TokenID string
@@ -162,7 +156,7 @@ func Anonymous() *Principal {
 // nothing.
 func (p Principal) Equal(other Principal) bool {
 	if p.ID != other.ID || p.Role != other.Role ||
-		p.Distinguishable != other.Distinguishable || p.TokenID != other.TokenID {
+		p.TokenID != other.TokenID {
 		return false
 	}
 	if len(p.Plugins) != len(other.Plugins) {

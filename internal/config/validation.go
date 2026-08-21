@@ -145,10 +145,6 @@ func (c *Config) Validate() error {
 		add("config: approval.inline_max_risk must be one of %v or empty (got %q)",
 			validRisks, r)
 	}
-	if r := c.Approval.RequireDistinctApproverAtOrAbove; r != "" && !slices.Contains(validRisks, r) {
-		add("config: approval.require_distinct_approver_at_or_above must be one of %v (got %q)",
-			validRisks, r)
-	}
 	for name, d := range map[string]time.Duration{
 		"proposal_ttl": c.Approval.ProposalTTL,
 		"approval_ttl": c.Approval.ApprovalTTL,
@@ -297,13 +293,6 @@ func (c *Config) Warnings() []string {
 	if c.Storage.RelaxedDurability {
 		out = append(out, "storage.relaxed_durability is enabled: "+
 			"approvals may be lost on power failure. Do not use this in production.")
-	}
-	if c.Approval.RequireDistinctApproverAtOrAbove != "" && c.Auth.Mode == "static" {
-		out = append(out, fmt.Sprintf(
-			"approval.require_distinct_approver_at_or_above is %q but auth.mode is static: "+
-				"static tokens cannot distinguish principals, so operations at or above "+
-				"that risk level will be refused rather than self-approved.",
-			c.Approval.RequireDistinctApproverAtOrAbove))
 	}
 	if c.Server.PublicURL == "" {
 		out = append(out, "server.public_url is unset: OAuth metadata will not be served, "+

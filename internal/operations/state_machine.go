@@ -34,15 +34,6 @@ type GuardContext struct {
 	// preconditions equal those captured at proposal time. Only consulted for
 	// TriggerClaim.
 	PreconditionsMatch bool
-
-	// RequireDistinctApprover activates separation of duties for this
-	// operation's risk level.
-	RequireDistinctApprover bool
-
-	// IdentityDistinguishable reports whether the active authentication mode
-	// can tell two principals apart. When separation of duties is required and
-	// this is false, approval is refused rather than silently degraded.
-	IdentityDistinguishable bool
 }
 
 // transition is one row of the transition table.
@@ -182,20 +173,6 @@ func guardApprovalExpired(op *Operation, gc GuardContext) error {
 func guardApprove(op *Operation, gc GuardContext) error {
 	if !gc.Now.Before(op.ExpiresAt) {
 		return guard(CodeProposalExpired, "proposal expired before approval")
-	}
-	if !gc.RequireDistinctApprover {
-		return nil
-	}
-	// Separation of duties fails closed. If the active authentication mode
-	// cannot distinguish principals, the rule cannot be enforced, and silently
-	// disabling it would leave the policy claiming a guarantee it is not
-	// providing.
-	if !gc.IdentityDistinguishable {
-		return guard(CodeIdentityIndistinct,
-			"risk level requires a distinct approver, but the active auth mode cannot distinguish principals")
-	}
-	if gc.Actor == op.RequestedBy {
-		return guard(CodeSelfApproval, "requester may not approve their own operation at this risk level")
 	}
 	return nil
 }

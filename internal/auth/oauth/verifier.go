@@ -65,8 +65,7 @@ func (v *Verifier) Verify(ctx context.Context, token string, _ *http.Request) (*
 		// OAuth identities are per user, so separation of duties is
 		// enforceable. This is the difference that makes high-risk approvals
 		// possible at all.
-		Distinguishable: true,
-		TokenID:         stored.ClientID,
+		TokenID: stored.ClientID,
 	}, nil
 }
 

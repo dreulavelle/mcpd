@@ -83,25 +83,6 @@ func TestValidate_RejectsSharedSecretReference(t *testing.T) {
 		t.Fatalf("expected a shared-secret error, got %v", err)
 	}
 }
-
-// Static tokens cannot distinguish principals, so a separation-of-duties
-// policy will refuse rather than self-approve. Operators must be told.
-func TestWarnings_FlagsSeparationOfDutiesUnderStaticAuth(t *testing.T) {
-	c := validConfig()
-	c.Approval.RequireDistinctApproverAtOrAbove = "high"
-	c.Auth.Mode = "static"
-
-	var found bool
-	for _, w := range c.Warnings() {
-		if strings.Contains(w, "cannot distinguish principals") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected a separation-of-duties warning, got %v", c.Warnings())
-	}
-}
-
 func TestWarnings_FlagsRelaxedDurability(t *testing.T) {
 	c := validConfig()
 	c.Storage.RelaxedDurability = true

@@ -77,10 +77,6 @@ auth:
   # protected-resource metadata before it will be created at all, and under
   # static auth there is none to give -- ChatGPT reports that the server does
   # not implement OAuth and stops there.
-  #
-  # It is also what makes require_distinct_approver_at_or_above below mean
-  # anything: one shared token is one identity, and one identity cannot be two
-  # people.
   mode: static
 
   static_tokens:
@@ -129,12 +125,6 @@ auth:
       password_ref: env:MCPD_BOOTSTRAP_PASSWORD
 
 approval:
-  # Risk level from which the requester may not also approve.
-  #
-  # This fails closed: under static-token auth every caller is the same
-  # principal, so operations at or above this level are refused rather than
-  # self-approved. Set to "" to disable, or move to OAuth for real identities.
-  require_distinct_approver_at_or_above: high
 
   # How long a proposal waits for a decision.
   proposal_ttl: 30m
@@ -146,14 +136,10 @@ approval:
   # How long an execution claim is held before the reaper reclaims it.
   lease_ttl: 2m
 
-  # Highest risk a user may approve from inside a conversation -- through the
-  # client's own confirmation prompt -- rather than opening the dashboard.
-  #
-  # Approving routine changes inline is what stops the gate being worked
-  # around: an operator who must switch windows for every trivial edit
-  # eventually stops using it. Anything above this goes to the dashboard,
-  # where the full before-and-after, the audit trail, and a second person are
-  # available. Empty sends every approval there.
+  # Highest risk a user may approve from a single yes/no prompt raised by
+  # their assistant. Above it the shortcut is withheld, not the decision: the
+  # assistant has to show the change in full and be told explicitly. Either way
+  # the person decides in the conversation.
   inline_max_risk: medium
 
 logging:

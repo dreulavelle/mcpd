@@ -3,7 +3,7 @@ import {
   api, ApiError, clearToken, getToken, setToken,
   type AuditRecord, type HealthReport, type Meta,
 } from "./api";
-import { CodeBlock, Dot, History, Message, Skeleton, usePoll } from "./components";
+import { CodeBlock, Dot, History, Message, Skeleton, usePoll, useToasts } from "./components";
 import { Plugins } from "./Plugins";
 import { Settings } from "./Settings";
 import { Tunnels } from "./Tunnels";
@@ -155,30 +155,64 @@ function Console({ onSignOut }: { onSignOut: () => void }) {
 
 function FullHistory() {
   const [records, setRecords] = useState<AuditRecord[] | null>(null);
-  const [chain, setChain] = useState<{ intact: boolean; broken_at: number } | null>(null);
+  const [broken, setBroken] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const { show, view } = useToasts();
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api.audit(200)
       .then((r) => setRecords(r.records ?? []))
-      .catch((e) => { setRecords([]); setError(e instanceof Error ? e.message : "Couldn't load the history."); });
-    // Needs admin rights, so failing here is normal for other people.
-    api.verifyAudit().then(setChain).catch(() => setChain(null));
+      .catch((e) => {
+        setRecords([]);
+        setError(e instanceof Error ? e.message : "Couldn't load the history.");
+      });
+    // Silence when the chain is intact. A check that announces success on
+    // every visit trains people to skip the one time it does not.
+    api.verifyAudit()
+      .then((c) => setBroken(c.intact ? null : c.broken_at))
+      .catch(() => setBroken(null));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function clear() {
+    if (!confirm("Clear the history? The record of everything so far is removed.")) return;
+    setBusy(true);
+    try {
+      const r = await api.clearAudit();
+      show("good", `Cleared ${r.removed} ${r.removed === 1 ? "entry" : "entries"}.`);
+    } catch (e) {
+      show("problem", e instanceof ApiError ? e.detail : "Couldn't clear it.");
+    } finally {
+      setBusy(false);
+      load();
+    }
+  }
 
   return (
     <>
-      <h1>History</h1>
-      <p className="lede">Append-only. mcpd notices if anything is altered.</p>
+      {view}
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        <div style={{ flex: 1 }}>
+          <h1>History</h1>
+          <p className="lede">Append-only. mcpd notices if anything is altered.</p>
+        </div>
+        <button className="btn sm" disabled={busy || !records?.length} onClick={clear}>
+          {busy ? "Clearing…" : "Clear"}
+        </button>
+      </div>
 
       {error && <Message tone="problem">{error}</Message>}
 
-      {chain && (chain.intact
-        ? <Message tone="good">Checked — nothing has been tampered with.</Message>
-        : <Message tone="problem">
+      {broken !== null && (
+        <Message tone="problem">
+          <span>
             <strong>The history has been altered.</strong> Something edited the
-            database directly, starting at entry {chain.broken_at}.
-          </Message>)}
+            database directly, starting at entry {broken}.
+          </span>
+        </Message>
+      )}
 
       {records === null ? <Skeleton rows={6} /> : (
         <div className="card"><History records={records} /></div>

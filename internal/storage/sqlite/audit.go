@@ -188,11 +188,18 @@ func (s *AuditStore) VerifyChain(ctx context.Context) (int64, error) {
 	}
 	defer rows.Close()
 
-	prev := genesisHash
+	// The first row anchors the chain. Usually that is genesis; after a prune
+	// it is the oldest survivor, whose predecessor was legitimately removed.
+	// Requiring genesis here would report every pruned trail as broken, which
+	// would make the check useless exactly where it matters.
+	prev := ""
 	for rows.Next() {
 		rec, err := scanAuditRow(rows)
 		if err != nil {
 			return 0, err
+		}
+		if prev == "" {
+			prev = rec.PrevHash
 		}
 		if rec.PrevHash != prev {
 			return rec.Seq, nil
@@ -240,4 +247,65 @@ func scanAuditRow(row scannable) (operations.AuditRecord, error) {
 	rec.Entry.Risk = operations.RiskLevel(risk)
 	rec.Entry.Detail = json.RawMessage(detail)
 	return rec, nil
+}
+
+// Prune removes audit entries older than cutoff and records that it did.
+//
+// Retention and tamper-evidence pull against each other, and the resolution is
+// that pruning is itself audited. The removal is written into the trail, so it
+// says what happened to the part of itself that is missing -- an absence with
+// a reason beats an absence.
+//
+// What remains still verifies: the oldest surviving entry becomes the anchor,
+// and VerifyChain treats it as one, so a pruned trail is not indistinguishable
+// from a tampered one.
+func (s *AuditStore) Prune(ctx context.Context, actor string, cutoff, now time.Time) (int64, error) {
+	var removed int64
+
+	err := s.db.WriteTx(ctx, now.UnixMilli(), func(tx *UnitOfWork) error {
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM audit_events WHERE at < ?`,
+			cutoff.UnixMilli()).Scan(&removed); err != nil {
+			return fmt.Errorf("sqlite: count prunable audit entries: %w", err)
+		}
+		if removed == 0 {
+			return nil
+		}
+
+		// The gate is what separates a declared prune from a stray DELETE. It
+		// lives and dies inside this transaction, so no other path can ever
+		// remove an audit row.
+		if err := tx.Exec(
+			`INSERT INTO audit_prune_gate (id, opened_at) VALUES (1, ?)`,
+			now.UnixMilli()); err != nil {
+			return fmt.Errorf("sqlite: open prune gate: %w", err)
+		}
+		if err := tx.Exec(`DELETE FROM audit_events WHERE at < ?`, cutoff.UnixMilli()); err != nil {
+			return fmt.Errorf("sqlite: prune audit: %w", err)
+		}
+		if err := tx.Exec(`DELETE FROM audit_prune_gate`); err != nil {
+			return fmt.Errorf("sqlite: close prune gate: %w", err)
+		}
+
+		// Appended after the delete, so it links to the newest survivor and is
+		// never removed by the prune that produced it.
+		detail, err := json.Marshal(map[string]any{
+			"removed_entries": removed,
+			"older_than":      cutoff.UTC().Format(time.RFC3339),
+		})
+		if err != nil {
+			return err
+		}
+		return tx.appendAudit(operations.AuditEntry{
+			EventID: newEventID(),
+			Kind:    "audit.pruned",
+			Actor:   actor,
+			Action:  "prune",
+			Detail:  detail,
+		})
+	})
+	if err != nil {
+		return 0, err
+	}
+	return removed, nil
 }

@@ -7,9 +7,7 @@ import (
 // Authorization error codes. They are stable identifiers suitable for audit
 // records, not prose.
 const (
-	CodeNotAuthorized      = "NOT_AUTHORIZED"
-	CodeSelfApproval       = "SELF_APPROVAL_FORBIDDEN"
-	CodeIdentityIndistinct = "IDENTITY_INDISTINCT"
+	CodeNotAuthorized = "NOT_AUTHORIZED"
 )
 
 // Decision is the outcome of an authorization check. It carries a reason so

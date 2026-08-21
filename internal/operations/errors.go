@@ -31,8 +31,6 @@ const (
 	CodePreconditionChanged = "PRECONDITION_CHANGED"
 	CodeProposalExpired     = "PROPOSAL_EXPIRED"
 	CodeApprovalExpired     = "APPROVAL_EXPIRED"
-	CodeSelfApproval        = auth.CodeSelfApproval
-	CodeIdentityIndistinct  = auth.CodeIdentityIndistinct
 	CodeNotAuthorized       = auth.CodeNotAuthorized
 	CodeUpstreamFailed      = "UPSTREAM_FAILED"
 	CodeIndeterminate       = "INDETERMINATE"

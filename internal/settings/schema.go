@@ -103,7 +103,8 @@ const (
 	KeyTunnelPlugins   = "tunnel.plugins"
 	KeyTunnelUpdates   = "tunnel.check_for_updates"
 
-	KeyApprovalDistinct    = "approval.require_distinct_approver_at_or_above"
+	KeyHistoryRetentionDays = "history.retention_days"
+
 	KeyApprovalProposalTTL = "approval.proposal_ttl_minutes"
 	KeyApprovalApprovalTTL = "approval.approval_ttl_minutes"
 	KeyApprovalLeaseTTL    = "approval.lease_ttl_minutes"
@@ -202,19 +203,26 @@ func schema() []Group {
 			},
 		},
 		{
+			Name:    "history",
+			Title:   "History",
+			Section: SectionSettings,
+			Help:    "How long the record is kept.",
+			Fields: []Field{
+				{
+					Key: KeyHistoryRetentionDays, Label: "Keep history for", Kind: KindInt,
+					Group: "history", Apply: ApplyLive,
+					Default: 7, Min: intPtr(0), Max: intPtr(3650),
+					Help: "Days. Older entries are removed once a day, and the removal " +
+						"is itself recorded. Zero keeps everything.",
+				},
+			},
+		},
+		{
 			Name:    "approval",
 			Title:   "Approvals",
 			Section: SectionSettings,
 			Help:    "How long a change waits, and who may approve one.",
 			Fields: []Field{
-				{
-					Key: KeyApprovalDistinct, Label: "Require a second person from",
-					Kind: KindEnum, Group: "approval", Apply: ApplyLive,
-					Options: []string{"", "low", "medium", "high", "critical"},
-					Default: "high",
-					Help: "Changes at this level or above can't be approved by whoever " +
-						"asked for them. Needs individual sign-ins.",
-				},
 				{
 					Key: KeyApprovalProposalTTL, Label: "Suggestions expire after",
 					Kind: KindDuration, Group: "approval", Apply: ApplyLive,

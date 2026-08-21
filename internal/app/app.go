@@ -40,6 +40,7 @@ type App struct {
 	db      *sqlite.DB
 	ops     *sqlite.OperationStore
 	outbox  *sqlite.OutboxStore
+	audit   *sqlite.AuditStore
 	manager *plugins.Manager
 	health  *observability.HealthRegistry
 
@@ -101,6 +102,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		db:     db,
 		ops:    sqlite.NewOperationStore(db, time.Now),
 		outbox: sqlite.NewOutboxStore(db, time.Now),
+		audit:  sqlite.NewAuditStore(db),
 		health: observability.NewHealthRegistry(2 * time.Second),
 	}
 
@@ -147,10 +149,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		}
 	}
 	authorizer := auth.NewAuthorizer()
-	a.approval = operations.NewApprovalPolicy(authorizer, operations.RiskPolicy{
-		RequireDistinctApproverAtOrAbove: operations.RiskLevel(
-			cfg.Approval.RequireDistinctApproverAtOrAbove),
-	})
+	a.approval = operations.NewApprovalPolicy(authorizer)
 
 	// The bus and publisher exist before plugins register, because a
 	// mutation's propose tool needs somewhere to send the resulting event.
@@ -280,7 +279,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Manager:    a.manager,
 			Health:     a.health,
 			Version:    Version,
-			Audit:      sqlite.NewAuditStore(db),
+			Audit:      a.audit,
+			Pruner:     a.audit,
 			PublicURL:  cfg.Server.PublicURL,
 			AuthMode:   cfg.Auth.Mode,
 			Plugins:    func() []string { return a.manager.Names() },
@@ -583,11 +583,7 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 			DisplayName: "tunnel",
 			Role:        auth.Role(a.settings.String(ctx, settings.KeyTunnelRole, orDefault(file.Role, "operator"))),
 			Plugins:     a.settings.Strings(ctx, settings.KeyTunnelPlugins, file.Plugins),
-			// A tunnel is one credential shared by everyone using the
-			// connector, so it cannot distinguish who is asking. Separation of
-			// duties must refuse rather than silently accept a self-approval.
-			Distinguishable: false,
-			TokenID:         "tunnel",
+			TokenID:     "tunnel",
 		},
 	}
 

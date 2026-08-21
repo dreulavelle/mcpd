@@ -35,11 +35,10 @@ func newOp(state OperationState) *Operation {
 // field at a time.
 func okGuard() GuardContext {
 	return GuardContext{
-		Now:                     base,
-		Actor:                   "user:bob",
-		RecomputedHash:          "hash",
-		PreconditionsMatch:      true,
-		IdentityDistinguishable: true,
+		Now:                base,
+		Actor:              "user:bob",
+		RecomputedHash:     "hash",
+		PreconditionsMatch: true,
 	}
 }
 
@@ -153,30 +152,6 @@ func TestGuard_ApprovalRequiresUnexpiredProposal(t *testing.T) {
 
 	err := Validate(op, StateApproved, TriggerApprove, gc)
 	assertGuardCode(t, err, CodeProposalExpired)
-}
-
-func TestGuard_SelfApprovalRefusedWhenPolicyRequiresDistinctApprover(t *testing.T) {
-	op := newOp(StatePendingApproval)
-	gc := okGuard()
-	gc.RequireDistinctApprover = true
-	gc.Actor = op.RequestedBy // same principal proposed and approved
-
-	err := Validate(op, StateApproved, TriggerApprove, gc)
-	assertGuardCode(t, err, CodeSelfApproval)
-}
-
-// A single static bearer token yields exactly one principal, so separation of
-// duties cannot be enforced. The policy must refuse rather than silently
-// degrade into no policy at all.
-func TestGuard_SeparationOfDutiesFailsClosedWithIndistinctIdentity(t *testing.T) {
-	op := newOp(StatePendingApproval)
-	gc := okGuard()
-	gc.RequireDistinctApprover = true
-	gc.IdentityDistinguishable = false
-	gc.Actor = "user:bob" // different name, but auth mode cannot vouch for it
-
-	err := Validate(op, StateApproved, TriggerApprove, gc)
-	assertGuardCode(t, err, CodeIdentityIndistinct)
 }
 
 func TestGuard_ClaimRejectsTamperedPayload(t *testing.T) {

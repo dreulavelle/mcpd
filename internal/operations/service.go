@@ -112,18 +112,6 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 	// declare its way out of an operator's classification.
 	risk := MaxRisk(req.Risk, s.policyFn().RiskOverrides[req.Plugin+"."+req.Action])
 
-	// Refuse at proposal time rather than at approval when the policy demands
-	// a distinct approver the auth mode cannot provide. Discovering it later
-	// means an operator has already described a change they can never enact.
-	if s.authz.RequiresDistinctApprover(risk) && !p.Distinguishable {
-		return nil, &GuardError{
-			ErrCode: CodeIdentityIndistinct,
-			Detail: fmt.Sprintf(
-				"a %s-risk operation requires a distinct approver, but the current "+
-					"authentication mode cannot distinguish principals", risk),
-		}
-	}
-
 	now := s.now()
 	idem := req.IdempotencyKey
 	if idem == "" {
@@ -228,7 +216,6 @@ func (s *Service) approve(ctx context.Context, p *auth.Principal, op *Operation,
 
 	now := s.now()
 	gc := s.guardContext(p, now)
-	gc.RequireDistinctApprover = s.authz.RequiresDistinctApprover(op.Risk)
 	if err := Validate(op, StateApproved, TriggerApprove, gc); err != nil {
 		return nil, err
 	}
@@ -394,10 +381,9 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, plugin string, st
 // guardContext assembles the inputs every transition guard inspects.
 func (s *Service) guardContext(p *auth.Principal, now time.Time) GuardContext {
 	return GuardContext{
-		Now:                     now,
-		Actor:                   p.ID,
-		PreconditionsMatch:      true,
-		IdentityDistinguishable: p.Distinguishable,
+		Now:                now,
+		Actor:              p.ID,
+		PreconditionsMatch: true,
 	}
 }
 

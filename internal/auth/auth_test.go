@@ -125,19 +125,6 @@ func TestStaticVerifier(t *testing.T) {
 	}
 }
 
-// A static token is shared by definition, so it cannot support separation of
-// duties. The verifier must mark it as such regardless of what the caller asks
-// for.
-func TestStaticToken_IsNeverDistinguishable(t *testing.T) {
-	tok := mustToken(t, "shared", tokenA, Principal{
-		ID: "svc:shared", Role: RoleApprover,
-		Plugins: []string{Wildcard}, Distinguishable: true, // caller asks for true
-	})
-	if tok.Principal.Distinguishable {
-		t.Fatal("a static token must never be marked distinguishable")
-	}
-}
-
 func TestStaticToken_RejectsWeakSecrets(t *testing.T) {
 	if _, err := NewStaticToken("weak", "short", Principal{
 		ID: "u", Role: RoleViewer, Plugins: []string{Wildcard}}); err == nil {
