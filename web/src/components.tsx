@@ -1,4 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  Component, createContext, useCallback, useContext, useEffect, useState,
+  type ErrorInfo, type ReactNode,
+} from "react";
 import type { AuditRecord } from "./api";
 
 /* ── status ─────────────────────────────────────────────────────────────── */
@@ -44,6 +47,56 @@ export function Message({ tone, children }: { tone: Tone; children: ReactNode })
       <div>{children}</div>
     </div>
   );
+}
+
+/**
+ * A page that throws does not take the console with it.
+ *
+ * React unmounts the whole tree when a render throws and nothing catches it,
+ * so one bad field in one panel left an empty window -- no navigation, no
+ * error, nothing to act on. That happened twice for the same shape of bug: a
+ * list the server sent as null where the page mapped over it. The fix for each
+ * belongs where the data is wrong, and this is what keeps the next one from
+ * costing the whole dashboard.
+ *
+ * A class because there is no hook form of this; React offers the lifecycle
+ * only to classes.
+ *
+ * Recovery is by remount rather than by a reset button: the console keys this
+ * on the open tab, so leaving the page and coming back builds a new boundary
+ * and tries again. A button that retried in place would re-run the same render
+ * against the same state and fail identically.
+ */
+export class ErrorBoundary extends Component<
+  { children: ReactNode },
+  { problem: string }
+> {
+  state = { problem: "" };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { problem: error instanceof Error ? error.message : String(error) };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    // The console is where an operator is standing when this happens, so the
+    // detail goes to the place they can copy it from.
+    console.error("a dashboard page failed to render", error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.problem) return this.props.children;
+    return (
+      <Message tone="problem">
+        <span>
+          This page could not be drawn, so it is showing this instead of
+          nothing. The rest of the console still works — switch to another tab
+          and back to try it again.
+          <br />
+          <span className="note tight">{this.state.problem}</span>
+        </span>
+      </Message>
+    );
+  }
 }
 
 /** Transient confirmation. A save that shows a banner forever makes the page
