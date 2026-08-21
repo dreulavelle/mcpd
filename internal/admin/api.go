@@ -1043,7 +1043,7 @@ func (s *Server) handleCACertificate(w http.ResponseWriter, r *http.Request) {
 // directory returns the tunnel manager, never nil.
 func (s *Server) directory() *tunnel.Directory {
 	if s.opts.Directory == nil {
-		return tunnel.NewDirectory("", "", "")
+		return tunnel.NewDirectory("", "", "", "")
 	}
 	return s.opts.Directory()
 }
@@ -1060,8 +1060,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 
 	dir := s.directory()
 	if !dir.Available() {
-		s.writeError(w, r, http.StatusBadRequest,
-			"add "+dir.Missing()+" in Settings first")
+		s.writeError(w, r, http.StatusBadRequest, "add "+dir.Missing()+" first")
 		return
 	}
 	if err := s.checkPlugin(body.Plugin); err != nil {
@@ -1069,7 +1068,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := dir.Create(r.Context(), body.Name, "Created by mcpd")
+	created, err := dir.Create(r.Context(), tunnelName(body.Name, body.Plugin), "Created by mcpd")
 	if err != nil {
 		s.writeError(w, r, http.StatusBadGateway, err.Error())
 		return
@@ -1079,6 +1078,13 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	if err := s.assign(r, created.ID, body.Plugin); err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// And running it is the point of assigning. Leaving the subsystem switched
+	// off would mean making a connector, watching it sit at "switched off",
+	// and having to find a toggle on another page to finish the job nobody
+	// started for any other reason.
+	if err := s.enableTunnels(r); err != nil {
+		s.opts.Log.Warn("tunnel created but the subsystem could not be enabled", "error", err)
 	}
 	s.writeJSON(w, r, http.StatusCreated, created)
 }
@@ -1152,6 +1158,36 @@ func (s *Server) assign(r *http.Request, id, plugin string) error {
 	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, []settings.Change{
 		{Key: key, Value: string(encoded)},
 	})
+}
+
+// tunnelName settles what a new tunnel is called.
+//
+// mcpd already knows what the tunnel is for, so asking someone to type a name
+// before the button will work is asking them to restate it. A name is still
+// accepted -- it is what shows in the OpenAI console, and a deployment with
+// several hosts will want to tell them apart -- but leaving it blank is the
+// ordinary case rather than an error.
+func tunnelName(name, plugin string) string {
+	if n := strings.TrimSpace(name); n != "" {
+		return n
+	}
+	if plugin == "" {
+		return "mcpd"
+	}
+	return "mcpd: " + plugin
+}
+
+// enableTunnels turns the tunnel subsystem on.
+//
+// It is idempotent and never turns it off: the switch remains a deliberate way
+// to stop every connector at once, and this only removes the step of finding
+// it after making one.
+func (s *Server) enableTunnels(r *http.Request) error {
+	if s.opts.Settings == nil {
+		return fmt.Errorf("settings are unavailable")
+	}
+	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID,
+		[]settings.Change{{Key: settings.KeyTunnelEnabled, Value: "true"}})
 }
 
 // unassign clears every reference to a tunnel id.
