@@ -249,7 +249,14 @@ a.out::after { content: " ↗"; font-size: .85em; opacity: .7; }
 .field > label:not(.switch) { display: block; font-weight: 550; font-size: 14px; margin-bottom: var(--s1); }
 .field .note { margin-top: 6px; }
 
-input[type=text], input[type=password], input[type=number], select, textarea {
+/* Every text-like input, named by exclusion rather than by listing types.
+   The list was type=text|password|number, so adding an email field to the
+   sign-in form gave it the browser's default box beside a styled one --
+   different width, different border, visibly mismatched. Excluding the
+   controls that must not be stretched is the version that stays correct when
+   the next input type is added. */
+input:not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]),
+select, textarea {
   width: 100%; padding: 9px 12px;
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--surface); color: var(--text);

@@ -50,7 +50,7 @@ type Tunnel struct {
 
 	// Principal is the identity requests arriving through the tunnel act as.
 	Principal string `yaml:"principal"`
-	// Role is viewer, operator, approver, or admin.
+	// Role is user or admin.
 	Role string `yaml:"role"`
 	// Plugins lists what the tunnel may reach, or ["*"]. This is the whole of
 	// its authorization, so it is worth being specific.
@@ -192,7 +192,7 @@ type StaticTokenConfig struct {
 	SecretRef string `yaml:"secret_ref"`
 	// Principal is the identity this credential asserts.
 	Principal string `yaml:"principal"`
-	// Role is viewer, operator, approver, or admin.
+	// Role is user or admin.
 	Role string `yaml:"role"`
 	// Plugins lists the plugins this credential may reach, or ["*"].
 	//
@@ -211,20 +211,13 @@ type StaticTokenConfig struct {
 type Accounts struct {
 	// SessionTTL bounds a signed-in browser.
 	SessionTTL time.Duration `yaml:"session_ttl"`
-
-	// Bootstrap provisions the first administrator when no accounts exist. It
-	// is ignored once any account is present, so it cannot be used to reset
-	// one.
-	Bootstrap Bootstrap `yaml:"bootstrap"`
 }
 
-// Bootstrap describes the initial administrator.
-type Bootstrap struct {
-	// Email is the address the first administrator signs in with.
-	Email string `yaml:"email"`
-	// PasswordRef is a secret reference, never a password.
-	PasswordRef string `yaml:"password_ref"`
-}
+// The first administrator is not configured here. An instance with no accounts
+// offers to create one, and whoever does becomes administrator -- which puts
+// the only password anyone types into a form rather than into a file, and
+// removes the failure where an operator starts the host once with the password
+// unset and has to clear a table to get back in.
 
 // Approval configures the risk policy.
 type Approval struct {

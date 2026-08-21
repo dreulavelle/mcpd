@@ -15,7 +15,7 @@ func validConfig() *Config {
 	c.Plugins = map[string]PluginConfig{"cnmaestro": {Enabled: true}}
 	c.Auth.StaticTokens = []StaticTokenConfig{{
 		ID: "agent-a", SecretRef: "env:MCPD_TOKEN_A",
-		Principal: "svc:agent-a", Role: "operator", Plugins: []string{"cnmaestro"},
+		Principal: "svc:agent-a", Role: "user", Plugins: []string{"cnmaestro"},
 	}}
 	return c
 }
@@ -43,9 +43,6 @@ func TestValidate_Rejects(t *testing.T) {
 		{"approval outliving proposal", func(c *Config) {
 			c.Approval.ApprovalTTL = c.Approval.ProposalTTL * 2
 		}, "outlive"},
-		{"bootstrap without password reference", func(c *Config) {
-			c.Auth.Accounts.Bootstrap.Email = "admin@example.com"
-		}, "password_ref is required"},
 		{"negative session ttl", func(c *Config) {
 			c.Auth.Accounts.SessionTTL = -time.Minute
 		}, "session_ttl"},
@@ -71,7 +68,7 @@ func TestValidate_RejectsSharedSecretReference(t *testing.T) {
 	c := validConfig()
 	c.Auth.StaticTokens = append(c.Auth.StaticTokens, StaticTokenConfig{
 		ID: "agent-b", SecretRef: "env:MCPD_TOKEN_A",
-		Principal: "svc:agent-b", Role: "viewer", Plugins: []string{"cnmaestro"},
+		Principal: "svc:agent-b", Role: "user", Plugins: []string{"cnmaestro"},
 	})
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), "share secret_ref") {

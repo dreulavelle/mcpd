@@ -112,9 +112,18 @@ func TestMeta_IsPublicAndMinimal(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body) != 2 {
-		t.Fatalf("meta exposes %d fields (%v); it is unauthenticated and must "+
-			"disclose only the version and auth mode", len(body), body)
+	// needs_setup joins version and auth_mode. It is a fact anyone can
+	// establish by trying to register, and the dashboard cannot decide between
+	// a sign-in form and a registration form without it.
+	want := map[string]bool{"version": true, "auth_mode": true, "needs_setup": true}
+	for k := range body {
+		if !want[k] {
+			t.Errorf("meta discloses %q; it is unauthenticated and must carry "+
+				"nothing about the plugins, the configuration, or the host", k)
+		}
+	}
+	if len(body) != len(want) {
+		t.Fatalf("meta exposes %d fields (%v), want %d", len(body), body, len(want))
 	}
 }
 

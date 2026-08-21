@@ -64,7 +64,12 @@ export interface AuditRecord {
   detail?: unknown;
 }
 
-export type Role = "viewer" | "operator" | "approver" | "admin";
+/**
+ * Two roles, and the line between them is administering the host rather than
+ * operating it. A user reads, proposes, and approves; an administrator also
+ * changes settings, makes tunnels, and manages accounts.
+ */
+export type Role = "user" | "admin";
 
 /** The signed-in person, as returned by the session endpoints. */
 export interface Session {
@@ -149,6 +154,8 @@ export interface HealthReport {
 export interface Meta {
   version: string;
   auth_mode: string;
+  /** No account exists yet, so the dashboard offers to create the first. */
+  needs_setup: boolean;
 }
 
 export type TunnelState =
@@ -337,6 +344,13 @@ export const api = {
     }),
 
   session: () => request<Session>("/api/session"),
+
+  /** Claims an instance that has no accounts yet. The first one is admin. */
+  registerFirst: (email: string, password: string, displayName?: string) =>
+    request<Session>("/api/setup", {
+      method: "POST",
+      body: JSON.stringify({ email, password, display_name: displayName ?? "" }),
+    }),
 
   signOut: () => request<void>("/api/session", { method: "DELETE" }),
 

@@ -156,19 +156,17 @@ storage:
 secret_key_ref: env:MCPD_SECRET_KEY
 
 auth:
-  # People sign in to the dashboard with an email and password. This creates
-  # the first administrator, and only on an empty database.
+  # People sign in to the dashboard with an email and password. The first
+  # account is made from the dashboard itself: a host with none offers to
+  # create one, and whoever does becomes the administrator.
   accounts:
     session_ttl: 12h
-    bootstrap:
-      email: you@example.com
-      password_ref: env:MCPD_BOOTSTRAP_PASSWORD
 
   # Bearer tokens, for machine callers that cannot complete a sign-in form.
   static_tokens:
     - id: local
       secret_ref: env:MCPD_TOKEN_LOCAL
-      principal: user:operator
+      principal: svc:local
       role: admin
       # Which plugins this credential may reach. Everything else returns 404,
       # so a scoped agent cannot discover what else is deployed.
@@ -201,7 +199,7 @@ tunnel:
   # A *runtime* API key, not an admin key.
   api_key_ref: env:OPENAI_TUNNEL_API_KEY
   principal: svc:chatgpt
-  role: approver
+  role: user
   plugins: ["echo"]
   check_for_updates: true
 
@@ -246,8 +244,5 @@ MCPD_SECRET_KEY=%s
 # MCPD_CNMAESTRO_CLIENT_ID=
 # MCPD_CNMAESTRO_CLIENT_SECRET=
 
-# Password for the administrator created on first start. Set it before the
-# first run: it is read only while the account table is empty.
-MCPD_BOOTSTRAP_PASSWORD=
 `, token, secretKey)
 }

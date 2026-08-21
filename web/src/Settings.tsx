@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Meta, type SettingGroup, type SettingsPayload, type TunnelInfo } from "./api";
-import { Message, Skeleton, useToasts } from "./components";
+import { api, type SettingGroup, type SettingsPayload, type TunnelInfo } from "./api";
+import { Message, Skeleton, useIsAdmin, useToasts } from "./components";
 import { SettingsForm } from "./SettingsForm";
 
 const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
@@ -17,10 +17,10 @@ const LINKS = {
 
 export function Settings() {
   const [data, setData] = useState<SettingsPayload | null>(null);
-  const [meta, setMeta] = useState<Meta | null>(null);
   const [tunnels, setTunnels] = useState<TunnelInfo | null>(null);
   const [error, setError] = useState("");
   const { show, view } = useToasts();
+  const admin = useIsAdmin();
 
   const load = useCallback(async () => {
     try {
@@ -32,36 +32,25 @@ export function Settings() {
     api.tunnel().then(setTunnels).catch(() => setTunnels(null));
   }, []);
 
-  useEffect(() => {
-    load();
-    api.meta().then(setMeta).catch(() => setMeta(null));
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
-  const groups = (data?.groups ?? []).map((g) =>
-    relevant(g, tunnels?.can_manage ?? false, data?.values ?? {}));
+  const groups = (data?.groups ?? []).map((g) => relevant(g, tunnels?.can_manage ?? false));
 
   return (
     <>
       {view}
       <h1>Settings</h1>
-      <p className="lede">Changes apply straight away unless a field says otherwise.</p>
+      <p className="lede">
+        {admin
+          ? "Changes apply straight away unless a field says otherwise."
+          : "What this host is configured to do. Changing it takes an administrator."}
+      </p>
 
       {error && <Message tone="problem">{error}</Message>}
 
-      {meta?.auth_mode === "static" && (
-        <Message tone="attention">
-          <span>
-            <strong>Everyone shares one sign-in.</strong> mcpd can't tell two
-            people apart, so it refuses changes that need a second approver.
-            Set <code>auth.mode</code> to <code>mixed</code> to give people
-            their own accounts.
-          </span>
-        </Message>
-      )}
-
       {!data ? <Skeleton rows={5} /> : (
         <SettingsForm groups={groups} settings={data} links={LINKS}
-                      onSaved={load} show={show} />
+                      onSaved={load} show={show} readOnly={!admin} />
       )}
     </>
   );
@@ -77,16 +66,9 @@ export function Settings() {
  * as is read only when the tunnel carries it -- once each person signs in,
  * their own account decides, and a configured identity is never consulted.
  */
-function relevant(group: SettingGroup, canManage: boolean, values: Record<string, unknown>): SettingGroup {
-  const identity = ["tunnel.principal", "tunnel.role", "tunnel.plugins"];
-  const signIn = String(values["tunnel.each_person_signs_in"] ?? "") === "true";
-
+function relevant(group: SettingGroup, canManage: boolean): SettingGroup {
   return {
     ...group,
-    fields: group.fields.filter((f) => {
-      if (canManage && f.key === "tunnel.tunnel_id") return false;
-      if (signIn && identity.includes(f.key)) return false;
-      return true;
-    }),
+    fields: group.fields.filter((f) => !(canManage && f.key === "tunnel.tunnel_id")),
   };
 }

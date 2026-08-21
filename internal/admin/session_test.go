@@ -13,6 +13,7 @@ import (
 
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/users"
+	"github.com/spoked/mcpd/internal/observability"
 )
 
 // fakeAccounts is a hand-rolled stand-in rather than a real store, because
@@ -27,6 +28,9 @@ type fakeAccounts struct {
 
 	deleted  []string
 	loggedIn []string
+	// count stands in for how many accounts exist, which is what decides
+	// whether the instance still offers registration.
+	count int
 }
 
 func newFakeAccounts() *fakeAccounts {
@@ -41,6 +45,7 @@ func newFakeAccounts() *fakeAccounts {
 		},
 		token:    "session-token-value",
 		password: "a-sufficiently-long-passphrase",
+		count:    1,
 	}
 }
 
@@ -72,6 +77,17 @@ func (f *fakeAccounts) DeleteSession(_ context.Context, token string) error {
 	return nil
 }
 
+func (f *fakeAccounts) Count(context.Context) (int, error) { return f.count, nil }
+
+func (f *fakeAccounts) CreateFirst(_ context.Context, email, password, _ string) (*users.User, error) {
+	if f.count > 0 {
+		return nil, users.ErrAlreadyClaimed
+	}
+	f.count = 1
+	f.user.Email = email
+	return f.user, nil
+}
+
 func (f *fakeAccounts) Create(context.Context, users.CreateRequest) (*users.User, error) {
 	return f.user, nil
 }
@@ -91,6 +107,10 @@ func newTestServer(t *testing.T, accounts Accounts) *Server {
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Accounts: accounts,
 		Version:  "test",
+		// Enough for the endpoints these tests actually execute. The rest are
+		// asserted on their authorization outcome, which is decided before any
+		// handler runs.
+		Health: observability.NewHealthRegistry(time.Second),
 	})
 }
 
@@ -270,7 +290,7 @@ func TestSignOutAlwaysClearsTheCookie(t *testing.T) {
 // administrator's endpoints by holding a valid cookie.
 func TestSessionCarriesTheAccountsRole(t *testing.T) {
 	accounts := newFakeAccounts()
-	accounts.user.Role = auth.RoleViewer
+	accounts.user.Role = auth.RoleUser
 	s := newTestServer(t, accounts)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/users", nil)
@@ -280,5 +300,123 @@ func TestSessionCarriesTheAccountsRole(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 for a viewer reading accounts", w.Code)
+	}
+}
+
+// A new instance says so, so the dashboard can offer to claim it rather than
+// asking for credentials nobody has yet.
+func TestMetaReportsWhetherSetupIsNeeded(t *testing.T) {
+	accounts := newFakeAccounts()
+	accounts.count = 0
+	s := newTestServer(t, accounts)
+
+	get := func() bool {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/meta", nil))
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body["needs_setup"] == true
+	}
+
+	if !get() {
+		t.Error("an instance with no accounts must report needs_setup")
+	}
+	accounts.count = 1
+	if get() {
+		t.Error("an instance with an account must not report needs_setup")
+	}
+}
+
+// Registration is unauthenticated by necessity, and signs the new
+// administrator straight in.
+func TestRegisterFirst_ClaimsAndSignsIn(t *testing.T) {
+	accounts := newFakeAccounts()
+	accounts.count = 0
+	s := newTestServer(t, accounts)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/setup",
+		strings.NewReader(`{"email":"first@example.com","password":"a-sufficiently-long-passphrase"}`))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var cookie bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookie && c.HttpOnly {
+			cookie = true
+		}
+	}
+	if !cookie {
+		t.Error("registering must sign the new administrator in")
+	}
+	var body sessionResponse
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.CSRFToken == "" {
+		t.Error("the session must carry a CSRF token")
+	}
+}
+
+// Once an instance has an account, registration is a way to mint an
+// administrator on a running host. It has to be refused.
+func TestRegisterFirst_RefusedOnceClaimed(t *testing.T) {
+	accounts := newFakeAccounts() // count starts at 1
+	s := newTestServer(t, accounts)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/setup",
+		strings.NewReader(`{"email":"mallory@example.com","password":"a-sufficiently-long-passphrase"}`))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+	if len(w.Result().Cookies()) > 0 {
+		t.Error("a refused registration must not set a cookie")
+	}
+}
+
+// The line between the two roles is administering the host. A user reaches the
+// operating endpoints and is refused the administrative ones.
+func TestUserRoleCannotAdminister(t *testing.T) {
+	accounts := newFakeAccounts()
+	accounts.user.Role = auth.RoleUser
+	s := newTestServer(t, accounts)
+
+	req := func(method, path string) int {
+		r := httptest.NewRequest(method, path, strings.NewReader(`{}`))
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: accounts.token})
+		r.Header.Set(csrfHeader, accounts.session.CSRFToken)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		return w.Code
+	}
+
+	// Administering: settings, tunnels, accounts, clearing history.
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPut, "/api/settings"},
+		{http.MethodPost, "/api/tunnels"},
+		{http.MethodPost, "/api/tunnel/start"},
+		{http.MethodGet, "/api/users"},
+		{http.MethodDelete, "/api/audit"},
+	} {
+		if got := req(tc.method, tc.path); got != http.StatusForbidden {
+			t.Errorf("%s %s = %d, want 403 for a user", tc.method, tc.path, got)
+		}
+	}
+
+	// Operating: reading the host is a user's business, and approving is too.
+	// Only endpoints this stripped-down server can actually serve are called;
+	// the rest would be asserting on nil dependencies rather than on roles.
+	if got := req(http.MethodGet, "/api/health"); got == http.StatusForbidden {
+		t.Error("GET /api/health was refused; a user may see the host's state")
+	}
+	if !accounts.user.Principal("ses").Can(auth.CapApprove) {
+		t.Error("a user must be able to approve; that is the point of the two roles")
 	}
 }

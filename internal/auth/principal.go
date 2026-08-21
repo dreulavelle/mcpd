@@ -10,18 +10,23 @@ import (
 	"strings"
 )
 
-// Role is a coarse capability bundle. Roles are ordered by privilege, but note
-// that approver is not simply "more than operator": the separation-of-duties
-// policy relies on proposing and approving being distinguishable acts.
+// Role is a coarse capability bundle.
+//
+// There are two, and the line between them is administering the host rather
+// than operating it. A user reads, proposes, and approves -- everything the
+// integrations exist to do. An administrator additionally changes settings,
+// makes and assigns tunnels, manages accounts, and clears history.
+//
+// It used to be four, laddered viewer -> operator -> approver -> admin. The
+// finer steps were never asked for and the ladder invited a reading it did not
+// support: separating proposing from approving only means something when the
+// two are different people, and the second-approver rule that would have made
+// that so was dropped. Two roles say what is actually enforced.
 type Role string
 
 const (
-	// RoleViewer may read.
-	RoleViewer Role = "viewer"
-	// RoleOperator may read and propose mutations.
-	RoleOperator Role = "operator"
-	// RoleApprover may read, propose, and approve.
-	RoleApprover Role = "approver"
+	// RoleUser may read, propose, and approve.
+	RoleUser Role = "user"
 	// RoleAdmin may additionally administer the host and its plugins.
 	RoleAdmin Role = "admin"
 )
@@ -29,7 +34,7 @@ const (
 // Valid reports whether r is a recognised role.
 func (r Role) Valid() bool {
 	switch r {
-	case RoleViewer, RoleOperator, RoleApprover, RoleAdmin:
+	case RoleUser, RoleAdmin:
 		return true
 	}
 	return false
@@ -49,10 +54,8 @@ const (
 
 // roleCapabilities is the authoritative role-to-capability mapping.
 var roleCapabilities = map[Role][]Capability{
-	RoleViewer:   {CapRead},
-	RoleOperator: {CapRead, CapPropose},
-	RoleApprover: {CapRead, CapPropose, CapApprove},
-	RoleAdmin:    {CapRead, CapPropose, CapApprove, CapAdmin},
+	RoleUser:  {CapRead, CapPropose, CapApprove},
+	RoleAdmin: {CapRead, CapPropose, CapApprove, CapAdmin},
 }
 
 // Wildcard grants access to every plugin. It is spelled out rather than

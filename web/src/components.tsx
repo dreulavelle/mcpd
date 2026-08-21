@@ -1,9 +1,27 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import type { AuditRecord } from "./api";
 
 /* ── status ─────────────────────────────────────────────────────────────── */
 
 export type Tone = "good" | "attention" | "problem" | "info" | "busy" | "";
+
+/**
+ * Who is signed in, for pages that render differently by role.
+ *
+ * A context rather than props because the question is asked deep in the tree --
+ * a field inside a form inside a page -- and threading it through every layer
+ * would mean every component in between knowing about roles it does not use.
+ *
+ * The default is null, which reads as "not an administrator". A page rendered
+ * outside the provider therefore hides the controls rather than offering ones
+ * the API will refuse.
+ */
+export const SessionContext = createContext<{ role: string } | null>(null);
+
+/** True when the signed-in account may administer the host. */
+export function useIsAdmin(): boolean {
+  return useContext(SessionContext)?.role === "admin";
+}
 
 export function Dot({ tone }: { tone: Tone }) {
   return <span className={`dot ${tone}`} aria-hidden="true" />;
