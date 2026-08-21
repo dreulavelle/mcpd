@@ -3,6 +3,7 @@ import { api, ApiError, type OpenAITunnel, type TunnelInfo, type TunnelStatus } 
 import { Copyable, Dot, Message, Out, Skeleton, useIsAdmin, usePoll, useToasts } from "./components";
 
 const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
+const CHATGPT_CONNECTORS = "https://chatgpt.com/#settings/Connectors";
 
 /**
  * Tunnels.
@@ -42,7 +43,11 @@ export function Tunnels() {
     <>
       {view}
       <h1>Tunnels</h1>
-      <p className="lede">One tunnel is one connector in ChatGPT.</p>
+      <p className="lede">
+        One tunnel is one connector in ChatGPT. Copy a tunnel's ID, then add it
+        under <Out href={CHATGPT_CONNECTORS}>Connectors</Out> — ChatGPT has no
+        API for that last step, so it is the one part mcpd cannot do for you.
+      </p>
 
       {error && <Message tone="problem">{error}</Message>}
       {info.problem && <Message tone="problem">{info.problem}</Message>}
