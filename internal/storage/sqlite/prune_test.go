@@ -19,7 +19,7 @@ func TestPrune_RemovesOldEntriesAndRecordsThat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	now := time.Now()
+	now := testClock.Add(time.Minute)
 	removed, err := audit.Prune(ctx, "user:alice", now.Add(time.Hour), now)
 	if err != nil {
 		t.Fatalf("Prune: %v", err)
@@ -55,7 +55,7 @@ func TestPrune_LeavesAVerifiableChain(t *testing.T) {
 	if _, err := approve(t, s, "op_a", "user:bob"); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
+	now := testClock.Add(time.Minute)
 	if _, err := audit.Prune(ctx, "user:alice", now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestPrune_StillDetectsTampering(t *testing.T) {
 	ctx := context.Background()
 
 	proposeOp(t, s, "op_a")
-	now := time.Now()
+	now := testClock.Add(time.Minute)
 	if _, err := audit.Prune(ctx, "user:alice", now.Add(time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,12 @@ func TestPrune_DoesNothingWhenNothingIsOldEnough(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	now := time.Now()
+	// Anchored to the store's clock, not the wall's. These entries are written
+	// at testClock, so a cutoff derived from time.Now() moves further from
+	// them every day the suite is not run -- and this test, whose cutoff is in
+	// the past, began failing on its own the day real time passed
+	// testClock + 24h.
+	now := testClock.Add(time.Minute)
 	removed, err := audit.Prune(ctx, "user:alice", now.Add(-24*time.Hour), now)
 	if err != nil {
 		t.Fatal(err)
