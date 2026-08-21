@@ -23,6 +23,8 @@ type Registry struct {
 	descriptor Descriptor
 	tools      []registeredTool
 	mutations  []registeredMutation
+	resources  []registeredResource
+	prompts    []registeredPrompt
 	errs       []error
 }
 
@@ -47,6 +49,23 @@ type ToolSpec struct {
 	// annotation.
 	Idempotent bool
 
+	// Capability is what a caller must hold to invoke this tool. Empty means
+	// read, which is what a tool registered here is unless it says otherwise.
+	//
+	// It exists for the read that is not merely a read: a credential dump, a
+	// billing figure, anything where seeing it is itself the privilege. Such a
+	// tool can ask for more without becoming a mutation, which it is not --
+	// nothing changes, so there is nothing to approve.
+	Capability auth.Capability
+
+	// RateLimit bounds calls to this tool, in requests per second. Zero leaves
+	// it unbounded.
+	//
+	// Per tool rather than per plugin, because the one expensive call is
+	// usually one endpoint rather than an integration. Bounding the plugin to
+	// protect it would slow every cheap call beside it.
+	RateLimit float64
+
 	// InputSchema overrides the schema derived from the handler's parameter
 	// type.
 	//
@@ -58,6 +77,13 @@ type ToolSpec struct {
 }
 
 func (s ToolSpec) validate(plugin string) error {
+	if s.Capability != "" && !s.Capability.Valid() {
+		return fmt.Errorf("plugins: %s tool %q has unknown capability %q",
+			plugin, s.Name, s.Capability)
+	}
+	if s.RateLimit < 0 {
+		return fmt.Errorf("plugins: %s tool %q has a negative rate limit", plugin, s.Name)
+	}
 	if !toolNamePattern.MatchString(s.Name) {
 		return fmt.Errorf("plugins: %s tool name %q must match %s",
 			plugin, s.Name, toolNamePattern)
@@ -124,13 +150,20 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 	}
 
 	qualified := r.descriptor.Name + "_" + spec.Name
-	readOnly := true
 	openWorld := true
+	capability := spec.Capability
+	if capability == "" {
+		capability = auth.CapRead
+	}
+	// A tool registered here changes nothing, whatever it takes to call it.
+	// The annotation describes the effect, not the permission.
+	readOnly := true
+	limiter := newToolLimiter(spec.RateLimit)
 
 	r.tools = append(r.tools, registeredTool{
 		spec:       spec,
 		qualified:  qualified,
-		capability: auth.CapRead,
+		capability: capability,
 		attach: func(s *mcp.Server, mw ToolMiddleware) {
 			tool := &mcp.Tool{
 				Name:        qualified,
@@ -147,7 +180,10 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 			}
 			mcp.AddTool(s, tool, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 				var zero Out
-				if err := mw(ctx, qualified, auth.CapRead); err != nil {
+				if err := mw(ctx, qualified, capability); err != nil {
+					return nil, zero, err
+				}
+				if err := limiter.wait(ctx); err != nil {
 					return nil, zero, err
 				}
 				out, err := fn(ctx, in)

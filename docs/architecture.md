@@ -232,6 +232,44 @@ document when it needs one — see [cnmaestro.md](cnmaestro.md) — because the
 API a plugin talks to changes on someone else's schedule, and mixing that into
 the host's design makes both harder to read.
 
-What is architectural is the contract every plugin meets: it declares tools and
-mutations, a mutation names its target and desired state and how to observe the
-result, and the host does the rest.
+What is architectural is the contract every plugin meets.
+
+**A type, and its instances.** A plugin *type* is an integration the binary was
+built with; an *instance* is one configured copy of it. The config key is the
+instance name and `type` says what it is an instance of, defaulting to the key.
+Two instances are two plugins as far as the host is concerned — two endpoints,
+two entries in a credential's plugin list, two connectors, and operations that
+say which one acted — because the name is already the identity everywhere
+downstream. That is also why an instance argument on each tool was the wrong
+design: access is granted per plugin, so a shared endpoint could not express
+"this agent reaches one and not the other".
+
+**Four things a plugin can declare.**
+
+| | what it is |
+|---|---|
+| Tool | an action a model chooses and reasons about choosing |
+| Mutation | a write, which becomes propose/approve rather than a tool that writes |
+| Resource | reference material read by address, kept out of the tool catalogue |
+| Prompt | a named way of asking something useful; returns text, performs nothing |
+
+All four pass the same authorization gate. A resource that skipped it would be
+a way around per-plugin scoping, and a prompt that acted would be a tool
+wearing a name that hides it from every check tools go through.
+
+A tool may raise its capability above read — for the read that is not merely a
+read, where seeing something is itself the privilege — and may declare a rate
+limit, per tool rather than per plugin, because the expensive call is usually
+one endpoint rather than an integration.
+
+**Settings belong to the plugin, resolution belongs to the host.** A type
+declares its fields; the host namespaces them per instance, validates them,
+encrypts the secrets, renders the form, and hands back resolved values. A
+plugin never reads a file or an environment variable. Values resolve store,
+then file, then default — the store winning because a value changed in the
+dashboard has to beat the one the host started with.
+
+A plugin whose credentials are entered in the dashboard cannot refuse to start
+without them: a host that will not start is a dashboard nobody can open to
+enter them. Structure is validated at construction, credentials at `Start`, so
+an unconfigured instance mounts, shows its form, and reports what is missing.

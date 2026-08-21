@@ -22,6 +22,46 @@
 // Drop the compiled binary and a plugin.json into the plugins directory and
 // mcpd mounts it at /mcp/weather. Nothing about the host needs to change.
 //
+// # Settings
+//
+// A plugin declares what it needs configured and the host does the rest:
+// renders the form, validates what is typed, encrypts the secrets, and hands
+// back resolved values.
+//
+//	sdk.Settings(p,
+//		sdk.SettingField{Key: "api_token", Label: "API token", Kind: sdk.KindSecret, Required: true},
+//		sdk.SettingField{Key: "host", Label: "Address", Kind: sdk.KindString},
+//	)
+//
+//	token, ok := p.Configured("api_token")
+//
+// A plugin never reads a file, an environment variable, or a credential
+// reference. What it receives is the value, whichever of those it came from,
+// which is one fewer thing every plugin has to get right.
+//
+// # Resources and prompts
+//
+// A tool is an action a model chooses and reasons about choosing. Two other
+// things are worth expressing differently.
+//
+// A resource is reference material read by address — a config dump, a
+// topology, a status document. Keeping it out of the tool catalogue matters
+// because every tool costs the model attention on every call.
+//
+//	sdk.Resource(p, sdk.ResourceSpec{
+//		Path: "state", Name: "state", Description: "Current state.",
+//	}, func(ctx context.Context) (string, error) { return dump(ctx) })
+//
+// A prompt is the integration saying "here is how to ask me something useful".
+// Diagnosing a device is a sequence of reads and a way of reading them; the
+// reads are tools, and the sequence is knowledge that otherwise lives only in
+// whoever wrote the plugin. A prompt returns text and performs nothing.
+//
+//	sdk.Prompt(p, sdk.PromptSpec{
+//		Name: "diagnose", Description: "Work through an offline device.",
+//		Args: []sdk.PromptArg{{Name: "mac", Required: true}},
+//	}, func(ctx context.Context, args map[string]string) (string, error) { ... })
+//
 // # What the host guarantees
 //
 // Everything a plugin would otherwise have to get right itself: authentication,
@@ -166,6 +206,16 @@ type ToolSpec struct {
 	Description string
 	// Idempotent marks a tool whose repeated invocation has no extra effect.
 	Idempotent bool
+	// Capability is what a caller must hold to invoke this tool. Empty means
+	// read, which is what a tool is unless it says otherwise.
+	//
+	// For the read that is not merely a read: a credential dump, a billing
+	// figure, anything where seeing it is itself the privilege.
+	Capability string
+	// RateLimit bounds calls to this tool, in requests per second. Zero is
+	// unbounded. Per tool rather than per plugin, because the expensive call
+	// is usually one endpoint rather than an integration.
+	RateLimit float64
 }
 
 // MutationSpec describes an approval-gated write.
@@ -194,6 +244,17 @@ type Plugin struct {
 	mutations map[string]*registeredMutation
 	order     []string
 	mutOrder  []string
+
+	resources   map[string]*registeredResource
+	resOrder    []string
+	prompts     map[string]*registeredPrompt
+	promptOrder []string
+
+	// settings is what this plugin needs configured; config is what the host
+	// resolved and handed back. A plugin declares the first and reads the
+	// second, and never has to know where a value came from.
+	settings []SettingField
+	config   map[string]string
 
 	healthFn   func(context.Context) Health
 	shutdownFn func(context.Context) error

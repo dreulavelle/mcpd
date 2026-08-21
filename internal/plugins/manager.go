@@ -114,8 +114,9 @@ func (m *Manager) Register(ctx context.Context, p Plugin, instance string, requi
 	if err := reg.err(); err != nil {
 		return err
 	}
-	if len(reg.tools) == 0 && len(reg.mutations) == 0 {
-		return fmt.Errorf("plugins: %s registered no tools or mutations", d.Name)
+	if len(reg.tools) == 0 && len(reg.mutations) == 0 &&
+		len(reg.resources) == 0 && len(reg.prompts) == 0 {
+		return fmt.Errorf("plugins: %s registered nothing", d.Name)
 	}
 
 	srv := mcp.NewServer(&mcp.Implementation{
@@ -374,6 +375,12 @@ func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals Appr
 
 	for _, t := range reg.tools {
 		t.attach(srv, mw)
+	}
+	for _, res := range reg.resources {
+		res.attach(srv, mw)
+	}
+	for _, pr := range reg.prompts {
+		pr.attach(srv, mw)
 	}
 
 	// Mutations become propose tools, and any endpoint with a mutation also
