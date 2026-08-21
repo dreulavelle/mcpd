@@ -125,7 +125,10 @@ func TestOneFailingTunnelDoesNotStopTheOthers(t *testing.T) {
 	broken := groupConfig("echo", "not-a-tunnel-id")
 	good := groupConfig("cnmaestro", "tunnel_2123456789abcdef0123456789abcdef")
 
-	err := g.Apply(ctx, []Config{broken, good}, testFactory())
+	if err := g.Apply(ctx, []Config{broken, good}, testFactory()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	err := g.Start(ctx)
 	t.Cleanup(func() { _ = g.Stop(ctx) })
 	if err == nil {
 		t.Fatal("a malformed tunnel id must be reported")
@@ -179,5 +182,28 @@ func TestSameAsIgnoresPluginOrder(t *testing.T) {
 	m := NewManager(a, testFactory(), discardLogger())
 	if !m.SameAs(b) {
 		t.Fatal("the same grants listed in a different order are not a change")
+	}
+}
+
+// An HTTP-bound tunnel client probes mcpd as it starts. Connecting before the
+// host is answering means that probe fails and stays failed, so configuring
+// and connecting have to be separable.
+func TestApplyConfiguresWithoutConnecting(t *testing.T) {
+	g := NewGroup(discardLogger())
+	ctx := context.Background()
+
+	if err := g.Apply(ctx, []Config{
+		groupConfig("echo", "tunnel_1123456789abcdef0123456789abcdef"),
+	}, testFactory()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	t.Cleanup(func() { _ = g.Stop(ctx) })
+
+	statuses := g.Status()
+	if len(statuses) != 1 {
+		t.Fatalf("got %d tunnels, want the one configured", len(statuses))
+	}
+	if statuses[0].State == StateConnected || statuses[0].State == StateStarting {
+		t.Fatalf("state = %q, want it configured but not connected", statuses[0].State)
 	}
 }

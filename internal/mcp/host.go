@@ -234,15 +234,36 @@ func (h *Host) authenticate(next http.Handler) http.Handler {
 }
 
 // challenge emits a 401 with the RFC 9728 resource-metadata pointer.
+//
+// The pointer names the endpoint that was called, not the host. Each MCP
+// endpoint is a separate protected resource: a client presenting a token to
+// /mcp/echo is using a different resource from one presenting to /mcp, and
+// pointing both at one document tells them otherwise. It also makes two
+// tunnels serving different endpoints indistinguishable to whatever is reading
+// their metadata, which is how one connector ends up standing in for both.
 func (h *Host) challenge(w http.ResponseWriter, r *http.Request) {
 	if h.opts.PublicURL != "" {
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf(
-			`Bearer resource_metadata=%q`,
-			strings.TrimRight(h.opts.PublicURL, "/")+"/.well-known/oauth-protected-resource"))
+			`Bearer resource_metadata=%q`, h.metadataURL(r.URL.Path)))
 	} else {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 	}
 	h.writeError(w, r, http.StatusUnauthorized, "authentication required")
+}
+
+// metadataURL builds the RFC 9728 metadata address for one resource path.
+//
+// The path is inserted after the well-known segment, which is what section 3.1
+// specifies and what clients derive independently when no pointer is given.
+// The two must agree or a client following the pointer and a client guessing
+// reach different documents.
+func (h *Host) metadataURL(resourcePath string) string {
+	base := strings.TrimRight(h.opts.PublicURL, "/")
+	suffix := strings.Trim(resourcePath, "/")
+	if suffix == "" {
+		return base + "/.well-known/oauth-protected-resource"
+	}
+	return base + "/.well-known/oauth-protected-resource/" + suffix
 }
 
 // recover turns a panic in a handler into a 500 rather than a dropped

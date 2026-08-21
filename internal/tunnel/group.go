@@ -25,6 +25,14 @@ type Group struct {
 	mu       sync.RWMutex
 	managers map[string]*Manager
 	order    []string
+	// started reports whether the host has reached the point of serving.
+	//
+	// Before that, Apply only configures. An HTTP-bound tunnel client probes
+	// mcpd as it starts, and a probe that lands before mcpd is answering fails
+	// and stays failed -- so the composition root can describe its tunnels
+	// without connecting them, and the lifecycle connects them when there is
+	// something to connect to.
+	started bool
 }
 
 // NewGroup returns an empty group.
@@ -106,7 +114,7 @@ func (g *Group) Apply(ctx context.Context, configs []Config, factory ServerFacto
 		g.managers[key] = m
 		g.mu.Unlock()
 
-		if cfg.Enabled && cfg.TunnelID != "" {
+		if g.started && cfg.Enabled && cfg.TunnelID != "" {
 			if err := m.Start(ctx); err != nil {
 				// One tunnel failing must not stop the others: a mistyped id
 				// for one plugin should cost that plugin's connector, not
@@ -144,8 +152,13 @@ func (g *Group) Lookup(plugin string) *Manager {
 	return g.managers[Key(plugin)]
 }
 
-// Start brings up every configured tunnel.
+// Start brings up every configured tunnel, and marks the group live so that
+// tunnels configured from here on start as soon as they are applied.
 func (g *Group) Start(ctx context.Context) error {
+	g.mu.Lock()
+	g.started = true
+	g.mu.Unlock()
+
 	var errs []error
 	for _, m := range g.all() {
 		if !m.Enabled() {
