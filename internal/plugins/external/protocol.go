@@ -37,6 +37,14 @@ const (
 	MethodApply = "apply"
 	// MethodObserve re-reads state for verification.
 	MethodObserve = "observe"
+	// MethodReadResource returns one resource's content.
+	MethodReadResource = "read_resource"
+	// MethodGetPrompt renders one prompt.
+	MethodGetPrompt = "get_prompt"
+	// MethodConfigure hands over resolved settings, before anything is
+	// called. A plugin therefore reads values rather than references and never
+	// has to understand env:, file:, or credential:.
+	MethodConfigure = "configure"
 	// MethodHealth reports the plugin's view of its upstream.
 	MethodHealth = "health"
 	// MethodShutdown asks the plugin to stop cleanly.
@@ -100,6 +108,59 @@ type DescribeResult struct {
 	Description string               `json:"description"`
 	Tools       []ToolDescriptor     `json:"tools"`
 	Mutations   []MutationDescriptor `json:"mutations"`
+	// Resources and Prompts are optional. A plugin written before they
+	// existed omits them and is unaffected.
+	Resources []ResourceDescriptor `json:"resources,omitempty"`
+	Prompts   []PromptDescriptor   `json:"prompts,omitempty"`
+	// Settings are the fields this plugin needs configured. The host
+	// namespaces them per instance, validates them, encrypts the secrets, and
+	// renders the form -- so an out-of-process plugin is configured the same
+	// way an in-tree one is.
+	Settings []SettingDescriptor `json:"settings,omitempty"`
+}
+
+// ResourceDescriptor describes something readable by address.
+type ResourceDescriptor struct {
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	MIMEType    string `json:"mime_type"`
+	Capability  string `json:"capability,omitempty"`
+}
+
+// PromptDescriptor describes a named prompt.
+type PromptDescriptor struct {
+	Name        string           `json:"name"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	Args        []PromptArgument `json:"args,omitempty"`
+	Capability  string           `json:"capability,omitempty"`
+}
+
+// PromptArgument is one argument a prompt takes.
+type PromptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+// SettingDescriptor is one configurable field.
+//
+// It mirrors settings.Field on the wire rather than importing it, so the
+// protocol stays a description of bytes and a plugin does not depend on the
+// host's internal packages to say what it needs.
+type SettingDescriptor struct {
+	Key         string   `json:"key"`
+	Label       string   `json:"label"`
+	Help        string   `json:"help,omitempty"`
+	Kind        string   `json:"kind"`
+	Default     any      `json:"default,omitempty"`
+	Options     []string `json:"options,omitempty"`
+	Min         *int     `json:"min,omitempty"`
+	Max         *int     `json:"max,omitempty"`
+	Required    bool     `json:"required,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
 }
 
 // ToolDescriptor describes one read-only tool.
@@ -109,6 +170,10 @@ type ToolDescriptor struct {
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
 	Idempotent  bool            `json:"idempotent"`
+	// Capability is what a caller must hold. Empty means read.
+	Capability string `json:"capability,omitempty"`
+	// RateLimit bounds calls per second. Zero is unbounded.
+	RateLimit float64 `json:"rate_limit,omitempty"`
 }
 
 // MutationDescriptor describes one approval-gated write.
@@ -119,6 +184,28 @@ type MutationDescriptor struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 	Risk        string          `json:"risk"`
 	Reversible  bool            `json:"reversible"`
+}
+
+// ReadResourceParams reads one resource.
+type ReadResourceParams struct {
+	Path string `json:"path"`
+}
+
+// ReadResourceResult is a resource's content.
+type ReadResourceResult struct {
+	Body     string `json:"body"`
+	MIMEType string `json:"mime_type,omitempty"`
+}
+
+// GetPromptParams renders one prompt.
+type GetPromptParams struct {
+	Name string            `json:"name"`
+	Args map[string]string `json:"args,omitempty"`
+}
+
+// GetPromptResult is the text a prompt produced.
+type GetPromptResult struct {
+	Text string `json:"text"`
 }
 
 // CallToolParams invokes a tool.
