@@ -110,6 +110,36 @@ export interface Meta {
   auth_mode: string;
 }
 
+export type TunnelState =
+  | "disabled"
+  | "stopped"
+  | "starting"
+  | "connected"
+  | "failed";
+
+export interface TunnelStatus {
+  state: TunnelState;
+  tunnel_id?: string;
+  principal?: string;
+  role?: string;
+  plugins?: string[];
+  message?: string;
+  connected_at?: string;
+}
+
+export interface TunnelVersion {
+  embedded: string;
+  latest?: string;
+  update_available: boolean;
+  checked_at?: string;
+  note?: string;
+}
+
+export interface TunnelInfo {
+  status: TunnelStatus;
+  version?: TunnelVersion;
+}
+
 export interface Endpoints {
   /** One address serving everything the token is allowed to reach. */
   aggregate: string;
@@ -219,6 +249,13 @@ export const api = {
   plugins: () => request<{ plugins: Plugin[]; count: number }>("/api/plugins"),
 
   endpoints: () => request<Endpoints>("/api/endpoints"),
+
+  tunnel: () => request<TunnelInfo>("/api/tunnel"),
+
+  tunnelStart: () =>
+    request<TunnelStatus>("/api/tunnel/start", { method: "POST" }),
+
+  tunnelStop: () => request<TunnelStatus>("/api/tunnel/stop", { method: "POST" }),
 
   audit: (limit = 100) =>
     request<{ records: AuditRecord[]; count: number }>(`/api/audit?limit=${limit}`),

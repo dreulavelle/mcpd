@@ -118,6 +118,37 @@ logging:
   level: info
   format: json
 
+# OpenAI's Secure MCP Tunnel, running inside mcpd.
+#
+# This is how ChatGPT reaches mcpd without an inbound port, public DNS, or a
+# NAT rule: the connection is dialled outward and held open. It runs in this
+# process over an in-memory transport, so requests never touch a socket and
+# there is no local address for anything else to find.
+#
+# Because there is no HTTP request to authenticate, what the tunnel may reach
+# is decided here rather than by a bearer token.
+tunnel:
+  enabled: false
+
+  # From platform.openai.com -> Settings -> Organization -> Tunnels.
+  tunnel_id: ""
+
+  # A *runtime* API key, referenced not written. An admin key is only for
+  # creating and deleting tunnels and must not be used for the connection.
+  api_key_ref: env:OPENAI_TUNNEL_API_KEY
+
+  # The identity requests through the tunnel act as. This is the whole of its
+  # authorization, so be specific: everyone using the connector shares it.
+  principal: svc:chatgpt
+  role: operator
+  plugins:
+    - cnmaestro
+
+  # Report when a newer tunnel client is released. It only reports -- the
+  # client is compiled in, so picking one up means rebuilding mcpd, which is
+  # the point: the code that runs is the code that was built and reviewed.
+  check_for_updates: true
+
 plugins:
   # A test connection for checking that everything works. It touches nothing
   # outside mcpd. Turn it on while setting up, then turn it off.

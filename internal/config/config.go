@@ -22,7 +22,43 @@ type Config struct {
 	Auth     Auth                    `yaml:"auth"`
 	Approval Approval                `yaml:"approval"`
 	Logging  Logging                 `yaml:"logging"`
+	Tunnel   Tunnel                  `yaml:"tunnel"`
 	Plugins  map[string]PluginConfig `yaml:"plugins"`
+}
+
+// Tunnel configures OpenAI's Secure MCP Tunnel, which runs inside mcpd.
+//
+// It lets ChatGPT reach mcpd without an inbound port, public DNS, or a NAT
+// rule: the connection is dialled outward and held open. Because it runs in
+// process there is no HTTP request to authenticate, so what the tunnel may
+// reach is decided here rather than by a bearer token.
+type Tunnel struct {
+	Enabled bool `yaml:"enabled"`
+
+	// TunnelID comes from the OpenAI platform's Tunnels settings.
+	TunnelID string `yaml:"tunnel_id"`
+
+	// APIKeyRef is a secret reference to a *runtime* API key. An admin key is
+	// only for creating and deleting tunnels and must not be used here.
+	APIKeyRef string `yaml:"api_key_ref"`
+
+	// Principal is the identity requests arriving through the tunnel act as.
+	Principal string `yaml:"principal"`
+	// Role is viewer, operator, approver, or admin.
+	Role string `yaml:"role"`
+	// Plugins lists what the tunnel may reach, or ["*"]. This is the whole of
+	// its authorization, so it is worth being specific.
+	Plugins []string `yaml:"plugins"`
+
+	// ControlPlaneBaseURL overrides the OpenAI endpoint. Leave empty.
+	ControlPlaneBaseURL string `yaml:"control_plane_base_url"`
+
+	// CheckForUpdates enables a daily check for a newer tunnel client release.
+	//
+	// It only reports. The client is compiled in, so updating means rebuilding
+	// mcpd -- which is the point: the code that runs is the code that was
+	// built and reviewed.
+	CheckForUpdates bool `yaml:"check_for_updates"`
 }
 
 // PluginsDir is where out-of-process plugins are discovered.
@@ -261,6 +297,7 @@ func Default() *Config {
 			ApprovalTTL:                      15 * time.Minute,
 			LeaseTTL:                         2 * time.Minute,
 		},
+		Tunnel:  Tunnel{CheckForUpdates: true},
 		Logging: Logging{Level: "info", Format: "json"},
 		Plugins: map[string]PluginConfig{},
 	}

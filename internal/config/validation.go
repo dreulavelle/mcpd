@@ -133,6 +133,38 @@ func (c *Config) Validate() error {
 			c.Approval.ApprovalTTL, c.Approval.ProposalTTL)
 	}
 
+	// --- tunnel ---
+	if c.Tunnel.Enabled {
+		if strings.TrimSpace(c.Tunnel.TunnelID) == "" {
+			add("config: tunnel.tunnel_id is required when the tunnel is enabled")
+		}
+		if strings.TrimSpace(c.Tunnel.APIKeyRef) == "" {
+			add("config: tunnel.api_key_ref is required when the tunnel is enabled")
+		} else if !strings.Contains(c.Tunnel.APIKeyRef, ":") {
+			add("config: tunnel.api_key_ref must be a reference such as " +
+				"env:OPENAI_TUNNEL_API_KEY, not the key itself")
+		}
+		if strings.TrimSpace(c.Tunnel.Principal) == "" {
+			add("config: tunnel.principal is required; it names the identity requests " +
+				"through the tunnel act as")
+		}
+		if !slices.Contains(validRoles, c.Tunnel.Role) {
+			add("config: tunnel.role must be one of %v (got %q)", validRoles, c.Tunnel.Role)
+		}
+		if len(c.Tunnel.Plugins) == 0 {
+			add(`config: tunnel.plugins is empty; the tunnel would reach nothing. ` +
+				`List plugins explicitly or use ["*"]`)
+		}
+		for _, name := range c.Tunnel.Plugins {
+			if name == "*" {
+				continue
+			}
+			if _, known := c.Plugins[name]; !known {
+				add("config: tunnel.plugins names %q, which is not configured", name)
+			}
+		}
+	}
+
 	// --- plugins ---
 	for name, p := range c.Plugins {
 		if !pluginNamePattern.MatchString(name) {

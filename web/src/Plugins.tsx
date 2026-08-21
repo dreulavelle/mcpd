@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Endpoints, type Plugin } from "./api";
 import { Banner } from "./components";
+import { TunnelCard } from "./Tunnel";
 
 /**
  * Connections page.
@@ -49,6 +50,8 @@ export function Plugins() {
       </p>
 
       {error && <Banner tone="error">{error}</Banner>}
+
+      <TunnelCard />
 
       {endpoints && plugins.length > 0 && (
         <div className="card all-at-once">

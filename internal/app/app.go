@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/admin"
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/oauth"
@@ -23,6 +24,7 @@ import (
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/tunnel"
 )
 
 // Version is the host version, overridden at build time via -ldflags.
@@ -46,6 +48,8 @@ type App struct {
 	reaper      *operations.Reaper
 	bus         *messaging.InProcessBus
 	publisher   *messaging.Publisher
+	tunnel      *tunnel.Manager
+	tunnelCheck *tunnel.Checker
 
 	workers     sync.WaitGroup
 	stopWorkers context.CancelFunc
@@ -186,6 +190,14 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		return nil, err
 	}
 
+	// The tunnel serves the same aggregate catalogue an HTTP client would get,
+	// built for its configured grants. It runs in process, so there is no
+	// request to authenticate and its identity comes from configuration.
+	if err := a.buildTunnel(cfg, authorizer, log); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	a.registerHealthChecks()
 
 	host, err := mcphost.NewHost(mcphost.Options{
@@ -222,6 +234,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Audit:      sqlite.NewAuditStore(db),
 			PublicURL:  cfg.Server.PublicURL,
 			AuthMode:   cfg.Auth.Mode,
+			Tunnel:     a.tunnel,
+			TunnelInfo: func() any { return a.tunnelCheck.Info() },
 			PluginSettings: func(name string) map[string]any {
 				return cfg.Plugins[name].Settings
 			},
@@ -377,4 +391,57 @@ func instanceID(cfg *config.Config) string {
 		host = "mcpd"
 	}
 	return host + ":" + cfg.Server.Listen
+}
+
+// buildTunnel constructs the embedded tunnel and its release checker.
+//
+// The checker runs whether or not the tunnel is enabled, because knowing a
+// newer client exists is useful before turning one on.
+func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *slog.Logger) error {
+	a.tunnelCheck = tunnel.NewChecker(newPluginHTTPClient(), log, 24*time.Hour)
+
+	tcfg := tunnel.Config{ControlPlaneBaseURL: cfg.Tunnel.ControlPlaneBaseURL}
+
+	if cfg.Tunnel.Enabled {
+		key, err := config.NewSecretResolver().Resolve(cfg.Tunnel.APIKeyRef)
+		if err != nil {
+			return fmt.Errorf("app: tunnel api key: %w", err)
+		}
+		tcfg.TunnelID = cfg.Tunnel.TunnelID
+		tcfg.APIKey = key
+		tcfg.Principal = auth.Principal{
+			ID:          cfg.Tunnel.Principal,
+			DisplayName: "tunnel",
+			Role:        auth.Role(cfg.Tunnel.Role),
+			Plugins:     cfg.Tunnel.Plugins,
+			// A tunnel is one credential shared by everyone using the
+			// connector, so it cannot distinguish who is asking. Separation of
+			// duties must refuse rather than silently accept a self-approval.
+			Distinguishable: false,
+			TokenID:         "tunnel",
+		}
+	}
+
+	a.tunnel = tunnel.NewManager(tcfg, func(principal *auth.Principal) (*sdkmcp.Server, error) {
+		granted := authorizer.VisiblePlugins(principal, a.manager.Names())
+		if len(granted) == 0 {
+			return nil, fmt.Errorf("the tunnel principal is granted no mounted plugins")
+		}
+		srv, err := a.manager.AggregateServer(granted)
+		if err != nil {
+			return nil, err
+		}
+		// The identity is attached here because an in-memory transport carries
+		// no HTTP request. Every tool call through this server sees the
+		// tunnel's configured principal, and the same authorization checks
+		// then apply as they would to a bearer token.
+		srv.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
+			return func(ctx context.Context, method string, req sdkmcp.Request) (sdkmcp.Result, error) {
+				return next(auth.WithPrincipal(ctx, principal), method, req)
+			}
+		})
+		return srv, nil
+	}, log.With("component", "tunnel"))
+
+	return nil
 }

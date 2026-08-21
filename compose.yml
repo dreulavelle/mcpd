@@ -9,8 +9,8 @@
 # container, where mcpd resolves the `env:` references in its config.
 #
 # Nothing here publishes the MCP endpoint beyond loopback. To reach it from
-# ChatGPT, use OpenAI's Secure MCP Tunnel -- see the `tunnel` profile below --
-# which connects outbound and needs no inbound port at all.
+# ChatGPT, turn on the tunnel in config.yaml: it runs inside mcpd, connects
+# outbound, and needs no inbound port, no public DNS, and no second container.
 
 name: mcpd
 
@@ -82,65 +82,6 @@ services:
       resources:
         limits:
           memory: 1g
-
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # OpenAI's Secure MCP Tunnel. Connects outbound to OpenAI and forwards
-  # JSON-RPC to mcpd, so ChatGPT can reach it with no inbound port, no public
-  # DNS, and no NAT rule.
-  #
-  #   docker compose --profile tunnel up -d
-  #
-  # Create the tunnel and a runtime API key at
-  # platform.openai.com/settings/organization/tunnels, then attach it in
-  # ChatGPT under Plugins -> create a developer-mode app -> Connection: Tunnel.
-  tunnel:
-    profiles: ["tunnel"]
-    image: ghcr.io/openai/tunnel-client:latest
-    restart: unless-stopped
-
-    env_file:
-      - path: .env
-        required: false
-
-    environment:
-      # Deliberately not guarded with `:?`. Compose interpolates every service
-      # even when its profile is inactive, so a required-variable guard here
-      # would block `docker compose up` for anyone who never wants a tunnel.
-      # tunnel-client reports a missing key clearly on its own.
-      CONTROL_PLANE_API_KEY: ${OPENAI_TUNNEL_API_KEY:-}
-      CONTROL_PLANE_TUNNEL_ID: ${OPENAI_TUNNEL_ID:-}
-
-      # The aggregate endpoint, so one tunnel serves every integration the
-      # token is granted rather than needing one tunnel per plugin.
-      #
-      # Scoping still comes from the token, not the path: point this at a
-      # credential limited to one integration and the connector sees exactly
-      # that one. To split them deliberately, use /mcp/<plugin> and a token
-      # scoped to match.
-      MCP_SERVER_URL: http://mcpd:8080/mcp
-
-      # tunnel-client injects this on every forwarded request, so mcpd's
-      # ordinary bearer authentication works through the tunnel with no OAuth
-      # and nothing public. Header values accept env: and file: references.
-      MCP_EXTRA_HEADERS: "Authorization: Bearer ${MCPD_TOKEN_LOCAL:-}"
-
-      # mcpd binds after the tunnel container may start, so hold the first
-      # poll until the listener is reachable.
-      MCP_STARTUP_WAIT_TIMEOUT: 60s
-
-    depends_on:
-      mcpd:
-        condition: service_healthy
-
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
 
     logging:
       driver: json-file

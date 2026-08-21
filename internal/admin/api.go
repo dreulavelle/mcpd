@@ -22,6 +22,7 @@ import (
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/tunnel"
 )
 
 // Options configures the dashboard.
@@ -49,6 +50,22 @@ type Options struct {
 	// AuthMode names the configured authentication mode, so the setup guide
 	// can show the steps that actually apply.
 	AuthMode string
+
+	// Tunnel exposes the embedded tunnel so an operator can see its state and
+	// start or stop it without restarting mcpd.
+	Tunnel TunnelController
+
+	// TunnelInfo reports the embedded tunnel client version against the newest
+	// release.
+	TunnelInfo func() any
+}
+
+// TunnelController is the slice of the tunnel manager the dashboard needs.
+type TunnelController interface {
+	Status() tunnel.Status
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+	Enabled() bool
 }
 
 // AuditReader is the slice of the audit store the dashboard needs.
@@ -111,6 +128,11 @@ func (s *Server) routes() {
 	api("POST /api/operations/{id}/cancel", s.handleCancel, auth.CapPropose)
 	api("GET /api/plugins", s.handleListPlugins, auth.CapRead)
 	api("GET /api/endpoints", s.handleEndpoints, auth.CapRead)
+	api("GET /api/tunnel", s.handleTunnelStatus, auth.CapRead)
+	// Starting and stopping a tunnel changes what an external service can
+	// reach, so it takes administrator rights rather than read.
+	api("POST /api/tunnel/start", s.handleTunnelStart, auth.CapAdmin)
+	api("POST /api/tunnel/stop", s.handleTunnelStop, auth.CapAdmin)
 	api("GET /api/audit", s.handleAudit, auth.CapRead)
 	api("GET /api/audit/verify", s.handleVerifyAudit, auth.CapAdmin)
 	api("GET /api/health", s.handleHealth, auth.CapRead)
@@ -198,6 +220,54 @@ func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 		Aggregate: s.connectURL("/mcp"),
 		PerPlugin: s.connectURL("/mcp/{name}"),
 	})
+}
+
+// tunnelResponse is the dashboard's view of the tunnel.
+type tunnelResponse struct {
+	Status  tunnel.Status `json:"status"`
+	Version any           `json:"version,omitempty"`
+}
+
+func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
+	resp := tunnelResponse{Status: tunnel.Status{State: tunnel.StateDisabled}}
+	if s.opts.Tunnel != nil {
+		resp.Status = s.opts.Tunnel.Status()
+	}
+	if s.opts.TunnelInfo != nil {
+		resp.Version = s.opts.TunnelInfo()
+	}
+	s.writeJSON(w, r, http.StatusOK, resp)
+}
+
+func (s *Server) handleTunnelStart(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Tunnel == nil || !s.opts.Tunnel.Enabled() {
+		s.writeError(w, r, http.StatusBadRequest, "no tunnel is configured")
+		return
+	}
+	if err := s.opts.Tunnel.Start(r.Context()); err != nil {
+		// The tunnel's own error is shown: an operator acting on this needs to
+		// know whether the tunnel id was wrong or the key lacked permission,
+		// and the manager already redacts the credential.
+		s.writeJSON(w, r, http.StatusConflict, map[string]any{
+			"error":  "tunnel_failed",
+			"detail": err.Error(),
+			"status": s.opts.Tunnel.Status(),
+		})
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, s.opts.Tunnel.Status())
+}
+
+func (s *Server) handleTunnelStop(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Tunnel == nil || !s.opts.Tunnel.Enabled() {
+		s.writeError(w, r, http.StatusBadRequest, "no tunnel is configured")
+		return
+	}
+	if err := s.opts.Tunnel.Stop(r.Context()); err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "the tunnel did not stop cleanly")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, s.opts.Tunnel.Status())
 }
 
 func (s *Server) handleListOperations(w http.ResponseWriter, r *http.Request) {

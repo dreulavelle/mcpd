@@ -379,3 +379,8 @@ button.btn.small { padding: 4px 10px; font-size: 12.5px; }
 
 .all-at-once { margin-bottom: 18px; border-color: var(--signal); }
 .all-at-once h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+
+.tunnel-card { margin-bottom: 18px; }
+.tunnel-head { display: flex; align-items: center; gap: 14px; }
+.tunnel-head h3 { margin: 0 0 2px; font-size: 15px; font-weight: 600; }
+.tunnel-head .spacer { flex: 1; }
