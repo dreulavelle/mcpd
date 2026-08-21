@@ -24,6 +24,7 @@ import (
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/servertls"
 	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 	"github.com/spoked/mcpd/internal/tunnel"
@@ -53,6 +54,7 @@ type App struct {
 	tunnel      *tunnel.Manager
 	tunnelCheck *tunnel.Checker
 	settings    *settings.Store
+	tls         *servertls.Materials
 
 	workers     sync.WaitGroup
 	stopWorkers context.CancelFunc
@@ -219,6 +221,26 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	// The tunnel serves the same aggregate catalogue an HTTP client would get,
 	// built for its configured grants. It runs in process, so there is no
 	// request to authenticate and its identity comes from configuration.
+	// Issued before anything that depends on it. The embedded tunnel client
+	// has to be told about this certificate authority when it is built -- it
+	// makes outbound requests back to mcpd for OAuth discovery and the
+	// tunnelled token endpoint, and without the CA both fail verification.
+	if cfg.Server.TLS.Enabled() {
+		materials, err := servertls.EnsureSelfSigned(
+			cfg.TLSDir(),
+			servertls.HostsFor(cfg.Server.PublicURL, cfg.Server.Listen),
+			time.Now())
+		if err != nil {
+			return nil, err
+		}
+		a.tls = materials
+		log.Info("serving https with mcpd's own certificate",
+			"hosts", materials.Hosts,
+			"expires", materials.NotAfter.Format(time.RFC3339),
+			"issued_now", materials.Issued,
+			"ca", materials.CAPath)
+	}
+
 	if err := a.buildTunnel(cfg, authorizer, log); err != nil {
 		db.Close()
 		return nil, err
@@ -260,6 +282,12 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Audit:      sqlite.NewAuditStore(db),
 			PublicURL:  cfg.Server.PublicURL,
 			AuthMode:   cfg.Auth.Mode,
+			CACertificate: func() []byte {
+				if a.tls == nil {
+					return nil
+				}
+				return a.tls.CAPEM
+			},
 			Tunnel:     a.tunnel,
 			TunnelInfo: func() any { return a.tunnelCheck.Info() },
 			Settings:   a.settings,
@@ -287,6 +315,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		WriteTimeout:      cfg.Server.WriteTimeout,
 		IdleTimeout:       cfg.Server.IdleTimeout,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+	}
+	if a.tls != nil {
+		a.server.TLSConfig = a.tls.TLSConfig()
 	}
 	return a, nil
 }
@@ -511,6 +542,9 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 	// hide plugins from people who were granted them.
 	if a.oauthServer != nil && a.cfg.Server.PublicURL != "" {
 		cfg.MCPServerURL = strings.TrimRight(a.cfg.Server.PublicURL, "/") + "/mcp"
+	}
+	if a.tls != nil {
+		cfg.TrustedCAFile = a.tls.CAPath
 	}
 
 	// The key comes from the store when it is there, and otherwise from the

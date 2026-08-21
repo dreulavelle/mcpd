@@ -159,7 +159,7 @@ func TestTunnelBindsOverHTTPWhenOAuthIsMounted(t *testing.T) {
 
 	oauth := newOAuthSettingsApp(t)
 	got := oauth.tunnelConfig(ctx).MCPServerURL
-	if got != "http://localhost:9080/mcp" {
+	if got != "https://localhost:9080/mcp" {
 		t.Fatalf("MCPServerURL = %q, want mcpd's own MCP endpoint", got)
 	}
 }
@@ -184,7 +184,9 @@ func newOAuthSettingsApp(t *testing.T) *App {
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "mcpd.db")
 	cfg.Storage.RelaxedDurability = true
-	cfg.Server.PublicURL = "http://localhost:9080"
+	// https because an OAuth issuer must be one; the validator now refuses the
+	// combination that produced "does not implement OAuth".
+	cfg.Server.PublicURL = "https://localhost:9080"
 	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
 	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
 	cfg.Auth.Mode = "oauth"
@@ -199,4 +201,42 @@ func newOAuthSettingsApp(t *testing.T) *App {
 	}
 	t.Cleanup(func() { a.db.Close() })
 	return a
+}
+
+// Ordering bug this guards: the tunnel was constructed before the certificate
+// existed, so it was told about an empty CA path and every request it made
+// back to mcpd failed with "tls: bad certificate" -- including OAuth
+// discovery, which is the whole reason for serving https in the first place.
+func TestTheTunnelIsToldAboutOurCertificate(t *testing.T) {
+	t.Setenv("MCPD_SECRET_KEY", "test-encryption-key-at-least-32-chars-long")
+
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	cfg.Storage.RelaxedDurability = true
+	cfg.Server.PublicURL = "https://127.0.0.1:9080"
+	cfg.Server.TLS = config.TLS{Mode: "self-signed", Dir: filepath.Join(dir, "tls")}
+	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
+	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
+	cfg.Auth.Mode = "oauth"
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("config invalid: %v", err)
+	}
+	a, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { a.db.Close() })
+
+	if a.tls == nil {
+		t.Fatal("self-signed mode must produce certificate material")
+	}
+	got := a.tunnelConfig(context.Background()).TrustedCAFile
+	if got == "" {
+		t.Fatal("the tunnel must be told about the CA, or it cannot reach mcpd over https")
+	}
+	if got != a.tls.CAPath {
+		t.Fatalf("TrustedCAFile = %q, want the CA mcpd issued from (%q)", got, a.tls.CAPath)
+	}
 }

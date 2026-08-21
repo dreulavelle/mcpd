@@ -83,6 +83,15 @@ type Config struct {
 	// reachable from outside the network.
 	MCPServerURL string
 
+	// TrustedCAFile is a PEM bundle added to the tunnel client's trust roots.
+	//
+	// Without it, a self-signed mcpd is unreachable over HTTPS by the very
+	// client that has to reach it: protected-resource discovery and the
+	// tunnelled OAuth token endpoint are both outbound requests back to mcpd,
+	// and both would fail certificate verification. The system roots are kept
+	// -- the control plane is api.openai.com and must stay verifiable.
+	TrustedCAFile string
+
 	// ControlPlaneBaseURL overrides the OpenAI endpoint. Empty uses the
 	// default.
 	ControlPlaneBaseURL string

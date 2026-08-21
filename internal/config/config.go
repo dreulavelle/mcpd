@@ -79,6 +79,29 @@ func (c *Config) PluginsDir() string {
 	return filepath.Join(c.StorageDir(), "plugins")
 }
 
+// TLS configures HTTPS on the MCP listener.
+//
+// The dashboard listener is deliberately not covered. What forces the issue
+// here is OAuth: RFC 8414 requires an authorization server's issuer to use the
+// https scheme, so a connector pointed at an http:// issuer is refused. The
+// dashboard has no such contract and is reached over an internal interface.
+type TLS struct {
+	// Mode is "off" or "self-signed".
+	//
+	// Self-signed is the only option a private deployment has. A publicly
+	// trusted certificate cannot be issued for an address like 192.168.1.10,
+	// and a host that already had a real certificate did not need a tunnel.
+	Mode string `yaml:"mode"`
+
+	// Dir holds the certificate authority and server certificate. Empty puts
+	// them beside the database, which is already the directory that has to
+	// survive a restart.
+	Dir string `yaml:"dir"`
+}
+
+// Enabled reports whether the listener should serve HTTPS.
+func (t TLS) Enabled() bool { return t.Mode == "self-signed" }
+
 // Server configures the HTTP listener.
 type Server struct {
 	// Listen is the bind address. Default is loopback: mcpd expects to sit
@@ -110,6 +133,9 @@ type Server struct {
 
 	// FrontendEnabled turns the dashboard off entirely.
 	FrontendEnabled bool `yaml:"frontend_enabled"`
+
+	// TLS gives the MCP listener a certificate.
+	TLS TLS `yaml:"tls"`
 
 	ReadHeaderTimeout time.Duration `yaml:"read_header_timeout"`
 	ReadTimeout       time.Duration `yaml:"read_timeout"`
@@ -333,6 +359,14 @@ func (c *Config) EnabledPlugins() []string {
 	}
 	sortStrings(out)
 	return out
+}
+
+// TLSDir returns the directory holding the certificate authority.
+func (c *Config) TLSDir() string {
+	if c.Server.TLS.Dir != "" {
+		return c.Server.TLS.Dir
+	}
+	return filepath.Join(c.StorageDir(), "tls")
 }
 
 // StorageDir returns the directory holding the database.

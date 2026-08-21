@@ -16,6 +16,7 @@ import (
 	tcconfig "github.com/openai/tunnel-client/pkg/config"
 	tccontrolplane "github.com/openai/tunnel-client/pkg/controlplane"
 	tcruntimeconfig "github.com/openai/tunnel-client/pkg/runtimeconfig"
+	"github.com/openai/tunnel-client/pkg/tlsconfig"
 	tctypes "github.com/openai/tunnel-client/pkg/types"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
@@ -135,9 +136,21 @@ func newHTTPRuntime(cfg Config, log *slog.Logger, out logWriter) (runtime, error
 		return nil, fmt.Errorf("tunnel: %w", err)
 	}
 
+	// mcpd's own certificate is not in any system trust store, so the client
+	// is told about it explicitly. LoadBundle extends the system roots rather
+	// than replacing them, which keeps api.openai.com verifiable.
+	var trust *tlsconfig.Bundle
+	if cfg.TrustedCAFile != "" {
+		trust, err = tlsconfig.LoadBundle(cfg.TrustedCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("tunnel: trust mcpd's certificate: %w", err)
+		}
+	}
+
 	r := &httpRuntime{ready: make(chan struct{})}
 
 	tcCfg := &tcconfig.Config{
+		TLS: trust,
 		ControlPlane: tcconfig.ControlPlaneConfig{
 			BaseURL:             controlPlane,
 			URLPath:             urlPath,

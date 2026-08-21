@@ -52,6 +52,13 @@ type Options struct {
 	// can show the steps that actually apply.
 	AuthMode string
 
+	// CACertificate returns the certificate authority mcpd issued its own
+	// certificate from, or nil when it is not serving HTTPS itself.
+	//
+	// Offering it for download is the difference between a browser warning an
+	// operator has to click past every time and one they resolve once.
+	CACertificate func() []byte
+
 	// Tunnel exposes the embedded tunnel so an operator can see its state and
 	// start or stop it without restarting mcpd.
 	Tunnel TunnelController
@@ -137,6 +144,11 @@ func (s *Server) routes() {
 	// Unauthenticated: the login page needs to know how to authenticate before
 	// it can authenticate.
 	s.mux.HandleFunc("GET /api/meta", s.handleMeta)
+
+	// Unauthenticated by necessity and harmless by nature: a CA certificate is
+	// a public document, and requiring a sign-in to fetch it would mean
+	// needing the browser to trust it before it can be trusted.
+	s.mux.HandleFunc("GET /api/tls/ca", s.handleCACertificate)
 
 	api("GET /api/operations", s.handleListOperations, auth.CapRead)
 	api("GET /api/operations/{id}", s.handleGetOperation, auth.CapRead)
@@ -907,4 +919,21 @@ func decodeJSON(raw json.RawMessage) any {
 		return nil
 	}
 	return v
+}
+
+// handleCACertificate serves the certificate authority for installation.
+func (s *Server) handleCACertificate(w http.ResponseWriter, r *http.Request) {
+	if s.opts.CACertificate == nil {
+		s.writeError(w, r, http.StatusNotFound, "mcpd is not using a certificate of its own")
+		return
+	}
+	pem := s.opts.CACertificate()
+	if len(pem) == 0 {
+		s.writeError(w, r, http.StatusNotFound, "no certificate authority available")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Disposition", `attachment; filename="mcpd-ca.pem"`)
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(pem)
 }
