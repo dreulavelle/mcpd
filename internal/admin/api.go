@@ -84,9 +84,13 @@ type BootstrapSetting struct {
 	Help  string `json:"help,omitempty"`
 }
 
-// TunnelController is the slice of the tunnel manager the dashboard needs.
+// TunnelController is the slice of the tunnel group the dashboard needs.
+//
+// Status returns one entry per connector, because a tunnel forwards to exactly
+// one MCP endpoint: a deployment giving a system its own connector runs a
+// tunnel per system, and each has its own state worth showing.
 type TunnelController interface {
-	Status() tunnel.Status
+	Status() []tunnel.Status
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	Enabled() bool
@@ -258,14 +262,17 @@ func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 
 // tunnelResponse is the dashboard's view of the tunnel.
 type tunnelResponse struct {
-	Status  tunnel.Status `json:"status"`
-	Version any           `json:"version,omitempty"`
+	// Tunnels is one entry per connector, in configuration order.
+	Tunnels []tunnel.Status `json:"tunnels"`
+	Version any             `json:"version,omitempty"`
 }
 
 func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	resp := tunnelResponse{Status: tunnel.Status{State: tunnel.StateDisabled}}
+	resp := tunnelResponse{Tunnels: []tunnel.Status{}}
 	if s.opts.Tunnel != nil {
-		resp.Status = s.opts.Tunnel.Status()
+		if list := s.opts.Tunnel.Status(); len(list) > 0 {
+			resp.Tunnels = list
+		}
 	}
 	if s.opts.TunnelInfo != nil {
 		resp.Version = s.opts.TunnelInfo()
@@ -327,7 +334,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	resp := settingsResponse{
-		Groups:     settings.Schema(),
+		Groups:     settings.Schema(s.opts.Manager.Names()...),
 		Values:     map[string]any{},
 		SecretsSet: map[string]bool{},
 		Encryption: s.opts.Settings.HasCipher(),

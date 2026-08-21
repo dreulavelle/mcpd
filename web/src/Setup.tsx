@@ -54,7 +54,10 @@ function ChatGPT({ tunnel, plugins, meta }: {
   plugins: Plugin[];
   meta: Meta | null;
 }) {
-  const state = tunnel?.status.state ?? "disabled";
+  // The overall picture: any connector up means ChatGPT can reach something.
+  const tunnels = tunnel?.tunnels ?? [];
+  const state = tunnels.find((t) => t.state === "connected")?.state
+    ?? tunnels[0]?.state ?? "disabled";
   const connected = state === "connected";
 
   return (

@@ -43,18 +43,19 @@ type App struct {
 	manager *plugins.Manager
 	health  *observability.HealthRegistry
 
-	oauthStore  *oauth.Store
-	oauthServer *oauth.Server
-	approval    *operations.ApprovalPolicy
-	opsService  *operations.Service
-	executor    *operations.Executor
-	reaper      *operations.Reaper
-	bus         *messaging.InProcessBus
-	publisher   *messaging.Publisher
-	tunnel      *tunnel.Manager
-	tunnelCheck *tunnel.Checker
-	settings    *settings.Store
-	tls         *servertls.Materials
+	oauthStore    *oauth.Store
+	oauthServer   *oauth.Server
+	approval      *operations.ApprovalPolicy
+	opsService    *operations.Service
+	executor      *operations.Executor
+	reaper        *operations.Reaper
+	bus           *messaging.InProcessBus
+	publisher     *messaging.Publisher
+	tunnels       *tunnel.Group
+	tunnelFactory tunnel.ServerFactory
+	tunnelCheck   *tunnel.Checker
+	settings      *settings.Store
+	tls           *servertls.Materials
 
 	workers     sync.WaitGroup
 	stopWorkers context.CancelFunc
@@ -288,7 +289,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 				}
 				return a.tls.CAPEM
 			},
-			Tunnel:     a.tunnel,
+			Tunnel:     a.tunnels,
 			TunnelInfo: func() any { return a.tunnelCheck.Info() },
 			Settings:   a.settings,
 			Bootstrap:  func() []admin.BootstrapSetting { return bootstrapSettings(cfg) },
@@ -459,7 +460,8 @@ func instanceID(cfg *config.Config) string {
 func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *slog.Logger) error {
 	a.tunnelCheck = tunnel.NewChecker(newPluginHTTPClient(), log, 24*time.Hour)
 
-	a.tunnel = tunnel.NewManager(a.tunnelConfig(context.Background()), func(principal *auth.Principal) (*sdkmcp.Server, error) {
+	a.tunnels = tunnel.NewGroup(log.With("component", "tunnel"))
+	a.tunnelFactory = func(principal *auth.Principal) (*sdkmcp.Server, error) {
 		granted := authorizer.VisiblePlugins(principal, a.manager.Names())
 		if len(granted) == 0 {
 			return nil, fmt.Errorf("the tunnel principal is granted no mounted plugins")
@@ -478,7 +480,14 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 			}
 		})
 		return srv, nil
-	}, log.With("component", "tunnel"))
+	}
+
+	if err := a.tunnels.Apply(context.Background(), a.tunnelConfigs(context.Background()), a.tunnelFactory); err != nil {
+		// Not fatal. A tunnel that will not start is reported on its own
+		// status, and the rest of mcpd -- including every other tunnel --
+		// works without it.
+		log.Warn("some tunnels did not start", "error", err)
+	}
 
 	// A change made in the dashboard has to reach the running tunnel, not just
 	// the database. Without this the settings form writes to a store nothing
@@ -490,7 +499,7 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			if err := a.tunnel.Reconfigure(ctx, a.tunnelConfig(ctx)); err != nil {
+			if err := a.tunnels.Apply(ctx, a.tunnelConfigs(ctx), a.tunnelFactory); err != nil {
 				// Already recorded on the tunnel's status, which is where an
 				// operator will look.
 				log.Warn("tunnel did not reconnect after a settings change", "error", err)
@@ -499,6 +508,50 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 	})
 
 	return nil
+}
+
+// tunnelConfigs resolves every tunnel mcpd should be running.
+//
+// There is one per connector. A tunnel forwards to exactly one MCP endpoint,
+// so a connector limited to a single system needs a tunnel of its own bound to
+// that system's endpoint -- which is what a per-plugin tunnel id means. The
+// tunnel without a plugin serves the aggregate endpoint, and both kinds can
+// run at once.
+func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
+	base := a.tunnelConfig(ctx)
+
+	var out []tunnel.Config
+	if base.TunnelID != "" {
+		out = append(out, base)
+	}
+
+	for _, name := range a.manager.Names() {
+		id := a.settings.String(ctx, settings.PluginTunnelKey(name), "")
+		if id == "" {
+			continue
+		}
+		if id == base.TunnelID {
+			// One tunnel cannot serve two endpoints, and running two clients
+			// against the same id has them competing for the same commands.
+			a.log.Warn("ignoring a per-plugin tunnel that reuses the main tunnel's id",
+				"plugin", name)
+			continue
+		}
+
+		scoped := base
+		scoped.Plugin = name
+		scoped.TunnelID = id
+		// Bound to this plugin's endpoint, which is the whole point: the
+		// connector reaches this system and cannot discover any other.
+		if a.oauthServer != nil && a.cfg.Server.PublicURL != "" {
+			scoped.MCPServerURL = strings.TrimRight(a.cfg.Server.PublicURL, "/") + "/mcp/" + name
+		}
+		scoped.Principal.Plugins = []string{name}
+		// Only one client may bind the diagnostics port.
+		scoped.DiagnosticsAddr = ""
+		out = append(out, scoped)
+	}
+	return out
 }
 
 // tunnelConfig resolves the tunnel's settings.
