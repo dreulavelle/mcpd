@@ -93,11 +93,27 @@ const (
 // Setting keys. They are namespaced by group so a key cannot collide and so
 // history reads clearly.
 const (
-	KeyTunnelEnabled   = "tunnel.enabled"
-	KeyTunnelID        = "tunnel.tunnel_id"
-	KeyTunnelAPIKey    = "tunnel.api_key"
-	KeyTunnelAdminKey  = "tunnel.admin_key"
-	KeyTunnelOrgID     = "tunnel.organization_id"
+	KeyTunnelEnabled = "tunnel.enabled"
+	// KeyTunnelID holds the tunnel serving every plugin at once.
+	//
+	// Deliberately not a settings field, for the same reason as
+	// PluginTunnelKey below: tunnels are made and assigned on the Tunnels
+	// page, where the id comes from the tunnel that was just created. A text
+	// box asking an operator to paste one back in asks them to copy a value
+	// the app already has, and it appeared before there was anything to paste.
+	//
+	// A deployment that would rather not hand mcpd an admin key can still set
+	// tunnel.tunnel_id in config.yaml, which this falls back to.
+	KeyTunnelID       = "tunnel.tunnel_id"
+	KeyTunnelAPIKey   = "tunnel.api_key"
+	KeyTunnelAdminKey = "tunnel.admin_key"
+	KeyTunnelOrgID    = "tunnel.organization_id"
+	// KeyTunnelPrincipal is the identity requests through the tunnel act as.
+	//
+	// Not a field either. It only decides how ChatGPT is labelled in the
+	// history, the default says exactly that, and a form asking an operator to
+	// name it invites them to think it means more than it does. config.yaml
+	// can still set it.
 	KeyTunnelPrincipal = "tunnel.principal"
 	KeyTunnelRole      = "tunnel.role"
 	KeyTunnelPlugins   = "tunnel.plugins"
@@ -159,44 +175,34 @@ func schema() []Group {
 					Default: false,
 				},
 				{
-					Key: KeyTunnelID, Label: "Tunnel ID", Kind: KindString,
-					Group: "tunnel", Apply: ApplyReconnect, Required: true,
-					Placeholder: "tunnel_0123456789abcdef0123456789abcdef",
-					Help:        "From your OpenAI account, under Settings, Organization, Tunnels.",
-				},
-				{
 					Key: KeyTunnelAPIKey, Label: "OpenAI key", Kind: KindSecret,
 					Group: "tunnel", Apply: ApplyReconnect, Required: true,
 					Help: "Needs Tunnels: Read and Use. Stored encrypted.",
 				},
 				{
 					Key: KeyTunnelAdminKey, Label: "OpenAI admin key", Kind: KindSecret,
-					Group: "tunnel", Apply: ApplyLive,
-					Help: "Optional, and a different key from the one above. Lets you " +
-						"make tunnels from the Tunnels page.",
+					Group: "tunnel", Apply: ApplyLive, Required: true,
+					Help: "A different key from the one above, and how tunnels get made " +
+						"on the Tunnels page. Stored encrypted.",
 				},
 				{
 					Key: KeyTunnelOrgID, Label: "OpenAI organization ID", Kind: KindString,
-					Group: "tunnel", Apply: ApplyLive, Placeholder: "org_...",
-					Help: "Needed alongside the admin key. Settings, Organization, General.",
-				},
-				{
-					Key: KeyTunnelPrincipal, Label: "Show it as", Kind: KindString,
-					Group: "tunnel", Apply: ApplyReconnect, Default: "svc:chatgpt",
-					Help: "How ChatGPT appears in your history.",
+					Group: "tunnel", Apply: ApplyLive, Required: true,
+					Placeholder: "org_...",
+					Help:        "Goes with the admin key. Settings, Organization, General.",
 				},
 				{
 					Key: KeyTunnelRole, Label: "What ChatGPT may do", Kind: KindEnum,
 					Group: "tunnel", Apply: ApplyReconnect, Default: "user",
 					Options: []string{"user", "admin"},
-					// "Also approve" sounds like the agent deciding for itself,
-					// and it is not: approval happens in the conversation, and
-					// the agent is what carries your answer back. Without it a
-					// change can be proposed and then never applied by anyone,
-					// because there is nowhere else to approve it.
-					Help: "Changes are applied only after you say yes in the conversation. " +
-						"The last option is what lets your answer get back here; without " +
-						"it, changes can be suggested but never applied.",
+					// A user can approve, and has to be able to: approval
+					// happens in the conversation and the agent is what carries
+					// the answer back. Admin additionally lets it change this
+					// host's own settings, which is almost never wanted for a
+					// connector.
+					Help: "Changes apply only after you say yes in the conversation. " +
+						"Admin also lets it change these settings, which you probably " +
+						"do not want.",
 				},
 				{
 					Key: KeyTunnelPlugins, Label: "Systems ChatGPT can reach", Kind: KindList,
