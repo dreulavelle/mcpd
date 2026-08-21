@@ -38,7 +38,7 @@ export function Settings() {
   }, [load]);
 
   const groups = (data?.groups ?? []).map((g) =>
-    relevant(g, tunnels?.can_manage ?? false, meta?.auth_mode ?? ""));
+    relevant(g, tunnels?.can_manage ?? false, data?.values ?? {}));
 
   return (
     <>
@@ -72,19 +72,20 @@ export function Settings() {
  *
  * A form offering settings that do nothing is worse than one that omits them:
  * it invites someone to fill one in and then ignores the value. Two things
- * decide it. With an admin key, tunnel IDs come from the tunnel you just made
- * on the Tunnels page rather than being typed. And under OAuth the connector's
- * own sign-in decides who is asking, so a configured identity is never read.
+ * decide it here. With an admin key, tunnel IDs come from the tunnel you made
+ * on the Tunnels page rather than being typed. And the identity ChatGPT acts
+ * as is read only when the tunnel carries it -- once each person signs in,
+ * their own account decides, and a configured identity is never consulted.
  */
-function relevant(group: SettingGroup, canManage: boolean, authMode: string): SettingGroup {
+function relevant(group: SettingGroup, canManage: boolean, values: Record<string, unknown>): SettingGroup {
   const identity = ["tunnel.principal", "tunnel.role", "tunnel.plugins"];
-  const oauth = authMode === "oauth" || authMode === "mixed";
+  const signIn = String(values["tunnel.each_person_signs_in"] ?? "") === "true";
 
   return {
     ...group,
     fields: group.fields.filter((f) => {
       if (canManage && f.key === "tunnel.tunnel_id") return false;
-      if (oauth && identity.includes(f.key)) return false;
+      if (signIn && identity.includes(f.key)) return false;
       return true;
     }),
   };
