@@ -120,19 +120,6 @@ func (d *DB) ReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
 // design that is an expected outcome, not necessarily a failure.
 var ErrNoRowsAffected = errors.New("sqlite: guarded update matched no rows")
 
-// IsConstraint reports whether err is a SQLite constraint violation, which is
-// how uniqueness conflicts, CHECK failures and RAISE(ABORT) from triggers all
-// surface. modernc.org/sqlite does not export typed errors per constraint
-// class, so this matches on the driver's message.
-func IsConstraint(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "constraint failed") ||
-		strings.Contains(msg, "SQLITE_CONSTRAINT")
-}
-
 // isUniqueViolation reports whether err is a UNIQUE constraint failure over a
 // particular set of columns. Identifying which constraint fired is what
 // separates "this exact proposal already exists" from any other constraint the

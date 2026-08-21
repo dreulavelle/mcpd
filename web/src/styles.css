@@ -45,6 +45,10 @@
   --r: 8px;
   --r-lg: 12px;
 
+  /* Form controls and buttons share these so they line up beside each other. */
+  --control-size: 14px;
+  --control-line: 1.6;
+
   /* One spacing scale, used everywhere, so rhythm holds without per-element
      nudging. */
   --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
@@ -224,7 +228,8 @@ a.out::after { content: " ↗"; font-size: .85em; opacity: .7; }
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   padding: 9px 16px; border-radius: var(--r-sm);
   border: 1px solid var(--line); background: var(--surface);
-  font-size: 14px; font-weight: 550; cursor: pointer;
+  font-size: var(--control-size); line-height: var(--control-line);
+  font-weight: 550; cursor: pointer;
   transition: background .12s ease, border-color .12s ease, transform .06s ease;
   white-space: nowrap;
 }
@@ -261,6 +266,12 @@ select, textarea {
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--surface); color: var(--text);
   transition: border-color .12s ease, box-shadow .12s ease;
+  /* Same metrics as .btn, so a control and a button sitting in one row are
+     the same height. They inherited the body's 15px/1.6 while .btn declared
+     14px, which made every button beside an input about 2px short and its
+     label a size smaller -- visible on the Tunnels form, where a select, an
+     input and a button sit side by side. */
+  font-size: var(--control-size); line-height: var(--control-line);
 }
 input:hover:not(:disabled), select:hover, textarea:hover { border-color: var(--text-4); }
 input:focus, select:focus, textarea:focus {

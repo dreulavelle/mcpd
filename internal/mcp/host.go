@@ -289,14 +289,3 @@ func grantedFromContext(ctx context.Context) []string {
 	names, _ := ctx.Value(grantedKey{}).([]string)
 	return names
 }
-
-// pluginFromPath returns the plugin an endpoint serves, or "" for the
-// aggregate endpoint and anything else.
-func pluginFromPath(path string) string {
-	rest, ok := strings.CutPrefix(strings.Trim(path, "/"), "mcp/")
-	if !ok {
-		return ""
-	}
-	name, _, _ := strings.Cut(rest, "/")
-	return name
-}

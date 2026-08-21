@@ -4,6 +4,11 @@ import "strings"
 
 // This file is the single authority for subject naming. Constructing a subject
 // anywhere else eventually produces a namespace nobody can filter on.
+//
+// Operations map their own states to subjects, in operations.subjectFor. That
+// duplication is deliberate and documented there: the domain does not depend
+// on the transport layer. A copy of the mapping lived here too and had no
+// callers, which made it the version free to drift.
 
 // Operation lifecycle subjects.
 const (
@@ -18,14 +23,6 @@ const (
 	SubjectOperationIndeterminate = "mcp.operation.indeterminate"
 )
 
-// Wildcards for subscribing.
-const (
-	// PatternAllOperations matches every operation lifecycle event.
-	PatternAllOperations = "mcp.operation.>"
-	// PatternAllPlugins matches every plugin-domain event.
-	PatternAllPlugins = "mcp.plugin.>"
-)
-
 // pluginPrefix is the namespace a plugin's events live under.
 const pluginPrefix = "mcp.plugin."
 
@@ -36,36 +33,4 @@ const pluginPrefix = "mcp.plugin."
 // an operation lifecycle event.
 func PluginSubject(plugin, suffix string) string {
 	return pluginPrefix + plugin + "." + strings.TrimPrefix(suffix, ".")
-}
-
-// PluginPattern matches every event from one plugin.
-func PluginPattern(plugin string) string {
-	return pluginPrefix + plugin + ".>"
-}
-
-// SubjectForState maps a terminal or transitional state to its subject, so
-// that the state machine and the subject taxonomy cannot drift apart.
-func SubjectForState(state string) string {
-	switch state {
-	case "pending_approval":
-		return SubjectOperationProposed
-	case "approved":
-		return SubjectOperationApproved
-	case "rejected":
-		return SubjectOperationRejected
-	case "cancelled":
-		return SubjectOperationCancelled
-	case "expired":
-		return SubjectOperationExpired
-	case "executing":
-		return SubjectOperationExecuting
-	case "succeeded":
-		return SubjectOperationSucceeded
-	case "failed":
-		return SubjectOperationFailed
-	case "indeterminate":
-		return SubjectOperationIndeterminate
-	default:
-		return ""
-	}
 }
