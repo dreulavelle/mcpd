@@ -31,8 +31,8 @@ export function Connections() {
     <>
       <h1>Connections</h1>
       <p className="lede">
-        The systems mcpd can work with. Each has its own address, so you can
-        give an assistant one without giving it the others.
+        The systems mcpd can work with. Each has its own address, so an
+        assistant that connects directly can be given one without the others.
       </p>
 
       {error && <Message tone="problem">{error}</Message>}
@@ -51,9 +51,10 @@ export function Connections() {
               <div className="card-body">
                 <h3>One address for everything</h3>
                 <p className="note">
-                  Gives an assistant everything its key is allowed to reach. Use
-                  this when whatever you're connecting can only point at a
-                  single address.
+                  Gives an assistant everything its key is allowed to reach.
+                  This is the one ChatGPT uses: a tunnel carries a single
+                  address, so what ChatGPT can reach comes from who signed in
+                  rather than which address they were given.
                 </p>
                 <Copyable value={endpoints.aggregate} label="address" />
               </div>
@@ -105,8 +106,10 @@ function Row({ plugin, open, onToggle }: { plugin: Plugin; open: boolean; onTogg
           <div className="section">
             <p className="eyebrow">Address</p>
             <p className="note">
-              For connecting something directly. It only works with a key that's
-              been given access to this system.
+              For something that can already reach this machine, with a key
+              that's been given access to this system. Not for ChatGPT — it
+              arrives through the tunnel, which carries one address for
+              everything.
             </p>
             <Copyable value={plugin.connect_url} label="address" />
           </div>
