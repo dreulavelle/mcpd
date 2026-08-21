@@ -121,8 +121,8 @@ function Console({ onSignOut }: { onSignOut: () => void }) {
 
   const tabs: [Tab, string][] = [
     ["changes", "Changes"],
-    ["plugins", "Systems"],
-    ["tunnels", "ChatGPT"],
+    ["plugins", "Plugins"],
+    ["tunnels", "Tunnels"],
     ["settings", "Settings"],
     ["history", "History"],
   ];

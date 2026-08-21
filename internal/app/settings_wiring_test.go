@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -308,23 +307,15 @@ func TestAPerPluginTunnelCannotReuseTheMainTunnelID(t *testing.T) {
 	}
 }
 
-// The form has to offer a tunnel for each mounted system, or the feature is
-// unreachable from the dashboard mcpd is supposed to be managed from.
-func TestSettingsOffersATunnelPerMountedPlugin(t *testing.T) {
-	groups := settings.Schema("echo", "cnmaestro")
-
-	var keys []string
-	for _, g := range groups {
+// Tunnels are made and assigned on the Tunnels page, where the id comes from
+// the tunnel that was just created. A settings field asking an operator to
+// paste that id back in would ask them to copy a value the app already has.
+func TestSettingsDoesNotOfferPerPluginTunnelFields(t *testing.T) {
+	for _, g := range settings.Schema() {
 		for _, f := range g.Fields {
-			keys = append(keys, f.Key)
-		}
-	}
-	for _, want := range []string{
-		settings.PluginTunnelKey("echo"),
-		settings.PluginTunnelKey("cnmaestro"),
-	} {
-		if !slices.Contains(keys, want) {
-			t.Errorf("settings form is missing %q", want)
+			if settings.PluginFromTunnelKey(f.Key) != "" {
+				t.Errorf("settings still offers %q", f.Key)
+			}
 		}
 	}
 }

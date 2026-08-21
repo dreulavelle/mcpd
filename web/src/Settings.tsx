@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Meta, type SettingsPayload } from "./api";
+import { api, type Meta, type SettingGroup, type SettingsPayload, type TunnelInfo } from "./api";
 import { Message, Skeleton, useToasts } from "./components";
 import { SettingsForm } from "./SettingsForm";
 
-/**
- * Settings.
- *
- * Only what belongs to no particular page. Anything about ChatGPT lives on the
- * Tunnels page beside the connectors it configures, because a setting people
- * cannot find is a setting that does not work.
- */
+const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
+const OPENAI_API_KEYS = "https://platform.openai.com/settings/organization/api-keys";
+const OPENAI_ADMIN_KEYS = "https://platform.openai.com/settings/organization/admin-keys";
+const OPENAI_ORG = "https://platform.openai.com/settings/organization/general";
+
+const LINKS = {
+  "tunnel.tunnel_id": { href: OPENAI_TUNNELS, label: "Tunnels" },
+  "tunnel.api_key": { href: OPENAI_API_KEYS, label: "API keys" },
+  "tunnel.admin_key": { href: OPENAI_ADMIN_KEYS, label: "Admin keys" },
+  "tunnel.organization_id": { href: OPENAI_ORG, label: "Organization settings" },
+};
+
 export function Settings() {
   const [data, setData] = useState<SettingsPayload | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
+  const [tunnels, setTunnels] = useState<TunnelInfo | null>(null);
   const [error, setError] = useState("");
   const { show, view } = useToasts();
 
@@ -23,6 +29,7 @@ export function Settings() {
     } catch {
       setError("Couldn't load settings.");
     }
+    api.tunnel().then(setTunnels).catch(() => setTunnels(null));
   }, []);
 
   useEffect(() => {
@@ -30,7 +37,8 @@ export function Settings() {
     api.meta().then(setMeta).catch(() => setMeta(null));
   }, [load]);
 
-  const groups = data?.groups.filter((g) => g.section !== "tunnels") ?? [];
+  const groups = (data?.groups ?? []).map((g) =>
+    relevant(g, tunnels?.can_manage ?? false, meta?.auth_mode ?? ""));
 
   return (
     <>
@@ -52,8 +60,32 @@ export function Settings() {
       )}
 
       {!data ? <Skeleton rows={5} /> : (
-        <SettingsForm groups={groups} settings={data} onSaved={load} show={show} />
+        <SettingsForm groups={groups} settings={data} links={LINKS}
+                      onSaved={load} show={show} />
       )}
     </>
   );
+}
+
+/**
+ * Hides fields this deployment cannot act on.
+ *
+ * A form offering settings that do nothing is worse than one that omits them:
+ * it invites someone to fill one in and then ignores the value. Two things
+ * decide it. With an admin key, tunnel IDs come from the tunnel you just made
+ * on the Tunnels page rather than being typed. And under OAuth the connector's
+ * own sign-in decides who is asking, so a configured identity is never read.
+ */
+function relevant(group: SettingGroup, canManage: boolean, authMode: string): SettingGroup {
+  const identity = ["tunnel.principal", "tunnel.role", "tunnel.plugins"];
+  const oauth = authMode === "oauth" || authMode === "mixed";
+
+  return {
+    ...group,
+    fields: group.fields.filter((f) => {
+      if (canManage && f.key === "tunnel.tunnel_id") return false;
+      if (oauth && identity.includes(f.key)) return false;
+      return true;
+    }),
+  };
 }

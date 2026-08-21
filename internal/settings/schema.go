@@ -119,9 +119,14 @@ func intPtr(i int) *int { return &i }
 
 // PluginTunnelKey builds the key holding a plugin's own tunnel id.
 //
-// A tunnel forwards to exactly one MCP endpoint, so a connector that serves
-// one system needs a tunnel of its own bound to that system's endpoint. This
-// is where its id lives.
+// A tunnel forwards to exactly one MCP endpoint, so a connector serving one
+// plugin needs a tunnel of its own bound to that plugin's endpoint. This is
+// where the assignment is stored.
+//
+// It is deliberately not a settings field. Tunnels are made and assigned on
+// the Tunnels page, where the id comes from the tunnel that was just created;
+// a text box asking an operator to paste one back in would be asking them to
+// copy a value the app already has.
 func PluginTunnelKey(plugin string) string { return "tunnel.plugin." + plugin + ".tunnel_id" }
 
 // PluginFromTunnelKey reverses PluginTunnelKey, returning "" for anything else.
@@ -135,44 +140,7 @@ func PluginFromTunnelKey(key string) string {
 }
 
 // Schema returns every editable group.
-//
-// plugins names the systems currently mounted, so each can be given a tunnel
-// of its own. It is a parameter rather than a constant because which systems
-// exist is a deployment's choice, and a form offering a tunnel for a plugin
-// that is not mounted would be offering something that cannot work.
-func Schema(plugins ...string) []Group {
-	groups := schema()
-	if len(plugins) == 0 {
-		return groups
-	}
-	for i := range groups {
-		if groups[i].Name != "tunnel" {
-			continue
-		}
-		groups[i].Fields = append(groups[i].Fields, pluginTunnelFields(plugins)...)
-	}
-	return groups
-}
-
-// pluginTunnelFields builds one tunnel id field per mounted plugin.
-func pluginTunnelFields(plugins []string) []Field {
-	sorted := slices.Clone(plugins)
-	slices.Sort(sorted)
-
-	fields := make([]Field, 0, len(sorted))
-	for _, name := range sorted {
-		fields = append(fields, Field{
-			Key:         PluginTunnelKey(name),
-			Label:       "Separate tunnel for " + name,
-			Kind:        KindString,
-			Group:       "tunnel",
-			Apply:       ApplyReconnect,
-			Placeholder: "tunnel_0123456789abcdef0123456789abcdef",
-			Help:        "Optional. Gives " + name + " a connector of its own.",
-		})
-	}
-	return fields
-}
+func Schema() []Group { return schema() }
 
 func schema() []Group {
 	return []Group{
@@ -327,8 +295,7 @@ func Validate(key, value string) error {
 		// The tunnel ID has a documented shape, and checking it here turns a
 		// typo into an immediate message rather than a confusing failure to
 		// connect several seconds later.
-		isTunnelID := key == KeyTunnelID || PluginFromTunnelKey(key) != ""
-		if isTunnelID && strings.TrimSpace(value) != "" {
+		if key == KeyTunnelID && strings.TrimSpace(value) != "" {
 			if !validTunnelID(value) {
 				return fmt.Errorf(
 					"settings: %s should look like tunnel_ followed by 32 characters",
