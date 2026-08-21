@@ -63,8 +63,22 @@ func (h *Host) handleResourceMetadata(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, "no public url configured")
 		return
 	}
+
+	// The document describes the endpoint it was asked about, not the host.
+	//
+	// Each MCP endpoint is its own protected resource, and RFC 9728 puts that
+	// resource's path after the well-known segment. Returning the same
+	// identifier whatever was asked makes every endpoint look like the same
+	// resource -- which breaks audience binding, and makes two tunnels serving
+	// different endpoints indistinguishable to anything reading their
+	// metadata.
+	resource := base
+	if suffix := strings.Trim(r.PathValue("path"), "/"); suffix != "" {
+		resource = base + "/" + suffix
+	}
+
 	meta := protectedResourceMetadata{
-		Resource:               base,
+		Resource:               resource,
 		BearerMethodsSupported: []string{"header"},
 		ResourceName:           "mcpd",
 	}

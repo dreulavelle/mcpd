@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"syscall"
 	"time"
@@ -109,8 +112,18 @@ func (a *App) Run(ctx context.Context) error {
 	// The tunnel connects in the background: a control plane that is slow or
 	// unreachable must not hold up the listeners, and it can be started from
 	// the dashboard afterwards.
+	//
+	// It waits for the MCP listener first. A tunnel client bound over HTTP
+	// probes mcpd as it starts, and a probe that lands before the listener is
+	// accepting fails and stays failed -- readiness reports OAuth discovery as
+	// broken for a server that came up fine a second later.
 	if a.tunnels.Enabled() {
 		a.startWorker("tunnel", workerCtx, func(ctx context.Context) error {
+			select {
+			case <-a.serving:
+			case <-ctx.Done():
+				return nil
+			}
 			if err := a.tunnels.Start(ctx); err != nil {
 				// Already recorded on the tunnel's status and logged there.
 				// Returning nil keeps a tunnel failure from looking like a
@@ -146,16 +159,29 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
+	// Bound here rather than inside ListenAndServe, so a failure to bind is a
+	// startup error rather than something reported from a goroutine.
+	listener, err := net.Listen("tcp", a.cfg.Server.Listen)
+	if err != nil {
+		return fmt.Errorf("app: cannot bind %s: %w", a.cfg.Server.Listen, err)
+	}
+	// Binding is not serving. The socket accepts into the kernel backlog the
+	// moment it is bound, so a client can connect and then wait forever for a
+	// TLS handshake that nothing is running yet -- which arrives as EOF, and
+	// looks nothing like "too early". Readiness is therefore a completed
+	// request, not a bound port.
+	go a.announceServing(workerCtx, listener.Addr())
+
 	go func() {
 		a.log.Info("http server listening",
 			"addr", a.cfg.Server.Listen,
 			"public_url", a.cfg.Server.PublicURL,
 			"plugins", a.manager.Names())
-		serve := a.server.ListenAndServe
+		serve := func() error { return a.server.Serve(listener) }
 		if a.server.TLSConfig != nil {
 			// The certificate is already in TLSConfig, so the file arguments
 			// are deliberately empty.
-			serve = func() error { return a.server.ListenAndServeTLS("", "") }
+			serve = func() error { return a.server.ServeTLS(listener, "", "") }
 		}
 		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("app: http server: %w", err)
@@ -278,4 +304,49 @@ func (a *App) pruneHistory(ctx context.Context) error {
 			a.log.Info("pruned history", "removed", removed, "older_than_days", days)
 		}
 	}
+}
+
+// announceServing closes a.serving once the MCP listener answers a request.
+//
+// It probes the listener's own address rather than the public URL: what needs
+// establishing is that this process is serving, and going out through whatever
+// NAT or proxy sits in front would test that too.
+func (a *App) announceServing(ctx context.Context, addr net.Addr) {
+	scheme := "http"
+	client := &http.Client{Timeout: 2 * time.Second}
+	if a.tls != nil {
+		scheme = "https"
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(a.tls.CAPEM)
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
+	}
+
+	host, port, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		close(a.serving)
+		return
+	}
+	// A wildcard bind is not an address to dial.
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	url := scheme + "://" + net.JoinHostPort(host, port) + "/health/live"
+
+	for attempt := 0; attempt < 100; attempt++ {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			close(a.serving)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	// Give up waiting rather than holding the tunnel back for ever: it will
+	// report its own failure, which is more use than silence.
+	a.log.Warn("the MCP listener did not answer; starting tunnels anyway")
+	close(a.serving)
 }

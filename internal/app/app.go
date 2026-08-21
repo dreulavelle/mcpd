@@ -58,6 +58,11 @@ type App struct {
 	settings      *settings.Store
 	tls           *servertls.Materials
 
+	// serving closes once the MCP listener is accepting, so anything that has
+	// to reach mcpd over HTTP -- the tunnel client probing itself, above all
+	// -- can wait rather than fail against a port nothing is on yet.
+	serving chan struct{}
+
 	workers     sync.WaitGroup
 	stopWorkers context.CancelFunc
 	server      *http.Server
@@ -97,13 +102,14 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		"path", db.Path(), "schema_version", version, "migrations_applied", applied)
 
 	a := &App{
-		cfg:    cfg,
-		log:    log,
-		db:     db,
-		ops:    sqlite.NewOperationStore(db, time.Now),
-		outbox: sqlite.NewOutboxStore(db, time.Now),
-		audit:  sqlite.NewAuditStore(db),
-		health: observability.NewHealthRegistry(2 * time.Second),
+		cfg:     cfg,
+		log:     log,
+		db:      db,
+		ops:     sqlite.NewOperationStore(db, time.Now),
+		outbox:  sqlite.NewOutboxStore(db, time.Now),
+		audit:   sqlite.NewAuditStore(db),
+		serving: make(chan struct{}),
+		health:  observability.NewHealthRegistry(2 * time.Second),
 	}
 
 	// The OAuth store backs both the authorization server and the
