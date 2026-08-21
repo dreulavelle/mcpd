@@ -127,12 +127,6 @@ const (
 	KeyApprovalLeaseTTL    = "approval.lease_ttl_minutes"
 )
 
-// PluginKey builds the key holding a plugin's settings.
-func PluginKey(plugin string) string { return "plugins." + plugin + ".settings" }
-
-// PluginEnabledKey builds the key controlling whether a plugin is on.
-func PluginEnabledKey(plugin string) string { return "plugins." + plugin + ".enabled" }
-
 func intPtr(i int) *int { return &i }
 
 // PluginTunnelKey builds the key holding a plugin's own tunnel id.

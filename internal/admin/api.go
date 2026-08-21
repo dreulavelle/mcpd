@@ -660,7 +660,7 @@ func (s *Server) handleListOperations(w http.ResponseWriter, r *http.Request) {
 
 	// Listing spans only the plugins this principal may reach, so the
 	// dashboard never shows an operation belonging to an integration the
-	// viewer has no access to.
+	// caller has no access to.
 	visible := s.opts.Authorizer.VisiblePlugins(principal, s.opts.Manager.Names())
 
 	var all []operationDTO

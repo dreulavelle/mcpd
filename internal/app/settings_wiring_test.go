@@ -140,52 +140,6 @@ func TestApprovalPolicyIsReadLive(t *testing.T) {
 	}
 }
 
-// A tunnel carries the MCP server, not the sign-in, so mcpd never binds over
-// HTTP for a connector's benefit. Every tunnel talks to an MCP server in this
-// process, and the scoping comes from the principal it carries.
-func TestTunnelAlwaysStaysInProcess(t *testing.T) {
-	if got := newSettingsApp(t).tunnelConfig(context.Background()).MCPServerURL; got != "" {
-		t.Fatalf("MCPServerURL = %q, want in-process", got)
-	}
-}
-
-// Ordering bug this guards: the tunnel was constructed before the certificate
-// existed, so it was told about an empty CA path and every request it made
-// back to mcpd failed with "tls: bad certificate" -- including OAuth
-// discovery, which is the whole reason for serving https in the first place.
-func TestTheTunnelIsToldAboutOurCertificate(t *testing.T) {
-	t.Setenv("MCPD_SECRET_KEY", "test-encryption-key-at-least-32-chars-long")
-
-	dir := t.TempDir()
-	cfg := config.Default()
-	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
-	cfg.Storage.RelaxedDurability = true
-	cfg.Server.PublicURL = "https://127.0.0.1:9080"
-	cfg.Server.TLS = config.TLS{Mode: "self-signed", Dir: filepath.Join(dir, "tls")}
-	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
-	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
-
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("config invalid: %v", err)
-	}
-	a, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { a.db.Close() })
-
-	if a.tls == nil {
-		t.Fatal("self-signed mode must produce certificate material")
-	}
-	got := a.tunnelConfig(context.Background()).TrustedCAFile
-	if got == "" {
-		t.Fatal("the tunnel must be told about the CA, or it cannot reach mcpd over https")
-	}
-	if got != a.tls.CAPath {
-		t.Fatalf("TrustedCAFile = %q, want the CA mcpd issued from (%q)", got, a.tls.CAPath)
-	}
-}
-
 // The point of a per-plugin tunnel: its connector reaches that system and
 // cannot discover any other. In process that separation is the principal's,
 // so it is the principal this asserts.
@@ -302,9 +256,6 @@ func TestAPerPluginTunnelIsScopedWithoutSignIn(t *testing.T) {
 	}
 	if scoped == nil {
 		t.Fatal("no tunnel was built for echo")
-	}
-	if scoped.MCPServerURL != "" {
-		t.Errorf("MCPServerURL = %q, want the in-process binding", scoped.MCPServerURL)
 	}
 	if len(scoped.Principal.Plugins) != 1 || scoped.Principal.Plugins[0] != "echo" {
 		t.Errorf("Plugins = %v, want echo alone -- that is what scopes it in process",

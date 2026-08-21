@@ -30,26 +30,14 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// The bug this guards: with an in-memory binding the tunnel client answers
-// "missing MCP server URL" to every protected-resource discovery command, so
-// the control plane concludes mcpd has no OAuth and ChatGPT refuses to create
-// the connector. An HTTP binding is the only way discovery can succeed.
-func TestHTTPBindingChosenWhenServerURLIsSet(t *testing.T) {
-	cfg := testConfig()
-	cfg.MCPServerURL = "http://192.168.1.10:9080/mcp"
-
-	r, err := newRuntime(cfg, testServer(), t.Context(), discardLogger(), logWriter{log: discardLogger()})
-	if err != nil {
-		t.Fatalf("newRuntime: %v", err)
-	}
-	if _, ok := r.(*httpRuntime); !ok {
-		t.Fatalf("runtime = %T, want the HTTP binding", r)
-	}
-}
-
-// And the reverse: without one, nothing binds a port and no credential is
-// involved, which is the better arrangement whenever OAuth is not in play.
-func TestInMemoryBindingIsTheDefault(t *testing.T) {
+// Every tunnel binds in process: no port, no socket, no credential, and no
+// local address for anything else to find.
+//
+// There was a second binding that pointed the tunnel at mcpd's own HTTP
+// listener. It existed so protected-resource discovery could succeed, since
+// that is a tunnel command the client can only run against a URL. mcpd is no
+// longer an authorization server, so there is nothing to discover.
+func TestInMemoryBindingIsTheOnlyOne(t *testing.T) {
 	r, err := newRuntime(testConfig(), testServer(), t.Context(), discardLogger(), logWriter{log: discardLogger()})
 	if err != nil {
 		t.Fatalf("newRuntime: %v", err)
@@ -59,45 +47,11 @@ func TestInMemoryBindingIsTheDefault(t *testing.T) {
 	}
 }
 
-func TestHTTPBindingRejectsAnUnusableURL(t *testing.T) {
-	cfg := testConfig()
-	cfg.MCPServerURL = "192.168.1.10:9080/mcp" // no scheme
-
-	if _, err := newRuntime(cfg, testServer(), t.Context(), discardLogger(), logWriter{log: discardLogger()}); err == nil {
-		t.Fatal("an address with no scheme must be refused, not dialled")
-	}
-}
-
 // Without the guard this is a nil dereference inside a goroutine, which takes
 // the whole process down instead of just failing to start the tunnel.
 func TestInMemoryBindingNeedsAServer(t *testing.T) {
 	if _, err := newInMemoryRuntime(testConfig(), nil, t.Context(), discardLogger(), logWriter{log: discardLogger()}); err == nil {
 		t.Fatal("a missing MCP server must be an error, not a panic")
-	}
-}
-
-// A plain-HTTP deployment is the expected case for a tunnel -- a host that
-// already had TLS did not need one -- so Harpoon has to accept it, or the
-// authorization server's token endpoint is unreachable from outside.
-func TestPlaintextIsAllowedForAnHTTPDeployment(t *testing.T) {
-	cfg := testConfig()
-	cfg.MCPServerURL = "http://192.168.1.10:9080/mcp"
-
-	if _, err := newHTTPRuntime(cfg, discardLogger(), logWriter{log: discardLogger()}); err != nil {
-		t.Fatalf("newHTTPRuntime: %v", err)
-	}
-}
-
-func TestValidateRejectsAnUnusableMCPAddress(t *testing.T) {
-	cfg := testConfig()
-	cfg.MCPServerURL = "not a url"
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected a validation failure")
-	}
-	if !strings.Contains(err.Error(), "full URL") {
-		t.Fatalf("error = %q, want it to say what a usable address looks like", err)
 	}
 }
 

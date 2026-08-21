@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/spoked/mcpd/internal/config"
+	"github.com/spoked/mcpd/internal/messaging"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
 
@@ -62,7 +63,7 @@ func (p *pluginPublisher) Publish(ctx context.Context, subject string, payload a
 	if err != nil {
 		return fmt.Errorf("plugin publisher: encode payload: %w", err)
 	}
-	full := "mcp.plugin." + p.plugin + "." + subject
+	full := messaging.PluginSubject(p.plugin, subject)
 	return p.db.WriteTx(ctx, nowMillis(), func(u *sqlite.UnitOfWork) error {
 		return u.EnqueueEvent(full, "", "", body)
 	})

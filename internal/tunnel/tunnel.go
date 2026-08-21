@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -77,20 +76,6 @@ type Config struct {
 	// cannot tell two people apart and so cannot enforce a second approver.
 	Principal auth.Principal
 
-	// MCPServerURL points the tunnel at mcpd's own HTTP listener instead of
-	// an in-process MCP server.
-	//
-	// Empty keeps the in-memory binding, which is faster and needs no
-	// credential. Set it when the connector authenticates with OAuth: the
-	// control plane asks the tunnel client to fetch protected-resource
-	// metadata, and the client can only do that against a URL. Without one,
-	// ChatGPT reports that the server does not implement OAuth.
-	//
-	// It must share an origin with the OAuth issuer -- both come from
-	// server.public_url -- or the authorization server's endpoints will not be
-	// reachable from outside the network.
-	MCPServerURL string
-
 	// Debug turns on the tunnel client's verbose and raw-HTTP logging.
 	//
 	// It logs full requests and responses, headers and bodies included, which
@@ -111,15 +96,6 @@ type Config struct {
 	//
 	// Bind it to loopback. It is unauthenticated.
 	DiagnosticsAddr string
-
-	// TrustedCAFile is a PEM bundle added to the tunnel client's trust roots.
-	//
-	// Without it, a self-signed mcpd is unreachable over HTTPS by the very
-	// client that has to reach it: protected-resource discovery and the
-	// tunnelled OAuth token endpoint are both outbound requests back to mcpd,
-	// and both would fail certificate verification. The system roots are kept
-	// -- the control plane is api.openai.com and must stay verifiable.
-	TrustedCAFile string
 
 	// ControlPlaneBaseURL overrides the OpenAI endpoint. Empty uses the
 	// default.
@@ -153,14 +129,6 @@ func (c *Config) Validate() error {
 	if err := c.Principal.Validate(); err != nil {
 		problems = append(problems, err.Error())
 	}
-	if raw := strings.TrimSpace(c.MCPServerURL); raw != "" {
-		parsed, err := url.Parse(raw)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			problems = append(problems,
-				"the MCP address must be a full URL, like http://192.168.1.10:9080/mcp")
-		}
-	}
-
 	if len(problems) > 0 {
 		return fmt.Errorf("tunnel: %s", strings.Join(problems, "; "))
 	}
@@ -197,10 +165,6 @@ type Status struct {
 	Principal string   `json:"principal,omitempty"`
 	Role      string   `json:"role,omitempty"`
 	Plugins   []string `json:"plugins,omitempty"`
-	// MCPURL is the address the tunnel reaches mcpd at. It is empty when the
-	// MCP server runs in this process, which is the difference between the
-	// connector signing people in and everyone sharing one identity.
-	MCPURL string `json:"mcp_url,omitempty"`
 	// Plugin names the system this tunnel serves, empty for all of them.
 	Plugin string `json:"plugin"`
 	// Message explains a failure in terms an operator can act on. It never
@@ -259,13 +223,6 @@ func (m *Manager) Status() Status {
 		s.Principal = m.cfg.Principal.ID
 		s.Role = m.cfg.Principal.Role.String()
 		s.Plugins = m.cfg.Principal.Plugins
-		s.MCPURL = m.cfg.MCPServerURL
-		// Over HTTP the connector's own token decides who the caller is, so
-		// reporting a configured principal would name an identity that never
-		// gets used.
-		if s.MCPURL != "" {
-			s.Principal, s.Role, s.Plugins = "", "", nil
-		}
 	}
 	return s
 }
@@ -292,19 +249,13 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Only the in-memory binding needs a server in this process. Over HTTP the
-	// tunnel reaches the same listener every other client uses, so building a
-	// second server here would give the connector a different set of tools
-	// from the one the endpoint actually serves.
-	var server *mcp.Server
-	if m.cfg.MCPServerURL == "" {
-		principal := m.cfg.Principal
-		built, err := m.factory(&principal)
-		if err != nil {
-			m.fail(fmt.Errorf("tunnel: could not build the MCP server: %w", err))
-			return err
-		}
-		server = built
+	// The tunnel drives an MCP server in this process, built for the identity
+	// this tunnel carries.
+	principal := m.cfg.Principal
+	server, err := m.factory(&principal)
+	if err != nil {
+		m.fail(fmt.Errorf("tunnel: could not build the MCP server: %w", err))
+		return err
 	}
 
 	// A context detached from the caller's: the tunnel outlives the request
@@ -574,8 +525,6 @@ func (m *Manager) SameAs(cfg Config) bool {
 		current.Plugin == cfg.Plugin &&
 		current.TunnelID == cfg.TunnelID &&
 		current.APIKey == cfg.APIKey &&
-		current.MCPServerURL == cfg.MCPServerURL &&
-		current.TrustedCAFile == cfg.TrustedCAFile &&
 		current.ControlPlaneBaseURL == cfg.ControlPlaneBaseURL &&
 		current.DiagnosticsAddr == cfg.DiagnosticsAddr &&
 		current.Debug == cfg.Debug &&
