@@ -91,6 +91,15 @@ type Config struct {
 	// reachable from outside the network.
 	MCPServerURL string
 
+	// Debug turns on the tunnel client's verbose and raw-HTTP logging.
+	//
+	// It logs full requests and responses, headers and bodies included, which
+	// is the only way to see what the control plane actually sent and what
+	// mcpd actually answered. That also means credentials in the clear, so it
+	// is off by default, said out loud when it is on, and meant to be turned
+	// back off.
+	Debug bool
+
 	// DiagnosticsAddr binds the tunnel client's own health and admin listener.
 	//
 	// Empty leaves it off, which is the right default: it is a second HTTP
@@ -569,5 +578,6 @@ func (m *Manager) SameAs(cfg Config) bool {
 		current.TrustedCAFile == cfg.TrustedCAFile &&
 		current.ControlPlaneBaseURL == cfg.ControlPlaneBaseURL &&
 		current.DiagnosticsAddr == cfg.DiagnosticsAddr &&
+		current.Debug == cfg.Debug &&
 		current.Principal.Equal(cfg.Principal)
 }

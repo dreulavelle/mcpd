@@ -102,6 +102,7 @@ const (
 	KeyTunnelRole      = "tunnel.role"
 	KeyTunnelPlugins   = "tunnel.plugins"
 	KeyTunnelUpdates   = "tunnel.check_for_updates"
+	KeyTunnelDebug     = "tunnel.debug"
 
 	KeyHistoryRetentionDays = "history.retention_days"
 
@@ -194,6 +195,12 @@ func schema() []Group {
 					Key: KeyTunnelPlugins, Label: "Systems ChatGPT can reach", Kind: KindList,
 					Group: "tunnel", Apply: ApplyReconnect,
 					Help: "Comma separated. Empty means all of them.",
+				},
+				{
+					Key: KeyTunnelDebug, Label: "Log everything (for diagnosis)",
+					Kind: KindBool, Group: "tunnel", Apply: ApplyReconnect, Default: false,
+					Help: "Records full requests and responses, credentials included. " +
+						"Turn it off when you're done.",
 				},
 				{
 					Key: KeyTunnelUpdates, Label: "Mention new versions",
