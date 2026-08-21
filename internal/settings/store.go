@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,27 @@ func (s *Store) Get(ctx context.Context, key string) (string, bool, error) {
 	defer s.mu.RUnlock()
 	v, ok := s.cache[key]
 	return v, ok, nil
+}
+
+// WithPrefix returns every stored key beginning with prefix.
+//
+// It exists for the settings whose names are not known in advance -- a plugin
+// instance is recorded by its own name, so there is no schema entry to look
+// up. A copy rather than the cache itself, since the caller holds no lock.
+func (s *Store) WithPrefix(ctx context.Context, prefix string) map[string]string {
+	if err := s.load(ctx); err != nil && !errors.Is(err, ErrDecrypt) {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := map[string]string{}
+	for k, v := range s.cache {
+		if strings.HasPrefix(k, prefix) {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // GetJSON decodes a stored value into out.

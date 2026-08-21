@@ -157,8 +157,8 @@ func splitList(raw string) []string {
 // field the dashboard had just drawn.
 func (a *App) settingsCatalog() *settings.Catalog {
 	var groups []settings.Group
-	for name, pc := range a.cfg.Plugins {
-		g, ok := a.types.SettingsFor(name, pc.ResolvedType(name))
+	for _, inst := range a.instances(context.Background()) {
+		g, ok := a.types.SettingsFor(inst.Name, inst.Type)
 		if !ok {
 			continue
 		}

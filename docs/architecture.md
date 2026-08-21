@@ -273,3 +273,15 @@ A plugin whose credentials are entered in the dashboard cannot refuse to start
 without them: a host that will not start is a dashboard nobody can open to
 enter them. Structure is validated at construction, credentials at `Start`, so
 an unconfigured instance mounts, shows its form, and reports what is missing.
+
+**Instances come from two places.** The configuration file, and the settings
+store where the dashboard writes them. The store layers over the file, and an
+instance knows which it came from — the dashboard will not delete a file-defined
+one, because it would return on the next start and read as the delete having
+failed.
+
+Adding an instance records intent; it does not mount. A plugin is built once,
+at startup, from the settings it had then, so the dashboard says a restart is
+needed rather than showing an instance whose tools never appear. Removing one
+takes its settings with it, so a name reused later cannot silently inherit
+someone else's credentials.
