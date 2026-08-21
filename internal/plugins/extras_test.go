@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -175,4 +176,33 @@ func (r *resourceOnlyPlugin) Register(_ context.Context, reg *Registry) error {
 	Resource(reg, ResourceSpec{Path: "readme", Name: "readme", Description: "The readme."},
 		func(context.Context) (string, error) { return "hello", nil })
 	return nil
+}
+
+// A plugin prefixes its errors with what it is, and so does the host when it
+// says which plugin failed. Left alone the two compose into "plugins:
+// cnmaestro did not start with the new settings: cnmaestro: ..." -- the name
+// twice, and the part that matters pushed to the end.
+func TestOwnName_DoesNotRepeatThePluginName(t *testing.T) {
+	inner := errors.New("cnmaestro: those credentials were rejected")
+
+	got := ownName("cnmaestro", inner).Error()
+	if want := "those credentials were rejected"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+	// Trimming is presentation. Anything matching on the original error still
+	// has to find it.
+	if !errors.Is(ownName("cnmaestro", inner), inner) {
+		t.Fatal("the original error must still be wrapped")
+	}
+}
+
+// An error that does not already name the plugin is left exactly as it is.
+func TestOwnName_LeavesOtherErrorsAlone(t *testing.T) {
+	inner := errors.New("dial tcp: connection refused")
+	if got := ownName("cnmaestro", inner).Error(); got != inner.Error() {
+		t.Fatalf("message = %q, want it untouched", got)
+	}
+	if ownName("cnmaestro", nil) != nil {
+		t.Fatal("a nil error must stay nil")
+	}
 }

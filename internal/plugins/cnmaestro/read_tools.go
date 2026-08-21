@@ -28,9 +28,10 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "networks",
 		Title: "List networks",
-		Description: "Lists the networks in this cnMaestro account. Start here " +
-			"when you do not know what exists: network names are what most " +
-			"other filters take.",
+		Description: "Lists networks. Start here when you do not know what " +
+			"exists: network names are what most other filters take. Reads " +
+			"every account this credential can see unless an account is named " +
+			"here or one is configured as the default.",
 		Idempotent: true,
 	}, p.listNetworks)
 
@@ -38,9 +39,10 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 		Name:  "devices",
 		Title: "List devices",
 		Description: "Lists devices, newest state first. Filter by network, " +
-			"site, tower, type, or whether the device is online. Prefer a " +
-			"filter to listing everything: a large estate is truncated, and " +
-			"the result says so when it was.",
+			"site, tower, type, or whether the device is online, and name an " +
+			"account to read one MSP tenant -- cnmaestro_managed_accounts " +
+			"lists them. Prefer a filter to listing everything: a large estate " +
+			"is truncated, and the result says so when it was.",
 		Idempotent: true,
 	}, p.listDevices)
 
@@ -61,16 +63,19 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 		Title: "Get one device",
 		Description: "Returns the full record for a single device by MAC " +
 			"address. Use this after cnmaestro_devices has narrowed to one, " +
-			"since the list omits fields this returns.",
+			"since the list omits fields this returns. Name the account the " +
+			"device belongs to if reads are not pinned to one.",
 		Idempotent: true,
 	}, p.getDevice)
 
 	return nil
 }
 
-// NetworksInput takes no arguments. Networks are the top of the hierarchy and
-// there is nothing above them to filter by.
-type NetworksInput struct{}
+// NetworksInput carries only the account, since networks are the top of the
+// hierarchy and there is nothing above them to filter by.
+type NetworksInput struct {
+	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
+}
 
 // NetworksOutput is a list of networks.
 type NetworksOutput struct {
@@ -84,10 +89,16 @@ type NetworksOutput struct {
 	// drops these reports incomplete data as complete.
 	Warnings  []string `json:"warnings,omitempty"`
 	Truncated bool     `json:"truncated,omitempty"`
+	// Account is which account answered. Empty means none was named and the
+	// result spans every account the credential can see, which is a different
+	// statement from naming the main account.
+	Account string `json:"account,omitempty"`
+	Note    string `json:"note,omitempty"`
 }
 
-func (p *Plugin) listNetworks(ctx context.Context, _ NetworksInput) (NetworksOutput, error) {
-	page, err := p.client.List(ctx, "/networks", nil)
+func (p *Plugin) listNetworks(ctx context.Context, in NetworksInput) (NetworksOutput, error) {
+	account := p.cfg.Account(in.Account)
+	page, err := p.client.List(ctx, "/networks", accountParams(account))
 	p.note(err)
 	if err != nil {
 		return NetworksOutput{}, err
@@ -98,6 +109,8 @@ func (p *Plugin) listNetworks(ctx context.Context, _ NetworksInput) (NetworksOut
 		Total:     page.Total,
 		Warnings:  page.Warnings,
 		Truncated: page.Truncated,
+		Account:   account,
+		Note:      spanningNote(account, false),
 	}, nil
 }
 
@@ -107,6 +120,7 @@ func (p *Plugin) listNetworks(ctx context.Context, _ NetworksInput) (NetworksOut
 // model is told to prefer filters because an unfiltered estate is the case
 // that gets truncated.
 type DevicesInput struct {
+	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
 	Network string `json:"network,omitempty" jsonschema:"limit to one network, by name"`
 	Site    string `json:"site,omitempty" jsonschema:"limit to one site, by name"`
 	Tower   string `json:"tower,omitempty" jsonschema:"limit to one tower, by name"`
@@ -128,13 +142,17 @@ type DevicesOutput struct {
 	Total     int      `json:"total,omitempty"`
 	Warnings  []string `json:"warnings,omitempty"`
 	Truncated bool     `json:"truncated,omitempty"`
+	// Account is which account answered. Empty means none was named.
+	Account string `json:"account,omitempty"`
 	// Note explains a truncated result in words, since that is the one
-	// outcome a model is likely to misread as "this is the whole estate".
+	// outcome a model is likely to misread as "this is the whole estate" --
+	// and carries the same warning about which accounts were in scope.
 	Note string `json:"note,omitempty"`
 }
 
 func (p *Plugin) listDevices(ctx context.Context, in DevicesInput) (DevicesOutput, error) {
-	params := url.Values{}
+	account := p.cfg.Account(in.Account)
+	params := accountParams(account)
 	setIf(params, "network", in.Network)
 	setIf(params, "site", in.Site)
 	setIf(params, "tower", in.Tower)
@@ -163,13 +181,22 @@ func (p *Plugin) listDevices(ctx context.Context, in DevicesInput) (DevicesOutpu
 		Total:     page.Total,
 		Warnings:  page.Warnings,
 		Truncated: page.Truncated,
+		Account:   account,
 	}
+	// A hierarchy filter changes what an absent account means, so the two
+	// notes are composed rather than one replacing the other.
+	notes := make([]string, 0, 2)
 	if page.Truncated {
-		out.Note = fmt.Sprintf(
+		notes = append(notes, fmt.Sprintf(
 			"Stopped at %d devices; the estate has more. Narrow with network, "+
 				"site, tower, type, or search rather than treating this as the "+
-				"whole estate.", len(page.Items))
+				"whole estate.", len(page.Items)))
 	}
+	hierarchy := in.Network != "" || in.Site != "" || in.Tower != ""
+	if n := spanningNote(account, hierarchy); n != "" {
+		notes = append(notes, n)
+	}
+	out.Note = strings.Join(notes, " ")
 	return out, nil
 }
 
@@ -203,7 +230,8 @@ func (p *Plugin) listManagedAccounts(ctx context.Context, _ ManagedAccountsInput
 
 // DeviceInput names one device.
 type DeviceInput struct {
-	MAC string `json:"mac" jsonschema:"the device's MAC address, with or without separators"`
+	MAC     string `json:"mac" jsonschema:"the device's MAC address, with or without separators"`
+	Account string `json:"account,omitempty" jsonschema:"which account the device belongs to: an MSP tenant name, or Base Infrastructure for the main account; omit to use the configured default"`
 }
 
 // DeviceOutput is one device's full record.
@@ -222,7 +250,8 @@ func (p *Plugin) getDevice(ctx context.Context, in DeviceInput) (DeviceOutput, e
 	// The device record arrives as a single-element array on this endpoint,
 	// not a bare object, so it is decoded as one and unwrapped.
 	var records []Record
-	warnings, err := p.client.Get(ctx, "/devices/"+url.PathEscape(mac), nil, &records)
+	warnings, err := p.client.Get(ctx, "/devices/"+url.PathEscape(mac),
+		accountParams(p.cfg.Account(in.Account)), &records)
 	p.note(err)
 	if err != nil {
 		return DeviceOutput{}, err
@@ -231,6 +260,37 @@ func (p *Plugin) getDevice(ctx context.Context, in DeviceInput) (DeviceOutput, e
 		return DeviceOutput{}, fmt.Errorf("cnmaestro: no device with MAC %s", mac)
 	}
 	return DeviceOutput{Device: records[0], Warnings: warnings}, nil
+}
+
+// accountParams starts a parameter set with the account, or without it when
+// there is none to send.
+func accountParams(account string) url.Values {
+	params := url.Values{}
+	setIf(params, managedAccountKV, account)
+	return params
+}
+
+// spanningNote says which accounts a result covered, when that is not what a
+// reader would assume.
+//
+// Two cases, and they are opposites. Without a hierarchy filter an unnamed
+// account spans the whole installation, which is easy to mistake for one
+// tenant. With one, cnMaestro quietly answers from the main account alone --
+// the same tool call, the same configuration, a narrower answer, and nothing
+// in the response says so.
+func spanningNote(account string, hierarchyFiltered bool) string {
+	if account != "" {
+		return ""
+	}
+	if hierarchyFiltered {
+		return "No account was named and this request filters by network, " +
+			"site, or tower, so cnMaestro answered from the main account " +
+			"alone rather than every account. Name an account to read a " +
+			"tenant's devices."
+	}
+	return "No account was named, so this spans every account the credential " +
+		"can see. Each record's managed_account says which one it belongs to, " +
+		"and an empty one means the main account."
 }
 
 // setIf adds a parameter only when it carries a value, so an omitted filter is
