@@ -27,6 +27,16 @@ const (
 	KindList     Kind = "list"
 )
 
+// Valid reports whether k is a recognised kind. Plugins declare their own
+// fields, so this is checked rather than assumed.
+func (k Kind) Valid() bool {
+	switch k {
+	case KindString, KindSecret, KindBool, KindInt, KindDuration, KindEnum, KindList:
+		return true
+	}
+	return false
+}
+
 // Apply describes when a change takes effect.
 type Apply string
 
@@ -86,6 +96,9 @@ type Group struct {
 const (
 	// SectionSettings is the general settings page.
 	SectionSettings = "settings"
+	// SectionPlugins is the page listing integrations. A plugin's own
+	// settings belong beside the plugin, not in a general list.
+	SectionPlugins = "plugins"
 	// SectionTunnels is the page listing ChatGPT connectors.
 	SectionTunnels = "tunnels"
 )
@@ -281,7 +294,13 @@ func Validate(key, value string) error {
 	if !ok {
 		return fmt.Errorf("settings: %q is not an editable setting", key)
 	}
+	return validateAgainst(f, key, value)
+}
 
+// validateAgainst checks a value against a field it has already been matched
+// to. Split out so a Catalog, which knows about fields this package's static
+// schema does not, checks them the same way.
+func validateAgainst(f Field, key, value string) error {
 	switch f.Kind {
 	case KindBool:
 		if _, err := strconv.ParseBool(value); err != nil {
