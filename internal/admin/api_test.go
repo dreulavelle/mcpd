@@ -196,3 +196,37 @@ func TestWorkspacesIn(t *testing.T) {
 		t.Fatalf("workspacesIn(nil) = %v, want empty", got)
 	}
 }
+
+// Lists in the tunnel response are always lists.
+//
+// A nil slice encodes as null, and the dashboard maps over these to build the
+// selects that point a tunnel at a plugin. A host with nothing mounted yet --
+// the ordinary state of a new install -- sent "plugins": null, which threw
+// during render and left the Tunnels page blank.
+func TestTunnelStatus_ListsAreNeverNull(t *testing.T) {
+	s := NewServer(Options{
+		// What a manager with nothing mounted returns.
+		Plugins: func() []string { return nil },
+	})
+
+	w := httptest.NewRecorder()
+	s.handleTunnelStatus(w, httptest.NewRequest(http.MethodGet, "/api/tunnel", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, field := range []string{"tunnels", "plugins", "workspaces"} {
+		raw, ok := got[field]
+		if !ok {
+			t.Fatalf("%q is absent; the dashboard reads it unconditionally", field)
+		}
+		if string(raw) == "null" {
+			t.Fatalf("%q = null, want []", field)
+		}
+	}
+}

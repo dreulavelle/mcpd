@@ -5,15 +5,23 @@ services:
     build:
       context: .
     image: ghcr.io/dreulavelle/mcpd:local
+    container_name: mcpd
     restart: unless-stopped
     env_file:
       - path: .env
         required: false
     environment:
+      # Both listeners bind every interface *inside* the container. mcpd
+      # defaults to loopback, which in a container means the published port
+      # reaches a socket nothing is listening on. What the host exposes is
+      # decided by the port mappings below, not here.
+      MCPD_LISTEN: ":8080"
       MCPD_FRONTEND_LISTEN: ":8081"
     ports:
       - "${MCPD_BIND:-127.0.0.1}:${MCPD_PORT:-8080}:8080"
       - "${MCPD_FRONTEND_BIND:-127.0.0.1}:${MCPD_FRONTEND_PORT:-80}:8081"
+      # Loopback, not configurable: the tunnel's diagnostics listener is
+      # unauthenticated.
       - "127.0.0.1:${MCPD_TUNNEL_DIAGNOSTICS_PORT:-9099}:9099"
     volumes:
       # Must be owned by 65532 -- the image is distroless nonroot, and a

@@ -398,14 +398,22 @@ type tunnelResponse struct {
 }
 
 func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	resp := tunnelResponse{Tunnels: []tunnel.Status{}, Plugins: []string{}}
+	// Empty rather than nil, and kept that way below: a nil slice encodes as
+	// null, and the dashboard maps over these to build its selects. A host
+	// with nothing mounted yet is the ordinary state of a new install, not an
+	// error, and it should not be the one that blanks the page.
+	resp := tunnelResponse{
+		Tunnels: []tunnel.Status{}, Plugins: []string{}, Workspaces: []string{},
+	}
 	if s.opts.Tunnel != nil {
 		if list := s.opts.Tunnel.Status(); len(list) > 0 {
 			resp.Tunnels = list
 		}
 	}
 	if s.opts.Plugins != nil {
-		resp.Plugins = s.opts.Plugins()
+		if names := s.opts.Plugins(); len(names) > 0 {
+			resp.Plugins = names
+		}
 	}
 	dir := s.directory()
 	resp.Missing = dir.Missing()
@@ -417,7 +425,9 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 			resp.Problem = err.Error()
 		} else {
 			resp.Available = list
-			resp.Workspaces = workspacesIn(list)
+			if ws := workspacesIn(list); len(ws) > 0 {
+				resp.Workspaces = ws
+			}
 		}
 	}
 	if s.opts.TunnelInfo != nil {

@@ -27,9 +27,14 @@ export function Tunnels() {
   usePoll(load, 8_000);
 
   const running = new Map((info?.tunnels ?? []).map((t) => [t.tunnel_id ?? "", t]));
+  // A list that is absent is treated as an empty one throughout. An older
+  // build sends null for a list with nothing in it, and mapping over that
+  // threw during render -- which, with no error boundary above, left the
+  // whole page blank rather than showing "no tunnels yet".
+  const plugins = info?.plugins ?? [];
   const rows: Row[] = !info ? [] : info.can_manage
     ? (info.available ?? []).map((t) => ({ ...t, status: running.get(t.id) }))
-    : info.tunnels.map((t) => ({
+    : (info.tunnels ?? []).map((t) => ({
         id: t.tunnel_id ?? "", name: t.plugin || "Everything", status: t,
       }));
 
@@ -56,7 +61,7 @@ export function Tunnels() {
       )}
 
       {info?.can_manage && admin && (
-        <Add plugins={info.plugins} workspaces={info.workspaces ?? []}
+        <Add plugins={plugins} workspaces={info.workspaces ?? []}
              onDone={load} show={show} />
       )}
 
@@ -79,7 +84,8 @@ export function Tunnels() {
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <TunnelRow key={row.id} row={row} info={info} onDone={load} show={show} />
+                  <TunnelRow key={row.id} row={row} info={info} plugins={plugins}
+                             onDone={load} show={show} />
                 ))}
               </tbody>
             </table>
@@ -95,9 +101,10 @@ interface Row extends OpenAITunnel {
   status?: TunnelStatus;
 }
 
-function TunnelRow({ row, info, onDone, show }: {
+function TunnelRow({ row, info, plugins, onDone, show }: {
   row: Row;
   info: TunnelInfo;
+  plugins: string[];
   onDone: () => void;
   show: Notify;
 }) {
@@ -140,7 +147,7 @@ function TunnelRow({ row, info, onDone, show }: {
                   onChange={(e) => assign(e.target.value)}>
             <option value="">Not used</option>
             <option value="*">Everything</option>
-            {info.plugins.map((p) => <option key={p} value={p}>{p}</option>)}
+            {plugins.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         ) : (
           <code>{row.status?.plugin || "Everything"}</code>
