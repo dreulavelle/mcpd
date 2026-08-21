@@ -125,6 +125,8 @@ export interface TunnelStatus {
   plugins?: string[];
   /** Set when ChatGPT signs people in; absent when everyone shares one identity. */
   mcp_url?: string;
+  /** The system this connector reaches, empty for all of them. */
+  plugin?: string;
   message?: string;
   connected_at?: string;
 }
@@ -138,7 +140,9 @@ export interface TunnelVersion {
 }
 
 export interface TunnelInfo {
-  status: TunnelStatus;
+  /** One per connector: a tunnel carries a single endpoint, so a system with
+   *  its own connector has a tunnel of its own. */
+  tunnels: TunnelStatus[];
   version?: TunnelVersion;
 }
 

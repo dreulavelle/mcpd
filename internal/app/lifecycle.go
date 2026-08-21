@@ -106,16 +106,16 @@ func (a *App) Run(ctx context.Context) error {
 	// The tunnel connects in the background: a control plane that is slow or
 	// unreachable must not hold up the listeners, and it can be started from
 	// the dashboard afterwards.
-	if a.tunnel.Enabled() {
+	if a.tunnels.Enabled() {
 		a.startWorker("tunnel", workerCtx, func(ctx context.Context) error {
-			if err := a.tunnel.Start(ctx); err != nil {
+			if err := a.tunnels.Start(ctx); err != nil {
 				// Already recorded on the tunnel's status and logged there.
 				// Returning nil keeps a tunnel failure from looking like a
 				// crashed worker.
 				return nil
 			}
 			<-ctx.Done()
-			return a.tunnel.Stop(context.WithoutCancel(ctx))
+			return a.tunnels.Stop(context.WithoutCancel(ctx))
 		})
 	}
 

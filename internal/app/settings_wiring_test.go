@@ -5,12 +5,14 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/settings"
+	"github.com/spoked/mcpd/internal/tunnel"
 )
 
 // A settings form that writes to a store nothing reads is worse than no form
@@ -238,5 +240,91 @@ func TestTheTunnelIsToldAboutOurCertificate(t *testing.T) {
 	}
 	if got != a.tls.CAPath {
 		t.Fatalf("TrustedCAFile = %q, want the CA mcpd issued from (%q)", got, a.tls.CAPath)
+	}
+}
+
+// The point of a per-plugin tunnel: its connector reaches that system's
+// endpoint and cannot discover any other. If it bound the aggregate instead,
+// the separation would be cosmetic.
+func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
+	a := newOAuthSettingsApp(t)
+	ctx := context.Background()
+
+	const (
+		main = "tunnel_0123456789abcdef0123456789abcdef"
+		echo = "tunnel_1123456789abcdef0123456789abcdef"
+	)
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.KeyTunnelID, Value: `"` + main + `"`},
+		{Key: settings.PluginTunnelKey("echo"), Value: `"` + echo + `"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	configs := a.tunnelConfigs(ctx)
+	if len(configs) != 2 {
+		t.Fatalf("got %d tunnels, want the aggregate plus echo", len(configs))
+	}
+
+	var scoped *tunnel.Config
+	for i := range configs {
+		if configs[i].Plugin == "echo" {
+			scoped = &configs[i]
+		}
+	}
+	if scoped == nil {
+		t.Fatal("no tunnel was built for echo")
+	}
+	if !strings.HasSuffix(scoped.MCPServerURL, "/mcp/echo") {
+		t.Errorf("MCPServerURL = %q, want echo's own endpoint", scoped.MCPServerURL)
+	}
+	if scoped.TunnelID != echo {
+		t.Errorf("TunnelID = %q, want the id stored for echo", scoped.TunnelID)
+	}
+	if len(scoped.Principal.Plugins) != 1 || scoped.Principal.Plugins[0] != "echo" {
+		t.Errorf("Plugins = %v, want echo alone", scoped.Principal.Plugins)
+	}
+}
+
+// Two clients on one tunnel id compete for the same commands, so the reuse has
+// to be refused rather than silently halving throughput.
+func TestAPerPluginTunnelCannotReuseTheMainTunnelID(t *testing.T) {
+	a := newOAuthSettingsApp(t)
+	ctx := context.Background()
+
+	const id = "tunnel_0123456789abcdef0123456789abcdef"
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
+		{Key: settings.PluginTunnelKey("echo"), Value: `"` + id + `"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	configs := a.tunnelConfigs(ctx)
+	if len(configs) != 1 {
+		t.Fatalf("got %d tunnels, want only the main one", len(configs))
+	}
+}
+
+// The form has to offer a tunnel for each mounted system, or the feature is
+// unreachable from the dashboard mcpd is supposed to be managed from.
+func TestSettingsOffersATunnelPerMountedPlugin(t *testing.T) {
+	groups := settings.Schema("echo", "cnmaestro")
+
+	var keys []string
+	for _, g := range groups {
+		for _, f := range g.Fields {
+			keys = append(keys, f.Key)
+		}
+	}
+	for _, want := range []string{
+		settings.PluginTunnelKey("echo"),
+		settings.PluginTunnelKey("cnmaestro"),
+	} {
+		if !slices.Contains(keys, want) {
+			t.Errorf("settings form is missing %q", want)
+		}
 	}
 }

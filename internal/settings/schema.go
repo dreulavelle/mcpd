@@ -100,8 +100,67 @@ func PluginEnabledKey(plugin string) string { return "plugins." + plugin + ".ena
 
 func intPtr(i int) *int { return &i }
 
+// PluginTunnelKey builds the key holding a plugin's own tunnel id.
+//
+// A tunnel forwards to exactly one MCP endpoint, so a connector that serves
+// one system needs a tunnel of its own bound to that system's endpoint. This
+// is where its id lives.
+func PluginTunnelKey(plugin string) string { return "tunnel.plugin." + plugin + ".tunnel_id" }
+
+// PluginFromTunnelKey reverses PluginTunnelKey, returning "" for anything else.
+func PluginFromTunnelKey(key string) string {
+	const prefix = "tunnel.plugin."
+	const suffix = ".tunnel_id"
+	if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, suffix) {
+		return ""
+	}
+	return key[len(prefix) : len(key)-len(suffix)]
+}
+
 // Schema returns every editable group.
-func Schema() []Group {
+//
+// plugins names the systems currently mounted, so each can be given a tunnel
+// of its own. It is a parameter rather than a constant because which systems
+// exist is a deployment's choice, and a form offering a tunnel for a plugin
+// that is not mounted would be offering something that cannot work.
+func Schema(plugins ...string) []Group {
+	groups := schema()
+	if len(plugins) == 0 {
+		return groups
+	}
+	for i := range groups {
+		if groups[i].Name != "tunnel" {
+			continue
+		}
+		groups[i].Fields = append(groups[i].Fields, pluginTunnelFields(plugins)...)
+	}
+	return groups
+}
+
+// pluginTunnelFields builds one tunnel id field per mounted plugin.
+func pluginTunnelFields(plugins []string) []Field {
+	sorted := slices.Clone(plugins)
+	slices.Sort(sorted)
+
+	fields := make([]Field, 0, len(sorted))
+	for _, name := range sorted {
+		fields = append(fields, Field{
+			Key:         PluginTunnelKey(name),
+			Label:       "Separate tunnel for " + name,
+			Kind:        KindString,
+			Group:       "tunnel",
+			Apply:       ApplyReconnect,
+			Placeholder: "tunnel_0123456789abcdef0123456789abcdef",
+			Help: "Optional. Create a second tunnel in your OpenAI account and " +
+				"paste its ID here to give " + name + " a connector of its own, " +
+				"which can reach nothing else. Leave empty and it stays part of " +
+				"the main connection above.",
+		})
+	}
+	return fields
+}
+
+func schema() []Group {
 	return []Group{
 		{
 			Name:      "tunnel",
@@ -251,7 +310,8 @@ func Validate(key, value string) error {
 		// The tunnel ID has a documented shape, and checking it here turns a
 		// typo into an immediate message rather than a confusing failure to
 		// connect several seconds later.
-		if key == KeyTunnelID && strings.TrimSpace(value) != "" {
+		isTunnelID := key == KeyTunnelID || PluginFromTunnelKey(key) != ""
+		if isTunnelID && strings.TrimSpace(value) != "" {
 			if !validTunnelID(value) {
 				return fmt.Errorf(
 					"settings: %s should look like tunnel_ followed by 32 characters",

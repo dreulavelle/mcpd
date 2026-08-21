@@ -49,6 +49,14 @@ type Config struct {
 	// configured tunnel can be turned off without losing its settings.
 	Enabled bool
 
+	// Plugin names the single plugin this tunnel serves. Empty serves the
+	// aggregate endpoint: everything the caller is granted.
+	//
+	// It is here rather than derived from MCPServerURL because it is what an
+	// operator chose, and what the dashboard has to name the tunnel by. The
+	// URL is built from it.
+	Plugin string
+
 	// TunnelID identifies the tunnel in OpenAI's control plane.
 	TunnelID string
 	// APIKey is a *runtime* key. An admin key is for creating and deleting
@@ -184,6 +192,8 @@ type Status struct {
 	// MCP server runs in this process, which is the difference between the
 	// connector signing people in and everyone sharing one identity.
 	MCPURL string `json:"mcp_url,omitempty"`
+	// Plugin names the system this tunnel serves, empty for all of them.
+	Plugin string `json:"plugin"`
 	// Message explains a failure in terms an operator can act on. It never
 	// quotes a credential.
 	Message     string     `json:"message,omitempty"`
@@ -234,6 +244,7 @@ func (m *Manager) Status() Status {
 		Message:     m.message,
 		ConnectedAt: m.connectedAt,
 	}
+	s.Plugin = m.cfg.Plugin
 	if m.state != StateDisabled {
 		s.TunnelID = m.cfg.TunnelID
 		s.Principal = m.cfg.Principal.ID
@@ -538,4 +549,25 @@ func diagnose(apiKey, code string) string {
 	}
 	return "Check the tunnel ID exists, and that the key is a runtime API key whose " +
 		"principal has Tunnels Read and Use -- an admin key will not work"
+}
+
+// SameAs reports whether a configuration would produce the same tunnel.
+//
+// Reconfiguring restarts, and restarting drops a connector until it
+// reconnects, so a save that changed an unrelated setting must not disturb a
+// working tunnel.
+func (m *Manager) SameAs(cfg Config) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	current := m.cfg
+	return current.Enabled == cfg.Enabled &&
+		current.Plugin == cfg.Plugin &&
+		current.TunnelID == cfg.TunnelID &&
+		current.APIKey == cfg.APIKey &&
+		current.MCPServerURL == cfg.MCPServerURL &&
+		current.TrustedCAFile == cfg.TrustedCAFile &&
+		current.ControlPlaneBaseURL == cfg.ControlPlaneBaseURL &&
+		current.DiagnosticsAddr == cfg.DiagnosticsAddr &&
+		current.Principal.Equal(cfg.Principal)
 }

@@ -154,3 +154,23 @@ func (p *Principal) String() string {
 func Anonymous() *Principal {
 	return &Principal{ID: "anonymous", Role: "", Plugins: nil}
 }
+
+// Equal reports whether two principals grant exactly the same thing.
+//
+// Plugin order is not significant: the same grants listed differently are the
+// same grants, and treating them as a change would restart a tunnel for
+// nothing.
+func (p Principal) Equal(other Principal) bool {
+	if p.ID != other.ID || p.Role != other.Role ||
+		p.Distinguishable != other.Distinguishable || p.TokenID != other.TokenID {
+		return false
+	}
+	if len(p.Plugins) != len(other.Plugins) {
+		return false
+	}
+	mine := slices.Clone(p.Plugins)
+	theirs := slices.Clone(other.Plugins)
+	slices.Sort(mine)
+	slices.Sort(theirs)
+	return slices.Equal(mine, theirs)
+}

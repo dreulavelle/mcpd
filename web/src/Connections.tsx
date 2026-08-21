@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { api, ApiError, type Endpoints, type Plugin, type TunnelInfo } from "./api";
+import { api, ApiError, type Endpoints, type Plugin, type TunnelInfo, type TunnelStatus } from "./api";
 import {
   Copyable, Dot, Empty, Message, Out, Pill, Skeleton, usePoll, useToasts,
 } from "./components";
@@ -203,64 +203,46 @@ function TunnelPanel() {
   }
 
   if (!info) return null;
-  const { status, version } = info;
-  const off = status.state === "disabled";
+  const { tunnels, version } = info;
+  const anyConnected = tunnels.some((t) => t.state === "connected");
 
   return (
     <>
       {view}
       <div className="card" style={{ marginBottom: "var(--s3)" }}>
         <div className="card-body">
-          <div className="row" style={{ marginBottom: off ? 0 : "var(--s4)" }}>
-            <Dot tone={tone(status.state)} />
+          <div className="row" style={{ marginBottom: tunnels.length ? "var(--s4)" : 0 }}>
+            <Dot tone={overallTone(tunnels)} />
             <div style={{ flex: 1 }}>
               <h3 style={{ marginBottom: 2 }}>ChatGPT</h3>
-              <p className="note tight">{describe(status.state)}</p>
+              <p className="note tight">{summarise(tunnels)}</p>
             </div>
-            {!off && (
-              <button className={`btn ${status.state === "connected" ? "" : "primary"}`}
-                      disabled={busy} onClick={() => act(status.state === "connected" ? "stop" : "start")}>
-                {busy ? "Working…" : status.state === "connected" ? "Disconnect" : "Connect"}
+            {tunnels.length > 0 && (
+              <button className={`btn ${anyConnected ? "" : "primary"}`}
+                      disabled={busy} onClick={() => act(anyConnected ? "stop" : "start")}>
+                {busy ? "Working…" : anyConnected ? "Disconnect" : "Connect"}
               </button>
             )}
           </div>
 
-          {status.state === "failed" && status.message && (
-            <Message tone="problem">{status.message}</Message>
-          )}
-
-          {off ? (
+          {tunnels.length === 0 ? (
             <p className="note" style={{ marginTop: "var(--s2)" }}>
               Set this up in Settings and ChatGPT can reach mcpd without you
               opening anything to the internet. You'll need a tunnel from{" "}
               <Out href={OPENAI_TUNNELS}>your OpenAI account</Out>.
             </p>
           ) : (
-            <dl className="kv">
-              {status.mcp_url ? (
-                <div>
-                  <dt>Who's asking</dt>
-                  <dd>
-                    <Pill tone="good">Each person signs in</Pill>
-                    <span className="note tight">
-                      ChatGPT asks whoever uses it to sign in, so what they can
-                      do here is their own.
-                    </span>
-                  </dd>
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <dt>Who's asking</dt>
-                    <dd><code>{status.principal}</code><Pill>{roleLabel(status.role)}</Pill></dd>
-                  </div>
-                  <div>
-                    <dt>Can reach</dt>
-                    <dd><code>{status.plugins?.includes("*") ? "everything" : status.plugins?.join(", ")}</code></dd>
-                  </div>
-                </>
-              )}
-            </dl>
+            <div className="stack">
+              {tunnels.map((t) => <TunnelRow key={t.plugin || "*"} status={t} />)}
+            </div>
+          )}
+
+          {tunnels.length > 0 && (
+            <p className="note" style={{ marginTop: "var(--s4)" }}>
+              Each of these is one connector in ChatGPT. A tunnel carries a
+              single address, so giving a system a connector of its own means
+              giving it a tunnel of its own — add one per system in Settings.
+            </p>
           )}
 
           {version?.update_available && (
@@ -277,7 +259,45 @@ function TunnelPanel() {
   );
 }
 
-function tone(state: TunnelInfo["status"]["state"]) {
+/** One connector: what it reaches, and whether it is up. */
+function TunnelRow({ status }: { status: TunnelStatus }) {
+  return (
+    <div className="expander">
+      <div className="expander-head" style={{ cursor: "default" }}>
+        <Dot tone={tone(status.state)} />
+        <span className="expander-title">
+          <div className="name">{status.plugin || "Everything you're allowed"}</div>
+          <div className="sub">{describe(status.state)}</div>
+        </span>
+        <span className="dim" style={{ fontSize: 13, whiteSpace: "nowrap" }}>
+          {status.plugin ? "one system" : "all systems"}
+        </span>
+        <span />
+      </div>
+      {status.state === "failed" && status.message && (
+        <div className="expander-body" style={{ paddingTop: "var(--s3)" }}>
+          <Message tone="problem">{status.message}</Message>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function overallTone(tunnels: TunnelStatus[]) {
+  if (tunnels.some((t) => t.state === "failed")) return "problem" as const;
+  if (tunnels.some((t) => t.state === "connected")) return "good" as const;
+  if (tunnels.some((t) => t.state === "starting")) return "busy" as const;
+  return "" as const;
+}
+
+function summarise(tunnels: TunnelStatus[]): string {
+  if (tunnels.length === 0) return "not set up yet";
+  const up = tunnels.filter((t) => t.state === "connected").length;
+  if (tunnels.length === 1) return describe(tunnels[0]!.state);
+  return `${up} of ${tunnels.length} connectors are ready`;
+}
+
+function tone(state: TunnelStatus["state"]) {
   switch (state) {
     case "connected": return "good" as const;
     case "starting": return "busy" as const;
@@ -286,7 +306,7 @@ function tone(state: TunnelInfo["status"]["state"]) {
   }
 }
 
-function describe(state: TunnelInfo["status"]["state"]): string {
+function describe(state: TunnelStatus["state"]): string {
   switch (state) {
     case "connected": return "Connected — ChatGPT can reach mcpd.";
     case "starting": return "Connecting…";
@@ -296,12 +316,3 @@ function describe(state: TunnelInfo["status"]["state"]): string {
   }
 }
 
-function roleLabel(role?: string): string {
-  switch (role) {
-    case "viewer": return "can look, not touch";
-    case "operator": return "can suggest changes";
-    case "approver": return "can approve its own changes";
-    case "admin": return "full access";
-    default: return role ?? "";
-  }
-}
