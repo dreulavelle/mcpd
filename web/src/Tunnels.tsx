@@ -173,7 +173,11 @@ function Add({ plugins, onDone, show }: {
     setBusy(true);
     try {
       await api.createTunnel(name.trim(), plugin);
-      show("good", "Made.");
+      // OpenAI's own CLI prints the same caution after creating one: a tunnel
+      // is not active for the first half minute. Saying "made" and stopping
+      // sends someone to ChatGPT to look for a connector that is not there
+      // yet, and conclude it failed.
+      show("good", "Made. Give it about 30 seconds to become active in ChatGPT.");
       setName("");
     } catch (e) {
       show("problem", e instanceof ApiError ? e.detail : "Couldn't make it.");
@@ -185,11 +189,6 @@ function Add({ plugins, onDone, show }: {
 
   return (
     <div className="row wrap" style={{ alignItems: "flex-end" }}>
-      <div className="field" style={{ marginBottom: 0, flex: "1 1 12rem" }}>
-        <label htmlFor="tname">Name</label>
-        <input id="tname" type="text" value={name} placeholder="ChatGPT"
-               onChange={(e) => setName(e.target.value)} />
-      </div>
       <div className="field" style={{ marginBottom: 0, flex: "0 1 12rem" }}>
         <label htmlFor="tplug">Reaches</label>
         <select id="tplug" value={plugin} onChange={(e) => setPlugin(e.target.value)}>
@@ -197,7 +196,13 @@ function Add({ plugins, onDone, show }: {
           {plugins.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
       </div>
-      <button className="btn primary" disabled={busy || !name.trim()} onClick={add}>
+      <div className="field" style={{ marginBottom: 0, flex: "1 1 12rem" }}>
+        <label htmlFor="tname">Name (optional)</label>
+        <input id="tname" type="text" value={name}
+               placeholder={plugin ? `mcpd: ${plugin}` : "mcpd"}
+               onChange={(e) => setName(e.target.value)} />
+      </div>
+      <button className="btn primary" disabled={busy} onClick={add}>
         {busy ? "Adding…" : "Add"}
       </button>
     </div>

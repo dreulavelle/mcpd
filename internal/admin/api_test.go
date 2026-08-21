@@ -153,3 +153,22 @@ func contains(haystack, needle string) bool {
 			return false
 		}()
 }
+
+// mcpd already knows what a tunnel is for, so the name is derived rather than
+// demanded. Typing one is still allowed; it is what shows in the OpenAI
+// console, and several hosts in one organisation need telling apart.
+func TestTunnelName(t *testing.T) {
+	for _, tc := range []struct {
+		given, plugin, want string
+	}{
+		{"", "", "mcpd"},
+		{"", "echo", "mcpd: echo"},
+		{"  ", "echo", "mcpd: echo"},
+		{"Ops laptop", "echo", "Ops laptop"},
+		{"  Ops laptop  ", "", "Ops laptop"},
+	} {
+		if got := tunnelName(tc.given, tc.plugin); got != tc.want {
+			t.Errorf("tunnelName(%q, %q) = %q, want %q", tc.given, tc.plugin, got, tc.want)
+		}
+	}
+}
