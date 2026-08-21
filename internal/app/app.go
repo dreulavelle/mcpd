@@ -545,7 +545,7 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 		Principal: auth.Principal{
 			ID:          a.settings.String(ctx, settings.KeyTunnelPrincipal, orDefault(file.Principal, "svc:chatgpt")),
 			DisplayName: "tunnel",
-			Role:        auth.Role(a.settings.String(ctx, settings.KeyTunnelRole, orDefault(file.Role, "operator"))),
+			Role:        auth.Role(a.settings.String(ctx, settings.KeyTunnelRole, orDefault(file.Role, string(auth.RoleUser)))),
 			Plugins:     a.settings.Strings(ctx, settings.KeyTunnelPlugins, file.Plugins),
 			TokenID:     "tunnel",
 		},
