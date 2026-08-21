@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { api, ApiError, type OpenAITunnel, type TunnelInfo, type TunnelStatus } from "./api";
-import { Copyable, Dot, Message, Out, Skeleton, useIsAdmin, usePoll, useToasts } from "./components";
+import { Copyable, Dot, Message, Out, Skeleton, useIsAdmin, usePoll, useToasts, type Notify } from "./components";
 
 const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
 const CHATGPT_CONNECTORS = "https://chatgpt.com/#settings/Connectors";
@@ -26,14 +26,8 @@ export function Tunnels() {
   }, []);
   usePoll(load, 8_000);
 
-  if (!info) {
-    return <><h1>Tunnels</h1>{error
-      ? <Message tone="problem">{error}</Message>
-      : <Skeleton rows={4} />}</>;
-  }
-
-  const running = new Map(info.tunnels.map((t) => [t.tunnel_id ?? "", t]));
-  const rows: Row[] = info.can_manage
+  const running = new Map((info?.tunnels ?? []).map((t) => [t.tunnel_id ?? "", t]));
+  const rows: Row[] = !info ? [] : info.can_manage
     ? (info.available ?? []).map((t) => ({ ...t, status: running.get(t.id) }))
     : info.tunnels.map((t) => ({
         id: t.tunnel_id ?? "", name: t.plugin || "Everything", status: t,
@@ -50,9 +44,9 @@ export function Tunnels() {
       </p>
 
       {error && <Message tone="problem">{error}</Message>}
-      {info.problem && <Message tone="problem">{info.problem}</Message>}
+      {info?.problem && <Message tone="problem">{info.problem}</Message>}
 
-      {info.missing && (
+      {info?.missing && (
         <Message tone="info">
           <span>
             Add {info.missing} in Settings to make tunnels from here, or make
@@ -61,11 +55,12 @@ export function Tunnels() {
         </Message>
       )}
 
-      {info.can_manage && admin && (
+      {info?.can_manage && admin && (
         <Add plugins={info.plugins} workspaces={info.workspaces ?? []}
              onDone={load} show={show} />
       )}
 
+      {!info ? <Skeleton rows={4} /> : (
       <div className="card" style={{ marginTop: "var(--s4)" }}>
         {rows.length === 0 ? (
           <div className="card-body">
@@ -91,6 +86,7 @@ export function Tunnels() {
           </div>
         )}
       </div>
+      )}
     </>
   );
 }
@@ -103,7 +99,7 @@ function TunnelRow({ row, info, onDone, show }: {
   row: Row;
   info: TunnelInfo;
   onDone: () => void;
-  show: (tone: "good" | "problem", text: string) => void;
+  show: Notify;
 }) {
   const state = row.status?.state;
   const admin = useIsAdmin();
@@ -172,7 +168,7 @@ function Add({ plugins, workspaces, onDone, show }: {
   plugins: string[];
   workspaces: string[];
   onDone: () => void;
-  show: (tone: "good" | "problem", text: string) => void;
+  show: Notify;
 }) {
   const [name, setName] = useState("");
   const [plugin, setPlugin] = useState("");

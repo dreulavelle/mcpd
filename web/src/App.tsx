@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   api, ApiError, setCSRFToken,
   type AuditRecord, type HealthReport, type Meta, type Session,
@@ -49,6 +49,44 @@ export default function App() {
   );
 }
 
+/* ── signed out ─────────────────────────────────────────────────────────── */
+
+/**
+ * The frame both signed-out screens sit in.
+ *
+ * Signing in and claiming a new host are different questions, but they are
+ * asked in the same place and looked at the same way. Two copies of this drifted
+ * apart in the ways chrome always does -- the version footer said a different
+ * thing on one of them -- so there is one.
+ */
+function SignedOutCard({ meta, error, title, children }: {
+  meta: Meta | null;
+  error?: string;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="signin">
+      <div className="signin-card">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">m</span>
+          mcpd
+        </div>
+
+        <div className="card">
+          <div className="card-body">
+            {title && <h3 className="signin-title">{title}</h3>}
+            {error && <Message tone="problem">{error}</Message>}
+            {children}
+          </div>
+        </div>
+
+        {meta && <p className="note signin-version">mcpd {meta.version}</p>}
+      </div>
+    </div>
+  );
+}
+
 /* ── sign in ────────────────────────────────────────────────────────────── */
 
 function SignIn({ meta, onDone }: { meta: Meta | null; onDone: (s: Session) => void }) {
@@ -75,52 +113,32 @@ function SignIn({ meta, onDone }: { meta: Meta | null; onDone: (s: Session) => v
   }
 
   return (
-    <div className="signin">
-      <div className="signin-card">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">m</span>
-          mcpd
+    <SignedOutCard meta={meta} error={error}>
+      <form onSubmit={submit}>
+        <div className="field">
+          <label htmlFor="email">Email</label>
+          <input
+            id="email" type="email" autoComplete="username" autoFocus
+            value={email} onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+          />
         </div>
 
-        <div className="card">
-          <div className="card-body">
-            {error && <Message tone="problem">{error}</Message>}
-
-            <form onSubmit={submit}>
-              <div className="field">
-                <label htmlFor="email">Email</label>
-                <input
-                  id="email" type="email" autoComplete="username" autoFocus
-                  value={email} onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                />
-              </div>
-
-              <div className="field">
-                <label htmlFor="password">Password</label>
-                <input
-                  id="password" type="password" autoComplete="current-password"
-                  value={password} onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Your password"
-                />
-              </div>
-
-              <button className="btn primary" type="submit"
-                      disabled={busy || !email.trim() || !password}
-                      style={{ width: "100%" }}>
-                {busy ? "Signing in…" : "Sign in"}
-              </button>
-            </form>
-          </div>
+        <div className="field">
+          <label htmlFor="password">Password</label>
+          <input
+            id="password" type="password" autoComplete="current-password"
+            value={password} onChange={(e) => setPassword(e.target.value)}
+            placeholder="Your password"
+          />
         </div>
 
-        {meta && (
-          <p className="note" style={{ textAlign: "center", marginTop: "var(--s4)" }}>
-            mcpd {meta.version}
-          </p>
-        )}
-      </div>
-    </div>
+        <button className="btn primary wide" type="submit"
+                disabled={busy || !email.trim() || !password}>
+          {busy ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+    </SignedOutCard>
   );
 }
 
@@ -163,69 +181,46 @@ function FirstRun({ meta, onDone }: { meta: Meta | null; onDone: (s: Session) =>
   }
 
   return (
-    <div className="signin">
-      <div className="signin-card">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">m</span>
-          mcpd
+    <SignedOutCard meta={meta} error={error} title="Create the first account">
+      <p className="note">
+        Nobody has claimed this host yet. This account will be an
+        administrator; you can add others once you are in.
+      </p>
+
+      <form onSubmit={submit}>
+        <div className="field">
+          <label htmlFor="su-email">Email</label>
+          <input
+            id="su-email" type="email" autoComplete="username" autoFocus
+            value={email} onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+          />
         </div>
 
-        <div className="card">
-          <div className="card-body">
-            <h3 style={{ margin: "0 0 var(--s2)" }}>Create the first account</h3>
-            <p className="note">
-              Nobody has claimed this host yet. This account will be an
-              administrator; you can add others once you are in.
-            </p>
-
-            {error && <Message tone="problem">{error}</Message>}
-
-            <form onSubmit={submit}>
-              <div className="field">
-                <label htmlFor="su-email">Email</label>
-                <input
-                  id="su-email" type="email" autoComplete="username" autoFocus
-                  value={email} onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                />
-              </div>
-
-              <div className="field">
-                <label htmlFor="su-password">Password</label>
-                <input
-                  id="su-password" type="password" autoComplete="new-password"
-                  value={password} onChange={(e) => setPassword(e.target.value)}
-                  placeholder="At least 12 characters"
-                />
-              </div>
-
-              <div className="field">
-                <label htmlFor="su-confirm">Confirm password</label>
-                <input
-                  id="su-confirm" type="password" autoComplete="new-password"
-                  value={confirm} onChange={(e) => setConfirm(e.target.value)}
-                  placeholder="Type it again"
-                />
-                {mismatch && <p className="note" style={{ color: "var(--problem)" }}>
-                  These do not match.
-                </p>}
-              </div>
-
-              <button className="btn primary" type="submit" disabled={busy || !ready}
-                      style={{ width: "100%" }}>
-                {busy ? "Creating…" : "Create account"}
-              </button>
-            </form>
-          </div>
+        <div className="field">
+          <label htmlFor="su-password">Password</label>
+          <input
+            id="su-password" type="password" autoComplete="new-password"
+            value={password} onChange={(e) => setPassword(e.target.value)}
+            placeholder="At least 12 characters"
+          />
         </div>
 
-        {meta && (
-          <p className="note" style={{ textAlign: "center", marginTop: "var(--s4)" }}>
-            mcpd {meta.version}
-          </p>
-        )}
-      </div>
-    </div>
+        <div className="field">
+          <label htmlFor="su-confirm">Confirm password</label>
+          <input
+            id="su-confirm" type="password" autoComplete="new-password"
+            value={confirm} onChange={(e) => setConfirm(e.target.value)}
+            placeholder="Type it again"
+          />
+          {mismatch && <p className="note problem">These do not match.</p>}
+        </div>
+
+        <button className="btn primary wide" type="submit" disabled={busy || !ready}>
+          {busy ? "Creating…" : "Create account"}
+        </button>
+      </form>
+    </SignedOutCard>
   );
 }
 

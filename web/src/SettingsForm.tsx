@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   api, ApiError, type SettingField, type SettingGroup, type SettingsPayload,
 } from "./api";
-import { Message, Out, Pill } from "./components";
+import { Message, Out, Pill, type Notify } from "./components";
 
 export interface FieldLink {
   href: string;
@@ -22,7 +22,7 @@ export function SettingsForm({ groups, settings, links, onSaved, show, readOnly 
   settings: SettingsPayload;
   links?: Record<string, FieldLink>;
   onSaved: () => void;
-  show: (tone: "good" | "problem", text: string) => void;
+  show: Notify;
   /**
    * Renders the values without any way to change them.
    *

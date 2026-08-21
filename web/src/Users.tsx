@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { api, ApiError, type Role, type User } from "./api";
-import { Message, Skeleton, usePoll, useToasts } from "./components";
+import { Message, Skeleton, usePoll, useToasts, type Notify } from "./components";
 
 const ROLES: [Role, string][] = [
   ["user", "User"],
@@ -27,19 +27,15 @@ export function Users() {
   }, []);
   usePoll(load, 30_000);
 
-  if (!users) {
-    return <><h1>Users</h1>{error
-      ? <Message tone="problem">{error}</Message>
-      : <Skeleton rows={4} />}</>;
-  }
-
   return (
     <>
       <div className="row">
         <h1 className="grow">Users</h1>
-        <button className="btn primary" onClick={() => setAdding(true)}>Add user</button>
+        {users && (
+          <button className="btn primary" onClick={() => setAdding(true)}>Add user</button>
+        )}
       </div>
-      <p className="note">
+      <p className="lede">
         Everyone signs in with their own email and password. Roles decide what
         they may do; the systems list decides what they can see.
       </p>
@@ -53,23 +49,25 @@ export function Users() {
         />
       )}
 
-      <div className="card">
-        <div className="tablewrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Email</th><th>Role</th><th>Can reach</th>
-                <th>Last signed in</th><th />
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <UserRow key={u.id} user={u} onChanged={load} notify={show} />
-              ))}
-            </tbody>
-          </table>
+      {!users ? <Skeleton rows={4} /> : (
+        <div className="card">
+          <div className="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Email</th><th>Role</th><th>Can reach</th>
+                  <th>Last signed in</th><th />
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => (
+                  <UserRow key={u.id} user={u} onChanged={load} notify={show} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {view}
     </>
@@ -79,7 +77,7 @@ export function Users() {
 function UserRow({ user, onChanged, notify }: {
   user: User;
   onChanged: () => void;
-  notify: (tone: "good", msg: string) => void;
+  notify: Notify;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -107,7 +105,7 @@ function UserRow({ user, onChanged, notify }: {
         {user.email}
         {user.self && <span className="pill info" style={{ marginLeft: 8 }}>you</span>}
         {user.disabled && <span className="pill" style={{ marginLeft: 8 }}>disabled</span>}
-        {error && <div className="note" style={{ color: "var(--problem)" }}>{error}</div>}
+        {error && <div className="note problem">{error}</div>}
       </td>
       <td>
         <select

@@ -48,6 +48,16 @@ export function Message({ tone, children }: { tone: Tone; children: ReactNode })
 
 /** Transient confirmation. A save that shows a banner forever makes the page
  *  look like it still has something to say. */
+/**
+ * Raising a toast.
+ *
+ * Named because it is passed down through pages to the rows that actually
+ * report something, and each of those was restating the signature -- one of
+ * them narrowed the tone to "good", which was a lie the compiler could not
+ * catch because it was never asked to raise anything else.
+ */
+export type Notify = (tone: Tone, text: string) => void;
+
 export function useToasts() {
   const [toasts, setToasts] = useState<{ id: number; tone: Tone; text: string }[]>([]);
 
