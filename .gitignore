@@ -7,6 +7,7 @@
 /plugins/*/
 !/plugins/.gitkeep
 .env
+*.swp
 
 # The dashboard bundle is a build artifact, copied into the package at build
 # time so go:embed can reach it.
