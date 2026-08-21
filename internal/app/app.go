@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -316,6 +317,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			SetPluginEnabled: a.SetInstanceEnabled,
 			SessionTTL:       cfg.Auth.Accounts.SessionTTL,
 			Plugins:          func() []string { return a.manager.Names() },
+			Assignments:      func() map[string]string { return a.tunnelAssignments(context.Background()) },
 			Directory: func() *tunnel.Directory {
 				// Read at call time: the admin key is a setting, and one
 				// captured at startup would be the key the deployment began
@@ -555,9 +557,23 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 		out = append(out, base)
 	}
 
-	for _, name := range a.manager.Names() {
+	// Every configured instance, not only the mounted ones: an assignment to a
+	// plugin that has not started is the case worth saying something about.
+	mounted := a.manager.Names()
+	for _, inst := range a.instances(ctx) {
+		name := inst.Name
 		id := a.settings.String(ctx, settings.PluginTunnelKey(name), "")
 		if id == "" {
+			continue
+		}
+		if !slices.Contains(mounted, name) {
+			// A tunnel bound to a plugin that is not serving would answer
+			// ChatGPT with an endpoint that has nothing behind it. Skipped, but
+			// said out loud: silently ignoring it is how an assignment that
+			// looks made comes to do nothing.
+			a.log.Warn("a tunnel is assigned to a plugin that is not running, "+
+				"so it is not being started",
+				"plugin", name, "tunnel_id", id)
 			continue
 		}
 		if id == base.TunnelID {
@@ -638,6 +654,24 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 		cfg.Principal.Plugins = []string{auth.Wildcard}
 	}
 	return cfg
+}
+
+// tunnelAssignments reports which system each tunnel is pointed at, by tunnel
+// id, including assignments to plugins that are not running.
+//
+// The dashboard shows this rather than deriving it from the running tunnels,
+// which cannot distinguish "not assigned" from "assigned and unable to start".
+func (a *App) tunnelAssignments(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	if id := a.settings.String(ctx, settings.KeyTunnelID, ""); id != "" {
+		out[id] = ""
+	}
+	for _, inst := range a.instances(ctx) {
+		if id := a.settings.String(ctx, settings.PluginTunnelKey(inst.Name), ""); id != "" {
+			out[id] = inst.Name
+		}
+	}
+	return out
 }
 
 func orDefault(v, fallback string) string {

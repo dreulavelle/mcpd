@@ -230,3 +230,36 @@ func TestTunnelStatus_ListsAreNeverNull(t *testing.T) {
 		}
 	}
 }
+
+// An assignment to a plugin that is not running is still an assignment.
+//
+// The tunnel does not start -- it would answer ChatGPT with an endpoint that
+// has nothing behind it -- and the page used to derive "what is this tunnel
+// pointed at" from the running tunnels alone. So the choice looked like it had
+// reverted to "Not used", with nothing saying why it had not taken effect.
+func TestTunnelStatus_ReportsAssignmentsThatAreNotRunning(t *testing.T) {
+	s := NewServer(Options{
+		// Nothing mounted, and a tunnel pointed at a plugin all the same.
+		Plugins: func() []string { return nil },
+		Assignments: func() map[string]string {
+			return map[string]string{"tunnel_abc": "cnmaestro"}
+		},
+	})
+
+	w := httptest.NewRecorder()
+	s.handleTunnelStatus(w, httptest.NewRequest(http.MethodGet, "/api/tunnel", nil))
+
+	var got struct {
+		Tunnels     []tunnel.Status   `json:"tunnels"`
+		Assignments map[string]string `json:"assignments"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Tunnels) != 0 {
+		t.Fatalf("tunnels = %v, want none running", got.Tunnels)
+	}
+	if got.Assignments["tunnel_abc"] != "cnmaestro" {
+		t.Fatalf("assignments = %v, want the stored assignment reported", got.Assignments)
+	}
+}
