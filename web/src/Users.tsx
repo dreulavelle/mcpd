@@ -3,8 +3,8 @@ import { api, ApiError, type Role, type User } from "./api";
 import { Message, Skeleton, usePoll, useToasts } from "./components";
 
 const ROLES: [Role, string][] = [
-  ["user", "User — can read, propose, and approve changes"],
-  ["admin", "Admin — can also change settings, tunnels, and accounts"],
+  ["user", "User"],
+  ["admin", "Admin"],
 ];
 
 /**
