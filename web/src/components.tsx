@@ -111,7 +111,12 @@ export function Skeleton({ rows = 3 }: { rows?: number }) {
 
 /* ── copy ───────────────────────────────────────────────────────────────── */
 
-export function Copyable({ value, label }: { value: string; label?: string }) {
+export function Copyable({ value, label, inline }: {
+  value: string;
+  label?: string;
+  /** Renders flat, for use inside a table row rather than as its own block. */
+  inline?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -127,7 +132,7 @@ export function Copyable({ value, label }: { value: string; label?: string }) {
   }
 
   return (
-    <div className="copybox">
+    <div className={inline ? "copybox inline" : "copybox"}>
       <code>{value}</code>
       <button className="btn sm" onClick={copy} aria-label={label ? `Copy ${label}` : "Copy"}>
         {copied ? "Copied" : "Copy"}

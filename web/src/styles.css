@@ -404,6 +404,21 @@ tbody tr.tappable:hover { background: var(--surface-2); }
   overflow-x: auto; white-space: nowrap; font-size: 13px;
 }
 
+/* A copybox inside a table row.
+   The standalone one is a block with its own padding, background and border,
+   which inside a cell that already has padding stands a good deal taller than
+   the select beside it -- so the row it is in reads as two rows. This matches
+   the control metrics instead, so a cell containing one lines up with the
+   cells that do not. */
+.copybox.inline {
+  padding: 0; background: none; border-color: transparent;
+  gap: var(--s2); min-height: 0;
+}
+.copybox.inline code { font-size: 12.5px; color: var(--text-3); }
+
+/* Name above its id, as one cell rather than two stacked things. */
+.tunnel-name { font-weight: 550; margin-bottom: 2px; }
+
 pre.code {
   margin: 0; padding: var(--s4); overflow-x: auto;
   background: var(--surface-2); border: 1px solid var(--line-soft);
