@@ -101,10 +101,11 @@ func PluginGroup(instance, title string, fields []Field) Group {
 		f.Key = PluginSettingKey(instance, f.Key)
 		f.Group = out.Name
 		if f.Apply == "" {
-			// A plugin is built once, at startup, from the settings it had
-			// then. Until instances can be remounted while the host runs,
-			// saying restart is the honest answer.
-			f.Apply = ApplyRestart
+			// A plugin holds whatever it was constructed with, so a change
+			// means building it again -- which the host does on the spot.
+			// Reconnect rather than live: the plugin really is replaced, and
+			// calls in flight against the old one finish against it.
+			f.Apply = ApplyReconnect
 		}
 		out.Fields = append(out.Fields, f)
 	}

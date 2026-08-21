@@ -24,10 +24,17 @@ type PluginInstanceInfo struct {
 	// would return on the next start and look like the removal failed.
 	FromFile bool `json:"from_file"`
 	Enabled  bool `json:"enabled"`
-	// Mounted reports whether it is serving now. An instance added since the
-	// last start is configured but not yet running, and saying so is the
-	// difference between "waiting for a restart" and "broken".
+	// Mounted reports whether it is serving now. An instance is not mounted
+	// until every required setting has a value, so this being false alongside
+	// Missing is the ordinary state of one nobody has finished configuring.
 	Mounted bool `json:"mounted"`
+	// Missing names the required settings still to be filled in. Empty on an
+	// instance that is ready.
+	Missing []string `json:"missing,omitempty"`
+	// Problem is why a configured instance is not serving -- a credential the
+	// upstream rejected, most often. Without it, an instance that has every
+	// field filled in and still will not mount says nothing about why.
+	Problem string `json:"problem,omitempty"`
 }
 
 func (s *Server) handlePluginTypes(w http.ResponseWriter, r *http.Request) {
@@ -80,14 +87,13 @@ func (s *Server) handleAddInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	s.opts.Log.Info("plugin instance added",
 		"instance", req.Name, "type", req.Type, "by", actor)
-	// Saying it is not yet running matters. A plugin is built at startup from
-	// the settings it had then, so an instance added now appears in the list
-	// and serves nothing until a restart -- which reads as a failure unless
-	// something says otherwise.
+	// Saying it is not yet running matters. An instance arrives with nothing
+	// filled in, so it appears in the list and serves nothing until it has
+	// what it needs -- which reads as a failure unless something says
+	// otherwise. It mounts itself once the settings are saved.
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{
-		"status":           "added",
-		"restart_required": true,
-		"note":             "Configure it below, then restart mcpd for it to start serving.",
+		"status": "added",
+		"note":   "Configure it below. It starts serving as soon as it has what it needs.",
 	})
 }
 
@@ -116,9 +122,7 @@ func (s *Server) handleSetInstanceEnabled(w http.ResponseWriter, r *http.Request
 	}
 	s.opts.Log.Info("plugin instance toggled",
 		"instance", name, "enabled", *req.Enabled, "by", actor)
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"status": "saved", "restart_required": true,
-	})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"status": "saved"})
 }
 
 func (s *Server) handleRemoveInstance(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +137,5 @@ func (s *Server) handleRemoveInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.opts.Log.Info("plugin instance removed", "instance", name, "by", actor)
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"status": "removed", "restart_required": true,
-	})
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"status": "removed"})
 }

@@ -2,7 +2,6 @@ package cnmaestro
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -72,8 +71,8 @@ type NetworksInput struct{}
 
 // NetworksOutput is a list of networks.
 type NetworksOutput struct {
-	Networks []json.RawMessage `json:"networks"`
-	Count    int               `json:"count"`
+	Networks []Record `json:"networks"`
+	Count    int      `json:"count"`
 	// Total is what the API said exists, which differs from Count when a
 	// result was truncated.
 	Total int `json:"total,omitempty"`
@@ -121,11 +120,11 @@ type DevicesInput struct {
 // There is no common shape, and inventing one would drop whatever the caller
 // actually asked about.
 type DevicesOutput struct {
-	Devices   []json.RawMessage `json:"devices"`
-	Count     int               `json:"count"`
-	Total     int               `json:"total,omitempty"`
-	Warnings  []string          `json:"warnings,omitempty"`
-	Truncated bool              `json:"truncated,omitempty"`
+	Devices   []Record `json:"devices"`
+	Count     int      `json:"count"`
+	Total     int      `json:"total,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"`
 	// Note explains a truncated result in words, since that is the one
 	// outcome a model is likely to misread as "this is the whole estate".
 	Note string `json:"note,omitempty"`
@@ -176,9 +175,9 @@ type ManagedAccountsInput struct{}
 
 // ManagedAccountsOutput is the authoritative tenant list.
 type ManagedAccountsOutput struct {
-	Accounts []json.RawMessage `json:"accounts"`
-	Count    int               `json:"count"`
-	Warnings []string          `json:"warnings,omitempty"`
+	Accounts []Record `json:"accounts"`
+	Count    int      `json:"count"`
+	Warnings []string `json:"warnings,omitempty"`
 	// Note carries the reserved name, because it is not in the list and is
 	// the value a single-account installation actually needs.
 	Note string `json:"note"`
@@ -206,8 +205,8 @@ type DeviceInput struct {
 
 // DeviceOutput is one device's full record.
 type DeviceOutput struct {
-	Device   json.RawMessage `json:"device"`
-	Warnings []string        `json:"warnings,omitempty"`
+	Device   Record   `json:"device"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func (p *Plugin) getDevice(ctx context.Context, in DeviceInput) (DeviceOutput, error) {
@@ -219,7 +218,7 @@ func (p *Plugin) getDevice(ctx context.Context, in DeviceInput) (DeviceOutput, e
 
 	// The device record arrives as a single-element array on this endpoint,
 	// not a bare object, so it is decoded as one and unwrapped.
-	var records []json.RawMessage
+	var records []Record
 	warnings, err := p.client.Get(ctx, "/devices/"+url.PathEscape(mac), nil, &records)
 	p.note(err)
 	if err != nil {

@@ -439,6 +439,9 @@ tbody tr.tappable:hover { background: var(--surface-2); }
 }
 .plugin-facts .note { margin: 0; }
 
+/* One line per instance still waiting on its settings. */
+.pending-row { display: block; }
+
 /* Name above its id, as one cell rather than two stacked things. */
 .tunnel-name { font-weight: 550; margin-bottom: 2px; }
 
