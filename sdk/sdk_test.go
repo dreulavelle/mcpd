@@ -328,3 +328,120 @@ func TestUnreadableFrameDoesNotStopTheLoop(t *testing.T) {
 		t.Fatalf("the valid request after a bad frame was not answered: %s", out.String())
 	}
 }
+
+// A plugin declares what it needs configured; the host resolves it and hands
+// back values, so a plugin never reads a file or an environment variable.
+func TestSettingsAndConfigure(t *testing.T) {
+	p := New("thing", "1.0.0", "Thing", "A thing.")
+	Settings(p,
+		SettingField{Key: "api_token", Label: "API token", Kind: KindSecret, Required: true},
+		SettingField{Key: "host", Label: "Address", Kind: KindString, Default: "example.test"},
+	)
+	Tool(p, ToolSpec{Name: "noop", Description: "Does nothing."},
+		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
+
+	d := p.describe()
+	if len(d.Settings) != 2 {
+		t.Fatalf("described %d settings, want 2", len(d.Settings))
+	}
+	if d.Settings[0].Kind != KindSecret || !d.Settings[0].Required {
+		t.Errorf("first setting = %+v, want a required secret", d.Settings[0])
+	}
+
+	// Nothing is configured until the host says so.
+	if _, ok := p.Configured("api_token"); ok {
+		t.Error("a setting must not report configured before the host hands values over")
+	}
+
+	resp := p.dispatch(context.Background(), request{
+		Method: "configure",
+		Params: []byte(`{"api_token":"secret-value","host":"nas.local"}`),
+	})
+	if resp.Error != nil {
+		t.Fatalf("configure: %v", resp.Error)
+	}
+
+	if v, ok := p.Configured("api_token"); !ok || v != "secret-value" {
+		t.Errorf("api_token = %q,%v want the resolved value", v, ok)
+	}
+	// An empty value is "not set", which a plugin can act on.
+	if _, ok := p.Configured("nonesuch"); ok {
+		t.Error("an unset field must report not configured")
+	}
+}
+
+// A bad field declaration is a developer's mistake, caught before Serve rather
+// than when someone opens the page.
+func TestSettings_RejectsABadField(t *testing.T) {
+	for _, f := range []SettingField{
+		{Key: "Bad-Key", Label: "X", Kind: KindString},
+		{Key: "ok", Kind: KindString},
+		{Key: "ok", Label: "X", Kind: "colour"},
+		{Key: "ok", Label: "X", Kind: KindEnum},
+	} {
+		p := New("thing", "1.0.0", "Thing", "A thing.")
+		Settings(p, f)
+		if len(p.errs) == 0 {
+			t.Errorf("field %+v must be refused", f)
+		}
+	}
+}
+
+// A resource is reference material a model reads by address, which keeps it
+// out of the tool catalogue where every entry costs attention on every call.
+func TestResourceAndPrompt(t *testing.T) {
+	p := New("thing", "1.0.0", "Thing", "A thing.")
+	Resource(p, ResourceSpec{
+		Path: "state", Name: "state", Description: "Current state.",
+		MIMEType: "application/json",
+	}, func(context.Context) (string, error) { return `{"ok":true}`, nil })
+
+	Prompt(p, PromptSpec{
+		Name: "diagnose", Description: "Work through a device.",
+		Args: []PromptArg{{Name: "mac", Required: true}},
+	}, func(_ context.Context, args map[string]string) (string, error) {
+		return "look at " + args["mac"], nil
+	})
+
+	d := p.describe()
+	if len(d.Resources) != 1 || d.Resources[0].Path != "state" {
+		t.Fatalf("resources = %+v", d.Resources)
+	}
+	if d.Resources[0].MIMEType != "application/json" {
+		t.Errorf("mime = %q, want the declared one", d.Resources[0].MIMEType)
+	}
+	if len(d.Prompts) != 1 || len(d.Prompts[0].Args) != 1 {
+		t.Fatalf("prompts = %+v", d.Prompts)
+	}
+
+	resp := p.dispatch(context.Background(), request{
+		Method: "read_resource", Params: []byte(`{"path":"state"}`),
+	})
+	if resp.Error != nil {
+		t.Fatalf("read_resource: %v", resp.Error)
+	}
+	if !strings.Contains(string(resp.Result), "ok") {
+		t.Errorf("resource body = %s", resp.Result)
+	}
+
+	resp = p.dispatch(context.Background(), request{
+		Method: "get_prompt", Params: []byte(`{"name":"diagnose","args":{"mac":"AA:BB"}}`),
+	})
+	if resp.Error != nil {
+		t.Fatalf("get_prompt: %v", resp.Error)
+	}
+	if !strings.Contains(string(resp.Result), "look at AA:BB") {
+		t.Errorf("prompt text = %s", resp.Result)
+	}
+}
+
+// Returning text rather than performing anything is the whole contract of a
+// prompt, so a missing required argument is refused before the handler runs.
+func TestPrompt_RefusesAPathCarryingAScheme(t *testing.T) {
+	p := New("thing", "1.0.0", "Thing", "A thing.")
+	Resource(p, ResourceSpec{Path: "other://x", Name: "x", Description: "d"},
+		func(context.Context) (string, error) { return "", nil })
+	if len(p.errs) == 0 {
+		t.Fatal("a resource path carrying its own scheme must be refused")
+	}
+}

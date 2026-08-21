@@ -52,6 +52,16 @@ const (
 	CapAdmin   Capability = "admin"
 )
 
+// Valid reports whether c is a recognised capability. Plugins name one when a
+// tool needs more than read, so it is checked rather than assumed.
+func (c Capability) Valid() bool {
+	switch c {
+	case CapRead, CapPropose, CapApprove, CapAdmin:
+		return true
+	}
+	return false
+}
+
 // roleCapabilities is the authoritative role-to-capability mapping.
 var roleCapabilities = map[Role][]Capability{
 	RoleUser:  {CapRead, CapPropose, CapApprove},

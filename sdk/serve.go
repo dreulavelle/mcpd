@@ -84,6 +84,63 @@ type describeResult struct {
 	Description string               `json:"description"`
 	Tools       []toolDescriptor     `json:"tools"`
 	Mutations   []mutationDescriptor `json:"mutations"`
+	Resources   []resourceDescriptor `json:"resources,omitempty"`
+	Prompts     []promptDescriptor   `json:"prompts,omitempty"`
+	Settings    []settingDescriptor  `json:"settings,omitempty"`
+}
+
+type resourceDescriptor struct {
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	MIMEType    string `json:"mime_type"`
+	Capability  string `json:"capability,omitempty"`
+}
+
+type promptDescriptor struct {
+	Name        string           `json:"name"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	Args        []promptArgument `json:"args,omitempty"`
+	Capability  string           `json:"capability,omitempty"`
+}
+
+type promptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+type settingDescriptor struct {
+	Key         string   `json:"key"`
+	Label       string   `json:"label"`
+	Help        string   `json:"help,omitempty"`
+	Kind        string   `json:"kind"`
+	Default     any      `json:"default,omitempty"`
+	Options     []string `json:"options,omitempty"`
+	Min         *int     `json:"min,omitempty"`
+	Max         *int     `json:"max,omitempty"`
+	Required    bool     `json:"required,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
+}
+
+type readResourceParams struct {
+	Path string `json:"path"`
+}
+
+type readResourceResult struct {
+	Body     string `json:"body"`
+	MIMEType string `json:"mime_type,omitempty"`
+}
+
+type getPromptParams struct {
+	Name string            `json:"name"`
+	Args map[string]string `json:"args,omitempty"`
+}
+
+type getPromptResult struct {
+	Text string `json:"text"`
 }
 
 type toolDescriptor struct {
@@ -92,6 +149,8 @@ type toolDescriptor struct {
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
 	Idempotent  bool            `json:"idempotent"`
+	Capability  string          `json:"capability,omitempty"`
+	RateLimit   float64         `json:"rate_limit,omitempty"`
 }
 
 type mutationDescriptor struct {
@@ -242,6 +301,57 @@ func (p *Plugin) handle(ctx context.Context, req request) (json.RawMessage, erro
 	case "describe":
 		return json.Marshal(p.describe())
 
+	case "read_resource":
+		var params readResourceParams
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, invalidParams("could not decode read_resource params: %v", err)
+		}
+		p.mu.RLock()
+		res := p.resources[params.Path]
+		p.mu.RUnlock()
+		if res == nil {
+			return nil, invalidParams("no such resource %q", params.Path)
+		}
+		body, err := res.fn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		mime := res.spec.MIMEType
+		if mime == "" {
+			mime = "text/plain"
+		}
+		return json.Marshal(readResourceResult{Body: body, MIMEType: mime})
+
+	case "get_prompt":
+		var params getPromptParams
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, invalidParams("could not decode get_prompt params: %v", err)
+		}
+		p.mu.RLock()
+		pr := p.prompts[params.Name]
+		p.mu.RUnlock()
+		if pr == nil {
+			return nil, invalidParams("no such prompt %q", params.Name)
+		}
+		text, err := pr.fn(ctx, params.Args)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(getPromptResult{Text: text})
+
+	case "configure":
+		// The host hands over resolved settings before anything is called, so
+		// a plugin reads values rather than references and never has to know
+		// where one came from.
+		var cfg map[string]string
+		if err := json.Unmarshal(req.Params, &cfg); err != nil {
+			return nil, invalidParams("could not decode configure params: %v", err)
+		}
+		p.mu.Lock()
+		p.config = cfg
+		p.mu.Unlock()
+		return json.Marshal(map[string]bool{"ok": true})
+
 	case "call_tool":
 		var params callToolParams
 		if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -326,6 +436,7 @@ func (p *Plugin) describe() describeResult {
 			Name: t.spec.Name, Title: t.spec.Title,
 			Description: t.spec.Description, InputSchema: t.inputSchema,
 			Idempotent: t.spec.Idempotent,
+			Capability: t.spec.Capability, RateLimit: t.spec.RateLimit,
 		})
 	}
 	for _, action := range p.mutOrder {
@@ -334,6 +445,39 @@ func (p *Plugin) describe() describeResult {
 			Action: m.spec.Action, Title: m.spec.Title,
 			Description: m.spec.Description, InputSchema: m.inputSchema,
 			Risk: string(m.spec.Risk), Reversible: m.spec.Reversible,
+		})
+	}
+	for _, path := range p.resOrder {
+		r := p.resources[path]
+		mime := r.spec.MIMEType
+		if mime == "" {
+			mime = "text/plain"
+		}
+		out.Resources = append(out.Resources, resourceDescriptor{
+			Path: r.spec.Path, Name: r.spec.Name, Title: r.spec.Title,
+			Description: r.spec.Description, MIMEType: mime,
+			Capability: r.spec.Capability,
+		})
+	}
+	for _, name := range p.promptOrder {
+		pr := p.prompts[name]
+		args := make([]promptArgument, 0, len(pr.spec.Args))
+		for _, a := range pr.spec.Args {
+			args = append(args, promptArgument{
+				Name: a.Name, Description: a.Description, Required: a.Required,
+			})
+		}
+		out.Prompts = append(out.Prompts, promptDescriptor{
+			Name: pr.spec.Name, Title: pr.spec.Title,
+			Description: pr.spec.Description, Args: args,
+			Capability: pr.spec.Capability,
+		})
+	}
+	for _, f := range p.settings {
+		out.Settings = append(out.Settings, settingDescriptor{
+			Key: f.Key, Label: f.Label, Help: f.Help, Kind: f.Kind,
+			Default: f.Default, Options: f.Options, Min: f.Min, Max: f.Max,
+			Required: f.Required, Placeholder: f.Placeholder,
 		})
 	}
 	return out

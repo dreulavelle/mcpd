@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -102,7 +103,8 @@ func validateDescribe(manifestName string, d DescribeResult) error {
 			"external: plugin in directory %q reports its name as %q; they must match",
 			manifestName, d.Name)
 	}
-	if len(d.Tools) == 0 && len(d.Mutations) == 0 {
+	if len(d.Tools) == 0 && len(d.Mutations) == 0 &&
+		len(d.Resources) == 0 && len(d.Prompts) == 0 {
 		return fmt.Errorf("external: plugin %s exposes no tools or mutations", manifestName)
 	}
 	for _, m := range d.Mutations {
@@ -152,6 +154,8 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 			Description: tool.Description,
 			Idempotent:  tool.Idempotent,
 			InputSchema: normalizeSchema(tool.InputSchema),
+			Capability:  auth.Capability(tool.Capability),
+			RateLimit:   tool.RateLimit,
 		}
 		name := tool.Name
 		// The result type is `any` rather than json.RawMessage on purpose: the
@@ -164,6 +168,39 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 				return nil, err
 			}
 			return decodeResult(raw), nil
+		})
+	}
+
+	for _, res := range describe.Resources {
+		path := res.Path
+		plugins.Resource(r, plugins.ResourceSpec{
+			Path:        res.Path,
+			Name:        res.Name,
+			Title:       res.Title,
+			Description: res.Description,
+			MIMEType:    res.MIMEType,
+			Capability:  auth.Capability(res.Capability),
+		}, func(ctx context.Context) (string, error) {
+			return p.readResource(ctx, path)
+		})
+	}
+
+	for _, pr := range describe.Prompts {
+		name := pr.Name
+		args := make([]plugins.PromptArg, 0, len(pr.Args))
+		for _, a := range pr.Args {
+			args = append(args, plugins.PromptArg{
+				Name: a.Name, Description: a.Description, Required: a.Required,
+			})
+		}
+		plugins.Prompt(r, plugins.PromptSpec{
+			Name:        pr.Name,
+			Title:       pr.Title,
+			Description: pr.Description,
+			Args:        args,
+			Capability:  auth.Capability(pr.Capability),
+		}, func(ctx context.Context, supplied map[string]string) (string, error) {
+			return p.getPrompt(ctx, name, supplied)
 		})
 	}
 
@@ -467,4 +504,45 @@ func orDefault(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// Configure hands resolved settings to the plugin process.
+//
+// Best-effort by design: a plugin written before settings existed does not
+// implement the method, and failing the handshake over that would break every
+// plugin that was working yesterday.
+func (p *Plugin) Configure(ctx context.Context, cfg map[string]string) {
+	if len(cfg) == 0 {
+		return
+	}
+	var ack map[string]bool
+	if err := p.proc.Call(ctx, MethodConfigure, cfg, &ack); err != nil {
+		p.deps.Log.Debug("plugin does not accept settings; continuing without them",
+			"error", err)
+	}
+}
+
+// SettingFields returns what this plugin says it needs configured.
+func (p *Plugin) SettingFields() []SettingDescriptor {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.describe.Settings
+}
+
+// readResource fetches one resource's body from the plugin process.
+func (p *Plugin) readResource(ctx context.Context, path string) (string, error) {
+	var out ReadResourceResult
+	if err := p.proc.Call(ctx, MethodReadResource, ReadResourceParams{Path: path}, &out); err != nil {
+		return "", err
+	}
+	return out.Body, nil
+}
+
+// getPrompt renders one prompt in the plugin process.
+func (p *Plugin) getPrompt(ctx context.Context, name string, args map[string]string) (string, error) {
+	var out GetPromptResult
+	if err := p.proc.Call(ctx, MethodGetPrompt, GetPromptParams{Name: name, Args: args}, &out); err != nil {
+		return "", err
+	}
+	return out.Text, nil
 }
