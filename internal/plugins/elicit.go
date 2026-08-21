@@ -12,7 +12,7 @@ import (
 // Approval can happen in two places, and which one is right depends on the
 // change.
 //
-// Opening a dashboard to approve every routine change is friction that gets
+// Leaving the conversation to approve every routine change is friction that gets
 // worked around, so mcpd asks in the conversation when it can: the MCP spec's
 // elicitation lets a server put a question to the user through the client,
 // and the answer comes back as a real user action rather than a model

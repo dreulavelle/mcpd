@@ -11,16 +11,20 @@ import (
 	"github.com/spoked/mcpd/internal/operations"
 )
 
-// InlinePolicy decides whether a change may be approved in the conversation.
+// InlinePolicy decides how a change may be approved in the conversation.
 //
-// It is a ceiling rather than a switch. Approving a routine change inline is
-// what keeps the gate from being worked around, but a high-risk change
-// deserves the dashboard: the full before-and-after, the audit trail, and --
-// where identities are real -- a second person. Those are things a one-line
-// confirmation in a chat window cannot give.
+// It is a ceiling on the *shortcut*, not on the decision. A routine change can
+// be approved from a single yes/no prompt, which is what stops the gate being
+// worked around by people who would otherwise stop using it. Above the
+// ceiling that prompt is withheld: the model has to show the change in full
+// and be told explicitly before calling approve_operation.
+//
+// Either way the person decides in the conversation. Sending them somewhere
+// else to approve is how a gate turns into an obstacle, and an obstacle is
+// what people route around.
 type InlinePolicy interface {
-	// AllowsInline reports whether a risk level may be approved through the
-	// client rather than the dashboard.
+	// AllowsInline reports whether a risk level may be approved from a single
+	// yes/no prompt, rather than needing the change shown in full first.
 	AllowsInline(risk operations.RiskLevel) bool
 }
 
@@ -31,9 +35,10 @@ type ApprovalService interface {
 	Reject(ctx context.Context, p *auth.Principal, operationID, reason string) (*operations.Operation, error)
 	Cancel(ctx context.Context, p *auth.Principal, operationID, reason string) (*operations.Operation, error)
 	Get(ctx context.Context, p *auth.Principal, operationID string) (*operations.Operation, error)
-	// ApproveInline records an approval given through the client rather than
-	// the dashboard. It is a separate method so the audit trail can say which
-	// it was: the two carry different evidence about who decided.
+	// ApproveInline records an approval given through a client's own
+	// confirmation prompt. It is a separate method so the audit trail can say
+	// which it was: a prompt the client raised and a deliberate call after
+	// seeing the change carry different evidence about who decided.
 	ApproveInline(ctx context.Context, p *auth.Principal, operationID string) (*operations.Operation, error)
 	// AwaitOutcome waits for an approved operation to finish executing, so an
 	// inline approval can report what actually happened rather than leaving

@@ -270,7 +270,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 }
 
 // resolveApproval asks the user in the conversation when that is possible and
-// permitted, and otherwise leaves the operation for the dashboard.
+// permitted, and otherwise leaves it for an explicit approve_operation call.
 //
 // Whichever path is taken, execution requires an approval recorded here.
 // A client that cannot ask does not get an unguarded write; it gets the
@@ -279,9 +279,15 @@ func resolveApproval(ctx context.Context, req *mcp.CallToolRequest, svc Approval
 	if inline == nil || !inline.AllowsInline(op.Risk) {
 		view := viewOf(op)
 		if inline != nil {
-			view.Note = "NOTHING HAS CHANGED YET. This change is too consequential to " +
-				"approve from a conversation, so it needs approving in the mcpd " +
-				"dashboard, where the full before-and-after is shown. " + view.Note
+			// Above the ceiling the shortcut is withheld, not the decision.
+			// A yes/no prompt is too thin a thing to hang a consequential
+			// change on, so the model has to show the change and be told
+			// explicitly -- but the person still decides in the conversation.
+			view.Note = "NOTHING HAS CHANGED YET. This change is consequential " +
+				"enough that a yes/no prompt is not sufficient: show the person " +
+				"exactly what will change, in full, and only if they explicitly " +
+				"tell you to go ahead, call approve_operation with this " +
+				"operation_id. Never call it on your own judgement. " + view.Note
 		}
 		return view
 	}
