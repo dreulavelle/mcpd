@@ -262,14 +262,17 @@ type Approval struct {
 	// LeaseTTL bounds an execution claim before the reaper reclaims it.
 	LeaseTTL time.Duration `yaml:"lease_ttl"`
 
-	// InlineMaxRisk is the highest risk a user may approve from inside a
-	// conversation, through the client's own confirmation prompt, rather than
-	// in the dashboard.
+	// InlineMaxRisk is the highest risk a user may approve from a single
+	// yes/no prompt raised by their client.
 	//
-	// Empty means every approval goes to the dashboard. Setting it too high
-	// trades away what the dashboard offers -- the full before-and-after, the
-	// audit trail alongside, and a second person where identities are real --
-	// for the convenience of not switching windows.
+	// Above it the shortcut is withheld, not the decision: the assistant has
+	// to show the change in full and be told explicitly before approving it.
+	// Either way the person decides in the conversation. Sending them to a
+	// separate console to approve is how a gate becomes an obstacle, and an
+	// obstacle is what people route around.
+	//
+	// Empty withholds the prompt for everything, which is the strictest
+	// setting rather than a disabled one.
 	InlineMaxRisk string `yaml:"inline_max_risk"`
 }
 
