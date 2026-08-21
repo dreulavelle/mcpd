@@ -200,7 +200,7 @@ tunnel:
   # A *runtime* API key, not an admin key.
   api_key_ref: env:OPENAI_TUNNEL_API_KEY
   principal: svc:chatgpt
-  role: operator
+  role: approver
   plugins: ["echo"]
   check_for_updates: true
 

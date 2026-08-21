@@ -196,9 +196,16 @@ func schema() []Group {
 				},
 				{
 					Key: KeyTunnelRole, Label: "What ChatGPT may do", Kind: KindEnum,
-					Group: "tunnel", Apply: ApplyReconnect, Default: "operator",
+					Group: "tunnel", Apply: ApplyReconnect, Default: "approver",
 					Options: []string{"viewer", "operator", "approver"},
-					Help:    "Approving its own changes removes the point of approving them.",
+					// "Also approve" sounds like the agent deciding for itself,
+					// and it is not: approval happens in the conversation, and
+					// the agent is what carries your answer back. Without it a
+					// change can be proposed and then never applied by anyone,
+					// because there is nowhere else to approve it.
+					Help: "Changes are applied only after you say yes in the conversation. " +
+						"The last option is what lets your answer get back here; without " +
+						"it, changes can be suggested but never applied.",
 				},
 				{
 					Key: KeyTunnelPlugins, Label: "Systems ChatGPT can reach", Kind: KindList,

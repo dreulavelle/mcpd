@@ -178,7 +178,10 @@ tunnel:
   # The identity requests through the tunnel act as. This is the whole of its
   # authorization, so be specific: everyone using the connector shares it.
   principal: svc:chatgpt
-  role: operator
+  # approver, because approval happens in the conversation and this is what
+  # carries the answer back. Without it a change can be proposed and then
+  # never applied by anyone.
+  role: approver
   plugins:
     - cnmaestro
 
