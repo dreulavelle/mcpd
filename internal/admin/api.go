@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,6 +67,15 @@ type Options struct {
 	// TunnelInfo reports the embedded tunnel client version against the newest
 	// release.
 	TunnelInfo func() any
+
+	// Directory manages tunnels in the OpenAI organisation. It is a function
+	// because the admin key it needs is a setting, and a value captured at
+	// startup would be the one the deployment began with rather than the one
+	// an operator just saved.
+	Directory func() *tunnel.Directory
+
+	// Plugins names the mounted systems, so a tunnel can be assigned to one.
+	Plugins func() []string
 
 	// Settings is the runtime configuration store.
 	Settings *settings.Store
@@ -171,6 +181,12 @@ func (s *Server) routes() {
 	// reach, so it takes administrator rights rather than read.
 	api("POST /api/tunnel/start", s.handleTunnelStart, auth.CapAdmin)
 	api("POST /api/tunnel/stop", s.handleTunnelStop, auth.CapAdmin)
+	// Managing tunnels reaches outside this deployment: creating one changes
+	// the OpenAI organisation, and deleting one breaks every connector using
+	// it, wherever those connectors are.
+	api("POST /api/tunnels", s.handleCreateTunnel, auth.CapAdmin)
+	api("POST /api/tunnels/{id}/assign", s.handleAssignTunnel, auth.CapAdmin)
+	api("DELETE /api/tunnels/{id}", s.handleDeleteTunnel, auth.CapAdmin)
 	api("GET /api/audit", s.handleAudit, auth.CapRead)
 	api("GET /api/audit/verify", s.handleVerifyAudit, auth.CapAdmin)
 	api("GET /api/health", s.handleHealth, auth.CapRead)
@@ -265,13 +281,38 @@ type tunnelResponse struct {
 	// Tunnels is one entry per connector, in configuration order.
 	Tunnels []tunnel.Status `json:"tunnels"`
 	Version any             `json:"version,omitempty"`
+
+	// CanManage reports whether tunnels can be created and deleted from here.
+	CanManage bool `json:"can_manage"`
+	// Available is every tunnel in the OpenAI organisation, so one already
+	// made there can be assigned without copying its id by hand. Nil when
+	// there is no admin key, which is different from an organisation with no
+	// tunnels in it.
+	Available []tunnel.TunnelInfo `json:"available,omitempty"`
+	// Problem explains why Available is missing, when it should not be.
+	Problem string `json:"problem,omitempty"`
+	// Plugins names the systems a tunnel can be pointed at.
+	Plugins []string `json:"plugins"`
 }
 
 func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	resp := tunnelResponse{Tunnels: []tunnel.Status{}}
+	resp := tunnelResponse{Tunnels: []tunnel.Status{}, Plugins: []string{}}
 	if s.opts.Tunnel != nil {
 		if list := s.opts.Tunnel.Status(); len(list) > 0 {
 			resp.Tunnels = list
+		}
+	}
+	if s.opts.Plugins != nil {
+		resp.Plugins = s.opts.Plugins()
+	}
+	if dir := s.directory(); dir.Available() {
+		resp.CanManage = true
+		// A listing failure is reported rather than fatal: the tunnels mcpd is
+		// running are known locally and stay visible either way.
+		if list, err := dir.List(r.Context()); err != nil {
+			resp.Problem = err.Error()
+		} else {
+			resp.Available = list
 		}
 	}
 	if s.opts.TunnelInfo != nil {
@@ -943,4 +984,157 @@ func (s *Server) handleCACertificate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="mcpd-ca.pem"`)
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(pem)
+}
+
+// directory returns the tunnel manager, never nil.
+func (s *Server) directory() *tunnel.Directory {
+	if s.opts.Directory == nil {
+		return tunnel.NewDirectory("", "")
+	}
+	return s.opts.Directory()
+}
+
+// handleCreateTunnel makes a tunnel at OpenAI and points it at a system.
+func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name   string `json:"name"`
+		Plugin string `json:"plugin"`
+	}
+	if !s.decode(w, r, &body) {
+		return
+	}
+
+	dir := s.directory()
+	if !dir.Available() {
+		s.writeError(w, r, http.StatusBadRequest,
+			"add an OpenAI admin key first, or create the tunnel on OpenAI's site and paste its ID")
+		return
+	}
+	if err := s.checkPlugin(body.Plugin); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	created, err := dir.Create(r.Context(), body.Name, "Created by mcpd")
+	if err != nil {
+		s.writeError(w, r, http.StatusBadGateway, err.Error())
+		return
+	}
+	// Assigning is the point of creating: a tunnel nothing is bound to is an
+	// object in someone's account doing nothing.
+	if err := s.assign(r, created.ID, body.Plugin); err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusCreated, created)
+}
+
+// handleAssignTunnel points an existing tunnel at a system.
+func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Plugin string `json:"plugin"`
+	}
+	if !s.decode(w, r, &body) {
+		return
+	}
+	if err := s.checkPlugin(body.Plugin); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.assign(r, r.PathValue("id"), body.Plugin); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"status": "assigned"})
+}
+
+// handleDeleteTunnel removes a tunnel from the organisation.
+func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
+	dir := s.directory()
+	if !dir.Available() {
+		s.writeError(w, r, http.StatusBadRequest,
+			"deleting a tunnel needs an OpenAI admin key")
+		return
+	}
+	id := r.PathValue("id")
+	if err := dir.Delete(r.Context(), id); err != nil {
+		s.writeError(w, r, http.StatusBadGateway, err.Error())
+		return
+	}
+	// Whatever was pointing at it now points at nothing, so the assignment
+	// goes too: leaving it would keep mcpd trying to run a tunnel that no
+	// longer exists.
+	if err := s.unassign(r, id); err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// checkPlugin rejects a system that is not mounted, because a tunnel bound to
+// one would connect and then serve nothing.
+func (s *Server) checkPlugin(plugin string) error {
+	if plugin == "" || s.opts.Plugins == nil {
+		return nil
+	}
+	if slices.Contains(s.opts.Plugins(), plugin) {
+		return nil
+	}
+	return fmt.Errorf("there is no system called %q", plugin)
+}
+
+// assign records which system a tunnel serves.
+func (s *Server) assign(r *http.Request, id, plugin string) error {
+	if s.opts.Settings == nil {
+		return fmt.Errorf("settings are unavailable")
+	}
+	key := settings.KeyTunnelID
+	if plugin != "" {
+		key = settings.PluginTunnelKey(plugin)
+	}
+	encoded, err := json.Marshal(id)
+	if err != nil {
+		return err
+	}
+	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, []settings.Change{
+		{Key: key, Value: string(encoded)},
+	})
+}
+
+// unassign clears every reference to a tunnel id.
+func (s *Server) unassign(r *http.Request, id string) error {
+	if s.opts.Settings == nil {
+		return fmt.Errorf("settings are unavailable")
+	}
+	ctx := r.Context()
+
+	var changes []settings.Change
+	keys := []string{settings.KeyTunnelID}
+	if s.opts.Plugins != nil {
+		for _, name := range s.opts.Plugins() {
+			keys = append(keys, settings.PluginTunnelKey(name))
+		}
+	}
+	for _, key := range keys {
+		var current string
+		if found, err := s.opts.Settings.GetJSON(ctx, key, &current); err != nil || !found {
+			continue
+		}
+		if current == id {
+			changes = append(changes, settings.Change{Key: key, Delete: true})
+		}
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+	return s.opts.Settings.Apply(ctx, auth.FromContext(ctx).ID, changes)
+}
+
+// decode reads a small JSON body, reporting a failure to the client.
+func (s *Server) decode(w http.ResponseWriter, r *http.Request, out any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(out); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "the request could not be read")
+		return false
+	}
+	return true
 }

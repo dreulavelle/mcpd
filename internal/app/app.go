@@ -283,6 +283,16 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Audit:      sqlite.NewAuditStore(db),
 			PublicURL:  cfg.Server.PublicURL,
 			AuthMode:   cfg.Auth.Mode,
+			Plugins:    func() []string { return a.manager.Names() },
+			Directory: func() *tunnel.Directory {
+				// Read at call time: the admin key is a setting, and one
+				// captured at startup would be the key the deployment began
+				// with rather than the one just saved.
+				ctx := context.Background()
+				return tunnel.NewDirectory(
+					a.settings.Secret(ctx, settings.KeyTunnelAdminKey, ""),
+					a.cfg.Tunnel.ControlPlaneBaseURL)
+			},
 			CACertificate: func() []byte {
 				if a.tls == nil {
 					return nil
