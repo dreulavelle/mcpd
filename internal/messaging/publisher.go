@@ -223,13 +223,3 @@ func (p *Publisher) backoff(attempts int) time.Duration {
 	jittered := delay/2 + rand.Float64()*(delay/2)
 	return time.Duration(jittered)
 }
-
-// Wait blocks until Run has returned.
-func (p *Publisher) Wait(ctx context.Context) error {
-	select {
-	case <-p.done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}

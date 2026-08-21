@@ -13,12 +13,6 @@ func groupConfig(plugin, id string) Config {
 	cfg := testConfig()
 	cfg.Plugin = plugin
 	cfg.TunnelID = id
-	// An MCP URL keeps these on the HTTP binding, which is what a real OAuth
-	// deployment uses and what per-plugin tunnels exist for.
-	cfg.MCPServerURL = "https://192.168.1.10:9080/mcp"
-	if plugin != "" {
-		cfg.MCPServerURL += "/" + plugin
-	}
 	return cfg
 }
 
@@ -168,9 +162,6 @@ func TestStatusNamesTheSystemEachTunnelServes(t *testing.T) {
 	if len(statuses) != 1 || statuses[0].Plugin != "echo" {
 		t.Fatalf("status = %+v, want it to name echo", statuses)
 	}
-	if !strings.HasSuffix(statuses[0].MCPURL, "/mcp/echo") {
-		t.Fatalf("MCPURL = %q, want this plugin's own endpoint", statuses[0].MCPURL)
-	}
 }
 
 func TestSameAsIgnoresPluginOrder(t *testing.T) {
@@ -223,8 +214,6 @@ func TestSameAsComparesEveryFieldThatChangesBehaviour(t *testing.T) {
 		{"plugin", func(c *Config) { c.Plugin = "other" }},
 		{"tunnel id", func(c *Config) { c.TunnelID = "tunnel_2123456789abcdef0123456789abcdef" }},
 		{"api key", func(c *Config) { c.APIKey = "sk-different" }},
-		{"mcp url", func(c *Config) { c.MCPServerURL = "https://elsewhere/mcp" }},
-		{"trusted CA", func(c *Config) { c.TrustedCAFile = "/somewhere/else.pem" }},
 		{"control plane", func(c *Config) { c.ControlPlaneBaseURL = "https://elsewhere" }},
 		{"diagnostics", func(c *Config) { c.DiagnosticsAddr = "127.0.0.1:1234" }},
 		{"debug", func(c *Config) { c.Debug = !c.Debug }},

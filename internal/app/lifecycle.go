@@ -113,10 +113,9 @@ func (a *App) Run(ctx context.Context) error {
 	// unreachable must not hold up the listeners, and it can be started from
 	// the dashboard afterwards.
 	//
-	// It waits for the MCP listener first. A tunnel client bound over HTTP
-	// probes mcpd as it starts, and a probe that lands before the listener is
-	// accepting fails and stays failed -- readiness reports OAuth discovery as
-	// broken for a server that came up fine a second later.
+	// It waits for the listeners first. A connected tunnel can carry a tool
+	// call immediately, and answering one before the host is serving would
+	// report a failure for a plugin that was moments from being ready.
 	if a.tunnels.Enabled() {
 		a.startWorker("tunnel", workerCtx, func(ctx context.Context) error {
 			select {

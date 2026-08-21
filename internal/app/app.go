@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -194,13 +193,12 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	}
 	a.settings = settings.NewStore(db, cipher, time.Now)
 
-	// The tunnel serves the same aggregate catalogue an HTTP client would get,
-	// built for its configured grants. It runs in process, so there is no
-	// request to authenticate and its identity comes from configuration.
-	// Issued before anything that depends on it. The embedded tunnel client
-	// has to be told about this certificate authority when it is built -- it
-	// makes outbound requests back to mcpd for OAuth discovery and the
-	// tunnelled token endpoint, and without the CA both fail verification.
+	// Issued before the listeners that present it. A browser reaching the
+	// dashboard and a direct MCP client both verify against this, and the CA
+	// is downloadable from the dashboard so it can be trusted once.
+	//
+	// The tunnel needs nothing from it: it drives an MCP server in this
+	// process over an in-memory transport and never dials mcpd back.
 	if cfg.Server.TLS.Enabled() {
 		materials, err := servertls.EnsureSelfSigned(
 			cfg.TLSDir(),
@@ -409,9 +407,6 @@ func (a *App) PluginNames() []string { return a.manager.Names() }
 // Handler exposes the HTTP handler, for tests.
 func (a *App) Handler() http.Handler { return a.host.Handler() }
 
-// dataDir returns the directory holding all mutable state.
-func (a *App) dataDir() string { return filepath.Dir(a.cfg.Storage.Path) }
-
 // nowMillis returns the current time in Unix milliseconds.
 func nowMillis() int64 { return time.Now().UnixMilli() }
 
@@ -563,9 +558,6 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 	// automatically tunneled" and that Harpoon is "not a general-purpose
 	// proxy", so the connector fetched the protected-resource metadata, found
 	// an authorization server it could not reach, and stopped.
-	if a.tls != nil {
-		cfg.TrustedCAFile = a.tls.CAPath
-	}
 	// Loopback only, and only inside this process's network namespace: it is
 	// unauthenticated, and it exists for someone already on the host running
 	// curl against it.

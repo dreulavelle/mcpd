@@ -70,8 +70,9 @@ func NewStaticToken(id, plaintext string, p Principal) (*StaticToken, error) {
 }
 
 // StaticVerifier authenticates against a fixed set of tokens. It suits
-// machine-to-machine callers and local development; ChatGPT connects over
-// OAuth instead.
+// machine callers that cannot complete a sign-in form; people sign in to the
+// dashboard with a password, and ChatGPT arrives through a tunnel that carries
+// its own identity.
 type StaticVerifier struct {
 	tokens []*StaticToken
 }

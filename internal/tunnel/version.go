@@ -155,13 +155,6 @@ func NewChecker(client *http.Client, log *slog.Logger, interval time.Duration) *
 	}
 }
 
-// WithReleaseURL overrides where releases are looked up. It exists for tests
-// and for hosts that mirror GitHub behind a proxy.
-func (c *Checker) WithReleaseURL(url string) *Checker {
-	c.releaseURL = url
-	return c
-}
-
 // Info returns the most recent result.
 func (c *Checker) Info() VersionInfo {
 	c.mu.RLock()
