@@ -21,9 +21,10 @@ import (
 // every tunnel in the organisation, so it is used only for the request an
 // operator explicitly asked for and never held by the running client.
 type Directory struct {
-	adminKey string
-	orgID    string
-	baseURL  string
+	adminKey    string
+	orgID       string
+	workspaceID string
+	baseURL     string
 }
 
 // ErrNoAdminKey means tunnel management is unavailable, not that it failed.
@@ -31,11 +32,12 @@ var ErrNoAdminKey = errors.New("tunnel: no admin key is configured")
 
 // NewDirectory returns a directory. Missing credentials leave it unavailable
 // rather than failing, so the dashboard can offer paste-an-id instead.
-func NewDirectory(adminKey, orgID, baseURL string) *Directory {
+func NewDirectory(adminKey, orgID, workspaceID, baseURL string) *Directory {
 	return &Directory{
-		adminKey: strings.TrimSpace(adminKey),
-		orgID:    strings.TrimSpace(orgID),
-		baseURL:  baseURL,
+		adminKey:    strings.TrimSpace(adminKey),
+		orgID:       strings.TrimSpace(orgID),
+		workspaceID: strings.TrimSpace(workspaceID),
+		baseURL:     baseURL,
 	}
 }
 
@@ -95,11 +97,19 @@ func (d *Directory) Create(ctx context.Context, name, description string) (*Tunn
 	if strings.TrimSpace(name) == "" {
 		return nil, errors.New("tunnel: a name is required")
 	}
-	t, err := client.CreateTunnel(ctx, tcadmin.TunnelCreateRequest{
+	// A workspace is sent alongside the organisation when one is configured.
+	// OpenAI's own CLI requires at least one of the two and passes both when
+	// it has them, and a tunnel scoped only to the organisation is not
+	// necessarily visible where ChatGPT is looking.
+	req := tcadmin.TunnelCreateRequest{
 		Name:            name,
 		Description:     description,
 		OrganizationIDs: []string{d.orgID},
-	})
+	}
+	if d.workspaceID != "" {
+		req.WorkspaceIDs = []string{d.workspaceID}
+	}
+	t, err := client.CreateTunnel(ctx, req)
 	if err != nil {
 		return nil, d.explain(err)
 	}

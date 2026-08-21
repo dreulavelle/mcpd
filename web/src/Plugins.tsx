@@ -178,7 +178,7 @@ function TunnelControl({ plugin, tunnels, tunnel, onChange, show }: {
     setBusy(true);
     try {
       await api.createTunnel(plugin.title, plugin.name);
-      show("good", "Tunnel made.");
+      show("good", "Made. Give it about 30 seconds to become active in ChatGPT.");
     } catch (e) {
       show("problem", e instanceof ApiError ? e.detail : "Couldn't make it.");
     } finally {
