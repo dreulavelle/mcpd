@@ -45,6 +45,10 @@ const (
 
 // Config describes the tunnel.
 type Config struct {
+	// Enabled switches the tunnel on. It is separate from TunnelID so a
+	// configured tunnel can be turned off without losing its settings.
+	Enabled bool
+
 	// TunnelID identifies the tunnel in OpenAI's control plane.
 	TunnelID string
 	// APIKey is a *runtime* key. An admin key is for creating and deleting
@@ -63,9 +67,17 @@ type Config struct {
 	// default.
 	ControlPlaneBaseURL string
 
-	// ReadyTimeout bounds how long Start waits for the connection before
-	// reporting failure. Zero uses 30 seconds, which is long enough for a slow
-	// control plane and short enough that an operator gets an answer.
+	// LogLevel controls how much of the tunnel client's own output is kept.
+	// Info is the default, because at Warn a rejected credential produces no
+	// explanation at all.
+	LogLevel slog.Level
+
+	// ReadyTimeout is retained for compatibility and no longer gates startup.
+	//
+	// Readiness is now watched rather than waited on: the client reports ready
+	// after its first completed control-plane poll, and an idle tunnel's first
+	// poll waits out the poll timeout while being perfectly healthy. Treating
+	// that as a failure tore down working tunnels.
 	ReadyTimeout time.Duration
 }
 
@@ -216,8 +228,11 @@ func (m *Manager) Start(ctx context.Context) error {
 		TunnelID:            m.cfg.TunnelID,
 		APIKey:              m.cfg.APIKey,
 		ControlPlaneBaseURL: m.cfg.ControlPlaneBaseURL,
-		LogLevel:            slog.LevelWarn,
-		LogWriter:           logWriter{log: m.log},
+		// The client's own output is the only place a 401 or a permission
+		// problem is visible; without it a failure is just "deadline
+		// exceeded", which says nothing an operator can act on.
+		LogLevel:  m.cfg.LogLevel,
+		LogWriter: logWriter{log: m.log},
 	}, tunnelTransport)
 	if err != nil {
 		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, m.cfg.APIKey)))
@@ -242,10 +257,6 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 
-	m.mu.Lock()
-	m.cancel = cancel
-	m.mu.Unlock()
-
 	m.running.Add(1)
 	go func() {
 		defer m.running.Done()
@@ -257,33 +268,43 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 	}()
 
-	// Waiting for readiness turns "did my tunnel ID work" into an immediate
-	// answer instead of something an operator has to infer from logs.
-	readyTimeout := m.cfg.ReadyTimeout
-	if readyTimeout <= 0 {
-		readyTimeout = 30 * time.Second
-	}
-	readyCtx, readyCancel := context.WithTimeout(ctx, readyTimeout)
-	defer readyCancel()
+	// Readiness is watched rather than waited on.
+	//
+	// The client reports ready after its first *completed* control-plane poll,
+	// and an empty poll waits out the poll timeout before completing. A tunnel
+	// with nothing to do is therefore slow to report ready while being
+	// perfectly healthy -- so blocking on it, and tearing the client down when
+	// it does not arrive, destroys a working tunnel for no reason.
+	//
+	// Start returns as soon as the client is running. The state moves from
+	// starting to connected on its own.
+	m.running.Add(1)
+	go func() {
+		defer m.running.Done()
+		select {
+		case <-client.Ready():
+			now := time.Now()
+			m.mu.Lock()
+			// Only claim connected if nothing stopped us in the meantime.
+			if m.state == StateStarting {
+				m.state = StateConnected
+				m.connectedAt = &now
+				m.message = ""
+			}
+			m.mu.Unlock()
+			m.log.Info("tunnel connected",
+				"tunnel_id", m.cfg.TunnelID,
+				"principal", m.cfg.Principal.ID,
+				"plugins", m.cfg.Principal.Plugins)
+		case <-runCtx.Done():
+		}
+	}()
 
-	if err := client.WaitUntilReady(readyCtx); err != nil {
-		cancel()
-		wrapped := fmt.Errorf(
-			"tunnel: did not connect within %s. Check that the tunnel ID exists and "+
-				"that the API key is a runtime key whose principal has Tunnels Read and "+
-				"Use: %w", readyTimeout, redactKey(err, m.cfg.APIKey))
-		m.fail(wrapped)
-		return wrapped
-	}
-
-	now := time.Now()
 	m.mu.Lock()
-	m.state = StateConnected
-	m.connectedAt = &now
-	m.message = ""
+	m.cancel = cancel
 	m.mu.Unlock()
 
-	m.log.Info("tunnel connected",
+	m.log.Info("tunnel started; waiting for the first control-plane poll",
 		"tunnel_id", m.cfg.TunnelID,
 		"principal", m.cfg.Principal.ID,
 		"plugins", m.cfg.Principal.Plugins)
@@ -317,6 +338,34 @@ func (m *Manager) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// Reconfigure replaces the configuration and restarts if it is enabled.
+//
+// This is what makes the dashboard mean anything: a tunnel id pasted into a
+// form has to reach the running tunnel, not just the database. It stops first
+// so a changed key or id never keeps serving under the old one.
+func (m *Manager) Reconfigure(ctx context.Context, cfg Config) error {
+	if err := m.Stop(ctx); err != nil {
+		m.log.Warn("previous tunnel did not stop cleanly before reconfiguring", "error", err)
+	}
+
+	m.mu.Lock()
+	m.cfg = cfg
+	m.message = ""
+	m.connectedAt = nil
+	if cfg.TunnelID == "" || !cfg.Enabled {
+		m.state = StateDisabled
+		if cfg.TunnelID != "" {
+			m.state = StateStopped
+		}
+		m.mu.Unlock()
+		return nil
+	}
+	m.state = StateStopped
+	m.mu.Unlock()
+
+	return m.Start(ctx)
 }
 
 // Enabled reports whether a tunnel is configured.
@@ -353,9 +402,34 @@ func redactKey(err error, key string) error {
 type logWriter struct{ log *slog.Logger }
 
 func (w logWriter) Write(p []byte) (int, error) {
-	line := strings.TrimSpace(string(p))
-	if line != "" {
+	for _, line := range strings.Split(string(p), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Errors from the client matter more than its routine chatter, and an
+		// operator scanning for a cause should not have to read past the rest.
+		if strings.Contains(line, "level=ERROR") || strings.Contains(line, `"level":"ERROR"`) {
+			w.log.Error("tunnel-client", "line", line)
+			continue
+		}
 		w.log.Info("tunnel-client", "line", line)
 	}
 	return len(p), nil
+}
+
+// diagnose names the likeliest cause of a failure to connect.
+//
+// The two credentials involved look alike and are obtained from adjacent pages,
+// so the mistake is easy to make and nearly impossible to spot from a 401. An
+// admin key is recognisable by its prefix, which turns a guess into a
+// statement.
+func diagnose(apiKey string) string {
+	if strings.HasPrefix(apiKey, "sk-admin-") {
+		return "That looks like an admin key (it starts with sk-admin-). Admin keys " +
+			"can only create and delete tunnels, not run one. Use a runtime API key " +
+			"from Settings, Organization, API keys instead"
+	}
+	return "Check the tunnel ID exists, and that the key is a runtime API key whose " +
+		"principal has Tunnels Read and Use -- an admin key will not work"
 }

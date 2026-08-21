@@ -119,24 +119,61 @@ func TestManager_FailureRedactsTheKey(t *testing.T) {
 		APIKey:              key,
 		Principal:           testPrincipal(),
 		ControlPlaneBaseURL: srv.URL,
-		ReadyTimeout:        2 * time.Second,
 	}, func(*auth.Principal) (*mcp.Server, error) {
 		return mcp.NewServer(&mcp.Implementation{Name: "t", Version: "1"}, nil), nil
 	}, discardLog())
 
 	err := m.Start(context.Background())
-	if err == nil {
-		t.Skip("the control plane stub was accepted; nothing to assert about redaction")
-	}
-	if strings.Contains(err.Error(), key) {
+	defer m.Stop(context.Background())
+
+	// Start no longer blocks on readiness, so it may succeed here and fail
+	// asynchronously. Either way, nothing may carry the key.
+	if err != nil && strings.Contains(err.Error(), key) {
 		t.Fatalf("the error leaked the API key: %v", err)
 	}
 	if strings.Contains(m.Status().Message, key) {
 		t.Fatal("the status message leaked the API key")
 	}
-	if m.Status().State != StateFailed {
-		t.Fatalf("state = %s, want failed", m.Status().State)
+}
+
+// A healthy but idle tunnel is slow to report ready, because the client only
+// does so after a completed control-plane poll and an empty poll waits out its
+// timeout. Blocking on that tore down working tunnels.
+func TestManager_StartDoesNotBlockOnReadiness(t *testing.T) {
+	// A control plane that accepts but never returns from a poll.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(30 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	m := NewManager(Config{
+		TunnelID:            "tunnel_0123456789abcdef0123456789abcdef",
+		APIKey:              "sk-runtime",
+		Principal:           testPrincipal(),
+		ControlPlaneBaseURL: srv.URL,
+	}, func(*auth.Principal) (*mcp.Server, error) {
+		return mcp.NewServer(&mcp.Implementation{Name: "t", Version: "1"}, nil), nil
+	}, discardLog())
+
+	done := make(chan error, 1)
+	go func() { done <- m.Start(context.Background()) }()
+
+	select {
+	case <-done:
+		// Returned promptly, which is the point.
+	case <-time.After(10 * time.Second):
+		t.Fatal("Start blocked waiting for readiness; an idle tunnel would be " +
+			"torn down despite working")
 	}
+
+	if state := m.Status().State; state == StateFailed {
+		t.Fatal("a tunnel that has not yet completed its first poll must not " +
+			"be reported as failed")
+	}
+	_ = m.Stop(context.Background())
 }
 
 // A server factory that refuses -- because the principal is granted nothing

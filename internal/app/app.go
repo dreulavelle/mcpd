@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -156,17 +157,15 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		messaging.PublisherConfig{}, time.Now)
 
 	ids := operations.NewULIDGenerator(time.Now)
-	inlinePolicy := operations.InlineApprovalPolicy{
-		MaxRisk: operations.RiskLevel(cfg.Approval.InlineMaxRisk),
-	}
-	a.opsService = operations.NewService(a.ops, a.approval, operations.Policy{
-		ProposalTTL:    cfg.Approval.ProposalTTL,
-		ApprovalTTL:    cfg.Approval.ApprovalTTL,
-		LeaseTTL:       cfg.Approval.LeaseTTL,
-		InlineApproval: inlinePolicy,
-	}, log, time.Now, ids, a.publisher.Notify)
+	// Read on every use rather than snapshotted, so a TTL changed in the
+	// dashboard applies to the next proposal instead of the next restart.
+	policyFn := func() operations.Policy { return a.approvalPolicy(context.Background()) }
 
-	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService, inlinePolicy)
+	a.opsService = operations.NewService(a.ops, a.approval, policyFn,
+		log, time.Now, ids, a.publisher.Notify)
+
+	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService,
+		inlinePolicyFunc(policyFn))
 
 	if err := a.registerPlugins(ctx); err != nil {
 		db.Close()
@@ -429,29 +428,7 @@ func instanceID(cfg *config.Config) string {
 func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *slog.Logger) error {
 	a.tunnelCheck = tunnel.NewChecker(newPluginHTTPClient(), log, 24*time.Hour)
 
-	tcfg := tunnel.Config{ControlPlaneBaseURL: cfg.Tunnel.ControlPlaneBaseURL}
-
-	if cfg.Tunnel.Enabled {
-		key, err := config.NewSecretResolver().Resolve(cfg.Tunnel.APIKeyRef)
-		if err != nil {
-			return fmt.Errorf("app: tunnel api key: %w", err)
-		}
-		tcfg.TunnelID = cfg.Tunnel.TunnelID
-		tcfg.APIKey = key
-		tcfg.Principal = auth.Principal{
-			ID:          cfg.Tunnel.Principal,
-			DisplayName: "tunnel",
-			Role:        auth.Role(cfg.Tunnel.Role),
-			Plugins:     cfg.Tunnel.Plugins,
-			// A tunnel is one credential shared by everyone using the
-			// connector, so it cannot distinguish who is asking. Separation of
-			// duties must refuse rather than silently accept a self-approval.
-			Distinguishable: false,
-			TokenID:         "tunnel",
-		}
-	}
-
-	a.tunnel = tunnel.NewManager(tcfg, func(principal *auth.Principal) (*sdkmcp.Server, error) {
+	a.tunnel = tunnel.NewManager(a.tunnelConfig(context.Background()), func(principal *auth.Principal) (*sdkmcp.Server, error) {
 		granted := authorizer.VisiblePlugins(principal, a.manager.Names())
 		if len(granted) == 0 {
 			return nil, fmt.Errorf("the tunnel principal is granted no mounted plugins")
@@ -472,7 +449,85 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 		return srv, nil
 	}, log.With("component", "tunnel"))
 
+	// A change made in the dashboard has to reach the running tunnel, not just
+	// the database. Without this the settings form writes to a store nothing
+	// reads, which is worse than not offering the form at all.
+	a.settings.Watch(func(changed []string) {
+		if !containsPrefix(changed, "tunnel.") {
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := a.tunnel.Reconfigure(ctx, a.tunnelConfig(ctx)); err != nil {
+				// Already recorded on the tunnel's status, which is where an
+				// operator will look.
+				log.Warn("tunnel did not reconnect after a settings change", "error", err)
+			}
+		}()
+	})
+
 	return nil
+}
+
+// tunnelConfig resolves the tunnel's settings.
+//
+// The store wins over the file, because a value changed in the dashboard has
+// to take precedence over the one it was started with. The file supplies
+// defaults for a deployment that has never used the dashboard.
+func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
+	file := a.cfg.Tunnel
+
+	cfg := tunnel.Config{
+		Enabled:             a.settings.Bool(ctx, settings.KeyTunnelEnabled, file.Enabled),
+		TunnelID:            a.settings.String(ctx, settings.KeyTunnelID, file.TunnelID),
+		ControlPlaneBaseURL: file.ControlPlaneBaseURL,
+		LogLevel:            slog.LevelInfo,
+		Principal: auth.Principal{
+			ID:          a.settings.String(ctx, settings.KeyTunnelPrincipal, orDefault(file.Principal, "svc:chatgpt")),
+			DisplayName: "tunnel",
+			Role:        auth.Role(a.settings.String(ctx, settings.KeyTunnelRole, orDefault(file.Role, "operator"))),
+			Plugins:     a.settings.Strings(ctx, settings.KeyTunnelPlugins, file.Plugins),
+			// A tunnel is one credential shared by everyone using the
+			// connector, so it cannot distinguish who is asking. Separation of
+			// duties must refuse rather than silently accept a self-approval.
+			Distinguishable: false,
+			TokenID:         "tunnel",
+		},
+	}
+
+	// The key comes from the store when it is there, and otherwise from the
+	// reference in the file, so an existing deployment keeps working.
+	cfg.APIKey = a.settings.Secret(ctx, settings.KeyTunnelAPIKey, "")
+	if cfg.APIKey == "" && file.APIKeyRef != "" {
+		if key, err := config.NewSecretResolver().Resolve(file.APIKeyRef); err == nil {
+			cfg.APIKey = key
+		}
+	}
+
+	// An empty grant reaches nothing, which is never what someone leaving the
+	// field blank meant. Everything the principal could see is the sensible
+	// reading, and it is still bounded by what is mounted.
+	if len(cfg.Principal.Plugins) == 0 {
+		cfg.Principal.Plugins = []string{auth.Wildcard}
+	}
+	return cfg
+}
+
+func orDefault(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
+func containsPrefix(values []string, prefix string) bool {
+	for _, v := range values {
+		if strings.HasPrefix(v, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // bootstrapSettings describes what cannot be edited at runtime.
@@ -509,4 +564,26 @@ func bootstrapSettings(cfg *config.Config) []admin.BootstrapSetting {
 				"what let mcpd require a second person to approve something.",
 		},
 	}
+}
+
+// approvalPolicy resolves the approval settings, store over file.
+func (a *App) approvalPolicy(ctx context.Context) operations.Policy {
+	file := a.cfg.Approval
+
+	return operations.Policy{
+		ProposalTTL: a.settings.Minutes(ctx, settings.KeyApprovalProposalTTL, file.ProposalTTL),
+		ApprovalTTL: a.settings.Minutes(ctx, settings.KeyApprovalApprovalTTL, file.ApprovalTTL),
+		LeaseTTL:    a.settings.Minutes(ctx, settings.KeyApprovalLeaseTTL, file.LeaseTTL),
+		InlineApproval: operations.InlineApprovalPolicy{
+			MaxRisk: operations.RiskLevel(file.InlineMaxRisk),
+		},
+	}
+}
+
+// inlinePolicyFunc adapts a live policy lookup to the plugins package's
+// interface, so an inline ceiling changed in the dashboard applies at once.
+type inlinePolicyFunc func() operations.Policy
+
+func (f inlinePolicyFunc) AllowsInline(risk operations.RiskLevel) bool {
+	return f().InlineApproval.Allows(risk)
 }

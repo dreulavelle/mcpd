@@ -31,11 +31,13 @@ type Policy struct {
 // Service owns the approval workflow. It is the only thing that moves an
 // operation through the state machine.
 type Service struct {
-	repo   Repository
-	authz  *ApprovalPolicy
-	policy Policy
-	log    *slog.Logger
-	now    func() time.Time
+	repo  Repository
+	authz *ApprovalPolicy
+	// policyFn is read on every use rather than captured, so a setting changed
+	// at runtime applies to the next operation instead of the next restart.
+	policyFn func() Policy
+	log      *slog.Logger
+	now      func() time.Time
 	// notify wakes the outbox drain after a commit, so an approval reaches the
 	// executor immediately rather than on the next poll.
 	notify func()
@@ -51,15 +53,18 @@ type IDGenerator interface {
 }
 
 // NewService builds the approval service.
-func NewService(repo Repository, authz *ApprovalPolicy, policy Policy, log *slog.Logger, now func() time.Time, ids IDGenerator, notify func()) *Service {
+func NewService(repo Repository, authz *ApprovalPolicy, policyFn func() Policy, log *slog.Logger, now func() time.Time, ids IDGenerator, notify func()) *Service {
 	if now == nil {
 		now = time.Now
 	}
 	if notify == nil {
 		notify = func() {}
 	}
+	if policyFn == nil {
+		policyFn = func() Policy { return Policy{} }
+	}
 	return &Service{
-		repo: repo, authz: authz, policy: policy,
+		repo: repo, authz: authz, policyFn: policyFn,
 		log: log, now: now, ids: ids, notify: notify,
 	}
 }
@@ -105,7 +110,7 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 
 	// Risk may be raised by policy but never lowered, so a plugin cannot
 	// declare its way out of an operator's classification.
-	risk := MaxRisk(req.Risk, s.policy.RiskOverrides[req.Plugin+"."+req.Action])
+	risk := MaxRisk(req.Risk, s.policyFn().RiskOverrides[req.Plugin+"."+req.Action])
 
 	// Refuse at proposal time rather than at approval when the policy demands
 	// a distinct approver the auth mode cannot provide. Discovering it later
@@ -142,7 +147,7 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 		Impact:         req.Impact,
 		RequestedBy:    p.ID,
 		RequestedAt:    now,
-		ExpiresAt:      now.Add(s.policy.ProposalTTL),
+		ExpiresAt:      now.Add(s.policyFn().ProposalTTL),
 		CorrelationID:  req.CorrelationID,
 		IdempotencyKey: idem,
 	}
@@ -161,7 +166,7 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 		Audit: s.audit("operation.proposed", op, p.ID, "", StatePendingApproval,
 			map[string]any{"impact": op.Impact, "changes": op.Changes}),
 		Event:          s.event(subjectFor(StatePendingApproval), op),
-		IdempotencyTTL: s.policy.ProposalTTL * 2,
+		IdempotencyTTL: s.policyFn().ProposalTTL * 2,
 	})
 	if err != nil {
 		return nil, err
@@ -200,7 +205,7 @@ func (s *Service) ApproveInline(ctx context.Context, p *auth.Principal, operatio
 	if err != nil {
 		return nil, err
 	}
-	if !s.policy.InlineApproval.Allows(op.Risk) {
+	if !s.policyFn().InlineApproval.Allows(op.Risk) {
 		return nil, &GuardError{
 			ErrCode: CodeNotAuthorized,
 			Detail: fmt.Sprintf(
@@ -228,7 +233,7 @@ func (s *Service) approve(ctx context.Context, p *auth.Principal, op *Operation,
 		return nil, err
 	}
 
-	approvalExpiry := now.Add(s.policy.ApprovalTTL)
+	approvalExpiry := now.Add(s.policyFn().ApprovalTTL)
 	stored, err := s.repo.Transition(ctx, TransitionRequest{
 		OperationID: op.ID,
 		From:        StatePendingApproval,
@@ -438,3 +443,7 @@ func (s *Service) event(subject string, op *Operation) OutboxEvent {
 		Payload:       payload,
 	}
 }
+
+// PolicyForTest exposes the current policy so tests can assert it is read
+// live rather than captured at construction.
+func (s *Service) PolicyForTest() Policy { return s.policyFn() }
