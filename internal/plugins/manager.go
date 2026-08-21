@@ -239,6 +239,34 @@ func (m *Manager) AggregateServer(names []string) (*mcp.Server, error) {
 		return cached, nil
 	}
 
+	srv, err := m.BuildServer(names)
+	if err != nil {
+		return nil, err
+	}
+
+	if m.aggregates == nil {
+		m.aggregates = make(map[string]*mcp.Server)
+	}
+	m.aggregates[key] = srv
+	m.log.Info("built aggregate endpoint", "plugins", names)
+	return srv, nil
+}
+
+// BuildServer returns a server that is nobody else's.
+//
+// AggregateServer caches by plugin set, which is right when identity arrives
+// with each request. It is wrong when the identity is attached to the server
+// itself: a caller that wraps the result in middleware carrying a principal
+// would be writing that principal into an instance other callers share, and
+// adding another layer every time it reconnected. The first identity attached
+// would then answer for everyone, and changing it would appear to do nothing.
+//
+// A tunnel is exactly that caller, so it gets its own.
+func (m *Manager) BuildServer(names []string) (*mcp.Server, error) {
+	if len(names) == 0 {
+		return nil, fmt.Errorf("plugins: no plugins to serve")
+	}
+
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "mcpd",
 		Title:   "mcpd",
@@ -257,12 +285,6 @@ func (m *Manager) AggregateServer(names []string) (*mcp.Server, error) {
 			return nil, fmt.Errorf("plugins: aggregate %s: %w", name, err)
 		}
 	}
-
-	if m.aggregates == nil {
-		m.aggregates = make(map[string]*mcp.Server)
-	}
-	m.aggregates[key] = srv
-	m.log.Info("built aggregate endpoint", "plugins", names)
 	return srv, nil
 }
 

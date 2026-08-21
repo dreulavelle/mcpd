@@ -487,7 +487,11 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 		if len(granted) == 0 {
 			return nil, fmt.Errorf("the tunnel principal is granted no mounted plugins")
 		}
-		srv, err := a.manager.AggregateServer(granted)
+		// Its own server, not the shared one: the principal is attached below
+		// as middleware, and writing that into a cached instance would give
+		// every other caller this identity and stack another layer on every
+		// reconnect -- so a changed role would appear to save and do nothing.
+		srv, err := a.manager.BuildServer(granted)
 		if err != nil {
 			return nil, err
 		}
