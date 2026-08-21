@@ -162,6 +162,11 @@ type SecretSource interface {
 // corrupt it, which makes the guarantee structural rather than a convention
 // that reviewers have to enforce.
 type Deps struct {
+	// Instance is the name this plugin is configured under, which is not
+	// necessarily its type: two instances of one integration differ only by
+	// this. It is what the endpoint, the tool prefix, and every operation
+	// record are keyed on.
+	Instance string
 	// Log is pre-tagged with the plugin name.
 	Log *slog.Logger
 	// Store is namespaced to this plugin.

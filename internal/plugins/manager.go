@@ -85,8 +85,17 @@ func NewManager(log *slog.Logger, version string, middleware ToolMiddleware, app
 // Registration is explicit and happens at startup. Nothing is discovered by
 // scanning, and no init() side effects are involved, so the set of plugins a
 // binary can serve is exactly the set named in the composition root.
-func (m *Manager) Register(ctx context.Context, p Plugin, required bool) error {
+func (m *Manager) Register(ctx context.Context, p Plugin, instance string, required bool) error {
 	d := p.Descriptor()
+
+	// The configured name wins over the one the plugin declares. A plugin
+	// knows what it is; only the host knows which of it this is, and the name
+	// is what the endpoint, the tool prefix, and every operation record are
+	// keyed on. Overriding centrally means a plugin author cannot get it
+	// wrong by returning a constant.
+	if instance != "" {
+		d.Name = instance
+	}
 	if err := d.Validate(); err != nil {
 		return err
 	}

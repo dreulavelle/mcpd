@@ -87,8 +87,11 @@ func (a *App) registerPlugins(ctx context.Context) error {
 		pc := a.cfg.Plugins[name]
 		deps := a.pluginDeps(name)
 
+		// The switch is on the type, not the name. They are the same thing
+		// until someone configures two instances of one integration, at which
+		// point the name is what tells them apart everywhere else.
 		var p plugins.Plugin
-		switch name {
+		switch pc.ResolvedType(name) {
 		case "echo":
 			p = echoplugin.New(deps)
 
@@ -104,11 +107,12 @@ func (a *App) registerPlugins(ctx context.Context) error {
 			p = built
 
 		default:
-			return fmt.Errorf("app: plugin %q is enabled in configuration "+
-				"but not compiled into this binary", name)
+			return fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
+				"configuration but not compiled into this binary",
+				name, pc.ResolvedType(name))
 		}
 
-		if err := a.manager.Register(ctx, p, pc.Required); err != nil {
+		if err := a.manager.Register(ctx, p, name, pc.Required); err != nil {
 			return err
 		}
 	}
@@ -157,7 +161,7 @@ func (a *App) registerExternalPlugins(ctx context.Context) error {
 				"plugin", m.Name, "error", err)
 			continue
 		}
-		if err := a.manager.Register(ctx, p, m.Required); err != nil {
+		if err := a.manager.Register(ctx, p, m.Name, m.Required); err != nil {
 			if m.Required {
 				return err
 			}
@@ -175,12 +179,13 @@ func (a *App) registerExternalPlugins(ctx context.Context) error {
 // plugin's stored state or publish events under another plugin's subject.
 func (a *App) pluginDeps(name string) plugins.Deps {
 	return plugins.Deps{
-		Log:     a.log.With("plugin", name),
-		Store:   newPluginStore(a.db, name),
-		Events:  newPluginPublisher(a.db, name),
-		Secrets: newPluginSecrets(a.cfg, name),
-		HTTP:    newPluginHTTPClient(),
-		Now:     time.Now,
+		Instance: name,
+		Log:      a.log.With("plugin", name),
+		Store:    newPluginStore(a.db, name),
+		Events:   newPluginPublisher(a.db, name),
+		Secrets:  newPluginSecrets(a.cfg, name),
+		HTTP:     newPluginHTTPClient(),
+		Now:      time.Now,
 	}
 }
 
