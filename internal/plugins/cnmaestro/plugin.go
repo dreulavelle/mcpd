@@ -2,7 +2,6 @@ package cnmaestro
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -15,34 +14,23 @@ type Plugin struct {
 	cfg    Config
 	client *Client
 
+	// configured reports whether credentials were supplied. A plugin without
+	// them still mounts, so its settings form has somewhere to live.
+	configured bool
+
 	mu      sync.RWMutex
 	lastErr error
 	checked time.Time
 }
 
-// New constructs the plugin.
-//
-// Credentials are resolved here rather than held in Config, so a configuration
-// dump — a log line, an error, the settings page — cannot carry them.
+// New constructs the plugin from resolved settings.
 func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 	cfg.withDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-
-	clientID, err := deps.Secrets.Secret(cfg.ClientIDRef)
-	if err != nil {
-		return nil, fmt.Errorf("cnmaestro: client_id_ref: %w", err)
-	}
-	secret, err := deps.Secrets.Secret(cfg.ClientSecretRef)
-	if err != nil {
-		return nil, fmt.Errorf("cnmaestro: client_secret_ref: %w", err)
-	}
-	if clientID == "" || secret == "" {
-		return nil, fmt.Errorf("cnmaestro: client_id_ref and client_secret_ref " +
-			"must resolve to values; both come from Download Credentials in " +
-			"cnMaestro under Services > API Clients")
-	}
+	clientID, secret := cfg.ClientID, cfg.ClientSecret
+	configured := cfg.Configured()
 
 	http := deps.HTTP
 	if http != nil && cfg.Timeout > 0 {
@@ -53,10 +41,15 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 		http = &clone
 	}
 
+	// The credential is not kept on the config the plugin holds, so a dump of
+	// it -- a log line, an error, the settings page -- cannot carry one.
+	cfg.ClientID, cfg.ClientSecret = "", ""
+
 	return &Plugin{
-		deps:   deps,
-		cfg:    cfg,
-		client: NewClient(http, cfg, clientID, secret, deps.Log, deps.Now),
+		deps:       deps,
+		cfg:        cfg,
+		configured: configured,
+		client:     NewClient(http, cfg, clientID, secret, deps.Log, deps.Now),
 	}, nil
 }
 
@@ -80,6 +73,15 @@ func (p *Plugin) Descriptor() plugins.Descriptor {
 // startup means a wrong client id is a message on the dashboard rather than a
 // confusing failure inside the first tool call an assistant makes.
 func (p *Plugin) Start(ctx context.Context) error {
+	if !p.configured {
+		// Not an error the host should die on. The plugin is mounted, its
+		// settings form is on the Plugins page, and Check says what is
+		// missing -- which is the whole path someone follows to fix it.
+		p.deps.Log.Info("cnmaestro has no credentials yet; " +
+			"add them on the Plugins page")
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
 	defer cancel()
 
@@ -105,6 +107,9 @@ func (p *Plugin) Check(_ context.Context) plugins.Health {
 	p.mu.RUnlock()
 
 	switch {
+	case !p.configured:
+		return plugins.Degraded("no API credentials yet — add a client ID and " +
+			"secret below, then restart")
 	case checked.IsZero():
 		return plugins.Degraded("has not reached cnMaestro yet")
 	case err != nil:

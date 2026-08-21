@@ -45,6 +45,16 @@ type Options struct {
 	// from AuditReader because reading and removing are different rights.
 	Pruner AuditPruner
 
+	// PluginType reports what integration an instance is of, which is not the
+	// instance's own name once someone configures two of something.
+	PluginType func(instance string) string
+
+	// Catalog returns every setting the running host has, its own and the
+	// configured plugin instances' alike. A function because instances change
+	// while the host runs, so a value captured at construction would describe
+	// the host as it started rather than as it is.
+	Catalog func() *settings.Catalog
+
 	// Accounts backs the sign-in form and the Users page. It is separate from
 	// Verifier because the two authenticate different callers: a person with a
 	// password and a session, or a script with a bearer token.
@@ -274,6 +284,18 @@ func (s *Server) authenticate(required auth.Capability, next http.HandlerFunc) h
 	})
 }
 
+// catalog returns the settings this host has, falling back to its own when no
+// plugin catalog was supplied. Falling back rather than failing keeps the
+// settings page working for a host with no plugins configured.
+func (s *Server) catalog() *settings.Catalog {
+	if s.opts.Catalog != nil {
+		if c := s.opts.Catalog(); c != nil {
+			return c
+		}
+	}
+	return settings.NewCatalog()
+}
+
 // --- handlers --------------------------------------------------------------
 
 type metaResponse struct {
@@ -438,7 +460,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	resp := settingsResponse{
-		Groups:     settings.Schema(),
+		Groups:     s.catalog().Groups(),
 		Values:     map[string]any{},
 		SecretsSet: map[string]bool{},
 		Encryption: s.opts.Settings.HasCipher(),
@@ -514,7 +536,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	// bad field changes nothing rather than applying the rest.
 	var problems []string
 	for key, value := range req.Values {
-		if err := settings.Validate(key, value); err != nil {
+		if err := s.catalog().Validate(key, value); err != nil {
 			problems = append(problems, err.Error())
 		}
 	}
@@ -531,7 +553,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	resp := putSettingsResponse{}
 
 	for key, value := range req.Values {
-		field, _ := settings.FieldFor(key)
+		field, _ := s.catalog().FieldFor(key)
 		secret := field.Kind == settings.KindSecret
 
 		stored := value
@@ -743,7 +765,11 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, fn decisionFunc)
 }
 
 type pluginDTO struct {
-	Name        string `json:"name"`
+	Name string `json:"name"`
+	// Type is the integration this is an instance of. It equals Name unless
+	// someone has configured more than one of something, which is the case the
+	// dashboard has to group by.
+	Type        string `json:"type"`
 	Version     string `json:"version"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
@@ -751,13 +777,18 @@ type pluginDTO struct {
 	// ConnectURL is the full address to paste into a client, rather than the
 	// bare path. It is the thing an operator actually needs and the thing they
 	// are most likely to assemble wrongly by hand.
-	ConnectURL string       `json:"connect_url"`
-	Health     string       `json:"health"`
-	Message    string       `json:"health_message,omitempty"`
-	Tools      []toolDTO    `json:"tools"`
-	Mutations  []string     `json:"mutations"`
-	Required   bool         `json:"required"`
-	Settings   []settingDTO `json:"settings"`
+	ConnectURL string    `json:"connect_url"`
+	Health     string    `json:"health"`
+	Message    string    `json:"health_message,omitempty"`
+	Tools      []toolDTO `json:"tools"`
+	Mutations  []string  `json:"mutations"`
+	Required   bool      `json:"required"`
+	// SettingsGroup names this instance's group in the settings payload, so
+	// the page listing plugins can render the form beside the plugin it
+	// configures rather than sending someone elsewhere. Empty when the plugin
+	// declares no settings.
+	SettingsGroup string       `json:"settings_group,omitempty"`
+	Settings      []settingDTO `json:"settings"`
 }
 
 // toolDTO describes one tool for the plugin list.
@@ -819,13 +850,37 @@ func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
 			Description: d.Description, Endpoint: d.Endpoint(),
 			ConnectURL: s.connectURL(d.Endpoint()),
 			Health:     string(h.State), Message: h.Message,
-			Tools:     tools,
-			Mutations: mutations,
-			Required:  m.Required,
-			Settings:  s.settingsFor(d.Name),
+			Tools:         tools,
+			Mutations:     mutations,
+			Required:      m.Required,
+			Type:          s.pluginType(d.Name),
+			SettingsGroup: s.settingsGroupFor(d.Name),
+			Settings:      s.settingsFor(d.Name),
 		})
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"plugins": out, "count": len(out)})
+}
+
+// pluginType reports what an instance is an instance of.
+func (s *Server) pluginType(instance string) string {
+	if s.opts.PluginType == nil {
+		return instance
+	}
+	if t := s.opts.PluginType(instance); t != "" {
+		return t
+	}
+	return instance
+}
+
+// settingsGroupFor names an instance's settings group, when it has one.
+func (s *Server) settingsGroupFor(instance string) string {
+	name := "plugin:" + instance
+	for _, g := range s.catalog().Groups() {
+		if g.Name == name {
+			return name
+		}
+	}
+	return ""
 }
 
 // connectURL builds the address a client connects to.

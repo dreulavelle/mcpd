@@ -44,6 +44,7 @@ type App struct {
 	health  *observability.HealthRegistry
 
 	accounts      *users.Store
+	types         *plugins.Catalog
 	approval      *operations.ApprovalPolicy
 	opsService    *operations.Service
 	executor      *operations.Executor
@@ -141,6 +142,37 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	a.opsService = operations.NewService(a.ops, a.approval, policyFn,
 		log, time.Now, ids, a.publisher.Notify)
 
+	types, err := builtinTypes()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	a.types = types
+
+	// Runtime configuration lives in the database so it can be managed from
+	// the dashboard. Secrets in it are encrypted with a key that stays
+	// outside, which is what makes typing one into a form safe.
+	//
+	// Before plugins are built, because a plugin's own settings live here now
+	// and it is constructed from them.
+	var cipher *settings.Cipher
+	if ref := cfg.SecretKeyRef; ref != "" {
+		key, keyErr := settings.ResolveKey(ref, os.Getenv("CREDENTIALS_DIRECTORY"))
+		if keyErr != nil {
+			db.Close()
+			return nil, fmt.Errorf("app: settings encryption key: %w", keyErr)
+		}
+		if cipher, err = settings.NewCipher(key); err != nil {
+			db.Close()
+			return nil, err
+		}
+	} else {
+		log.Warn("no settings encryption key is configured; " +
+			"secrets cannot be set from the dashboard. " +
+			"Generate one with: openssl rand -base64 32")
+	}
+	a.settings = settings.NewStore(db, cipher, time.Now)
+
 	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService,
 		inlinePolicyFunc(policyFn))
 
@@ -171,27 +203,6 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		db.Close()
 		return nil, err
 	}
-
-	// Runtime configuration lives in the database so it can be managed from
-	// the dashboard. Secrets in it are encrypted with a key that stays
-	// outside, which is what makes typing one into a form safe.
-	var cipher *settings.Cipher
-	if ref := cfg.SecretKeyRef; ref != "" {
-		key, keyErr := settings.ResolveKey(ref, os.Getenv("CREDENTIALS_DIRECTORY"))
-		if keyErr != nil {
-			db.Close()
-			return nil, fmt.Errorf("app: settings encryption key: %w", keyErr)
-		}
-		if cipher, err = settings.NewCipher(key); err != nil {
-			db.Close()
-			return nil, err
-		}
-	} else {
-		log.Warn("no settings encryption key is configured; " +
-			"secrets cannot be set from the dashboard. " +
-			"Generate one with: openssl rand -base64 32")
-	}
-	a.settings = settings.NewStore(db, cipher, time.Now)
 
 	// Issued before the listeners that present it. A browser reaching the
 	// dashboard and a direct MCP client both verify against this, and the CA
@@ -256,6 +267,10 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Pruner:     a.audit,
 			PublicURL:  cfg.Server.PublicURL,
 			Accounts:   a.accounts,
+			Catalog:    a.settingsCatalog,
+			PluginType: func(instance string) string {
+				return a.cfg.Plugins[instance].ResolvedType(instance)
+			},
 			SessionTTL: cfg.Auth.Accounts.SessionTTL,
 			Plugins:    func() []string { return a.manager.Names() },
 			Directory: func() *tunnel.Directory {
