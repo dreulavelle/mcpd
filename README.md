@@ -9,7 +9,7 @@ behind an approval it can prove.
                             │  Secure MCP Tunnel (outbound)
               ┌─────────────┼─────────────┐
               ▼             ▼             ▼
-       /mcp/cnmaestro  /mcp/netbox  /mcp/proxmox
+        /mcp/echo      /mcp/…        /mcp/…
               └─────────────┼─────────────┘
                             ▼
                           mcpd
@@ -84,10 +84,10 @@ Scripts that cannot fill in a sign-in form use a bearer token from
 ## How a change gets made
 
 ```
-  cnmaestro_set_radio_channel      →  operation_id, state=pending_approval
+  echo_set_label                   →  operation_id, state=pending_approval
        (nothing has changed)
 
-  cnmaestro_approve_operation      →  state=approved
+  echo_approve_operation           →  state=approved
        (a human decides)
 
   executor                         →  reload, revalidate, claim, apply, verify
@@ -114,18 +114,18 @@ See [`configs/example.yaml`](configs/example.yaml).
 `credential:` (systemd `LoadCredential`), or `file:` reference resolved at
 startup. A config file that never holds a token cannot leak one.
 
-**Scoping is per credential.** This agent reaches `/mcp/cnmaestro` and nothing
-else — every other endpoint returns 404, so it cannot discover what else is
+**Scoping is per credential.** This agent reaches `/mcp/echo` and nothing else
+— every other endpoint returns 404, so it cannot discover what else is
 deployed:
 
 ```yaml
 auth:
   static_tokens:
-    - id: chatgpt-cnmaestro
+    - id: chatgpt-echo
       secret_ref: env:MCPD_TOKEN_CHATGPT
       principal: svc:chatgpt
       role: user
-      plugins: [cnmaestro]
+      plugins: [echo]
 ```
 
 ## Writing a plugin
@@ -171,17 +171,22 @@ image is 24 MB, distroless, non-root, with a read-only root filesystem.
 Terminate TLS at a reverse proxy and bind mcpd to loopback, or let mcpd issue
 its own certificate with `server.tls.mode: self-signed`.
 
+## Integrations
+
+| Plugin | What it manages | State |
+|---|---|---|
+| `echo` | Nothing real — a worked example, including an approval-gated write | Bundled |
+| `cnmaestro` | Cambium cnMaestro: Wi-Fi and fixed-wireless estates | In progress |
+
+Anything else is a plugin you write. See below.
+
 ## Status
 
 Working: the MCP host with per-plugin endpoints and scoping; OpenAI's Secure
 MCP Tunnel, embedded, one per connector; accounts with first-run registration;
 the approval engine end to end, including confirmation raised in the
-conversation; SQLite storage with a hash-chained audit trail; the cnMaestro
-plugin; the dashboard; and the out-of-process plugin SDK.
-
-Not yet validated: cnMaestro's write path is built against the published 6.3.0
-specification and tested against a fake controller, not real hardware. Confirm
-before the first production write.
+conversation; SQLite storage with a hash-chained audit trail; the dashboard;
+and the out-of-process plugin SDK.
 
 ## Development
 

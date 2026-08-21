@@ -225,10 +225,13 @@ dropped except `CAP_NET_BIND_SERVICE`, and a syscall filter.
 The container image is distroless, non-root (uid 65532), read-only root
 filesystem, with `/tmp` on tmpfs.
 
-## Known gaps
+## Plugins are not architecture
 
-cnMaestro's write path is built against the published 6.3.0 specification and
-tested against a fake controller, not real hardware. Whether
-`PUT /devices/{mac}` merges or replaces the `overrides` object is undocumented;
-mcpd resends every override it read, which is correct under either behaviour,
-but confirm it before the first production write.
+What an integration does belongs with the integration. Each has its own
+document when it needs one — see [cnmaestro.md](cnmaestro.md) — because the
+API a plugin talks to changes on someone else's schedule, and mixing that into
+the host's design makes both harder to read.
+
+What is architectural is the contract every plugin meets: it declares tools and
+mutations, a mutation names its target and desired state and how to observe the
+result, and the host does the rest.
