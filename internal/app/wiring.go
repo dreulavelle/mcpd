@@ -92,20 +92,26 @@ func builtinTypes() (*plugins.Catalog, error) {
 // registerPlugins mounts every enabled plugin.
 func (a *App) registerPlugins(ctx context.Context) error {
 	for _, inst := range a.enabledInstances(ctx) {
-		name, typeName := inst.Name, inst.Type
+		name := inst.Name
 		pc := a.pluginConfigFor(name)
 
-		t, ok := a.types.Lookup(typeName)
-		if !ok {
+		if _, known := a.types.Lookup(inst.Type); !known {
 			return fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
-				"configuration but not compiled into this binary", name, typeName)
+				"configuration but not compiled into this binary", name, inst.Type)
 		}
 
-		cfg, err := a.resolveInstanceSettings(ctx, name, t)
-		if err != nil {
-			return err
+		// An instance nobody has finished configuring is not mounted. It
+		// appears on the Plugins page with its form and serves nothing, and
+		// the moment the last required field is filled in it is mounted
+		// without a restart. Mounting it now would put tools in front of a
+		// model that fail every call.
+		if ready, missing := a.ready(ctx, inst); !ready {
+			a.log.Info("plugin is waiting to be configured",
+				"plugin", name, "type", inst.Type, "missing", missing)
+			continue
 		}
-		p, err := t.New(a.pluginDeps(name), cfg)
+
+		p, _, err := a.buildInstance(ctx, inst)
 		if err != nil {
 			// Same rule as a failed Start: a required plugin failing is the
 			// host failing, and anything else is one integration down. A
@@ -117,7 +123,8 @@ func (a *App) registerPlugins(ctx context.Context) error {
 				return fmt.Errorf("app: plugin %q: %w", name, err)
 			}
 			a.log.Error("plugin could not be built; continuing without it",
-				"plugin", name, "type", typeName, "error", err)
+				"plugin", name, "type", inst.Type, "error", err)
+			a.noteReconcile(name, err)
 			continue
 		}
 		if err := a.manager.Register(ctx, p, name, pc.Required); err != nil {

@@ -24,9 +24,9 @@ func TestPluginGroup_NamespacesByInstance(t *testing.T) {
 	if a.Section != SectionPlugins {
 		t.Errorf("section = %q, want the plugins page", a.Section)
 	}
-	// A plugin is built at startup from the settings it had then.
-	if a.Fields[0].Apply != ApplyRestart {
-		t.Errorf("apply = %q, want restart", a.Fields[0].Apply)
+	// The plugin is rebuilt on the spot, so nothing has to be restarted.
+	if a.Fields[0].Apply != ApplyReconnect {
+		t.Errorf("apply = %q, want reconnect", a.Fields[0].Apply)
 	}
 }
 

@@ -139,7 +139,7 @@ func TestToken_DataCallsFollowRedirectURI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(page.Items) != 1 || !strings.Contains(string(page.Items[0]), "regional") {
+	if len(page.Items) != 1 || !strings.Contains(fmt.Sprint(page.Items[0]), "regional") {
 		t.Fatalf("items = %v, want the regional host's answer", page.Items)
 	}
 	if c.APIHost() != region.server.URL {

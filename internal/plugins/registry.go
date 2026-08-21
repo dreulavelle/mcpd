@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -147,6 +148,18 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 		r.errs = append(r.errs, fmt.Errorf(
 			"plugins: %s registers tool %q twice", r.descriptor.Name, spec.Name))
 		return
+	}
+
+	var in In
+	var out Out
+	for _, check := range []struct {
+		role string
+		typ  reflect.Type
+	}{{"input", reflect.TypeOf(in)}, {"output", reflect.TypeOf(out)}} {
+		if err := checkSchemaType(r.descriptor.Name, spec.Name, check.role, check.typ); err != nil {
+			r.errs = append(r.errs, err)
+			return
+		}
 	}
 
 	qualified := r.descriptor.Name + "_" + spec.Name

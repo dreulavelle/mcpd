@@ -30,7 +30,11 @@ export function Settings() {
 
   useEffect(() => { load(); }, [load]);
 
-  const groups = data?.groups ?? [];
+  // A plugin's settings belong on its own card, not here. An integration is
+  // independent of the host: someone configuring Cambium should not have to
+  // find it in a list of the host's own switches, and should not meet it there
+  // by accident when changing something else.
+  const groups = (data?.groups ?? []).filter((g) => g.section !== "plugins");
 
   return (
     <>

@@ -51,6 +51,20 @@ func NewClient(httpClient *http.Client, cfg Config, clientID, secret string, log
 	}
 }
 
+// Record is one cnMaestro object, held as decoded JSON rather than as a
+// typed struct.
+//
+// The API returns a oneOf across device types -- cnmatrix, cnwave60,
+// enterprise Wi-Fi, NSE and more -- each with its own fields and a type
+// discriminator. There is no common shape, and inventing one would drop
+// whatever the caller actually asked about.
+//
+// A map rather than json.RawMessage, because these reach a tool's output
+// schema. RawMessage is a []byte, which reflects to "array of integers 0-255"
+// while marshalling as an object -- a schema that contradicts the value it
+// describes, and one a strict client rejects.
+type Record = map[string]any
+
 // envelope is the shape every collection response arrives in.
 type envelope struct {
 	Data   json.RawMessage `json:"data"`
@@ -89,7 +103,7 @@ func (c *Client) Get(ctx context.Context, path string, params url.Values, out an
 
 // Page is one page of a collection, plus what it took to get there.
 type Page struct {
-	Items    []json.RawMessage
+	Items    []Record
 	Total    int
 	Warnings []string
 	// Truncated reports that MaxItems stopped the walk before the collection
@@ -134,7 +148,7 @@ func (c *Client) List(ctx context.Context, path string, params url.Values) (Page
 			return page, err
 		}
 
-		var items []json.RawMessage
+		var items []Record
 		if len(env.Data) > 0 {
 			if err := json.Unmarshal(env.Data, &items); err != nil {
 				return page, fmt.Errorf("cnmaestro: decode %s: %w", path, err)
