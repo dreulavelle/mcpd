@@ -17,13 +17,19 @@ import (
 
 // Config is the complete application configuration.
 type Config struct {
-	Server   Server                  `yaml:"server"`
-	Storage  Storage                 `yaml:"storage"`
-	Auth     Auth                    `yaml:"auth"`
-	Approval Approval                `yaml:"approval"`
-	Logging  Logging                 `yaml:"logging"`
-	Tunnel   Tunnel                  `yaml:"tunnel"`
-	Plugins  map[string]PluginConfig `yaml:"plugins"`
+	Server   Server   `yaml:"server"`
+	Storage  Storage  `yaml:"storage"`
+	Auth     Auth     `yaml:"auth"`
+	Approval Approval `yaml:"approval"`
+	Logging  Logging  `yaml:"logging"`
+	// SecretKeyRef points at the key used to encrypt secrets stored in the
+	// database. Without it, secrets cannot be set from the dashboard -- they
+	// would have to be stored in the clear, which is worse than not offering
+	// the feature.
+	SecretKeyRef string `yaml:"secret_key_ref"`
+
+	Tunnel  Tunnel                  `yaml:"tunnel"`
+	Plugins map[string]PluginConfig `yaml:"plugins"`
 }
 
 // Tunnel configures OpenAI's Secure MCP Tunnel, which runs inside mcpd.

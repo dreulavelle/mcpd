@@ -50,12 +50,19 @@ func initialize(dir string) error {
 	if err != nil {
 		return err
 	}
+	// Generated here rather than left to the operator: a deployment without
+	// one cannot store secrets from the dashboard, and discovering that later
+	// is worse than one extra line in a file.
+	secretKey, err := generateToken()
+	if err != nil {
+		return err
+	}
 
 	if err := writeFile(configPath, 0o640, initialConfig(dbPath, pluginsDir)); err != nil {
 		return err
 	}
 	// 0600: this file holds a bearer token.
-	if err := writeFile(envPath, 0o600, initialEnv(token)); err != nil {
+	if err := writeFile(envPath, 0o600, initialEnv(token, secretKey)); err != nil {
 		return err
 	}
 
@@ -142,6 +149,13 @@ storage:
   # infrastructure changes.
   relaxed_durability: false
 
+# Key used to encrypt secrets stored in the database, so they can be set from
+# the dashboard without landing in plaintext beside the data they protect. The
+# key stays outside the database, which is what makes a stolen copy useless.
+#
+# Generate one with:  openssl rand -base64 32
+secret_key_ref: env:MCPD_SECRET_KEY
+
 auth:
   # static: bearer tokens, for machine callers and for OpenAI's Secure MCP
   #         Tunnel, which injects the header itself.
@@ -213,7 +227,7 @@ plugins:
 	return strings.ReplaceAll(tmpl, "__PLUGINS__", pluginsDir)
 }
 
-func initialEnv(token string) string {
+func initialEnv(token, secretKey string) string {
 	return fmt.Sprintf(`# Secrets for mcpd. Mode 0600; never commit this file.
 #
 # Real environment variables take precedence over anything here, so an
@@ -222,11 +236,15 @@ func initialEnv(token string) string {
 # Bearer token for the dashboard and for machine callers.
 MCPD_TOKEN_LOCAL=%s
 
+# Encrypts secrets stored in the database, so they can be set from the
+# dashboard. Keep it: without it, those secrets cannot be read back.
+MCPD_SECRET_KEY=%s
+
 # cnMaestro OAuth client credentials, once that plugin is enabled.
 # MCPD_CNMAESTRO_CLIENT_ID=
 # MCPD_CNMAESTRO_CLIENT_SECRET=
 
 # Password for the administrator created on first start under auth.mode: oauth.
 # MCPD_BOOTSTRAP_PASSWORD=
-`, token)
+`, token, secretKey)
 }

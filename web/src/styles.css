@@ -384,3 +384,30 @@ button.btn.small { padding: 4px 10px; font-size: 12.5px; }
 .tunnel-head { display: flex; align-items: center; gap: 14px; }
 .tunnel-head h3 { margin: 0 0 2px; font-size: 15px; font-weight: 600; }
 .tunnel-head .spacer { flex: 1; }
+
+/* --- settings forms ------------------------------------------------------ */
+
+.field { margin-bottom: 20px; max-width: var(--measure); }
+.field label { display: flex; align-items: center; gap: 8px; font-weight: 500; color: var(--ink); }
+.field .hint { margin: 6px 0 0; }
+.field select {
+  width: 100%; padding: 9px 11px; font: inherit; font-size: 14px;
+  border: 1px solid var(--rule); border-radius: 3px;
+  background: var(--paper); color: var(--ink); margin-top: 5px;
+}
+.field input[type="text"], .field input[type="password"], .field input[type="number"] {
+  margin-top: 5px;
+}
+.field.toggle label { cursor: pointer; font-weight: 500; }
+.field.toggle input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--signal); }
+
+.secret-field { display: flex; gap: 8px; align-items: flex-start; }
+.secret-field input { flex: 1; }
+.secret-field .btn { margin-top: 5px; }
+
+.save-bar {
+  position: sticky; bottom: 0; z-index: 5;
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; margin: 18px 0;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 4px;
+}

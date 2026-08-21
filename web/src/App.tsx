@@ -12,6 +12,7 @@ import {
   type Plugin,
 } from "./api";
 import { Plugins } from "./Plugins";
+import { Settings } from "./Settings";
 import { Setup } from "./Setup";
 import {
   AuditTrail,
@@ -25,7 +26,7 @@ import {
   stateMeaning,
 } from "./components";
 
-type Tab = "changes" | "connections" | "setup" | "activity";
+type Tab = "changes" | "connections" | "settings" | "setup" | "activity";
 
 export default function App() {
   const [authed, setAuthed] = useState(() => getToken() !== null);
@@ -131,6 +132,7 @@ function Dashboard({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => vo
   const tabs: [Tab, string][] = [
     ["changes", "Changes"],
     ["connections", "Connections"],
+    ["settings", "Settings"],
     ["setup", "Setup"],
     ["activity", "Activity"],
   ];
@@ -167,6 +169,7 @@ function Dashboard({ meta, onSignOut }: { meta: Meta | null; onSignOut: () => vo
             <Operations onSelect={setSelected} />
           ))}
         {tab === "connections" && <Plugins />}
+        {tab === "settings" && <Settings />}
         {tab === "setup" && <Setup meta={meta} plugins={plugins} />}
         {tab === "activity" && <Audit />}
       </main>

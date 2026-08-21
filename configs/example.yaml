@@ -47,6 +47,13 @@ storage:
   # infrastructure changes.
   relaxed_durability: false
 
+# Key used to encrypt secrets stored in the database, so they can be set from
+# the dashboard without landing in plaintext beside the data they protect. The
+# key stays outside the database, which is what makes a stolen copy useless.
+#
+# Generate one with:  openssl rand -base64 32
+secret_key_ref: env:MCPD_SECRET_KEY
+
 auth:
   # static | oauth | mixed
   mode: static

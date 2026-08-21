@@ -22,6 +22,7 @@ import (
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/tunnel"
 )
 
@@ -58,6 +59,22 @@ type Options struct {
 	// TunnelInfo reports the embedded tunnel client version against the newest
 	// release.
 	TunnelInfo func() any
+
+	// Settings is the runtime configuration store.
+	Settings *settings.Store
+
+	// Bootstrap describes the settings that cannot be edited here, so the UI
+	// can show them read-only rather than pretending they do not exist.
+	Bootstrap func() []BootstrapSetting
+}
+
+// BootstrapSetting is a value that must be known before the database opens and
+// therefore cannot be stored in it.
+type BootstrapSetting struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Value string `json:"value"`
+	Help  string `json:"help,omitempty"`
 }
 
 // TunnelController is the slice of the tunnel manager the dashboard needs.
@@ -129,6 +146,11 @@ func (s *Server) routes() {
 	api("GET /api/plugins", s.handleListPlugins, auth.CapRead)
 	api("GET /api/endpoints", s.handleEndpoints, auth.CapRead)
 	api("GET /api/tunnel", s.handleTunnelStatus, auth.CapRead)
+	api("GET /api/settings", s.handleGetSettings, auth.CapRead)
+	// Changing configuration is an administrative act, and it is recorded
+	// against the principal who made it.
+	api("PUT /api/settings", s.handlePutSettings, auth.CapAdmin)
+	api("GET /api/settings/history", s.handleSettingsHistory, auth.CapAdmin)
 	// Starting and stopping a tunnel changes what an external service can
 	// reach, so it takes administrator rights rather than read.
 	api("POST /api/tunnel/start", s.handleTunnelStart, auth.CapAdmin)
@@ -268,6 +290,235 @@ func (s *Server) handleTunnelStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, s.opts.Tunnel.Status())
+}
+
+// settingsResponse is the dashboard's view of configuration.
+type settingsResponse struct {
+	Groups []settings.Group `json:"groups"`
+	// Values holds current values. A secret is never included; Secrets says
+	// which keys are set instead.
+	Values map[string]any `json:"values"`
+	// SecretsSet names the secret keys that hold a value, so the UI can show
+	// "set" rather than an empty box that looks unconfigured.
+	SecretsSet map[string]bool `json:"secrets_set"`
+	// Encryption reports whether secrets can be stored at all.
+	Encryption bool `json:"encryption_available"`
+	// Bootstrap lists the read-only settings from the startup file.
+	Bootstrap []BootstrapSetting `json:"bootstrap"`
+}
+
+func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Settings == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "settings are unavailable")
+		return
+	}
+	ctx := r.Context()
+
+	resp := settingsResponse{
+		Groups:     settings.Schema(),
+		Values:     map[string]any{},
+		SecretsSet: map[string]bool{},
+		Encryption: s.opts.Settings.HasCipher(),
+	}
+	if s.opts.Bootstrap != nil {
+		resp.Bootstrap = s.opts.Bootstrap()
+	}
+
+	for _, g := range resp.Groups {
+		for _, f := range g.Fields {
+			raw, ok, err := s.opts.Settings.Get(ctx, f.Key)
+			if err != nil {
+				s.opts.Log.Warn("could not read a setting", "key", f.Key, "error", err)
+				continue
+			}
+			if f.Kind == settings.KindSecret {
+				// A stored secret is never sent back, not even to an
+				// administrator. The dashboard is a place a screen gets
+				// shared, and there is no reason to read one out.
+				resp.SecretsSet[f.Key] = ok && raw != ""
+				continue
+			}
+			if !ok {
+				if f.Default != nil {
+					resp.Values[f.Key] = f.Default
+				}
+				continue
+			}
+			var decoded any
+			if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+				decoded = raw
+			}
+			resp.Values[f.Key] = decoded
+		}
+	}
+	s.writeJSON(w, r, http.StatusOK, resp)
+}
+
+type putSettingsRequest struct {
+	// Values maps a setting key to its new value, as a string. Strings rather
+	// than typed JSON because the schema already declares the type and
+	// validates it, and a form submits strings.
+	Values map[string]string `json:"values"`
+	// ClearSecrets names secret keys to remove.
+	ClearSecrets []string `json:"clear_secrets,omitempty"`
+}
+
+type putSettingsResponse struct {
+	Applied []string `json:"applied"`
+	// RestartRequired names settings that were stored but will not take effect
+	// until mcpd restarts. Saying so is the difference between a setting that
+	// looks broken and one that is simply pending.
+	RestartRequired []string `json:"restart_required,omitempty"`
+	// Reconnected reports components restarted to pick a change up.
+	Reconnected []string `json:"reconnected,omitempty"`
+}
+
+func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Settings == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "settings are unavailable")
+		return
+	}
+
+	var req putSettingsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&req); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "the request could not be read")
+		return
+	}
+
+	actor := auth.FromContext(r.Context()).ID
+
+	// Everything is validated before anything is written, so a form with one
+	// bad field changes nothing rather than applying the rest.
+	var problems []string
+	for key, value := range req.Values {
+		if err := settings.Validate(key, value); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]any{
+			"error":    "invalid_settings",
+			"problems": problems,
+		})
+		return
+	}
+
+	changes := make([]settings.Change, 0, len(req.Values)+len(req.ClearSecrets))
+	resp := putSettingsResponse{}
+
+	for key, value := range req.Values {
+		field, _ := settings.FieldFor(key)
+		secret := field.Kind == settings.KindSecret
+
+		stored := value
+		if !secret {
+			// Non-secret values are stored as JSON so they round-trip with
+			// their type intact.
+			encoded, err := encodeTyped(field.Kind, value)
+			if err != nil {
+				s.writeError(w, r, http.StatusBadRequest, err.Error())
+				return
+			}
+			stored = encoded
+		}
+		changes = append(changes, settings.Change{Key: key, Value: stored, Secret: secret})
+		resp.Applied = append(resp.Applied, key)
+
+		switch field.Apply {
+		case settings.ApplyRestart:
+			resp.RestartRequired = append(resp.RestartRequired, key)
+		case settings.ApplyReconnect:
+			resp.Reconnected = append(resp.Reconnected, field.Group)
+		}
+	}
+	for _, key := range req.ClearSecrets {
+		changes = append(changes, settings.Change{Key: key, Delete: true})
+		resp.Applied = append(resp.Applied, key)
+	}
+
+	if err := s.opts.Settings.Apply(r.Context(), actor, changes); err != nil {
+		s.opts.Log.Error("could not apply settings", "actor", actor, "error", err)
+		s.writeJSON(w, r, http.StatusConflict, map[string]string{
+			"error":  "settings_not_applied",
+			"detail": err.Error(),
+		})
+		return
+	}
+
+	sort.Strings(resp.Applied)
+	resp.Reconnected = dedupe(resp.Reconnected)
+	s.opts.Log.Info("settings changed", "actor", actor, "keys", resp.Applied)
+	s.writeJSON(w, r, http.StatusOK, resp)
+}
+
+func (s *Server) handleSettingsHistory(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Settings == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "settings are unavailable")
+		return
+	}
+	entries, err := s.opts.Settings.History(r.Context(), parseLimit(r.URL.Query().Get("limit"), 50, 200))
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "could not read the change history")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"entries": entries, "count": len(entries)})
+}
+
+// encodeTyped converts a form string into the JSON its declared type implies,
+// so a number is stored as a number rather than a quoted string.
+func encodeTyped(kind settings.Kind, value string) (string, error) {
+	switch kind {
+	case settings.KindBool:
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return "", fmt.Errorf("expected true or false")
+		}
+		return strconv.FormatBool(b), nil
+
+	case settings.KindInt, settings.KindDuration:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return "", fmt.Errorf("expected a whole number")
+		}
+		return strconv.Itoa(n), nil
+
+	case settings.KindList:
+		items := []string{}
+		for _, part := range strings.Split(value, ",") {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				items = append(items, trimmed)
+			}
+		}
+		encoded, err := json.Marshal(items)
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+
+	default:
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+	}
+}
+
+func dedupe(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (s *Server) handleListOperations(w http.ResponseWriter, r *http.Request) {

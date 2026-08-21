@@ -23,6 +23,7 @@ import (
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 	"github.com/spoked/mcpd/internal/tunnel"
 )
@@ -50,6 +51,7 @@ type App struct {
 	publisher   *messaging.Publisher
 	tunnel      *tunnel.Manager
 	tunnelCheck *tunnel.Checker
+	settings    *settings.Store
 
 	workers     sync.WaitGroup
 	stopWorkers context.CancelFunc
@@ -190,6 +192,27 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		return nil, err
 	}
 
+	// Runtime configuration lives in the database so it can be managed from
+	// the dashboard. Secrets in it are encrypted with a key that stays
+	// outside, which is what makes typing one into a form safe.
+	var cipher *settings.Cipher
+	if ref := cfg.SecretKeyRef; ref != "" {
+		key, keyErr := settings.ResolveKey(ref, os.Getenv("CREDENTIALS_DIRECTORY"))
+		if keyErr != nil {
+			db.Close()
+			return nil, fmt.Errorf("app: settings encryption key: %w", keyErr)
+		}
+		if cipher, err = settings.NewCipher(key); err != nil {
+			db.Close()
+			return nil, err
+		}
+	} else {
+		log.Warn("no settings encryption key is configured; " +
+			"secrets cannot be set from the dashboard. " +
+			"Generate one with: openssl rand -base64 32")
+	}
+	a.settings = settings.NewStore(db, cipher, time.Now)
+
 	// The tunnel serves the same aggregate catalogue an HTTP client would get,
 	// built for its configured grants. It runs in process, so there is no
 	// request to authenticate and its identity comes from configuration.
@@ -236,6 +259,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			AuthMode:   cfg.Auth.Mode,
 			Tunnel:     a.tunnel,
 			TunnelInfo: func() any { return a.tunnelCheck.Info() },
+			Settings:   a.settings,
+			Bootstrap:  func() []admin.BootstrapSetting { return bootstrapSettings(cfg) },
 			PluginSettings: func(name string) map[string]any {
 				return cfg.Plugins[name].Settings
 			},
@@ -444,4 +469,40 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 	}, log.With("component", "tunnel"))
 
 	return nil
+}
+
+// bootstrapSettings describes what cannot be edited at runtime.
+//
+// These are needed before the database opens, so they cannot live in it. The
+// dashboard shows them read-only rather than omitting them, because an
+// operator looking for a setting should find out where it lives instead of
+// concluding it does not exist.
+func bootstrapSettings(cfg *config.Config) []admin.BootstrapSetting {
+	return []admin.BootstrapSetting{
+		{
+			Key: "server.listen", Label: "Assistant address", Value: cfg.Server.Listen,
+			Help: "Where assistants connect. Changing it means restarting mcpd, " +
+				"since it has to be known before anything can listen.",
+		},
+		{
+			Key: "server.frontend_listen", Label: "Dashboard address",
+			Value: cfg.Server.FrontendListen,
+			Help:  "Where this page is served from.",
+		},
+		{
+			Key: "server.public_url", Label: "Address others use",
+			Value: cfg.Server.PublicURL,
+			Help: "The address assistants reach mcpd at from outside. It has to " +
+				"match what they actually use.",
+		},
+		{
+			Key: "storage.path", Label: "Database file", Value: cfg.Storage.Path,
+			Help: "Everything mcpd remembers. Back this up.",
+		},
+		{
+			Key: "auth.mode", Label: "How people sign in", Value: cfg.Auth.Mode,
+			Help: "A shared token, or individual accounts. Individual accounts are " +
+				"what let mcpd require a second person to approve something.",
+		},
+	}
 }

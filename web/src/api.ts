@@ -140,6 +140,56 @@ export interface TunnelInfo {
   version?: TunnelVersion;
 }
 
+export type SettingKind =
+  | "string" | "secret" | "bool" | "int" | "duration" | "enum" | "list";
+
+export type SettingApply = "live" | "reconnect" | "restart";
+
+export interface SettingField {
+  key: string;
+  label: string;
+  help?: string;
+  kind: SettingKind;
+  group: string;
+  apply: SettingApply;
+  default?: unknown;
+  options?: string[];
+  min?: number;
+  max?: number;
+  required?: boolean;
+  placeholder?: string;
+}
+
+export interface SettingGroup {
+  name: string;
+  title: string;
+  help?: string;
+  enabled_by?: string;
+  fields: SettingField[];
+}
+
+export interface BootstrapSetting {
+  key: string;
+  label: string;
+  value: string;
+  help?: string;
+}
+
+export interface SettingsPayload {
+  groups: SettingGroup[];
+  values: Record<string, unknown>;
+  /** Which secret keys hold a value. The values themselves are never sent. */
+  secrets_set: Record<string, boolean>;
+  encryption_available: boolean;
+  bootstrap: BootstrapSetting[];
+}
+
+export interface SaveResult {
+  applied: string[];
+  restart_required?: string[];
+  reconnected?: string[];
+}
+
 export interface Endpoints {
   /** One address serving everything the token is allowed to reach. */
   aggregate: string;
@@ -251,6 +301,14 @@ export const api = {
   endpoints: () => request<Endpoints>("/api/endpoints"),
 
   tunnel: () => request<TunnelInfo>("/api/tunnel"),
+
+  settings: () => request<SettingsPayload>("/api/settings"),
+
+  saveSettings: (values: Record<string, string>, clearSecrets: string[] = []) =>
+    request<SaveResult>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ values, clear_secrets: clearSecrets }),
+    }),
 
   tunnelStart: () =>
     request<TunnelStatus>("/api/tunnel/start", { method: "POST" }),
