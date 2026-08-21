@@ -177,7 +177,9 @@ function TunnelControl({ plugin, tunnels, tunnel, onChange, show }: {
   async function create() {
     setBusy(true);
     try {
-      await api.createTunnel(plugin.title, plugin.name);
+      // Same default as the Tunnels page: a tunnel scoped only to the
+      // organisation is invisible in an Enterprise or Edu workspace.
+      await api.createTunnel(plugin.title, plugin.name, tunnels?.workspaces?.[0]);
       show("good", "Made. Give it about 30 seconds to become active in ChatGPT.");
     } catch (e) {
       show("problem", e instanceof ApiError ? e.detail : "Couldn't make it.");

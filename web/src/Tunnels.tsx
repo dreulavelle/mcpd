@@ -56,7 +56,10 @@ export function Tunnels() {
         </Message>
       )}
 
-      {info.can_manage && admin && <Add plugins={info.plugins} onDone={load} show={show} />}
+      {info.can_manage && admin && (
+        <Add plugins={info.plugins} workspaces={info.workspaces ?? []}
+             onDone={load} show={show} />
+      )}
 
       <div className="card" style={{ marginTop: "var(--s4)" }}>
         {rows.length === 0 ? (
@@ -160,19 +163,25 @@ function TunnelRow({ row, info, onDone, show }: {
   );
 }
 
-function Add({ plugins, onDone, show }: {
+function Add({ plugins, workspaces, onDone, show }: {
   plugins: string[];
+  workspaces: string[];
   onDone: () => void;
   show: (tone: "good" | "problem", text: string) => void;
 }) {
   const [name, setName] = useState("");
   const [plugin, setPlugin] = useState("");
+  // Defaulted to the first known workspace. A tunnel scoped only to the
+  // Platform organisation does not appear in an Enterprise or Edu workspace,
+  // which is the failure this exists to prevent -- and it is silent, so the
+  // safe default is the one that has worked before.
+  const [workspace, setWorkspace] = useState(workspaces[0] ?? "");
   const [busy, setBusy] = useState(false);
 
   async function add() {
     setBusy(true);
     try {
-      await api.createTunnel(name.trim(), plugin);
+      await api.createTunnel(name.trim(), plugin, workspace.trim());
       // OpenAI's own CLI prints the same caution after creating one: a tunnel
       // is not active for the first half minute. Saying "made" and stopping
       // sends someone to ChatGPT to look for a connector that is not there
@@ -196,7 +205,22 @@ function Add({ plugins, onDone, show }: {
           {plugins.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
       </div>
-      <div className="field" style={{ marginBottom: 0, flex: "1 1 12rem" }}>
+      {workspaces.length > 0 ? (
+        <div className="field" style={{ marginBottom: 0, flex: "0 1 14rem" }}>
+          <label htmlFor="tws">Workspace</label>
+          <select id="tws" value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
+            {workspaces.map((w) => <option key={w} value={w}>{w}</option>)}
+            <option value="">None — organisation only</option>
+          </select>
+        </div>
+      ) : (
+        <div className="field" style={{ marginBottom: 0, flex: "0 1 14rem" }}>
+          <label htmlFor="tws">Workspace (optional)</label>
+          <input id="tws" type="text" value={workspace} placeholder="ws_..."
+                 onChange={(e) => setWorkspace(e.target.value)} />
+        </div>
+      )}
+      <div className="field" style={{ marginBottom: 0, flex: "1 1 10rem" }}>
         <label htmlFor="tname">Name (optional)</label>
         <input id="tname" type="text" value={name}
                placeholder={plugin ? `mcpd: ${plugin}` : "mcpd"}

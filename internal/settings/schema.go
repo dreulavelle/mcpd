@@ -104,11 +104,10 @@ const (
 	//
 	// A deployment that would rather not hand mcpd an admin key can still set
 	// tunnel.tunnel_id in config.yaml, which this falls back to.
-	KeyTunnelID        = "tunnel.tunnel_id"
-	KeyTunnelAPIKey    = "tunnel.api_key"
-	KeyTunnelAdminKey  = "tunnel.admin_key"
-	KeyTunnelOrgID     = "tunnel.organization_id"
-	KeyTunnelWorkspace = "tunnel.workspace_id"
+	KeyTunnelID       = "tunnel.tunnel_id"
+	KeyTunnelAPIKey   = "tunnel.api_key"
+	KeyTunnelAdminKey = "tunnel.admin_key"
+	KeyTunnelOrgID    = "tunnel.organization_id"
 	// KeyTunnelPrincipal is the identity requests through the tunnel act as.
 	//
 	// Not a field either. It only decides how ChatGPT is labelled in the
@@ -191,13 +190,6 @@ func schema() []Group {
 					Group: "tunnel", Apply: ApplyLive, Required: true,
 					Placeholder: "org_...",
 					Help:        "Goes with the admin key. Settings, Organization, General.",
-				},
-				{
-					Key: KeyTunnelWorkspace, Label: "OpenAI workspace ID", Kind: KindString,
-					Group: "tunnel", Apply: ApplyLive, Placeholder: "ws_...",
-					Help: "Optional. Set it if ChatGPT works in a workspace and new " +
-						"tunnels are not appearing there. Settings, Organization, " +
-						"Workspaces.",
 				},
 				{
 					Key: KeyTunnelRole, Label: "What ChatGPT may do", Kind: KindEnum,
