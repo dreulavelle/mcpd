@@ -3,7 +3,10 @@ import {
   api, ApiError, setCSRFToken,
   type AuditRecord, type HealthReport, type Meta, type Session,
 } from "./api";
-import { CodeBlock, Dot, History, Message, SessionContext, Skeleton, useIsAdmin, usePoll, useToasts } from "./components";
+import {
+  CodeBlock, Dot, ErrorBoundary, History, Message, SessionContext, Skeleton,
+  useIsAdmin, usePoll, useToasts,
+} from "./components";
 import { Plugins } from "./Plugins";
 import { Settings } from "./Settings";
 import { Tunnels } from "./Tunnels";
@@ -280,11 +283,17 @@ function Console({ session, onSignOut }: { session: Session; onSignOut: () => vo
       </header>
 
       <main>
-        {tab === "plugins" && <Plugins />}
-        {tab === "tunnels" && <Tunnels />}
-        {tab === "users" && <Users />}
-        {tab === "settings" && <Settings />}
-        {tab === "history" && <FullHistory />}
+        {/* Keyed on the tab, so a page that failed is rebuilt from scratch when
+            it is opened again rather than staying broken for the session. The
+            boundary is inside the chrome: whatever happens to a page, the
+            navigation out of it survives. */}
+        <ErrorBoundary key={tab}>
+          {tab === "plugins" && <Plugins />}
+          {tab === "tunnels" && <Tunnels />}
+          {tab === "users" && <Users />}
+          {tab === "settings" && <Settings />}
+          {tab === "history" && <FullHistory />}
+        </ErrorBoundary>
       </main>
     </div>
   );
