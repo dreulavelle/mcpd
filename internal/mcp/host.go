@@ -14,6 +14,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/oauth"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -25,6 +26,10 @@ type Options struct {
 	Verifier   auth.TokenVerifier
 	Authorizer *auth.Authorizer
 	Health     *observability.HealthRegistry
+
+	// Plugins names the mounted plugins, so an authentication challenge can
+	// say which scopes the endpoint being called actually needs.
+	Plugins func() []string
 
 	// PublicURL is the externally reachable base URL, used to build OAuth
 	// protected-resource metadata. ChatGPT reads that document to discover
@@ -243,8 +248,11 @@ func (h *Host) authenticate(next http.Handler) http.Handler {
 // their metadata, which is how one connector ends up standing in for both.
 func (h *Host) challenge(w http.ResponseWriter, r *http.Request) {
 	if h.opts.PublicURL != "" {
-		w.Header().Set("WWW-Authenticate", fmt.Sprintf(
-			`Bearer resource_metadata=%q`, h.metadataURL(r.URL.Path)))
+		challenge := fmt.Sprintf(`Bearer resource_metadata=%q`, h.metadataURL(r.URL.Path))
+		if scope := h.challengeScope(r.URL.Path); scope != "" {
+			challenge += fmt.Sprintf(`, scope=%q`, scope)
+		}
+		w.Header().Set("WWW-Authenticate", challenge)
 	} else {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 	}
@@ -328,4 +336,41 @@ func withGranted(ctx context.Context, names []string) context.Context {
 func grantedFromContext(ctx context.Context) []string {
 	names, _ := ctx.Value(grantedKey{}).([]string)
 	return names
+}
+
+// challengeScope names the scopes needed to use one endpoint.
+//
+// The specification says to include this, and here it is load-bearing rather
+// than polite: reaching a plugin requires a scope naming that plugin, and a
+// client with nothing to go on asks for whatever the authorization server
+// advertises -- which for the aggregate endpoint is every plugin, and for one
+// plugin's endpoint is more than it needs.
+//
+// Saying it per endpoint makes the request specific: a connector for /mcp/echo
+// asks for echo and gets a token that reaches echo, rather than one that
+// reaches everything or nothing depending on how its client guesses.
+func (h *Host) challengeScope(path string) string {
+	scopes := []string{oauth.ScopeRead, oauth.ScopePropose, oauth.ScopeApprove}
+
+	if plugin := pluginFromPath(path); plugin != "" {
+		return strings.Join(append(scopes, oauth.PluginScope(plugin)), " ")
+	}
+	if h.opts.Plugins == nil {
+		return strings.Join(scopes, " ")
+	}
+	for _, name := range h.opts.Plugins() {
+		scopes = append(scopes, oauth.PluginScope(name))
+	}
+	return strings.Join(scopes, " ")
+}
+
+// pluginFromPath returns the plugin an endpoint serves, or "" for the
+// aggregate endpoint and anything else.
+func pluginFromPath(path string) string {
+	rest, ok := strings.CutPrefix(strings.Trim(path, "/"), "mcp/")
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest, "/")
+	return name
 }
