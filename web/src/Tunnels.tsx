@@ -129,10 +129,10 @@ function TunnelRow({ row, info, onDone, show }: {
   return (
     <tr>
       <td>
-        <div style={{ fontWeight: 550, marginBottom: 4 }}>{row.name}</div>
+        <div className="tunnel-name">{row.name}</div>
         {/* Whole, and copyable: ChatGPT will accept a tunnel ID typed in, and
             an ID shown with the middle missing cannot be typed anywhere. */}
-        <Copyable value={row.id} label="tunnel ID" />
+        <Copyable value={row.id} label="tunnel ID" inline />
       </td>
       <td>
         {info.can_manage && admin ? (
