@@ -124,7 +124,7 @@ function Row({ plugin, tunnels, open, onToggle, onChange, show }: {
 
           <div className="section split two">
             <div>
-              <p className="eyebrow">Can look up</p>
+              <p className="eyebrow">Read</p>
               <div className="row wrap">
                 {lookups.length === 0
                   ? <span className="note tight">Nothing.</span>
@@ -134,7 +134,7 @@ function Row({ plugin, tunnels, open, onToggle, onChange, show }: {
               </div>
             </div>
             <div>
-              <p className="eyebrow">Can change, with approval</p>
+              <p className="eyebrow">Write (Approval Required)</p>
               <div className="row wrap">
                 {changes.length === 0
                   ? <span className="note tight">Nothing.</span>

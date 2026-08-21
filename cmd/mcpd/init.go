@@ -210,17 +210,6 @@ plugins:
   echo:
     enabled: true
     required: false
-
-  cnmaestro:
-    enabled: false
-    required: false
-    settings:
-      base_url: "https://cloud.cambiumnetworks.com"
-      client_id_ref: client_id_ref
-      client_secret_ref: client_secret_ref
-      # Always explicit. Omitting it means different things depending on
-      # whether a request names a network.
-      managed_account: "Base Infrastructure"
 `
 	tmpl = strings.ReplaceAll(tmpl, "__DB__", dbPath)
 	return strings.ReplaceAll(tmpl, "__PLUGINS__", pluginsDir)
@@ -240,9 +229,6 @@ MCPD_TOKEN_LOCAL=%s
 # dashboard. Keep it: without it, those secrets cannot be read back.
 MCPD_SECRET_KEY=%s
 
-# cnMaestro OAuth client credentials, once that plugin is enabled.
-# MCPD_CNMAESTRO_CLIENT_ID=
-# MCPD_CNMAESTRO_CLIENT_SECRET=
 
 `, token, secretKey)
 }
