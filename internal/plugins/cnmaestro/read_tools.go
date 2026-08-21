@@ -19,8 +19,11 @@ var macPattern = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-]?[0-9A-Fa-f]{2}){5}$`)
 
 // Register implements plugins.Plugin.
 //
-// Read tools only. The write surface comes later, once these have been run
-// against a real controller.
+// Read tools only, and that is the design rather than a first instalment. The
+// controllers this reaches run live networks, where the cost of a wrong write
+// is measured in outage rather than in a bad answer -- so the integration does
+// not have one to get wrong. readOnlyTransport enforces it below every tool
+// registered here.
 func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "networks",

@@ -24,10 +24,10 @@ import (
 // low-risk, collectively an unbounded side-channel, and none of them is needed
 // to manage a network.
 //
-// It is enforced now, while the plugin is read-only and nothing here can be
-// reached anyway. That is the point: the cheapest moment to establish that
-// mcpd will never run a command on someone's access point is before it can
-// write at all.
+// The integration is read-only, so nothing here is reachable by any tool it
+// registers. The list is checked anyway, on the decoded path of every request
+// as it leaves: a guarantee that depends on nobody adding the wrong tool is
+// not a guarantee, and these endpoints run commands on live infrastructure.
 var blockedPaths = []*regexp.Regexp{
 	// Arbitrary command execution.
 	regexp.MustCompile(`^/devices/[^/]+/cli$`),
