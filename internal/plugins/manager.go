@@ -160,7 +160,7 @@ func (m *Manager) build(ctx context.Context, d Descriptor, p Plugin, required bo
 	// error. A plugin -- especially an out-of-process one the operator dropped
 	// in -- must not be able to take the host down that way, so registration
 	// is recovered and reported as a failed mount.
-	if err := attachAll(srv, reg, m.middleware, m.approvals, m.inline); err != nil {
+	if err := attachAll(srv, reg, m.middleware, m.approvals, m.inline, m.log); err != nil {
 		return nil, fmt.Errorf("plugins: %s: %w", d.Name, err)
 	}
 
@@ -289,6 +289,15 @@ func (m *Manager) Start(ctx context.Context) error {
 				"plugin", name, "error", err)
 			continue
 		}
+		// Ask, rather than assume. A plugin whose Start deliberately does not
+		// fail on an unreachable upstream -- a remote MCP server, where being
+		// down is an operational state and not a misconfiguration -- would
+		// otherwise be recorded healthy until the first health check came
+		// round, which is the window an operator watching startup looks in.
+		if checker, ok := mp.plugin.(Checker); ok {
+			mp.setHealth(checker.Check(ctx))
+			continue
+		}
 		mp.setHealth(Healthy())
 	}
 	return nil
@@ -398,7 +407,7 @@ func (m *Manager) BuildServer(names []string) (*mcp.Server, error) {
 		if mounted == nil {
 			continue
 		}
-		if err := attachAll(srv, mounted.Registry, m.middleware, m.approvals, m.inline); err != nil {
+		if err := attachAll(srv, mounted.Registry, m.middleware, m.approvals, m.inline, m.log); err != nil {
 			return nil, fmt.Errorf("plugins: aggregate %s: %w", name, err)
 		}
 	}
@@ -489,15 +498,31 @@ func (m *Manager) All() []*Mounted {
 
 // attachAll wires every tool and mutation onto an MCP server, converting a
 // panic from the SDK into an error.
-func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals ApprovalService, inline InlinePolicy) (err error) {
+func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals ApprovalService, inline InlinePolicy, log *slog.Logger) (err error) {
 	defer func() {
 		if v := recover(); v != nil {
 			err = fmt.Errorf("tool registration failed: %v", v)
 		}
 	}()
 
+	// One recover around the whole loop is right for a plugin this project
+	// ships: every tool in it came from the same source, and if one is
+	// malformed the mount is what wants fixing. It is wrong for a remote MCP
+	// server, where a single bad descriptor out of three hundred would take
+	// the other two hundred and ninety-nine down with it -- and the operator
+	// cannot fix the far end's catalogue. So that runtime attaches tool by
+	// tool and loses only what it must.
+	perTool := reg.descriptor.EffectiveRuntime() == RuntimeMCP
+
 	for _, t := range reg.tools {
-		t.attach(srv, mw)
+		if !perTool {
+			t.attach(srv, mw)
+			continue
+		}
+		if failure := attachOne(func() { t.attach(srv, mw) }); failure != nil {
+			log.Error("skipping a remote tool the MCP SDK refused",
+				"plugin", reg.descriptor.Name, "tool", t.qualified, "error", failure)
+		}
 	}
 	for _, res := range reg.resources {
 		res.attach(srv, mw)
@@ -519,6 +544,18 @@ func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals Appr
 		}
 		attachApprovalTools(srv, reg.descriptor.Name, approvals, mw)
 	}
+	return nil
+}
+
+// attachOne runs one attachment, turning a panic from the SDK into an error
+// the caller can log and step past.
+func attachOne(fn func()) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("%v", v)
+		}
+	}()
+	fn()
 	return nil
 }
 

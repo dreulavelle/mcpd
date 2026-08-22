@@ -20,6 +20,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/config"
 	mcphost "github.com/spoked/mcpd/internal/mcp"
+	"github.com/spoked/mcpd/internal/mcpservers"
 	"github.com/spoked/mcpd/internal/messaging"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
@@ -57,6 +58,14 @@ type App struct {
 	tunnelCheck   *tunnel.Checker
 	settings      *settings.Store
 	tls           *servertls.Materials
+
+	// mcpStore holds the imported remote MCP servers and their tool
+	// snapshots. The cache beside it exists because instances() consults them
+	// on nearly every dashboard request, and it is refreshed by the only code
+	// that writes them.
+	mcpStore   *sqlite.MCPServerStore
+	mcpMu      sync.RWMutex
+	mcpServers map[string]mcpservers.Server
 
 	// serving closes once the MCP listener is accepting, so anything that has
 	// to reach mcpd over HTTP -- the tunnel client probing itself, above all
@@ -109,14 +118,22 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		"path", db.Path(), "schema_version", version, "migrations_applied", applied)
 
 	a := &App{
-		cfg:     cfg,
-		log:     log,
-		db:      db,
-		ops:     sqlite.NewOperationStore(db, time.Now),
-		outbox:  sqlite.NewOutboxStore(db, time.Now),
-		audit:   sqlite.NewAuditStore(db),
-		serving: make(chan struct{}),
-		health:  observability.NewHealthRegistry(2 * time.Second),
+		cfg:        cfg,
+		log:        log,
+		db:         db,
+		ops:        sqlite.NewOperationStore(db, time.Now),
+		outbox:     sqlite.NewOutboxStore(db, time.Now),
+		audit:      sqlite.NewAuditStore(db),
+		mcpStore:   sqlite.NewMCPServerStore(db, time.Now),
+		mcpServers: map[string]mcpservers.Server{},
+		serving:    make(chan struct{}),
+		health:     observability.NewHealthRegistry(2 * time.Second),
+	}
+	// Loaded before anything asks what is configured: a remote server is an
+	// instance, and instances() must be complete the first time it is called.
+	if err := a.loadMCPServers(ctx); err != nil {
+		db.Close()
+		return nil, err
 	}
 
 	// Accounts back the dashboard's sign-in. They are unrelated to the token
@@ -305,12 +322,25 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 					_, missing := a.ready(ctx, inst)
 					out = append(out, admin.PluginInstanceInfo{
 						Name: inst.Name, Type: inst.Type,
+						Runtime:  string(inst.Runtime),
 						FromFile: inst.FromFile, Enabled: inst.Enabled,
 						Missing: missing,
 						Problem: a.reconcileProblem(inst.Name),
 					})
 				}
 				return out
+			},
+			MCPServers: admin.MCPServerAPI{
+				List: func(ctx context.Context) (any, error) {
+					return a.MCPServers(ctx)
+				},
+				Tools:      a.MCPServerTools,
+				Import:     a.ImportMCPServer,
+				Remove:     a.RemoveMCPServer,
+				SetEnabled: a.SetMCPServerEnabled,
+				Discover:   a.DiscoverMCPServer,
+				Classify:   a.ClassifyMCPTool,
+				Schema:     mcpservers.SchemaDocument,
 			},
 			AddPlugin:        a.AddInstance,
 			RemovePlugin:     a.RemoveInstance,

@@ -17,6 +17,36 @@ import (
 // segment, a metrics label, a subject component, and a database value.
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 
+// Runtime says what kind of thing is behind a plugin.
+//
+// It exists because two of the host's rules are right for code this project
+// ships and wrong for a third party's server reached over the network, and the
+// difference has to be visible at the point the rules are applied rather than
+// argued about at each call site. Everything mcpd was built with is builtin;
+// only a remote MCP server is not.
+type Runtime string
+
+const (
+	// RuntimeBuiltin is an integration this binary carries, in process or as
+	// a subprocess speaking the sdk protocol. It is the default: a plugin that
+	// says nothing is one of these.
+	RuntimeBuiltin Runtime = "builtin"
+	// RuntimeMCP is a remote MCP server, reached over the network and trusted
+	// with nothing. It may register read tools and no mutations, its tool
+	// names follow the MCP specification rather than this host's convention,
+	// and one malformed tool costs that tool rather than the whole mount.
+	RuntimeMCP Runtime = "mcp"
+)
+
+// Valid reports whether r is a runtime this host serves.
+func (r Runtime) Valid() bool {
+	switch r {
+	case RuntimeBuiltin, RuntimeMCP:
+		return true
+	}
+	return false
+}
+
 // Descriptor is a plugin's identity.
 type Descriptor struct {
 	// Name is the stable identifier. It forms the endpoint path
@@ -30,12 +60,26 @@ type Descriptor struct {
 	// the model, so it should say what the plugin manages and what it will
 	// refuse to do.
 	Description string
+	// Runtime says what is behind this plugin. Empty means builtin, so every
+	// plugin written before remote servers existed keeps the rules it had.
+	Runtime Runtime
+}
+
+// EffectiveRuntime resolves the zero value, which is builtin.
+func (d Descriptor) EffectiveRuntime() Runtime {
+	if d.Runtime == "" {
+		return RuntimeBuiltin
+	}
+	return d.Runtime
 }
 
 // Validate checks a descriptor before registration.
 func (d Descriptor) Validate() error {
 	if !namePattern.MatchString(d.Name) {
 		return fmt.Errorf("plugins: name %q must match %s", d.Name, namePattern)
+	}
+	if !d.EffectiveRuntime().Valid() {
+		return fmt.Errorf("plugins: plugin %s declares unknown runtime %q", d.Name, d.Runtime)
 	}
 	if d.Version == "" {
 		return fmt.Errorf("plugins: plugin %s requires a version", d.Name)

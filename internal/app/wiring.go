@@ -95,9 +95,13 @@ func (a *App) registerPlugins(ctx context.Context) error {
 		name := inst.Name
 		pc := a.pluginConfigFor(name)
 
-		if _, known := a.types.Lookup(inst.Type); !known {
-			return fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
-				"configuration but not compiled into this binary", name, inst.Type)
+		// A remote MCP server has no compiled-in type to look up. What it is,
+		// is the document it was imported from, and buildInstance reads that.
+		if inst.Runtime != plugins.RuntimeMCP {
+			if _, known := a.types.Lookup(inst.Type); !known {
+				return fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
+					"configuration but not compiled into this binary", name, inst.Type)
+			}
 		}
 
 		// An instance nobody has finished configuring is not mounted. It

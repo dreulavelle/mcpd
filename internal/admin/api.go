@@ -127,6 +127,10 @@ type Options struct {
 	// Bootstrap describes the settings that cannot be edited here, so the UI
 	// can show them read-only rather than pretending they do not exist.
 	Bootstrap func() []BootstrapSetting
+
+	// MCPServers manages remote MCP servers: importing one, discovering what
+	// it offers, and classifying each tool before any of them is served.
+	MCPServers MCPServerAPI
 }
 
 // BootstrapSetting is a value that must be known before the database opens and
@@ -259,6 +263,20 @@ func (s *Server) routes() {
 	api("POST /api/instances", s.handleAddInstance, auth.CapAdmin)
 	api("PATCH /api/instances/{name}", s.handleSetInstanceEnabled, auth.CapAdmin)
 	api("DELETE /api/instances/{name}", s.handleRemoveInstance, auth.CapAdmin)
+	// Remote MCP servers. Reading what is imported and what each offers is an
+	// operator's business; importing one, connecting to it, and deciding which
+	// of its tools an assistant may reach decides what leaves this deployment,
+	// so those are an administrator's.
+	api("GET /api/mcp-servers", s.handleListMCPServers, auth.CapRead)
+	api("GET /api/mcp-servers/schema", s.handleMCPSchema, auth.CapRead)
+	api("POST /api/mcp-servers", s.handleImportMCPServer, auth.CapAdmin)
+	api("PATCH /api/mcp-servers/{name}", s.handleSetMCPServerEnabled, auth.CapAdmin)
+	api("DELETE /api/mcp-servers/{name}", s.handleRemoveMCPServer, auth.CapAdmin)
+	api("GET /api/mcp-servers/{name}/tools", s.handleMCPServerTools, auth.CapRead)
+	// Discovery reaches out to a third party with this deployment's
+	// credentials, which is not a read of local state.
+	api("POST /api/mcp-servers/{name}/discover", s.handleDiscoverMCPServer, auth.CapAdmin)
+	api("PATCH /api/mcp-servers/{name}/tools/{tool}", s.handleClassifyMCPTool, auth.CapAdmin)
 	// Accounts decide who can reach anything else here, so administering them
 	// is an administrator's right.
 	api("GET /api/users", s.handleListUsers, auth.CapAdmin)

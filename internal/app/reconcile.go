@@ -28,18 +28,18 @@ const reconcileTimeout = 2 * time.Minute
 // mounting something that will fail every call, and much better than refusing
 // to start the host.
 func (a *App) ready(ctx context.Context, inst Instance) (bool, []string) {
-	t, ok := a.types.Lookup(inst.Type)
-	if !ok {
-		return false, []string{"unknown integration " + inst.Type}
+	fields, err := a.fieldsFor(ctx, inst)
+	if err != nil {
+		return false, []string{err.Error()}
 	}
 
-	cfg, err := a.resolveInstanceSettings(ctx, inst.Name, t)
+	cfg, err := a.resolveFields(ctx, inst.Name, fields)
 	if err != nil {
 		return false, []string{err.Error()}
 	}
 
 	var missing []string
-	for _, f := range t.Settings {
+	for _, f := range fields {
 		if !f.Required {
 			continue
 		}
@@ -47,7 +47,36 @@ func (a *App) ready(ctx context.Context, inst Instance) (bool, []string) {
 			missing = append(missing, f.Label)
 		}
 	}
+	if inst.Runtime == plugins.RuntimeMCP && len(missing) == 0 {
+		// A remote server with nothing enabled has no tools to mount, and the
+		// registry refuses a plugin that registers nothing. Reported here as a
+		// thing still to do rather than as a build failure, because it is: the
+		// next step is to discover and classify.
+		tools, err := a.mcpStore.EnabledTools(ctx, inst.Name)
+		if err != nil {
+			return false, []string{err.Error()}
+		}
+		if len(tools) == 0 {
+			missing = append(missing, "at least one tool enabled")
+		}
+	}
 	return len(missing) == 0, missing
+}
+
+// fieldsFor returns the settings an instance asks for, whichever runtime it is.
+func (a *App) fieldsFor(ctx context.Context, inst Instance) ([]settings.Field, error) {
+	if inst.Runtime == plugins.RuntimeMCP {
+		srv, ok := a.mcpServer(inst.Name)
+		if !ok {
+			return nil, fmt.Errorf("no remote MCP server named %q", inst.Name)
+		}
+		return a.mcpFields(srv)
+	}
+	t, ok := a.types.Lookup(inst.Type)
+	if !ok {
+		return nil, fmt.Errorf("unknown integration %s", inst.Type)
+	}
+	return t.Settings, nil
 }
 
 func isEmpty(v any) bool {
@@ -80,6 +109,10 @@ func (a *App) reconcileProblem(name string) string {
 
 // buildInstance constructs one instance from its current settings.
 func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin, plugins.Type, error) {
+	if inst.Runtime == plugins.RuntimeMCP {
+		p, err := a.buildMCPInstance(ctx, inst.Name)
+		return p, plugins.Type{}, err
+	}
 	t, ok := a.types.Lookup(inst.Type)
 	if !ok {
 		return nil, t, fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
@@ -94,6 +127,23 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 		return nil, t, fmt.Errorf("app: plugin %q: %w", inst.Name, err)
 	}
 	return p, t, nil
+}
+
+// buildMCPInstance constructs a remote server from its snapshot.
+//
+// The tools come from SQLite and nothing else. That is what makes a host whose
+// upstream is unreachable come up serving the tools it served yesterday,
+// unhealthy and honest about it, rather than serving nothing.
+func (a *App) buildMCPInstance(ctx context.Context, name string) (plugins.Plugin, error) {
+	srv, ok := a.mcpServer(name)
+	if !ok {
+		return nil, fmt.Errorf("app: no remote MCP server named %q", name)
+	}
+	tools, err := a.mcpStore.EnabledTools(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return a.buildMCPPlugin(ctx, srv, tools)
 }
 
 // reconcileInstance brings one instance's mounted state in line with its

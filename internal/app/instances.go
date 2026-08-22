@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spoked/mcpd/internal/config"
+	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/settings"
 )
 
@@ -25,6 +26,11 @@ const instanceKeyPrefix = "instances."
 type Instance struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+	// Runtime says what is behind it: an integration this binary was built
+	// with, or a remote MCP server. It is the discriminator every path that
+	// has to treat the two differently branches on, rather than each of them
+	// inferring it from something else.
+	Runtime plugins.Runtime `json:"runtime"`
 	// FromFile reports that this instance came from the configuration file
 	// rather than the dashboard. The dashboard will not delete one, because
 	// it would reappear on the next start and look like the delete failed.
@@ -54,6 +60,7 @@ func (a *App) instances(ctx context.Context) []Instance {
 		byName[name] = Instance{
 			Name:     name,
 			Type:     pc.ResolvedType(name),
+			Runtime:  plugins.RuntimeBuiltin,
 			FromFile: true,
 			Enabled:  pc.Enabled,
 		}
@@ -74,8 +81,27 @@ func (a *App) instances(ctx context.Context) []Instance {
 		byName[name] = Instance{
 			Name:     name,
 			Type:     rec.Type,
+			Runtime:  plugins.RuntimeBuiltin,
 			FromFile: existing.FromFile,
 			Enabled:  rec.Enabled,
+		}
+	}
+
+	// Remote MCP servers are their own source. They are not recorded under
+	// instances. because the document that describes one is the record, and
+	// keeping a second copy of "does this exist" is a second thing to keep in
+	// step. A name collision is refused at import, so nothing here can be
+	// shadowed by one.
+	for _, name := range a.mcpServerNames() {
+		srv, ok := a.mcpServer(name)
+		if !ok {
+			continue
+		}
+		byName[name] = Instance{
+			Name:    name,
+			Type:    mcpInstanceType,
+			Runtime: plugins.RuntimeMCP,
+			Enabled: srv.Enabled,
 		}
 	}
 
