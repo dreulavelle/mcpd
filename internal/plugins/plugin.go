@@ -132,6 +132,20 @@ type Checker interface {
 	Check(ctx context.Context) Health
 }
 
+// HealthReporter is implemented by a plugin that already knows how it is,
+// without going and finding out.
+//
+// Check asks a plugin to establish its state now, which may mean a round trip.
+// This asks for the state it last observed, which costs nothing. The two are
+// separate because there are places -- startup being the one that matters --
+// where the host needs an answer and a plugin has just produced one: a remote
+// MCP server's Start deliberately does not fail when its upstream is down, so
+// it records what it found and returns. Calling Check there would dial the
+// same unreachable address a second time, serially, for every such plugin.
+type HealthReporter interface {
+	Health() Health
+}
+
 // HealthState is a plugin's readiness.
 type HealthState string
 

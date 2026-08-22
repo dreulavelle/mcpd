@@ -223,7 +223,32 @@ func TestParse_Refusals(t *testing.T) {
 			name: "a secret sitting in the document",
 			document: base(`"type":"streamable-http","url":"https://x.test/mcp",` +
 				`"headers":[{"name":"Authorization","isSecret":true,"value":"Bearer hunter2"}]`),
-			wantIn: "belongs in the settings store",
+			wantIn: "carries its value in the document",
+		},
+		{
+			// The one that slips past the `value` rule: Resolve falls back to
+			// a default when nothing is configured, so this is sent on the
+			// wire -- and Secrets() reads only what the store resolved, so it
+			// is not even in the redactor.
+			name: "a secret sitting in a default",
+			document: base(`"type":"streamable-http","url":"https://x.test/mcp",` +
+				`"headers":[{"name":"Authorization","isSecret":true,"default":"Bearer hunter2"}]`),
+			wantIn: "carries its default in the document",
+		},
+		{
+			name: "a secret variable with a default",
+			document: base(`"type":"streamable-http","url":"https://x.test/{tenant}/mcp",` +
+				`"variables":{"tenant":{"isSecret":true,"default":"acme-secret-slug"}}`),
+			wantIn: "carries its default in the document",
+		},
+		{
+			// A template is not a literal: its braces resolve from variables
+			// the operator fills in, which is the supported way to compose a
+			// header out of a credential.
+			name: "a secret header composed from a variable",
+			document: base(`"type":"streamable-http","url":"https://x.test/mcp",` +
+				`"headers":[{"name":"Authorization","isSecret":true,"value":"Bearer {token}",` +
+				`"variables":{"token":{"isSecret":true,"isRequired":true}}}]`),
 		},
 		{
 			name: "a header the transport owns",
@@ -236,6 +261,12 @@ func TestParse_Refusals(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.document)
+			if tc.wantIn == "" {
+				if err != nil {
+					t.Fatalf("expected this to be accepted: %v", err)
+				}
+				return
+			}
 			if err == nil {
 				t.Fatal("expected a refusal")
 			}

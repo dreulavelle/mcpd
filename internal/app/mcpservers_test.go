@@ -18,6 +18,7 @@ import (
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/mcpservers"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/settings"
 )
 
 // tokenRemote is the credential the endpoint test presents.
@@ -437,5 +438,124 @@ func TestMCPServer_ToolIsCallableThroughTheEndpoint(t *testing.T) {
 	}
 	if strings.Contains(body, `"isError":true`) {
 		t.Errorf("the call reported an error: %s", body)
+	}
+}
+
+// TestMCPServer_PluginsPageCannotBrickStartup is the regression this exists for.
+//
+// a.instances() returns remote servers, so the endpoints that manage a
+// compiled-in instance would accept one. Writing an instances. record for a
+// remote server is worse than useless: the MCP loop overwrites it on the next
+// read, so the toggle reports success and changes nothing -- and the record
+// outlives the server, leaving an enabled instance of type "mcp", which no
+// binary has. registerPlugins used to make that fatal, so the host would not
+// start and the only way back was a SQLite prompt.
+func TestMCPServer_PluginsPageCannotBrickStartup(t *testing.T) {
+	dir := t.TempDir()
+	rs := newRemote(t, map[string]string{"getWeather": "Reads the forecast."})
+
+	a := newAppIn(t, dir)
+	ctx := context.Background()
+	mustImport(t, a, "weather", rs.document())
+	mustDiscover(t, a, "weather")
+	mustEnable(t, a, "weather", "getWeather")
+
+	// Both plugin-instance endpoints must refuse, and say where to go instead.
+	err := a.SetInstanceEnabled(ctx, "tester", "weather", false)
+	if err == nil {
+		t.Fatal("the plugins endpoint must not toggle a remote MCP server")
+	}
+	if !strings.Contains(err.Error(), "/api/mcp-servers/weather") {
+		t.Errorf("the refusal should name the endpoint that works: %v", err)
+	}
+	err = a.RemoveInstance(ctx, "tester", "weather")
+	if err == nil {
+		t.Fatal("the plugins endpoint must not remove a remote MCP server")
+	}
+	if !strings.Contains(err.Error(), "/api/mcp-servers/weather") {
+		t.Errorf("the refusal should name the endpoint that works: %v", err)
+	}
+
+	// The server is still on, and still serving.
+	if err := a.RemoveMCPServer(ctx, "tester", "weather"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	a.db.Close()
+
+	// The host comes back up.
+	second := newAppIn(t, dir)
+	if len(second.instances(context.Background())) != 0 {
+		t.Errorf("removing a server should leave nothing behind, got %+v",
+			second.instances(context.Background()))
+	}
+}
+
+// TestMCPServer_RemoveClearsAnOrphanedInstanceRecord covers the databases an
+// earlier build could already have written one into.
+func TestMCPServer_RemoveClearsAnOrphanedInstanceRecord(t *testing.T) {
+	dir := t.TempDir()
+	rs := newRemote(t, map[string]string{"getWeather": "Reads the forecast."})
+
+	a := newAppIn(t, dir)
+	ctx := context.Background()
+	mustImport(t, a, "weather", rs.document())
+
+	// Exactly what the old SetInstanceEnabled wrote.
+	record, err := json.Marshal(instanceRecord{Type: mcpInstanceType, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.settings.Apply(ctx, "tester", []settings.Change{
+		{Key: instanceKeyPrefix + "weather", Value: string(record)},
+	}); err != nil {
+		t.Fatalf("plant the orphan: %v", err)
+	}
+
+	if err := a.RemoveMCPServer(ctx, "tester", "weather"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	for _, inst := range a.instances(ctx) {
+		if inst.Name == "weather" {
+			t.Fatalf("the orphan survived the removal: %+v", inst)
+		}
+	}
+
+	a.db.Close()
+	second := newAppIn(t, dir)
+	if second.manager.Lookup("weather") != nil {
+		t.Error("nothing should be mounted for a server that was removed")
+	}
+}
+
+// TestApp_StartsDespiteAnInstanceOfAnUnknownType is the defence that closes
+// the class rather than the instance.
+//
+// A type the binary does not have is a mistake either way, but where the
+// mistake lives decides what to do about it. In the configuration file it is a
+// typo and failing loudly is how an operator finds it. In the settings store
+// it is a record only the dashboard can correct -- and refusing to start
+// removes the dashboard.
+func TestApp_StartsDespiteAnInstanceOfAnUnknownType(t *testing.T) {
+	dir := t.TempDir()
+	a := newAppIn(t, dir)
+
+	record, err := json.Marshal(instanceRecord{Type: "a-type-no-build-has", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.settings.Apply(context.Background(), "tester", []settings.Change{
+		{Key: instanceKeyPrefix + "orphan", Value: string(record)},
+	}); err != nil {
+		t.Fatalf("plant the orphan: %v", err)
+	}
+	a.db.Close()
+
+	// newAppIn fails the test if New returns an error, which is the assertion.
+	second := newAppIn(t, dir)
+	if second.manager.Lookup("orphan") != nil {
+		t.Error("an instance of an unknown type must not mount")
+	}
+	if second.reconcileProblem("orphan") == "" {
+		t.Error("the Plugins page should say why it is not serving")
 	}
 }

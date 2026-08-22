@@ -31,8 +31,12 @@ CREATE TABLE mcp_servers (
     -- newer format is a visible difference rather than a silent reinterpretation.
     schema_version TEXT    NOT NULL,
     -- Resolved from the document's chosen remote. Only streamable-http is
-    -- served today; the column exists so adding sse is a value, not a schema
-    -- change.
+    -- served today, and the CHECK below says so: the database refuses a
+    -- transport this build has no code for, which is the guard that survives a
+    -- write path skipping validation. SQLite cannot alter a CHECK, so adding
+    -- sse means a migration that rebuilds this table -- which is the price of
+    -- having the constraint at all, and worth it for a column that decides
+    -- how mcpd talks to somebody else's server.
     transport      TEXT    NOT NULL,
     -- The URL template, still holding its {variables}. Substitution happens at
     -- dial time from resolved settings, because a variable may be a secret and

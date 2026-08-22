@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/spoked/mcpd/internal/auth"
@@ -64,6 +65,10 @@ func (s *Server) handleMCPSchema(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(s.opts.MCPServers.Schema())
 }
 
+// maxDocumentBytes bounds an imported server.json. Generous next to any real
+// document, and far short of what would make storing one a problem.
+const maxDocumentBytes = 256 << 10
+
 type importMCPServerRequest struct {
 	// Name is the instance name: the endpoint path segment, the tool prefix,
 	// and the entry in a credential's plugin list. It is not the document's
@@ -79,8 +84,17 @@ func (s *Server) handleImportMCPServer(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusServiceUnavailable, "remote MCP servers cannot be managed here")
 		return
 	}
+	// A body limit of its own. The shared one is 8 KiB, which is right for a
+	// dashboard form and wrong for the one endpoint whose entire job is
+	// pasting a document -- a published server.json carrying packages, icons
+	// and _meta goes past it, and the operator gets "the request could not be
+	// read" with nothing saying what was too big.
 	var req importMCPServerRequest
-	if !s.decode(w, r, &req) {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDocumentBytes)).
+		Decode(&req); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, fmt.Sprintf(
+			"the document could not be read; it must be JSON and at most %d KiB",
+			maxDocumentBytes>>10))
 		return
 	}
 	if len(req.Document) == 0 {

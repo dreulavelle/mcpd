@@ -90,12 +90,25 @@ func (a *App) instances(ctx context.Context) []Instance {
 	// Remote MCP servers are their own source. They are not recorded under
 	// instances. because the document that describes one is the record, and
 	// keeping a second copy of "does this exist" is a second thing to keep in
-	// step. A name collision is refused at import, so nothing here can be
-	// shadowed by one.
+	// step.
+	//
+	// Import refuses a name already taken, but that check happens once and the
+	// other side can move afterwards: someone can add [plugins.weather] to the
+	// configuration file after importing a remote server called weather. The
+	// remote wins, because the file's instance cannot be removed from here and
+	// the remote's can -- but the collision is said out loud, since a plugin
+	// silently answering as something other than what its configuration says
+	// is the hardest kind of thing to diagnose.
 	for _, name := range a.mcpServerNames() {
 		srv, ok := a.mcpServer(name)
 		if !ok {
 			continue
+		}
+		if shadowed, taken := byName[name]; taken {
+			a.log.Warn("a remote MCP server and a configured plugin share a name; "+
+				"the remote server is what will be served",
+				"plugin", name, "shadowed_type", shadowed.Type,
+				"from_file", shadowed.FromFile)
 		}
 		byName[name] = Instance{
 			Name:    name,
@@ -174,6 +187,15 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string) error {
 			"it here would not stick -- it would return on the next start. "+
 			"Remove it from the file instead", name)
 	}
+	if found.Runtime == plugins.RuntimeMCP {
+		// A remote server's record is its imported document, not an
+		// instances. key. Writing one here would leave a second, contradictory
+		// answer to "does this exist" -- and a stale one, because this path
+		// cannot remove the document. Point at the endpoint that owns it.
+		return fmt.Errorf("%q is a remote MCP server; remove it with "+
+			"DELETE /api/mcp-servers/%s, which also takes its tool approvals "+
+			"and its settings with it", name, name)
+	}
 
 	changes := []settings.Change{{Key: instanceKeyPrefix + name, Delete: true}}
 	if t, ok := a.types.Lookup(found.Type); ok {
@@ -195,6 +217,15 @@ func (a *App) SetInstanceEnabled(ctx context.Context, actor, name string, enable
 		if inst.FromFile {
 			return fmt.Errorf("%q is defined in the configuration file; change "+
 				"`enabled` there", name)
+		}
+		if inst.Runtime == plugins.RuntimeMCP {
+			// Whether a remote server is on lives in mcp_servers.enabled. A
+			// record written here would be shadowed by that on the next read,
+			// so the toggle would report success and change nothing -- and it
+			// would outlive the server, leaving an enabled instance of a type
+			// no binary has, which is a host that will not start.
+			return fmt.Errorf("%q is a remote MCP server; turn it on or off with "+
+				"PATCH /api/mcp-servers/%s", name, name)
 		}
 		rec, err := json.Marshal(instanceRecord{Type: inst.Type, Enabled: enabled})
 		if err != nil {

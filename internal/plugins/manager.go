@@ -292,19 +292,18 @@ func (m *Manager) Start(ctx context.Context) error {
 		// A start that returned nil means healthy, for a plugin whose Start
 		// fails when its upstream will not have it. A remote MCP server's does
 		// not -- being down is an operational state there and not a
-		// misconfiguration, so Start records health and returns nil -- and
-		// overwriting that would report a green dot for however long it takes
+		// misconfiguration, so Start records what it found and returns -- and
+		// overwriting that would show a green dot for however long it takes
 		// the first health check to come round, which is exactly the window an
 		// operator watching startup is looking in.
 		//
-		// Scoped to that runtime rather than applied to everyone: asking every
-		// plugin's Check here would add an upstream round trip per plugin to
-		// startup, for no answer that Start had not already given.
-		if mp.Descriptor.EffectiveRuntime() == RuntimeMCP {
-			if checker, ok := mp.plugin.(Checker); ok {
-				mp.setHealth(checker.Check(ctx))
-				continue
-			}
+		// Asked rather than re-established: Check would dial the same
+		// unreachable address a second time, serially, for every plugin, on a
+		// context whose cancellation the dial does not take. HealthReporter
+		// returns what Start already learned.
+		if reporter, ok := mp.plugin.(HealthReporter); ok {
+			mp.setHealth(reporter.Health())
+			continue
 		}
 		mp.setHealth(Healthy())
 	}

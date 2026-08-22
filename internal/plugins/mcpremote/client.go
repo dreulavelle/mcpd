@@ -31,9 +31,27 @@ type conn struct {
 
 	mu      sync.Mutex
 	current *mcp.ClientSession
+	// pending is the dial in flight, if there is one. Callers join it rather
+	// than starting their own, so an unreachable server costs one dial at a
+	// time however many callers are waiting.
+	pending *dial
 	// closed stops a dial after Shutdown, so a call arriving during teardown
 	// cannot open a session nothing will close.
 	closed bool
+}
+
+// dial is one attempt to establish a session, running on its own goroutine so
+// that no caller's deadline is anyone else's and no caller waits on a mutex
+// held across a TCP connect.
+//
+// The mutex is the part that mattered: holding it across the dial meant an
+// unreachable server stalled close() behind a twenty-second connect, so
+// shutdown overran its bounded context.
+type dial struct {
+	done    chan struct{}
+	cancel  context.CancelFunc
+	session *mcp.ClientSession
+	err     error
 }
 
 func newConn(endpoint string, headers map[string]string, impl *mcp.Implementation) *conn {
@@ -42,42 +60,97 @@ func newConn(endpoint string, headers map[string]string, impl *mcp.Implementatio
 
 // session returns a live session, dialling if there is not one.
 //
-// The dial runs on a context detached from the caller's cancellation. The
-// session outlives the call that happened to open it, and a caller that gives
-// up mid-handshake would otherwise leave the next one to start again from
-// nothing -- and, worse, could cancel a handshake several other callers were
-// already waiting on.
+// The caller waits for whichever comes first: the dial finishing, or its own
+// context ending. That second half is what keeps the readiness probe honest --
+// it runs on a two-second budget, and before this it waited out the full dial
+// timeout for every unreachable server in turn, so an orchestrator restarted a
+// host that was serving perfectly well.
+//
+// A caller that gives up does not cancel the dial. It is shared, and the next
+// caller -- or the next health check -- collects the result.
 func (c *conn) session(ctx context.Context) (*mcp.ClientSession, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return nil, errors.New("this server is shutting down")
 	}
 	if c.current != nil {
-		return c.current, nil
+		session := c.current
+		c.mu.Unlock()
+		return session, nil
 	}
+	pending := c.pending
+	if pending == nil {
+		pending = c.beginDialLocked(ctx)
+	}
+	c.mu.Unlock()
 
+	select {
+	case <-ctx.Done():
+		// Reported as the caller running out of time rather than as the server
+		// being unreachable, because those are different things and only one
+		// of them is the far end's fault.
+		return nil, fmt.Errorf("gave up waiting to connect: %w", ctx.Err())
+	case <-pending.done:
+		if pending.err != nil {
+			return nil, pending.err
+		}
+		return pending.session, nil
+	}
+}
+
+// beginDialLocked starts a dial. c.mu must be held; it is not held while the
+// dial runs.
+func (c *conn) beginDialLocked(ctx context.Context) *dial {
+	// Detached from the caller's cancellation, and bounded on its own. The
+	// session outlives the call that happened to open it, so one caller
+	// changing its mind must not cancel a handshake several others are waiting
+	// on. Values are kept, which is what carries the correlation id into the
+	// transport's logs.
 	dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dialTimeout)
-	defer cancel()
 
-	client := mcp.NewClient(c.impl, nil)
-	transport := &mcp.StreamableClientTransport{
-		Endpoint:   c.endpoint,
-		HTTPClient: c.client,
-		// This host does not act on server-initiated messages, and the
-		// standalone stream is a connection held open per server for the life
-		// of the process to receive them. Discovery is explicit here -- an
-		// administrator asks for it, and classifies what comes back -- so a
-		// tools/list_changed notification would have nowhere useful to go.
-		DisableStandaloneSSE: true,
-	}
+	d := &dial{done: make(chan struct{}), cancel: cancel}
+	c.pending = d
 
-	session, err := client.Connect(dialCtx, transport, nil)
-	if err != nil {
-		return nil, err
-	}
-	c.current = session
-	return session, nil
+	go func() {
+		defer cancel()
+
+		client := mcp.NewClient(c.impl, nil)
+		transport := &mcp.StreamableClientTransport{
+			Endpoint:   c.endpoint,
+			HTTPClient: c.client,
+			// This host does not act on server-initiated messages, and the
+			// standalone stream is a connection held open per server for the
+			// life of the process to receive them. Discovery is explicit here
+			// -- an administrator asks for it, and classifies what comes back
+			// -- so a tools/list_changed notification would have nowhere
+			// useful to go.
+			DisableStandaloneSSE: true,
+		}
+		session, err := client.Connect(dialCtx, transport, nil)
+
+		c.mu.Lock()
+		d.session, d.err = session, err
+		c.pending = nil
+		switch {
+		case err != nil:
+			// Nothing to keep.
+		case c.closed:
+			// Shutdown happened while this was in flight. The session is
+			// nobody's, so it is closed here rather than left open.
+			d.session, d.err = nil, errors.New("this server is shutting down")
+		default:
+			c.current = session
+		}
+		c.mu.Unlock()
+
+		if session != nil && d.session == nil {
+			_ = session.Close()
+		}
+		close(d.done)
+	}()
+
+	return d
 }
 
 // drop closes and forgets the session, so the next call dials again.
@@ -96,12 +169,21 @@ func (c *conn) drop() {
 }
 
 // close tears the session down for good.
+//
+// It cancels a dial in flight rather than waiting for one. Shutdown runs on a
+// bounded context, and a remote server that is not answering is exactly the
+// case where the dial would still be running.
 func (c *conn) close() error {
 	c.mu.Lock()
 	session := c.current
+	pending := c.pending
 	c.current = nil
 	c.closed = true
 	c.mu.Unlock()
+
+	if pending != nil {
+		pending.cancel()
+	}
 	if session == nil {
 		return nil
 	}

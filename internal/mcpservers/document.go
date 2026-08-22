@@ -189,14 +189,12 @@ func (d *Document) Remote() (Remote, error) {
 			if !headerNamePattern.MatchString(h.Name) {
 				return Remote{}, fmt.Errorf("mcpservers: %q is not a usable HTTP header name", h.Name)
 			}
-			if h.IsSecret && h.Value != "" && !bracePattern.MatchString(h.Value) {
-				// Checked here rather than in Inputs, because a header that
-				// carries its own value never becomes a question and so would
-				// never reach the input checks at all -- which is exactly the
-				// shape a credential pasted into a document takes.
-				return Remote{}, fmt.Errorf("mcpservers: header %s is marked secret and "+
-					"carries its value in the document; a credential belongs in the "+
-					"settings store, encrypted", h.Name)
+			// Checked here rather than in Inputs, because a header that
+			// carries its own value never becomes a question and so would
+			// never reach the input checks at all -- which is exactly the
+			// shape a credential pasted into a document takes.
+			if err := checkSecretLiteral(h.Name, h.Input); err != nil {
+				return Remote{}, err
 			}
 			if reservedHeaders[strings.ToLower(h.Name)] {
 				// These are the transport's, not the document's. Letting a
@@ -334,9 +332,32 @@ func checkInput(name string, in Input) error {
 	default:
 		return fmt.Errorf("mcpservers: %q declares unknown format %q", name, in.Format)
 	}
-	if in.IsSecret && in.Value != "" && !bracePattern.MatchString(in.Value) {
-		return fmt.Errorf("mcpservers: %q is marked secret and carries its value in the "+
-			"document; a credential belongs in the settings store, encrypted", name)
+	return checkSecretLiteral(name, in)
+}
+
+// checkSecretLiteral refuses a credential written into the document.
+//
+// Both fields, because both are read as a value. `value` is the one an author
+// reaches for, and `default` is the one that slips past: Resolve falls back to
+// it when nothing is configured, so a default-sourced credential is sent on
+// the wire -- and Secrets() reads only what the settings store resolved, so it
+// is not even in the redactor. A secret in a document is a secret in a
+// database column either way.
+func checkSecretLiteral(name string, in Input) error {
+	if !in.IsSecret {
+		return nil
+	}
+	for _, literal := range []struct{ field, value string }{
+		{"value", in.Value}, {"default", in.Default},
+	} {
+		// A template is not a literal: its braces resolve from variables the
+		// operator fills in, which is the supported way to compose one.
+		if literal.value == "" || bracePattern.MatchString(literal.value) {
+			continue
+		}
+		return fmt.Errorf("mcpservers: %q is marked secret and carries its %s in the "+
+			"document; a credential belongs in the settings store, encrypted",
+			name, literal.field)
 	}
 	return nil
 }

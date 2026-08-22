@@ -3,22 +3,49 @@ package mcpremote
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/mcpservers"
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
-// maxDescription bounds what a remote server can put in front of a model.
+// Bounds on what a remote server can make this host store and show.
 //
-// The description is the server's own text and goes straight into the tool
-// catalogue every call is chosen from. A server offering thirty tools with an
-// essay each would crowd out everything else a model can see, which is a
-// denial of service against the conversation rather than against this host.
-const maxDescription = 4096
+// None of these is a guess at what a legitimate server does; they are the
+// point past which one has stopped being legitimate. A discovery is written in
+// a single transaction against the one SQLite writer, and a description goes
+// straight into the tool catalogue a model chooses from -- so an unbounded
+// catalogue is a denial of service against the conversation, and an unbounded
+// transaction is one against every other writer in the process.
+const (
+	// maxDescription bounds the text a model reads when choosing.
+	maxDescription = 4096
+	// maxTitle bounds the label a person reads.
+	maxTitle = 256
+	// maxInputSchema bounds one tool's published schema. Anything larger is
+	// not something a model was going to fill in correctly anyway.
+	maxInputSchema = 64 << 10
+	// maxTools bounds one server's catalogue. tools/list is paginated, so
+	// without this a server can page forever.
+	maxTools = 1000
+	// maxSnapshotBytes bounds the whole discovery, since the per-tool caps
+	// multiplied by maxTools is still more than belongs in one transaction.
+	maxSnapshotBytes = 8 << 20
+)
+
+// minCheckBudget is the least remaining time worth starting a dial for.
+//
+// Below it, a health check reports what it last observed rather than beginning
+// a connection it cannot wait for. The readiness probe's budget is shared
+// across every plugin, so spending it on a handshake nobody will read the
+// result of takes it from the checks that could have answered.
+const minCheckBudget = 250 * time.Millisecond
 
 // Options is what the host supplies to build one remote server.
 type Options struct {
@@ -65,12 +92,18 @@ func New(opts Options) (*Plugin, error) {
 	if opts.Document == nil {
 		return nil, fmt.Errorf("mcpremote: %s has no server.json", opts.Instance)
 	}
+	// The redactor is built before the thing it has to redact. Resolve
+	// substitutes variables into the URL and then re-checks the result, and
+	// those refusals quote the whole address with %q -- so a secret variable
+	// holding a scheme-less host produces an error carrying the credential.
+	// That error is the one the host records as the reason a plugin will not
+	// mount, which reaches the Plugins page and the /discover response.
+	redact := mcpservers.NewRedactor(opts.Document.Secrets(opts.Values))
+
 	endpoint, headers, err := opts.Document.Resolve(opts.Values)
 	if err != nil {
-		return nil, err
+		return nil, errors.New(redact.Error(err))
 	}
-
-	redact := mcpservers.NewRedactor(opts.Document.Secrets(opts.Values))
 
 	p := &Plugin{
 		name:  opts.Instance,
@@ -191,10 +224,26 @@ func description(tool mcpservers.Tool) string {
 		// description is a tool a model picks by guessing at its name.
 		d = "The server published no description for " + tool.Name + "."
 	}
-	if len(d) > maxDescription {
-		d = d[:maxDescription] + "\n\n(truncated by mcpd)"
+	// A safety net rather than the bound: Discover already truncates before
+	// anything is stored. It stays because a snapshot written by an older
+	// build has not been through that.
+	return truncate(d, maxDescription)
+}
+
+// truncate cuts text to at most n bytes without splitting a rune.
+//
+// Byte-slicing third-party text produces invalid UTF-8, which then travels
+// into JSON, into the tool catalogue, and into whatever the model does with a
+// replacement character it did not expect.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	return d
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "\u2026 (truncated by mcpd)"
 }
 
 // call invokes one remote tool.
@@ -272,7 +321,16 @@ func (p *Plugin) Start(ctx context.Context) error {
 func (p *Plugin) Shutdown(context.Context) error { return p.conn.close() }
 
 // Check implements plugins.Checker.
+//
+// It reports what it last observed when there is not enough of the caller's
+// budget left to establish anything new. The readiness probe is served
+// unauthenticated and runs every plugin's check in turn on one shared
+// deadline, so a remote server that is black-holing packets must cost that
+// probe its share and no more.
 func (p *Plugin) Check(ctx context.Context) plugins.Health {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < minCheckBudget {
+		return p.Health()
+	}
 	if err := p.conn.ping(ctx); err != nil {
 		h := plugins.Unhealthy(p.redact.Error(err))
 		p.setHealth(h)
@@ -281,6 +339,15 @@ func (p *Plugin) Check(ctx context.Context) plugins.Health {
 	h := plugins.Healthy()
 	p.setHealth(h)
 	return h
+}
+
+// Health implements plugins.HealthReporter: the state last observed, with no
+// round trip. Start records one, so the host has an answer at boot without
+// dialling an unreachable address a second time.
+func (p *Plugin) Health() plugins.Health {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.health
 }
 
 func (p *Plugin) setHealth(h plugins.Health) {
@@ -305,6 +372,7 @@ func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 	}
 
 	var out []mcpservers.Tool
+	var total int
 	seen := map[string]bool{}
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
@@ -320,9 +388,24 @@ func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 		}
 		seen[tool.Name] = true
 
-		snapshot, err := snapshotOf(p.name, tool)
+		// Refused whole rather than truncated. Dropping the tail would make
+		// the next discovery report the dropped tools as withdrawn, and the
+		// one after that as new, forever -- a diff that lies is worse than a
+		// discovery that fails and says why.
+		if len(out) == maxTools {
+			return nil, fmt.Errorf("%s offers more than %d tools, which is more "+
+				"than this host will take from one server", p.name, maxTools)
+		}
+
+		snapshot, size, err := snapshotOf(p.name, tool)
 		if err != nil {
 			return nil, err
+		}
+		total += size
+		if total > maxSnapshotBytes {
+			return nil, fmt.Errorf("the tool descriptions of %s come to more than "+
+				"%d bytes, which is more than this host will store for one server",
+				p.name, maxSnapshotBytes)
 		}
 		out = append(out, snapshot)
 	}
@@ -331,42 +414,66 @@ func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 	return out, nil
 }
 
-// snapshotOf turns what the wire gave us into a row we can store.
-func snapshotOf(prefix string, tool *mcp.Tool) (mcpservers.Tool, error) {
+// snapshotOf turns what the wire gave us into a row we can store, and reports
+// how many bytes of it we agreed to keep.
+//
+// Text is truncated, because a description that is too long is still a usable
+// tool with a shorter description. A schema that is too long is not: it cannot
+// be shortened without changing what it validates, so the tool is kept with
+// the reason recorded and can never be enabled. Either way the row is stored
+// rather than dropped, so an operator looking for a tool that never appeared
+// finds it with the reason beside it.
+func snapshotOf(prefix string, tool *mcp.Tool) (mcpservers.Tool, int, error) {
 	descriptor := mcpservers.Descriptor{
 		Name:        tool.Name,
-		Title:       tool.Title,
-		Description: tool.Description,
+		Title:       truncate(tool.Title, maxTitle),
+		Description: truncate(tool.Description, maxDescription),
 	}
+
+	var problem string
 	for _, part := range []struct {
 		value any
 		into  *json.RawMessage
-	}{{tool.InputSchema, &descriptor.InputSchema}, {tool.Annotations, &descriptor.Annotations}} {
+		limit int
+		label string
+	}{
+		{tool.InputSchema, &descriptor.InputSchema, maxInputSchema, "input schema"},
+		{tool.Annotations, &descriptor.Annotations, maxInputSchema, "annotations"},
+	} {
 		if part.value == nil {
 			continue
 		}
 		encoded, err := json.Marshal(part.value)
 		if err != nil {
-			return mcpservers.Tool{}, fmt.Errorf("tool %q: %w", tool.Name, err)
+			return mcpservers.Tool{}, 0, fmt.Errorf("tool %q: %w", tool.Name, err)
+		}
+		if len(encoded) > part.limit {
+			// Left unset rather than stored truncated: half a schema is not a
+			// schema, and storing one would let Inspect judge the tool
+			// mountable on something the server never published.
+			problem = fmt.Sprintf("the tool's %s is %d bytes, past the %d this "+
+				"host will store", part.label, len(encoded), part.limit)
+			continue
 		}
 		*part.into = encoded
 	}
 
 	hash, err := mcpservers.HashDescriptor(descriptor)
 	if err != nil {
-		return mcpservers.Tool{}, err
+		return mcpservers.Tool{}, 0, err
 	}
+	if problem == "" {
+		problem = mcpservers.Inspect(prefix, descriptor)
+	}
+	size := len(descriptor.Name) + len(descriptor.Title) + len(descriptor.Description) +
+		len(descriptor.InputSchema) + len(descriptor.Annotations)
 	return mcpservers.Tool{
 		Name:       tool.Name,
 		Descriptor: descriptor,
 		Hash:       hash,
-		Problem:    mcpservers.Inspect(prefix, descriptor),
-	}, nil
+		Problem:    problem,
+	}, size, nil
 }
-
-// Endpoint reports where this plugin connects, with any variable substitution
-// already applied. For diagnostics; it is never put in a health message.
-func (p *Plugin) Endpoint() string { return p.endpoint }
 
 var (
 	_ plugins.Plugin  = (*Plugin)(nil)
