@@ -1,0 +1,31 @@
+{
+ "qualifiedName": "brave",
+ "displayName": "Brave Search",
+ "description": "Search the web with Brave's independent index \u2014 web, news, images, and videos. Bring your own subscription token from the [Brave Search API dashboard](https://api-dashboard.search.brave.com).",
+ "iconUrl": "https://api.smithery.ai/servers/brave/icon",
+ "remote": true,
+ "deploymentUrl": "https://brave.run.tools",
+ "connections": [
+  {
+   "type": "http",
+   "deploymentUrl": "https://brave.run.tools",
+   "configSchema": {
+    "type": "object",
+    "required": [
+     "braveApiKey"
+    ],
+    "properties": {
+     "braveApiKey": {
+      "type": "string",
+      "title": "Brave API Key",
+      "x-order": 0,
+      "description": "Your Brave Search subscription token. Get one at [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/app/keys)."
+     }
+    }
+   }
+  }
+ ],
+ "security": null,
+ "resources": null,
+ "prompts": null
+}

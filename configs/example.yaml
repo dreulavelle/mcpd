@@ -177,16 +177,38 @@ tunnel:
 # Selecting an entry hands its document to the same import endpoint a paste
 # goes through; there is no second way in.
 #
-# Both sources are on. Neither is contacted at startup, and neither is
-# contacted at all until an administrator opens the page -- so leaving them on
-# in a deployment that never browses costs nothing. Turn one off if this host
-# should not reach it; turn both off and the catalogue endpoints answer "no
-# server catalogue is configured", which is the right answer for a deployment
-# with no route to the internet.
+# Four sources. Three are on: none is contacted at startup, and none is
+# contacted at all until an administrator opens the page, so leaving them on in
+# a deployment that never browses costs nothing. Turn one off if this host
+# should not reach it; turn all of them off and the catalogue endpoints answer
+# "no server catalogue is configured", which is the right answer for a
+# deployment with no route to the internet.
+#
+# The order they are listed in below is preference order, and it decides which
+# copy of a server survives when more than one catalogue has it: the entry kept
+# is the one closest to the party that operates the server. Deduplication is by
+# address rather than by name, because no rule turns "app.linear/linear" into
+# "linear".
 catalog:
   # registry.modelcontextprotocol.io, where a publisher registers a server
   # themselves. Free and unauthenticated.
   official: true
+
+  # PulseMCP's v0.1 sub-registry: around 22,000 servers, and the same wire
+  # format the official registry serves, so a document arrives as its publisher
+  # wrote it rather than composed here.
+  #
+  # Off by default, and it is the only one that is, because v0.1 authenticates
+  # every request -- a deployment without a key would get a page of 401s rather
+  # than a catalogue. PulseMCP issues a key and tenant id by email
+  # (hello@pulsemcp.com); mcpd will not start with this on and either missing.
+  #
+  # The older unauthenticated v0beta API is deliberately not used: PulseMCP is
+  # failing a rising share of its requests on purpose and switches it off
+  # entirely in September 2026.
+  pulsemcp: false
+  # pulsemcp_api_key_ref: env:PULSEMCP_API_KEY
+  # pulsemcp_tenant: your-tenant-id
 
   # Docker's MCP catalogue, built from github.com/docker/mcp-registry (MIT).
   # No daemon and no container is involved: reading it is an HTTPS fetch of a
@@ -194,6 +216,18 @@ catalog:
   # shown with the reason rather than offered; the remote entries are the ones
   # this host can actually connect to.
   docker: true
+
+  # Smithery's registry: around 10,500 servers, every hosted one reachable at
+  # server.smithery.ai and opened by a single Smithery API key.
+  #
+  # Browsing needs no credential, which is why this is on by default. Dialling
+  # one of these servers does, and each entry says so -- the key is asked for at
+  # import, as an ordinary encrypted settings field, once per server imported.
+  #
+  # Smithery's own listing stops after 500 of those 10,500 servers however it is
+  # asked, so a browse says it is truncated and search is how the rest are
+  # reached; a search is passed to Smithery rather than applied to the 500.
+  smithery: true
 
 # Each key is an instance name, and `type` says what it is an instance of.
 # Leave `type` out and the two are the same, which is the ordinary case.

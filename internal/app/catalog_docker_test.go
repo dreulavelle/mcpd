@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -125,24 +127,97 @@ func TestDockerCatalogEntry_ALocalContainerIsListedAndNotOffered(t *testing.T) {
 // there is no catalogue, not one that reports a third party as unreachable
 // every time somebody opens the page.
 func TestCatalog_EverySourceOffLeavesNoCatalogue(t *testing.T) {
-	if catalog := buildCatalog(config.Catalog{}); catalog != nil {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if catalog := buildCatalog(config.Catalog{}, log); catalog != nil {
 		t.Fatalf("catalog = %+v, want none when every source is off", catalog)
 	}
 	if api := catalogAPI(nil); api.List != nil || api.Get != nil || api.Source != nil {
 		t.Errorf("api = %+v, want the handler to see no catalogue at all", api)
 	}
 
-	// And one source on is one source, not two.
-	only := buildCatalog(config.Catalog{Official: true})
+	// And one source on is one source, not four.
+	only := buildCatalog(config.Catalog{Official: true}, log)
 	if got := only.Sources(); len(got) != 1 || got[0] != "registry.modelcontextprotocol.io" {
 		t.Errorf("sources = %v, want just the official registry", got)
 	}
 	t.Cleanup(func() { _ = only.Close() })
 
-	both := buildCatalog(config.Catalog{Official: true, Docker: true})
+	both := buildCatalog(config.Catalog{Official: true, Docker: true}, log)
 	t.Cleanup(func() { _ = both.Close() })
 	want := []string{"registry.modelcontextprotocol.io", "docker/mcp-registry"}
 	if got := both.Sources(); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("sources = %v, want %v in preference order", got, want)
+	}
+}
+
+// TestCatalog_PreferenceOrderIsByDistanceFromThePublisher.
+//
+// The order is not alphabetical and not the order the sources were written.
+// It is how far an entry is from the party that operates the server: the
+// official registry is where a publisher registers their own, PulseMCP passes
+// that same document through, Docker's entry is a document this host composed
+// from a third party's description, and a Smithery entry describes Smithery's
+// proxy in front of the server rather than the server. Deduplication keeps the
+// first claim on an identity, so this order is the whole of the tie-break rule
+// and a reshuffle here silently changes which copy of a server an operator
+// imports.
+func TestCatalog_PreferenceOrderIsByDistanceFromThePublisher(t *testing.T) {
+	t.Setenv("MCPD_TEST_PULSEMCP_KEY", "a-key")
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	all := buildCatalog(config.Catalog{
+		Official: true, Docker: true, Smithery: true, PulseMCP: true,
+		PulseMCPAPIKeyRef: "env:MCPD_TEST_PULSEMCP_KEY",
+		PulseMCPTenant:    "a-tenant",
+	}, log)
+	if all == nil {
+		t.Fatal("catalog = nil, want four sources")
+	}
+	t.Cleanup(func() { _ = all.Close() })
+
+	want := []string{
+		"registry.modelcontextprotocol.io",
+		"api.pulsemcp.com",
+		"docker/mcp-registry",
+		"registry.smithery.ai",
+	}
+	if got := all.Sources(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("sources = %v, want %v in preference order", got, want)
+	}
+}
+
+// TestCatalog_PulseMCPWithAnUnreadableKeyIsLeftOut.
+//
+// It is the one source that cannot answer without a credential, so a reference
+// that will not resolve leaves it out rather than mounting a catalogue that
+// would 401 every page. The others are unaffected -- one source's problem is
+// one source's.
+func TestCatalog_PulseMCPWithAnUnreadableKeyIsLeftOut(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	catalog := buildCatalog(config.Catalog{
+		Official:          true,
+		PulseMCP:          true,
+		PulseMCPAPIKeyRef: "env:MCPD_TEST_A_VARIABLE_THAT_IS_NOT_SET",
+		PulseMCPTenant:    "a-tenant",
+	}, log)
+	if catalog == nil {
+		t.Fatal("catalog = nil, want the official registry to survive")
+	}
+	t.Cleanup(func() { _ = catalog.Close() })
+
+	if got := catalog.Sources(); len(got) != 1 || got[0] != "registry.modelcontextprotocol.io" {
+		t.Errorf("sources = %v, want PulseMCP left out and the rest kept", got)
+	}
+
+	// And a deployment whose only source drops out gets "no catalogue", not a
+	// catalogue that fails every page.
+	alone := buildCatalog(config.Catalog{
+		PulseMCP:          true,
+		PulseMCPAPIKeyRef: "env:MCPD_TEST_A_VARIABLE_THAT_IS_NOT_SET",
+		PulseMCPTenant:    "a-tenant",
+	}, log)
+	if alone != nil {
+		t.Errorf("catalog = %+v, want none when the only source could not be built", alone)
 	}
 }

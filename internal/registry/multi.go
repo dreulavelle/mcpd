@@ -247,6 +247,13 @@ collect:
 			Stale:       results[i].Stale,
 			RetrievedAt: results[i].RetrievedAt,
 			Entries:     contributed,
+			// Carried across rather than recomputed. The status this builds is
+			// this level's -- how many entries survived deduplication is not
+			// something a source can know -- but a note is the source's own
+			// account of its answer, and dropping it here would silence the
+			// one catalogue that has something to say the moment it is merged
+			// with another.
+			Note: noteFrom(results[i], name),
 		})
 	}
 
@@ -294,6 +301,20 @@ func (m *Multi) Get(ctx context.Context, name string) (Detail, error) {
 		return Detail{}, joinSourceErrors(failures)
 	}
 	return Detail{}, ErrNotFound
+}
+
+// noteFrom finds what a source said about its own page.
+//
+// By name rather than by position, because a source reports itself in its own
+// Sources slice and nothing promises that slice has exactly one element or
+// that the element is first.
+func noteFrom(page Page, source string) string {
+	for _, s := range page.Sources {
+		if s.Source == source {
+			return s.Note
+		}
+	}
+	return ""
 }
 
 // identity is what makes two entries from two catalogues the same server.

@@ -307,8 +307,15 @@ func TestPluginConfig_ResolvedType(t *testing.T) {
 // otherwise has to work: a bool that defaults true is only switchable if the
 // file's absent key leaves the default alone and its explicit false wins.
 func TestCatalog_DefaultsOnAndCanBeSwitchedOff(t *testing.T) {
-	if def := Default(); !def.Catalog.Official || !def.Catalog.Docker {
-		t.Errorf("catalog = %+v, want both sources on by default", def.Catalog)
+	// The three that need no credential are on; PulseMCP is not, because its
+	// API refuses every unauthenticated request and a source that can only
+	// answer 401 is worse to default to than one that is absent.
+	def := Default()
+	if !def.Catalog.Official || !def.Catalog.Docker || !def.Catalog.Smithery {
+		t.Errorf("catalog = %+v, want the credential-free sources on by default", def.Catalog)
+	}
+	if def.Catalog.PulseMCP {
+		t.Errorf("catalog = %+v, want pulsemcp off until it is configured", def.Catalog)
 	}
 
 	tests := []struct {
@@ -316,18 +323,33 @@ func TestCatalog_DefaultsOnAndCanBeSwitchedOff(t *testing.T) {
 		yaml         string
 		wantOfficial bool
 		wantDocker   bool
+		wantSmithery bool
+		wantPulseMCP bool
 		wantEnabled  bool
 	}{
 		{name: "no catalog block at all", yaml: "",
-			wantOfficial: true, wantDocker: true, wantEnabled: true},
+			wantOfficial: true, wantDocker: true, wantSmithery: true, wantEnabled: true},
 		{name: "the official registry only",
-			yaml:         "catalog:\n  docker: false\n",
+			yaml:         "catalog:\n  docker: false\n  smithery: false\n",
 			wantOfficial: true, wantEnabled: true},
 		{name: "docker only",
-			yaml:       "catalog:\n  official: false\n",
+			yaml:       "catalog:\n  official: false\n  smithery: false\n",
 			wantDocker: true, wantEnabled: true},
+		{name: "smithery only",
+			yaml:         "catalog:\n  official: false\n  docker: false\n",
+			wantSmithery: true, wantEnabled: true},
+		// PulseMCP is the one source that is off unless asked for: its v0.1
+		// API authenticates every request, so a deployment that has not been
+		// issued a key would get a page of 401s rather than a catalogue.
+		{name: "pulsemcp is off by default",
+			yaml:         "catalog:\n  docker: false\n  smithery: false\n",
+			wantOfficial: true, wantEnabled: true},
+		{name: "pulsemcp switched on",
+			yaml: "catalog:\n  official: false\n  docker: false\n" +
+				"  smithery: false\n  pulsemcp: true\n",
+			wantPulseMCP: true, wantEnabled: true},
 		{name: "no catalogue at all",
-			yaml: "catalog:\n  official: false\n  docker: false\n"},
+			yaml: "catalog:\n  official: false\n  docker: false\n  smithery: false\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -340,6 +362,12 @@ func TestCatalog_DefaultsOnAndCanBeSwitchedOff(t *testing.T) {
 			}
 			if c.Catalog.Docker != tc.wantDocker {
 				t.Errorf("docker = %v, want %v", c.Catalog.Docker, tc.wantDocker)
+			}
+			if c.Catalog.Smithery != tc.wantSmithery {
+				t.Errorf("smithery = %v, want %v", c.Catalog.Smithery, tc.wantSmithery)
+			}
+			if c.Catalog.PulseMCP != tc.wantPulseMCP {
+				t.Errorf("pulsemcp = %v, want %v", c.Catalog.PulseMCP, tc.wantPulseMCP)
 			}
 			if c.Catalog.Enabled() != tc.wantEnabled {
 				t.Errorf("enabled = %v, want %v", c.Catalog.Enabled(), tc.wantEnabled)
