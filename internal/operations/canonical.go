@@ -140,10 +140,16 @@ func Recompute(op *Operation) (string, error) {
 	return PayloadHash(op.Plugin, op.Action, op.Target, op.Params)
 }
 
-// PreconditionsEqual reports whether two precondition snapshots are equivalent
-// after canonicalisation. A malformed snapshot compares unequal, which fails
-// closed: an unreadable precondition blocks execution rather than permitting it.
-func PreconditionsEqual(a, b json.RawMessage) bool {
+// CanonicalEqual reports whether two JSON snapshots are equivalent after
+// canonicalisation. A malformed snapshot compares unequal, which fails closed:
+// an unreadable snapshot blocks execution rather than permitting it.
+//
+// Equality alone is not evidence. Two absent snapshots canonicalise to "null"
+// and compare equal, which is the right answer for a mutation whose desired
+// state is absence -- a delete confirmed by observing nothing -- and the wrong
+// one for a drift check that had nothing to compare. Callers that need the
+// difference ask Declared, or use CheckDrift.
+func CanonicalEqual(a, b json.RawMessage) bool {
 	ca, err := Canonicalize(a)
 	if err != nil {
 		return false
@@ -153,4 +159,66 @@ func PreconditionsEqual(a, b json.RawMessage) bool {
 		return false
 	}
 	return bytes.Equal(ca, cb)
+}
+
+// Declared reports whether a snapshot carries any state at all.
+//
+// Absent, JSON null, an empty object and an empty array all carry none: there
+// is no field in them for a comparison to notice changing. An unreadable
+// snapshot counts as declared, because it must reach CanonicalEqual and fail
+// there rather than be waved through as a mutation that asked for nothing.
+func Declared(raw json.RawMessage) bool {
+	c, err := Canonicalize(raw)
+	if err != nil {
+		return true
+	}
+	switch string(c) {
+	case "null", "{}", "[]":
+		return false
+	}
+	return true
+}
+
+// DriftCheck is the outcome of comparing the precondition snapshot taken at
+// proposal against one taken immediately before execution.
+type DriftCheck int
+
+const (
+	// DriftNotChecked means the mutation declared no preconditions, so there
+	// was nothing to compare. It is deliberately not the same value as
+	// DriftNone: a comparison that did not happen is not a comparison that
+	// passed, and recording it as one is how a check nobody performed ends up
+	// presented as a check that succeeded.
+	DriftNotChecked DriftCheck = iota
+	// DriftNone means the target still looks the way it did at proposal.
+	DriftNone
+	// DriftDetected means it does not, so applying the change would overwrite
+	// something nobody reviewed.
+	DriftDetected
+)
+
+// String implements fmt.Stringer.
+func (d DriftCheck) String() string {
+	switch d {
+	case DriftNone:
+		return "none"
+	case DriftDetected:
+		return "detected"
+	default:
+		return "not_checked"
+	}
+}
+
+// CheckDrift compares the proposed and current precondition snapshots.
+//
+// One snapshot declared and the other not is drift, not an absence of
+// checking: the target grew or lost the state the mutation depends on.
+func CheckDrift(proposed, current json.RawMessage) DriftCheck {
+	if !Declared(proposed) && !Declared(current) {
+		return DriftNotChecked
+	}
+	if !CanonicalEqual(proposed, current) {
+		return DriftDetected
+	}
+	return DriftNone
 }

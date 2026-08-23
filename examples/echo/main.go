@@ -48,6 +48,9 @@ func main() {
 		Description: "Changes the greeting used by the greet tool.",
 		Risk:        sdk.RiskLow,
 		Reversible:  true,
+		// Observe reads back the same value Apply writes, so the host's
+		// comparison against the desired state really does confirm it.
+		Verifiable: true,
 	}, &setGreeting{state: state})
 
 	p.OnHealth(func(context.Context) sdk.Health { return sdk.Healthy() })

@@ -86,6 +86,9 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 		Description: "Changes the label reported by echo_status.",
 		Risk:        operations.RiskLow,
 		Reversible:  true,
+		// Observe reads the same field Apply writes, so comparing it against
+		// the plan's desired state genuinely confirms the outcome.
+		Verifiable: true,
 	}, &labelHandler{p: p})
 
 	plugins.Tool(r, plugins.ToolSpec{

@@ -180,7 +180,7 @@ func (a *App) ImportMCPServer(ctx context.Context, actor, name string, document 
 	// Stored as it was given, not as it was decoded. The document is the
 	// operator's, and re-encoding it would quietly drop anything this build
 	// does not model.
-	if err := a.mcpStore.Import(ctx, name, document, doc.Schema, remote.Type, remote.URL); err != nil {
+	if err := a.mcpStore.Import(ctx, actor, name, document, doc.Schema, remote.Type, remote.URL); err != nil {
 		if errors.Is(err, sqlite.ErrServerExists) {
 			return fmt.Errorf("a remote MCP server named %q already exists", name)
 		}
@@ -205,7 +205,7 @@ func (a *App) RemoveMCPServer(ctx context.Context, actor, name string) error {
 		return fmt.Errorf("no remote MCP server named %q", name)
 	}
 
-	if err := a.mcpStore.Remove(ctx, name); err != nil {
+	if err := a.mcpStore.Remove(ctx, actor, name); err != nil {
 		if errors.Is(err, sqlite.ErrNoSuchServer) {
 			return fmt.Errorf("no remote MCP server named %q", name)
 		}
@@ -271,7 +271,7 @@ func (a *App) SetMCPServerEnabled(ctx context.Context, actor, name string, enabl
 	if _, ok := a.mcpServer(name); !ok {
 		return fmt.Errorf("no remote MCP server named %q", name)
 	}
-	if err := a.mcpStore.SetEnabled(ctx, name, enabled); err != nil {
+	if err := a.mcpStore.SetEnabled(ctx, actor, name, enabled); err != nil {
 		return err
 	}
 	if err := a.loadMCPServers(ctx); err != nil {
@@ -318,7 +318,7 @@ func (a *App) DiscoverMCPServer(ctx context.Context, actor, name string) (mcpser
 		return mcpservers.Diff{}, err
 	}
 
-	diff, err := a.mcpStore.Snapshot(ctx, name, seen)
+	diff, err := a.mcpStore.Snapshot(ctx, actor, name, seen)
 	if err != nil {
 		return mcpservers.Diff{}, err
 	}
@@ -354,7 +354,7 @@ func (a *App) ClassifyMCPTool(ctx context.Context, actor, server, tool, hash str
 			"the server offers now")
 	}
 
-	if err := a.mcpStore.ClassifyTool(ctx, server, tool, hash, state); err != nil {
+	if err := a.mcpStore.ClassifyTool(ctx, actor, server, tool, hash, state); err != nil {
 		if errors.Is(err, sqlite.ErrToolClassification) {
 			return fmt.Errorf("%s of %s was not changed: either it has been "+
 				"rediscovered with a different description or schema since you "+

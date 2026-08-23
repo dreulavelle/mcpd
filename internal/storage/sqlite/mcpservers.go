@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/mcpservers"
+	"github.com/spoked/mcpd/internal/operations"
 )
 
 // MCPServerStore holds imported remote MCP servers and the tools each was last
@@ -27,6 +28,37 @@ func NewMCPServerStore(db *DB, now func() time.Time) *MCPServerStore {
 	return &MCPServerStore{db: db, now: now}
 }
 
+// auditServer appends one admin action against a remote MCP server to the
+// operations audit trail, inside the transaction that performed it.
+//
+// The trail, not settings_history and not a third table. These are not
+// settings -- enabling a tool grants every caller of a plugin a path into a
+// third party's code, which is a privilege grant and belongs where privilege
+// grants are recorded. The chain is hash-linked and append-only, it already
+// carries entries with no operation of their own (a prune writes one), and
+// nothing about it is weakened by an entry whose operation_id is null: the
+// column is nullable, the link is over the whole row, and the triggers are
+// untouched.
+//
+// The plugin column carries the server's instance name, which is the name it
+// is mounted under and the name a grant lists, so an operator reading the
+// trail for one integration sees the decisions that shaped it beside the
+// operations that used it.
+func auditServer(u *UnitOfWork, kind, actor, server, action string, detail map[string]any) error {
+	body, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("sqlite: encode audit detail for %s: %w", kind, err)
+	}
+	return u.appendAudit(operations.AuditEntry{
+		EventID: newEventID(),
+		Kind:    kind,
+		Plugin:  server,
+		Action:  action,
+		Actor:   actor,
+		Detail:  body,
+	})
+}
+
 // ErrServerExists reports an import onto a name already taken.
 var ErrServerExists = errors.New("sqlite: a remote MCP server with that name already exists")
 
@@ -36,7 +68,7 @@ var ErrNoSuchServer = errors.New("sqlite: no such remote MCP server")
 // Import records a new server. The insert is guarded by the primary key
 // rather than by a prior read, so two operators racing the same name produce
 // one server and one refusal.
-func (s *MCPServerStore) Import(ctx context.Context, name string, doc []byte, schemaVersion, transport, endpoint string) error {
+func (s *MCPServerStore) Import(ctx context.Context, actor, name string, doc []byte, schemaVersion, transport, endpoint string) error {
 	now := s.now().UnixMilli()
 	return s.db.WriteTx(ctx, now, func(u *UnitOfWork) error {
 		res, err := u.exec(`
@@ -55,14 +87,29 @@ func (s *MCPServerStore) Import(ctx context.Context, name string, doc []byte, sc
 		if n == 0 {
 			return ErrServerExists
 		}
-		return nil
+		return auditServer(u, "mcpserver.imported", actor, name, "import", map[string]any{
+			"transport":      transport,
+			"endpoint":       endpoint,
+			"schema_version": schemaVersion,
+		})
 	})
 }
 
 // Remove forgets a server and its tool snapshot. The snapshot goes with it by
 // foreign key, so a name reused later cannot inherit someone else's approvals.
-func (s *MCPServerStore) Remove(ctx context.Context, name string) error {
+func (s *MCPServerStore) Remove(ctx context.Context, actor, name string) error {
 	return s.db.WriteTx(ctx, s.now().UnixMilli(), func(u *UnitOfWork) error {
+		// Counted before the delete, because the cascade takes the rows with
+		// it and an audit entry saying how much access was withdrawn is worth
+		// more than one saying a row went away.
+		var enabled, stored int
+		if err := u.queryRow(`
+			SELECT COUNT(*), COALESCE(SUM(state = 'enabled'), 0)
+			  FROM mcp_server_tools WHERE server_name = ?`,
+			name).Scan(&stored, &enabled); err != nil {
+			return fmt.Errorf("sqlite: count tools before removal: %w", err)
+		}
+
 		res, err := u.exec(`DELETE FROM mcp_servers WHERE name = ?`, name)
 		if err != nil {
 			return fmt.Errorf("sqlite: remove mcp server: %w", err)
@@ -70,12 +117,15 @@ func (s *MCPServerStore) Remove(ctx context.Context, name string) error {
 		if n, _ := res.RowsAffected(); n == 0 {
 			return ErrNoSuchServer
 		}
-		return nil
+		return auditServer(u, "mcpserver.removed", actor, name, "remove", map[string]any{
+			"tools_stored":  stored,
+			"tools_enabled": enabled,
+		})
 	})
 }
 
 // SetEnabled turns a server on or off.
-func (s *MCPServerStore) SetEnabled(ctx context.Context, name string, enabled bool) error {
+func (s *MCPServerStore) SetEnabled(ctx context.Context, actor, name string, enabled bool) error {
 	now := s.now().UnixMilli()
 	return s.db.WriteTx(ctx, now, func(u *UnitOfWork) error {
 		res, err := u.exec(`
@@ -96,8 +146,16 @@ func (s *MCPServerStore) SetEnabled(ctx context.Context, name string, enabled bo
 			if exists == 0 {
 				return ErrNoSuchServer
 			}
+			// Already in that state. Nothing changed, so nothing is recorded:
+			// a trail that logs non-events is one nobody reads carefully.
+			return nil
 		}
-		return nil
+		kind := "mcpserver.disabled"
+		if enabled {
+			kind = "mcpserver.enabled"
+		}
+		return auditServer(u, kind, actor, name, "set_enabled",
+			map[string]any{"enabled": enabled})
 	})
 }
 
@@ -236,7 +294,7 @@ func (s *MCPServerStore) queryTools(ctx context.Context, query string, args ...a
 //     with a new schema is not a way to undo a refusal.
 //   - A tool no longer offered goes disabled and stays in the table, so its
 //     return is recognised as a return rather than as something new.
-func (s *MCPServerStore) Snapshot(ctx context.Context, server string, seen []mcpservers.Tool) (mcpservers.Diff, error) {
+func (s *MCPServerStore) Snapshot(ctx context.Context, actor, server string, seen []mcpservers.Tool) (mcpservers.Diff, error) {
 	var diff mcpservers.Diff
 	now := s.now().UnixMilli()
 
@@ -355,14 +413,30 @@ func (s *MCPServerStore) Snapshot(ctx context.Context, server string, seen []mcp
 				"host keeps for one server; remove tools you have refused, or "+
 				"remove the server", ErrTooManyTools, server, stored, maxStoredTools)
 		}
-		return nil
+
+		// Sorted here rather than only on the way out, so the audit entry and
+		// the returned diff say the same thing in the same order.
+		for _, list := range [][]string{diff.Added, diff.Changed, diff.Removed, diff.Unchanged} {
+			sort.Strings(list)
+		}
+
+		// Recorded even when nothing changed. A discovery that found the
+		// catalogue unaltered is the evidence that it was unaltered, and it is
+		// also the moment an approval can be silently invalidated -- a changed
+		// descriptor sends an enabled tool back to pending, which withdraws
+		// access nobody asked to withdraw.
+		return auditServer(u, "mcpserver.discovered", actor, server, "discover",
+			map[string]any{
+				"offered":   len(seen),
+				"sequence":  seq,
+				"added":     diff.Added,
+				"changed":   diff.Changed,
+				"removed":   diff.Removed,
+				"unchanged": len(diff.Unchanged),
+			})
 	})
 	if err != nil {
 		return mcpservers.Diff{}, err
-	}
-
-	for _, list := range [][]string{diff.Added, diff.Changed, diff.Removed, diff.Unchanged} {
-		sort.Strings(list)
 	}
 	return diff, nil
 }
@@ -434,11 +508,23 @@ var ErrToolClassification = errors.New("sqlite: the tool could not be classified
 //
 // Enabling additionally requires that the tool has no recorded problem, so a
 // tool this host cannot mount cannot be marked mounted.
-func (s *MCPServerStore) ClassifyTool(ctx context.Context, server, tool, hash string, state mcpservers.ToolState) error {
+func (s *MCPServerStore) ClassifyTool(ctx context.Context, actor, server, tool, hash string, state mcpservers.ToolState) error {
 	if !state.Valid() {
 		return fmt.Errorf("sqlite: %q is not a tool state", state)
 	}
 	return s.db.WriteTx(ctx, s.now().UnixMilli(), func(u *UnitOfWork) error {
+		// Read inside the same transaction as the update, so the recorded
+		// "from" is the state the guarded statement was applied to. It is
+		// read rather than guarded on: the descriptor hash is the guard, and
+		// adding the previous state to the WHERE clause would refuse a
+		// harmless re-classification of something already in that state.
+		var previous string
+		if err := u.queryRow(`
+			SELECT state FROM mcp_server_tools WHERE server_name = ? AND tool_name = ?`,
+			server, tool).Scan(&previous); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("sqlite: read tool state before classifying: %w", err)
+		}
+
 		n, err := u.ExecAffected(`
 			UPDATE mcp_server_tools
 			   SET state = ?, ever_classified = 1
@@ -451,7 +537,17 @@ func (s *MCPServerStore) ClassifyTool(ctx context.Context, server, tool, hash st
 		if n == 0 {
 			return ErrToolClassification
 		}
-		return nil
+		// Enabling is a privilege grant: it hands every caller of this plugin
+		// a path into a third party's code. The descriptor hash goes into the
+		// record because what was approved was a description and a schema, not
+		// a name.
+		return auditServer(u, "mcpserver.tool_classified", actor, server, "classify",
+			map[string]any{
+				"tool":            tool,
+				"from":            previous,
+				"to":              string(state),
+				"descriptor_hash": hash,
+			})
 	})
 }
 

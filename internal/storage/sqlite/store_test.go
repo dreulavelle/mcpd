@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -741,5 +742,75 @@ func TestIdempotency_IndeterminateBlocksRetry(t *testing.T) {
 	})
 	if !errors.Is(err, operations.ErrIdempotencyConflict) {
 		t.Fatalf("an indeterminate outcome must block a retry, got %v", err)
+	}
+}
+
+// Verifiability is stored, not inferred, and it comes back the way it went in.
+// The executor reads it from this row rather than from the plugin it is about
+// to run, so a round trip that lost it would silently disable every
+// verification in the system.
+func TestOperations_VerifiabilityRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	s := NewOperationStore(db, func() time.Time { return testClock })
+
+	for _, want := range []bool{true, false} {
+		id := fmt.Sprintf("op_verifiable_%v", want)
+		target := json.RawMessage(`{"mac":"AA:BB"}`)
+		params := json.RawMessage(`{"channel":"149"}`)
+		hash, err := operations.PayloadHash("cnmaestro", "device.set_radio_channel", target, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		op := &operations.Operation{
+			ID: id, Plugin: "cnmaestro", Action: "device.set_radio_channel",
+			State: operations.StatePendingApproval, Risk: operations.RiskLow,
+			Target: target, Params: params, PayloadHash: hash,
+			Verifiable:     want,
+			RequestedBy:    "user:alice",
+			RequestedAt:    testClock,
+			ExpiresAt:      testClock.Add(time.Hour),
+			CorrelationID:  "corr-" + id,
+			IdempotencyKey: "idem-" + id,
+		}
+		if _, err := s.Propose(ctx, operations.RepoProposeRequest{
+			Operation: op, RequestHash: hash,
+			Audit: operations.AuditEntry{
+				EventID: "aud-" + id, Kind: "operation.proposed", OperationID: id,
+				Actor: op.RequestedBy, ToState: op.State, CorrelationID: op.CorrelationID,
+			},
+			Event: operations.OutboxEvent{
+				ID: "evt-" + id, Subject: "mcp.operation.proposed",
+				OperationID: id, CorrelationID: op.CorrelationID,
+			},
+		}); err != nil {
+			t.Fatalf("propose: %v", err)
+		}
+
+		got, err := s.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.Verifiable != want {
+			t.Fatalf("verifiable = %v, want %v", got.Verifiable, want)
+		}
+	}
+}
+
+// What a mutation claims it can prove is part of what was approved, so the
+// column is frozen with the rest of the payload. The refusal is a trigger
+// rather than a convention: a claim that can be rewritten after the decision
+// is not a claim.
+func TestOperations_VerifiabilityIsImmutableAfterSubmission(t *testing.T) {
+	s, db := newStore(t)
+	op := proposeOp(t, s, "op_freeze")
+
+	_, err := db.Writer().ExecContext(context.Background(),
+		`UPDATE operations SET verifiable = 0 WHERE id = ?`, op.ID)
+	if err == nil {
+		t.Fatal("a submitted operation's verifiability must not be rewritable")
+	}
+	if !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
