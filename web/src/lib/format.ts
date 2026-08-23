@@ -105,6 +105,17 @@ export const RISK_LABELS: Record<RiskLevel, string> = {
   low: "Low", medium: "Medium", high: "High", critical: "Critical",
 };
 
+/**
+ * A risk level, as a word.
+ *
+ * Takes a string rather than a `RiskLevel` because the approval policy hands
+ * the console its own list of ceilings, and a value the server offers that
+ * this build has not heard of should render as itself rather than as blank.
+ */
+export function riskLabel(risk: string): string {
+  return RISK_LABELS[risk as RiskLevel] ?? risk;
+}
+
 /** Tool names carry their plugin prefix; a page about one plugin already says which. */
 export function unprefixed(tool: string, plugin: string): string {
   return tool.startsWith(plugin + "_") ? tool.slice(plugin.length + 1) : tool;

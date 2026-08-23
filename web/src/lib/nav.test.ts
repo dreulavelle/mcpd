@@ -47,12 +47,19 @@ describe("navigation gating", () => {
   // Settings is how the *host* is configured. Your own account moved to
   // /profile, reached by clicking your name, so Account is no longer a child
   // here -- and Settings stopped meaning two different things.
-  it("keeps Settings for a user but drops the Users page inside it", () => {
+  // The approval policy is readable by anyone who may read, for the same
+  // reason General is: what this host will do without asking anybody is part
+  // of understanding the deployment, and the people the rules are written
+  // about are exactly who should be able to read them. Changing it is admin,
+  // which the page enforces by rendering read-only.
+  it("keeps Settings and the approval policy for a user but drops Users", () => {
     const settings = visibleNav(holding("read"))
       .flatMap((g) => g.items)
       .find((i) => i.path === "/settings");
     expect(settings).toBeDefined();
-    expect(settings?.children?.map((c) => c.label)).toEqual(["General"]);
+    expect(settings?.children?.map((c) => c.label))
+      .toEqual(["General", "Approval policy"]);
+    expect(settings?.children?.map((c) => c.label)).not.toContain("Users");
   });
 
   // It is in the map because the router judges every path against the map.
@@ -162,6 +169,7 @@ describe("the capability a path requires", () => {
     ["/tunnels", "read"],
     ["/marketplace", "admin"],
     ["/settings", "read"],
+    ["/settings/policy", "read"],
     ["/settings/users", "admin"],
     // Your own profile is not an administrative surface, and gating it on
     // read would be reflex rather than a rule.

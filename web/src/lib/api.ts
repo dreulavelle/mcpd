@@ -41,6 +41,15 @@ export interface Operation {
   expires_at: string;
   approved_by?: string;
   approved_at?: string;
+  /**
+   * The standing rule that authorised this change, when nobody was asked.
+   *
+   * This is the discriminator, not `approved_by`. An auto-approved operation
+   * carries `approved_by: "system:policy"`, which is not an account and reads
+   * as somebody having clicked if it is rendered on its own. Empty means a
+   * person decided.
+   */
+  authorized_by_rule?: string;
   execute_by?: string;
   terminal_at?: string;
   /**
@@ -362,6 +371,67 @@ export interface Endpoints {
   aggregate: string;
   /** The shape of a single-system address. */
   per_plugin_example: string;
+}
+
+/* -- the approval policy --------------------------------------------------- */
+
+/**
+ * A standing rule: an administrator saying in advance that a class of change
+ * does not need to be asked about.
+ *
+ * `max_risk` is two different kinds of answer in one field. A level is a
+ * grant, authorising up to that risk. Empty is an *exclusion* -- it authorises
+ * nothing, and it beats every grant that matches beside it whatever their
+ * scopes are. The two are not points on a scale and must not be offered as
+ * one.
+ *
+ * A selector left blank is not the wildcard: the server refuses `""` so that
+ * "anything" has one spelling. Send `policy.wildcard` instead.
+ */
+export interface ApprovalRule {
+  id: string;
+  plugin: string;
+  action: string;
+  principal: string;
+  /** A ceiling, or "" for an exclusion. Never "critical"; the server refuses it. */
+  max_risk: string;
+  note?: string;
+}
+
+export interface ApprovalPolicy {
+  /** Most specific first, as the server canonicalises them. */
+  rules: ApprovalRule[];
+  /** The selector meaning "anything", named by the server rather than hardcoded. */
+  wildcard: string;
+  /**
+   * The ceilings a grant may be given, least severe first.
+   *
+   * Not a priority order between rules -- an exclusion beats every grant it
+   * overlaps -- and the empty ceiling is deliberately absent, because an
+   * exclusion is a different choice rather than a lower level.
+   */
+  ceilings: string[];
+  /** What happens where no rule matches, in the server's own words. */
+  default: string;
+  /** Rules naming a plugin or action this host does not serve. Advisory. */
+  warnings?: string[];
+}
+
+/** What the policy would do with a change nobody has proposed yet. */
+export interface PolicyEvaluation {
+  auto_approve: boolean;
+  /** The rule that decided, including when it is the exclusion doing the refusing. */
+  rule?: ApprovalRule;
+  /** Prose meant to be shown as-is. Do not parse it. */
+  reason: string;
+}
+
+export interface EvaluateRequest {
+  plugin: string;
+  action: string;
+  principal: string;
+  risk: string;
+  reversible: boolean;
 }
 
 /* -- remote MCP servers ---------------------------------------------------- */
@@ -822,4 +892,27 @@ export const api = {
       `/api/mcp-servers/${encodeURIComponent(server)}/tools/${encodeURIComponent(tool)}`,
       { method: "PATCH", body: JSON.stringify({ state, descriptor_hash: descriptorHash }) },
     ),
+
+  approvalPolicy: () => request<ApprovalPolicy>("/api/approval-policy"),
+
+  /**
+   * Replaces the whole rule set.
+   *
+   * Whole-set replacement is the only honest unit. Whether a rule is legal
+   * depends on the others beside it -- two rules on one scope are refused --
+   * so there is nothing smaller that can be checked, and a per-row save would
+   * be pretending otherwise.
+   */
+  saveApprovalPolicy: (rules: ApprovalRule[]) =>
+    request<ApprovalPolicy>("/api/approval-policy", {
+      method: "PUT",
+      body: JSON.stringify({ rules }),
+    }),
+
+  /** Asks what the policy would do. Computes over configuration and changes nothing. */
+  evaluateApprovalPolicy: (query: EvaluateRequest) =>
+    request<PolicyEvaluation>("/api/approval-policy/evaluate", {
+      method: "POST",
+      body: JSON.stringify(query),
+    }),
 };

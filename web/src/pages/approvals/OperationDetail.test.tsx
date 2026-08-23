@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
-import { api, type Operation, type OperationState } from "@/lib/api";
+import { api, type AuditRecord, type Operation, type OperationState } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
 import { OperationDetail } from "./OperationDetail";
 
@@ -27,8 +27,8 @@ function operationFixture(overrides: Partial<Operation> = {}): Operation {
   };
 }
 
-function mount(op: Operation, role: "user" | "admin") {
-  vi.spyOn(api, "operation").mockResolvedValue({ operation: op, audit: [] });
+function mount(op: Operation, role: "user" | "admin", audit: AuditRecord[] = []) {
+  vi.spyOn(api, "operation").mockResolvedValue({ operation: op, audit });
   return renderWith(<OperationDetail id={op.id} />, { session: sessionFor(role) });
 }
 
@@ -165,5 +165,118 @@ describe("what the record will prove", () => {
     expect(
       await screen.findByText(/planned against a stored snapshot/i),
     ).toBeInTheDocument();
+  });
+});
+
+const POLICY_APPROVAL: AuditRecord = {
+  seq: 2,
+  at: "2026-08-22T09:00:01Z",
+  kind: "operation.approved",
+  actor: "system:policy",
+  operation_id: "op-1",
+  from_state: "pending_approval",
+  to_state: "approved",
+  detail: {
+    reason: "rule routine-radio (cnmaestro/* for *) authorises low changes up to low",
+    channel: "policy",
+    rule: "routine-radio",
+    rule_scope: "cnmaestro/* for *",
+    rule_max_risk: "low",
+    rule_note: "a channel change is undone by another channel change",
+    proposed_by: "svc:assistant",
+    asked_a_person: false,
+  },
+};
+
+/**
+ * Nobody clicked, and the page must not say otherwise.
+ *
+ * `approved_by` is `system:policy` on one of these and `approved_by_name` is
+ * the same string -- not an account, nothing to resolve. The discriminator is
+ * `authorized_by_rule`, and the scope and ceiling come from the audit entry
+ * rather than from the policy endpoint, because the rule may have been edited
+ * or deleted since and the entry is what actually authorised this change.
+ */
+describe("a change a standing rule authorised", () => {
+  const autoApproved = () => operationFixture({
+    state: "succeeded", terminal: true, verified: true, attempts: 1,
+    approved_by: "system:policy",
+    approved_at: "2026-08-22T09:00:01Z",
+    authorized_by_rule: "routine-radio",
+  });
+
+  it("names the rule instead of rendering the approver field", async () => {
+    mount(autoApproved(), "admin", [POLICY_APPROVAL]);
+
+    expect(await screen.findByText(/Authorised in advance by rule/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText("Decided by")).not.toBeInTheDocument();
+
+    // The audit trail still says `system:policy`, because that is literally
+    // what the entry says and the trail is the record rather than a rendering
+    // of it. What must not exist is a second place saying it -- a "Decided by"
+    // field, which reads as an account having pressed a button.
+    const mentions = screen.getAllByText("system:policy");
+    expect(mentions).toHaveLength(1);
+    expect(mentions[0]!.closest("table")).not.toBeNull();
+  });
+
+  it("reads the scope, ceiling and note out of the entry that authorised it", async () => {
+    mount(autoApproved(), "admin", [POLICY_APPROVAL]);
+
+    expect(await screen.findByText("cnmaestro/* for *")).toBeInTheDocument();
+    expect(screen.getByText("Authorised up to")).toBeInTheDocument();
+    expect(
+      screen.getByText("a channel change is undone by another channel change"),
+    ).toBeInTheDocument();
+  });
+
+  // The trail can be cleared. The id is on the operation row and survives;
+  // what the rule covered does not, and inventing it from the policy endpoint
+  // would describe today's rule rather than the authorisation that happened.
+  it("admits it cannot show the scope once the trail is gone", async () => {
+    mount(autoApproved(), "admin", []);
+
+    expect(await screen.findByText(/Authorised in advance by rule/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/no longer holds the entry/i)).toBeInTheDocument();
+    expect(screen.queryByText("cnmaestro/* for *")).not.toBeInTheDocument();
+  });
+
+  it("still says a person decided where one did", async () => {
+    mount(
+      operationFixture({
+        state: "succeeded", terminal: true, verified: true,
+        approved_by: "user:alice@example.com",
+        approved_at: "2026-08-22T09:00:01Z",
+      }),
+      "admin",
+    );
+
+    expect(await screen.findByText("Decided by")).toBeInTheDocument();
+    expect(screen.getByText("user:alice@example.com")).toBeInTheDocument();
+    expect(screen.queryByText(/Authorised in advance/i)).not.toBeInTheDocument();
+  });
+
+  // Assurance is orthogonal: an auto-approved change can carry every proof,
+  // and a gated call that a rule authorised was still not approved by anyone.
+  it("does not claim a person authorised a gated call a rule let through", async () => {
+    mount(
+      operationFixture({
+        state: "succeeded", terminal: true, attempts: 1,
+        assurance: "gated_call", drift_checked: false, outcome_verifiable: false,
+        approved_by: "system:policy",
+        authorized_by_rule: "routine-radio",
+      }),
+      "admin",
+      [POLICY_APPROVAL],
+    );
+
+    expect(
+      await screen.findByText(/A standing rule authorised it and the call was made/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Approving it records that a person authorised it/i),
+    ).not.toBeInTheDocument();
   });
 });
