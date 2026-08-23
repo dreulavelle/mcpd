@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
 )
@@ -56,9 +57,9 @@ type PluginInstanceInfo struct {
 	// Removed marks a file-declared instance an administrator removed here.
 	// It stays in this list, because somebody who removes the wrong thing has
 	// to be able to find it again to restore it.
-	Removed   bool   `json:"removed,omitempty"`
-	RemovedBy string `json:"removed_by,omitempty"`
-	RemovedAt int64  `json:"removed_at,omitempty"`
+	Removed   bool      `json:"removed,omitempty"`
+	RemovedBy string    `json:"removed_by,omitempty"`
+	RemovedAt time.Time `json:"removed_at,omitzero"`
 	// Declaration is the file's entry for this instance, when there is one.
 	Declaration *PluginDeclaration `json:"declaration,omitempty"`
 	// Mounted reports whether it is serving now. An instance is not mounted
@@ -83,10 +84,10 @@ type PluginInstanceInfo struct {
 // removal and resurrect all of them on the next good deploy. Shown, it is a
 // row somebody can deliberately forget.
 type StaleRemoval struct {
-	Name         string `json:"name"`
-	DeclaredType string `json:"declared_type"`
-	RemovedBy    string `json:"removed_by"`
-	RemovedAt    int64  `json:"removed_at"`
+	Name         string    `json:"name"`
+	DeclaredType string    `json:"declared_type"`
+	RemovedBy    string    `json:"removed_by"`
+	RemovedAt    time.Time `json:"removed_at"`
 }
 
 func (s *Server) handlePluginTypes(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +116,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 	}
 	stale := []StaleRemoval{}
 	if s.opts.StaleRemovals != nil {
-		stale = s.opts.StaleRemovals()
+		stale = s.opts.StaleRemovals(r.Context())
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"instances": list, "count": len(list), "stale_removals": stale,

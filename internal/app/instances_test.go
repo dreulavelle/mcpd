@@ -149,7 +149,7 @@ func TestRemoveInstance_OverridesTheFileAndSurvivesARestart(t *testing.T) {
 	if !got.Removed || got.Enabled || !got.FromFile {
 		t.Fatalf("instance = %+v, want it listed as removed, off, still from the file", got)
 	}
-	if got.RemovedBy != "user:test" || got.RemovedAt == 0 {
+	if got.RemovedBy != "user:test" || got.RemovedAt.IsZero() {
 		t.Fatalf("instance = %+v, want the removal to say who and when", got)
 	}
 	for _, inst := range a.enabledInstances(ctx) {
@@ -211,6 +211,27 @@ func TestRemoveInstance_RequiredTakesAnAcknowledgement(t *testing.T) {
 	}
 	if got := instanceNamed(t, a, "echo"); !got.Removed {
 		t.Fatal("the acknowledged removal did not take")
+	}
+}
+
+// Only the file can mark a plugin required, so the flag has to survive the
+// store's record of the same name -- otherwise touching an instance in the
+// dashboard quietly removes the acknowledgement that flag exists to require.
+func TestRemoveInstance_RequiredSurvivesAStoreRecord(t *testing.T) {
+	ctx := context.Background()
+	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
+		map[string]config.PluginConfig{"echo": {Enabled: true, Required: true}})
+
+	// What a toggle in the dashboard leaves behind for a file-declared name.
+	if err := a.settings.Apply(ctx, "user:test", settingsChange(
+		"instances.echo", `{"type":"echo","enabled":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := instanceNamed(t, a, "echo"); !got.Required {
+		t.Fatal("the file's required flag must survive the store's record")
+	}
+	if err := a.RemoveInstance(ctx, "user:test", "echo", false); err == nil {
+		t.Fatal("removing it must still take an acknowledgement")
 	}
 }
 
@@ -287,7 +308,7 @@ func TestStaleRemovals_AreKeptAndReported(t *testing.T) {
 
 	// The operator has since deleted the entry from their YAML.
 	tidied := fileApp(t, dbPath, map[string]config.PluginConfig{})
-	stale := tidied.staleRemovals()
+	stale := tidied.staleRemovals(ctx)
 	if len(stale) != 1 || stale[0].Name != "echo" {
 		t.Fatalf("staleRemovals = %+v, want the orphaned removal reported", stale)
 	}
@@ -299,7 +320,7 @@ func TestStaleRemovals_AreKeptAndReported(t *testing.T) {
 	if err := tidied.RestoreInstance(ctx, "user:test", "echo"); err != nil {
 		t.Fatalf("forgetting a stale removal: %v", err)
 	}
-	if len(tidied.staleRemovals()) != 0 {
+	if len(tidied.staleRemovals(ctx)) != 0 {
 		t.Fatal("the stale removal should be gone")
 	}
 }

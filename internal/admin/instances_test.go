@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
 )
@@ -26,17 +27,17 @@ func newInstanceDashboard(t *testing.T, role auth.Role, calls *instanceCalls) *S
 			return []PluginInstanceInfo{{
 				Name: "echo", Type: "echo", Runtime: "builtin",
 				FromFile: true, Required: true, Enabled: false,
-				Removed: true, RemovedBy: "user:alice", RemovedAt: 1700,
+				Removed: true, RemovedBy: "user:alice", RemovedAt: time.UnixMilli(1_700_000_000_000),
 				Declaration: &PluginDeclaration{
 					Type: "echo", Enabled: true, Required: true,
 					SettingsKeys: []string{"base_url"},
 				},
 			}}
 		},
-		StaleRemovals: func() []StaleRemoval {
+		StaleRemovals: func(context.Context) []StaleRemoval {
 			return []StaleRemoval{{
 				Name: "gone", DeclaredType: "cnmaestro",
-				RemovedBy: "user:alice", RemovedAt: 1700,
+				RemovedBy: "user:alice", RemovedAt: time.UnixMilli(1_700_000_000_000),
 			}}
 		},
 		AddPlugin: func(context.Context, string, string, string) error { return nil },

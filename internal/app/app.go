@@ -388,14 +388,14 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 				}
 				return out
 			},
-			StaleRemovals: func() []admin.StaleRemoval {
+			StaleRemovals: func(ctx context.Context) []admin.StaleRemoval {
 				out := make([]admin.StaleRemoval, 0)
-				for _, ov := range a.staleRemovals() {
+				for _, ov := range a.staleRemovals(ctx) {
 					out = append(out, admin.StaleRemoval{
 						Name:         ov.Name,
 						DeclaredType: ov.DeclaredType,
 						RemovedBy:    ov.Actor,
-						RemovedAt:    ov.UpdatedAt,
+						RemovedAt:    time.UnixMilli(ov.UpdatedAt),
 					})
 				}
 				return out

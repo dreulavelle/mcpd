@@ -3,18 +3,19 @@ import {
   api, ApiError, type Plugin, type PluginInstance, type SettingsPayload,
   type TunnelInfo, type TunnelStatus,
 } from "@/lib/api";
-import { unprefixed } from "@/lib/format";
+import { unprefixed, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { useRouter } from "@/lib/router";
 import { useCan } from "@/lib/session";
 import {
-  Copyable, Loading, Notice, PageHeader, Section,
+  Copyable, Detail, Loading, Notice, PageHeader, Section,
 } from "@/components/chrome";
 import { SettingsForm } from "@/components/SettingsForm";
 import { Chip, healthTone, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { RestoreButton } from "./PluginsList";
 import { RemoteServer } from "./RemoteServer";
 
 /**
@@ -105,10 +106,12 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
   );
   const health = plugin?.health ?? "unhealthy";
   const healthMessage = plugin?.health_message
-    ?? (instance?.missing?.length
-      ? `Waiting on ${instance.missing.join(", ")}.`
-      : instance?.problem
-        || (instance?.enabled === false ? "Switched off." : "Not running yet."));
+    ?? (instance?.removed
+      ? "Removed here. The configuration file still declares it."
+      : instance?.missing?.length
+        ? `Waiting on ${instance.missing.join(", ")}.`
+        : instance?.problem
+          || (instance?.enabled === false ? "Switched off." : "Not running yet."));
 
   return (
     <>
@@ -119,7 +122,9 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {runtime === "mcp" && <Chip tone="info">Remote MCP server</Chip>}
-            {running ? (
+            {instance?.removed ? (
+              <Chip>Removed</Chip>
+            ) : running ? (
               <Chip tone={healthTone(health)}>
                 <StatusDot tone={healthTone(health)} />
                 {health === "healthy" ? "Serving" : health}
@@ -132,7 +137,12 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
       />
 
       <div className="space-y-6">
-        {health !== "healthy" && healthMessage && (
+        {instance?.removed ? (
+          <RemovedNotice
+            name={name} instance={instance} mayManage={mayAdminister}
+            onChanged={onChanged}
+          />
+        ) : health !== "healthy" && healthMessage && (
           <Notice tone={health === "degraded" ? "attention" : "problem"}>
             {healthMessage}
           </Notice>
@@ -211,6 +221,12 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
           </>
         )}
 
+        <EnabledControl
+          name={name} instance={instance} runtime={runtime} onChanged={onChanged}
+        />
+
+        <Declaration instance={instance} />
+
         <RemoveControl
           name={name} instance={instance} runtime={runtime} onChanged={onChanged}
         />
@@ -234,7 +250,152 @@ function ToolList({ tools, tone }: { tools: string[]; tone?: "attention" }) {
   );
 }
 
-/** Removing an instance, where it can be done and where it cannot. */
+/**
+ * What the configuration file says about this plugin, read-only.
+ *
+ * Shown because the honest answer to "I removed it, is it gone?" is "not from
+ * your file" -- and the next question is which lines to delete when somebody
+ * next touches the YAML. Keys without values: this rides on a read-capability
+ * endpoint and a `settings:` block is usually where a credential is.
+ */
+function Declaration({ instance }: { instance: PluginInstance | null }) {
+  const d = instance?.declaration;
+  if (!d) return null;
+  return (
+    <Section
+      title="In the configuration file"
+      description="What the file declares. mcpd does not write this file; nothing on this page changes it."
+    >
+      <Card>
+        <CardContent className="grid gap-4 sm:grid-cols-3">
+          <Detail label="Type">
+            <code className="font-mono">{d.type}</code>
+          </Detail>
+          <Detail label="Enabled">{d.enabled ? "true" : "false"}</Detail>
+          <Detail label="Required">
+            {d.required ? "true — the host is meant not to run without it" : "false"}
+          </Detail>
+          {d.settings_keys && d.settings_keys.length > 0 && (
+            <Detail label="Settings it sets" className="sm:col-span-3">
+              <span className="flex flex-wrap gap-1.5">
+                {d.settings_keys.map((k) => (
+                  <Chip key={k}><span className="font-mono">{k}</span></Chip>
+                ))}
+              </span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                Names only. Their values are on the Settings page, where the
+                secret ones are redacted.
+              </span>
+            </Detail>
+          )}
+        </CardContent>
+      </Card>
+    </Section>
+  );
+}
+
+/**
+ * A plugin removed here that the configuration file still declares.
+ *
+ * The wording is the point. An operator who reads "removed" and assumes their
+ * file changed will be surprised twice: once when they cannot find the edit,
+ * and once when a colleague redeploys and nothing comes back. So it says which
+ * of the two happened, and offers the way out of it.
+ */
+function RemovedNotice({ name, instance, mayManage, onChanged }: {
+  name: string;
+  instance: PluginInstance;
+  mayManage: boolean;
+  onChanged: () => void;
+}) {
+  return (
+    <Notice tone="attention">
+      <div className="space-y-2">
+        <p>
+          <strong>Removed.</strong> mcpd is not serving this plugin, now or
+          after a restart.{" "}
+          {instance.removed_by && (
+            <>Removed by {instance.removed_by}
+              {instance.removed_at ? ` on ${when(instance.removed_at)}` : ""}.{" "}
+            </>
+          )}
+          The configuration file is unchanged — if you redeploy from it, the
+          removal still holds.
+        </p>
+        {mayManage && (
+          <RestoreButton name={name} label="Restore" onChanged={onChanged} />
+        )}
+      </div>
+    </Notice>
+  );
+}
+
+/**
+ * Switching a plugin off without removing it.
+ *
+ * This works on a file-declared instance for the same reason removing one
+ * does: `enabled: false` in a file nobody on this host can edit is the same
+ * dead end one step smaller, and the store already beats the file everywhere
+ * else. A remote MCP server is switched from its own panel, which owns the
+ * column that decides it -- a record written here would be shadowed on the
+ * next read, so the toggle would report success and change nothing.
+ */
+function EnabledControl({ name, instance, runtime, onChanged }: {
+  name: string;
+  instance: PluginInstance | null;
+  runtime: "builtin" | "mcp";
+  onChanged: () => void;
+}) {
+  const mayManage = useCan("admin");
+  const notify = useNotify();
+  const [busy, setBusy] = useState(false);
+
+  if (!mayManage || !instance || runtime === "mcp") return null;
+  // Nothing to switch: it is not being served either way, and the notice at
+  // the top of the page owns the one control that changes that.
+  if (instance.removed) return null;
+
+  const on = instance.enabled;
+
+  async function toggle() {
+    setBusy(true);
+    try {
+      await api.setInstanceEnabled(name, !on);
+      notify("good", on
+        ? `Switched ${name} off.`
+        : `Switched ${name} on. It serves as soon as it has what it needs.`);
+    } catch (e) {
+      notify("problem", e instanceof ApiError ? e.detail : "Couldn't change it.");
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-[52ch] text-sm text-muted-foreground">
+          {on
+            ? "Switching it off stops mcpd serving it and keeps everything it is configured with."
+            : "Switched off. Its settings are still here; switching it back on serves it again."}
+          {instance.from_file && (
+            <>
+              {" "}This is recorded here rather than in the configuration file,
+              which is unchanged and stays that way.
+            </>
+          )}
+        </p>
+        <Button variant="outline" size="sm" disabled={busy} onClick={toggle}>
+          {busy ? "Saving…" : on ? "Switch off" : "Switch on"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Removing an instance: what that means here, which is not the same thing
+ * for one the dashboard added and one the configuration file declares. */
 function RemoveControl({ name, instance, runtime, onChanged }: {
   name: string;
   instance: PluginInstance | null;
@@ -255,24 +416,38 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
   // remote panel above carries the one that works.
   if (runtime === "mcp") return null;
 
-  // An instance from the file would come back on the next start, so offering
-  // to remove it here would be offering something that does not stick.
-  if (instance.from_file) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        Defined in the configuration file. Remove it there rather than here, or
-        it returns on the next start.
-      </p>
-    );
-  }
+  // Already removed: the notice at the top of the page owns this, and a second
+  // control offering to remove it again would be a button with nothing to do.
+  if (instance.removed) return null;
+
+  const fromFile = instance.from_file;
+  const required = fromFile && instance.required === true;
 
   async function remove() {
-    if (!confirm(`Remove ${name}? Its settings, including credentials, go with it.`)) return;
+    // Two different acts, so two different confirmations. Telling somebody
+    // their credentials are about to be forgotten when they are not is as
+    // wrong as not telling them when they are.
+    const question = fromFile
+      ? `Remove ${name}? mcpd stops serving it, now and after every restart. `
+        + "Your configuration file is not changed — it still declares it, and "
+        + "you can restore it here."
+        + (required
+          ? "\n\nThe file also marks it required: true, meaning this host is "
+            + "meant not to run without it. Removing it overrides that."
+          : "")
+      : `Remove ${name}? Its settings, including credentials, go with it.`;
+    if (!confirm(question)) return;
     setBusy(true);
     try {
-      await api.removeInstance(name);
-      notify("good", `Removed ${name}.`);
-      navigate("/plugins");
+      await api.removeInstance(name, required);
+      notify("good", fromFile
+        ? `Removed ${name}. The configuration file is unchanged.`
+        : `Removed ${name}.`);
+      // A file-declared plugin still has a page -- it is removed, not gone --
+      // and that page is where the restore is. Leaving for the list would hide
+      // the undo behind a search.
+      if (fromFile) onChanged();
+      else navigate("/plugins");
     } catch (e) {
       notify("problem", e instanceof ApiError ? e.detail : "Couldn't remove it.");
       setBusy(false);
@@ -283,10 +458,35 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
   return (
     <Card>
       <CardContent className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-[52ch] text-sm text-muted-foreground">
-          Removing this forgets its settings, including any credentials. A name
-          reused later cannot inherit them.
-        </p>
+        <div className="max-w-[52ch] space-y-1 text-sm text-muted-foreground">
+          {fromFile ? (
+            <>
+              <p>
+                This plugin is declared in the configuration file. Removing it
+                here stops mcpd serving it, now and on every restart.{" "}
+                <strong className="text-foreground">
+                  The file is unchanged
+                </strong>{" "}
+                — if you redeploy from it, the removal still holds.
+              </p>
+              <p>
+                Its settings are kept, so restoring it brings it back as it was.
+              </p>
+              {required && (
+                <p className="text-attention">
+                  The file marks this <code className="font-mono">required: true</code>:
+                  this host is meant not to run without it. You will be asked to
+                  confirm that.
+                </p>
+              )}
+            </>
+          ) : (
+            <p>
+              Removing this forgets its settings, including any credentials. A
+              name reused later cannot inherit them.
+            </p>
+          )}
+        </div>
         <Button
           variant="outline" size="sm" disabled={busy}
           className="text-destructive hover:text-destructive"

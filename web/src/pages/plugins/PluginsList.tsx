@@ -1,19 +1,21 @@
 import { useCallback, useMemo, useState } from "react";
 import { Boxes } from "lucide-react";
 import {
-  api, ApiError, type Endpoints, type Plugin, type PluginInstance,
-  type PluginType,
+  api, ApiError, type Plugin, type PluginInstance, type PluginType,
+  type StaleRemoval,
 } from "@/lib/api";
-import { useLoader, usePoll } from "@/lib/hooks";
+import { when } from "@/lib/format";
+import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
 import { useCan } from "@/lib/session";
+import { cn } from "@/lib/utils";
 import {
-  CodeBlock, Copyable, EmptyState, Loading, Notice, PageHeader, Section,
+  EmptyState, Loading, Notice, PageHeader, Section,
 } from "@/components/chrome";
 import { Chip, healthTone, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
   DialogTitle,
@@ -44,6 +46,14 @@ export interface PluginRow {
   healthMessage: string;
   reads: number;
   writes: number;
+  /**
+   * Removed here while the configuration file still declares it.
+   *
+   * The row stays. An operator who removes the wrong plugin and then cannot
+   * find it again to undo is worse off than before the button existed.
+   */
+  removed: boolean;
+  removedBy: string;
 }
 
 /**
@@ -68,6 +78,8 @@ export function toRows(
     healthMessage: p.health_message ?? "",
     reads: p.tools.filter((t) => t.kind === "read").length,
     writes: p.tools.filter((t) => t.kind !== "read").length,
+    removed: false,
+    removedBy: "",
   }));
 
   const mounted = new Set(plugins.map((p) => p.name));
@@ -81,11 +93,18 @@ export function toRows(
       runtime: i.runtime ?? "builtin",
       running: false,
       health: "unhealthy",
-      healthMessage: i.missing?.length
-        ? `Waiting on ${i.missing.join(", ")}.`
-        : i.problem || (i.enabled ? "Not running yet." : "Switched off."),
+      // A removed plugin is not waiting on anything and is not broken. Saying
+      // "switched off" of it would hide the one fact that explains it, which
+      // is that somebody removed it and the file still declares it.
+      healthMessage: i.removed
+        ? "Removed here. The configuration file still declares it."
+        : i.missing?.length
+          ? `Waiting on ${i.missing.join(", ")}.`
+          : i.problem || (i.enabled ? "Not running yet." : "Switched off."),
       reads: 0,
       writes: 0,
+      removed: i.removed ?? false,
+      removedBy: i.removed_by ?? "",
     });
   }
 
@@ -105,6 +124,7 @@ export function PluginsList() {
   const mayAdd = useCan("admin");
   const [plugins, setPlugins] = useState<Plugin[] | null>(null);
   const [instances, setInstances] = useState<PluginInstance[]>([]);
+  const [stale, setStale] = useState<StaleRemoval[]>([]);
   const [types, setTypes] = useState<PluginType[]>([]);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
@@ -113,7 +133,12 @@ export function PluginsList() {
     api.plugins()
       .then((r) => { setPlugins(r.plugins ?? []); setError(""); })
       .catch(() => setError("Couldn't load plugins."));
-    api.instances().then((r) => setInstances(r.instances ?? [])).catch(() => setInstances([]));
+    api.instances()
+      .then((r) => {
+        setInstances(r.instances ?? []);
+        setStale(r.stale_removals ?? []);
+      })
+      .catch(() => { setInstances([]); setStale([]); });
     api.pluginTypes().then((r) => setTypes(r.types ?? [])).catch(() => setTypes([]));
   }, []);
   usePoll(load, 15_000);
@@ -124,6 +149,9 @@ export function PluginsList() {
   );
   const builtin = rows?.filter((r) => r.runtime === "builtin") ?? [];
   const remote = rows?.filter((r) => r.runtime === "mcp") ?? [];
+  // A removed instance is not enabled, so it is already out of this -- which
+  // is right: it is not waiting on anything, it is not being served on
+  // purpose, and its own row says so.
   const waiting = instances.filter((i) => i.enabled && !i.mounted);
 
   return (
@@ -160,6 +188,8 @@ export function PluginsList() {
         </Notice>
       )}
 
+      <StaleRemovals rows={stale} mayManage={mayAdd} onChanged={load} />
+
       {rows === null && !error ? (
         <Loading rows={4} />
       ) : rows && rows.length === 0 ? (
@@ -169,7 +199,9 @@ export function PluginsList() {
           <Link to="/marketplace" className="text-primary hover:underline">
             Marketplace
           </Link>
-          , or enable one in your startup file and restart.
+          , or declare one under <code className="font-mono">plugins:</code> in
+          the configuration file — that one needs a restart, because the file is
+          read once when the host starts.
         </EmptyState>
       ) : (
         <div className="mt-4 space-y-8">
@@ -178,7 +210,7 @@ export function PluginsList() {
               title="Built in"
               description="Integrations this binary was built with. They propose changes for approval and mcpd can plan against their state."
             >
-              <PluginTable rows={builtin} />
+              <PluginTable rows={builtin} mayManage={mayAdd} onChanged={load} />
             </Section>
           )}
 
@@ -194,18 +226,21 @@ export function PluginsList() {
                 )
                 : undefined}
             >
-              <PluginTable rows={remote} />
+              <PluginTable rows={remote} mayManage={mayAdd} onChanged={load} />
             </Section>
           )}
 
-          <ConnectingDirectly />
         </div>
       )}
     </>
   );
 }
 
-function PluginTable({ rows }: { rows: PluginRow[] }) {
+function PluginTable({ rows, mayManage, onChanged }: {
+  rows: PluginRow[];
+  mayManage: boolean;
+  onChanged: () => void;
+}) {
   return (
     <Card className="overflow-hidden p-0">
       <div className="scroll-x">
@@ -220,13 +255,38 @@ function PluginTable({ rows }: { rows: PluginRow[] }) {
           </TableHeader>
           <TableBody>
             {rows.map((row) => (
-              <TableRow key={row.name}>
+              /* The whole row is the click target, and the row is the
+                 positioning context that makes that work. The alternative --
+                 wrapping the row in an anchor -- is invalid inside a table and
+                 would put the Restore button inside a link, which breaks both
+                 the keyboard and the button. */
+              <TableRow
+                key={row.name}
+                className={cn(
+                  "relative transition-colors hover:bg-muted/50",
+                  // The focus ring belongs to the row rather than to four
+                  // characters of link text, so tabbing through the list shows
+                  // where you are. The link's own outline is suppressed
+                  // because two rings on one target read as two targets.
+                  "has-[a:focus-visible]:bg-muted/50 has-[a:focus-visible]:outline-2",
+                  "has-[a:focus-visible]:-outline-offset-2 has-[a:focus-visible]:outline-ring",
+                  row.removed && "opacity-70",
+                )}
+              >
                 <TableCell>
                   <Link
                     to={`/plugins/${encodeURIComponent(row.name)}`}
-                    className="font-medium hover:underline"
+                    className="font-medium outline-none hover:underline"
                   >
-                    {row.name}
+                    {/* Raised above the surface below it, so the name can
+                        still be selected and copied. An overlay that swallows
+                        drag-select makes the one string an operator most often
+                        wants to copy impossible to copy. */}
+                    <span className="relative z-10">{row.name}</span>
+                    {/* The stretched link. A real element rather than a
+                        pseudo-element so that a test can click the row's
+                        surface the way a person does. */}
+                    <span aria-hidden="true" className="absolute inset-0" />
                   </Link>
                   <div className="max-w-[52ch] truncate text-xs text-muted-foreground">
                     {row.title !== row.name ? `${row.title} — ` : ""}
@@ -234,7 +294,9 @@ function PluginTable({ rows }: { rows: PluginRow[] }) {
                   </div>
                 </TableCell>
                 <TableCell>
-                  {row.running ? (
+                  {row.removed ? (
+                    <Chip>Removed</Chip>
+                  ) : row.running ? (
                     <Chip tone={healthTone(row.health)}>
                       <StatusDot tone={healthTone(row.health)} />
                       {row.health === "healthy" ? "Serving" : row.health}
@@ -242,10 +304,15 @@ function PluginTable({ rows }: { rows: PluginRow[] }) {
                   ) : (
                     <Chip tone="attention">Not running</Chip>
                   )}
-                  {row.health !== "healthy" && row.healthMessage && (
+                  {(row.removed || row.health !== "healthy") && row.healthMessage && (
                     <div className="max-w-[40ch] text-xs text-muted-foreground">
                       {row.healthMessage}
                     </div>
+                  )}
+                  {row.removed && mayManage && (
+                    <RestoreButton
+                      name={row.name} label="Restore" onChanged={onChanged}
+                    />
                   )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
@@ -265,23 +332,86 @@ function PluginTable({ rows }: { rows: PluginRow[] }) {
   );
 }
 
-function ConnectingDirectly() {
-  const load = useCallback(() => api.endpoints(), []);
-  const { data } = useLoader<Endpoints>(load, "Couldn't load the address.");
-  if (!data) return null;
+/**
+ * Undoes a removal that overrode the configuration file.
+ *
+ * Raised above the row's click surface, so it receives its own clicks and does
+ * not also navigate. A button rather than a link, because one of those
+ * performs an action and the other goes somewhere, and a control wearing the
+ * wrong one is how somebody restores a plugin they meant to open.
+ */
+export function RestoreButton({ name, label, onChanged }: {
+  name: string;
+  label: string;
+  onChanged: () => void;
+}) {
+  const notify = useNotify();
+  const [busy, setBusy] = useState(false);
+
+  async function restore() {
+    setBusy(true);
+    try {
+      const result = await api.restoreInstance(name);
+      notify("good", result.note ?? `Restored ${name}.`);
+    } catch (e) {
+      notify("problem", e instanceof ApiError ? e.detail : "Couldn't restore it.");
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  }
+
   return (
-    <Section title="Connecting directly">
-      <Card>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            For clients that can reach this machine. ChatGPT uses a tunnel
-            instead.
+    <Button
+      variant="outline" size="xs" disabled={busy}
+      className="relative z-10 mt-1.5"
+      onClick={restore}
+    >
+      {busy ? "Restoring…" : label}
+    </Button>
+  );
+}
+
+/**
+ * Removals with nothing left to remove.
+ *
+ * A removal is keyed on the name the configuration file used, and it outlives
+ * the entry: an operator who removes a plugin here and later deletes the block
+ * from their YAML leaves a row that matches nothing. Discarding those
+ * automatically would mean one start against a truncated file forgetting every
+ * removal and resurrecting all of them on the next good deploy, so they are
+ * kept -- and shown here, because a name that would quietly refuse to come
+ * back if it were ever declared again is the kind of thing that costs somebody
+ * an afternoon.
+ */
+function StaleRemovals({ rows, mayManage, onChanged }: {
+  rows: StaleRemoval[];
+  mayManage: boolean;
+  onChanged: () => void;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <Notice tone="info">
+      <div className="space-y-2">
+        <p>
+          These were removed here, and the configuration file no longer declares
+          them. Nothing is being held back — the removal only bites if the name
+          is declared again. Forget one to clear it.
+        </p>
+        {rows.map((r) => (
+          <p key={r.name} className="flex flex-wrap items-center gap-x-2 text-sm">
+            <strong className="font-medium">{r.name}</strong>
+            <span className="text-muted-foreground">
+              was a {r.declared_type}, removed by {r.removed_by} on{" "}
+              {when(r.removed_at)}
+            </span>
+            {mayManage && (
+              <RestoreButton name={r.name} label="Forget" onChanged={onChanged} />
+            )}
           </p>
-          <Copyable value={data.aggregate} label="address" />
-          <CodeBlock>{"Authorization: Bearer YOUR_KEY"}</CodeBlock>
-        </CardContent>
-      </Card>
-    </Section>
+        ))}
+      </div>
+    </Notice>
   );
 }
 

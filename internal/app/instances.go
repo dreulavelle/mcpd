@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spoked/mcpd/internal/admin"
 	"github.com/spoked/mcpd/internal/config"
@@ -50,9 +51,9 @@ type Instance struct {
 	// A removed instance stays in this list rather than vanishing from it.
 	// Somebody who removes the wrong thing and then cannot find it to undo is
 	// worse off than before they had the button.
-	Removed   bool   `json:"removed,omitempty"`
-	RemovedBy string `json:"removed_by,omitempty"`
-	RemovedAt int64  `json:"removed_at,omitempty"`
+	Removed   bool      `json:"removed,omitempty"`
+	RemovedBy string    `json:"removed_by,omitempty"`
+	RemovedAt time.Time `json:"removed_at,omitzero"`
 }
 
 // instanceRecord is what the store holds for an instance added in the
@@ -102,6 +103,12 @@ func (a *App) instances(ctx context.Context) []Instance {
 			Runtime:  plugins.RuntimeBuiltin,
 			FromFile: existing.FromFile,
 			Enabled:  rec.Enabled,
+			// Only the file can say this, so it survives the store's record of
+			// the same name. Dropping it would let a `required: true` plugin
+			// be removed without the acknowledgement that flag exists to
+			// require, for no better reason than that someone had also
+			// touched it in the dashboard.
+			Required: existing.Required,
 		}
 	}
 
@@ -122,7 +129,7 @@ func (a *App) instances(ctx context.Context) []Instance {
 		if ov.Removed {
 			existing.Removed = true
 			existing.RemovedBy = ov.Actor
-			existing.RemovedAt = ov.UpdatedAt
+			existing.RemovedAt = time.UnixMilli(ov.UpdatedAt)
 			// Not mounted, and not counted as configured by anything that asks
 			// what to serve. Enabled is the one field every such caller reads,
 			// so this is where the removal has to land.
@@ -141,8 +148,8 @@ func (a *App) instances(ctx context.Context) []Instance {
 	// Import refuses a name already taken, but that check happens once and the
 	// other side can move afterwards: someone can add [plugins.weather] to the
 	// configuration file after importing a remote server called weather. The
-	// remote wins, because the file's instance cannot be removed from here and
-	// the remote's can. The collision is reported by shadowedNames, called
+	// remote wins, because it is the one whose record is here rather than in a
+	// file this host only reads. The collision is reported by shadowedNames, called
 	// once at startup -- not from here, which is a read path the dashboard
 	// hits on every request and which would turn one static misconfiguration
 	// into a log line per page load.
@@ -180,10 +187,11 @@ func (a *App) enabledInstances(ctx context.Context) []Instance {
 
 // AddInstance records a new plugin instance.
 //
-// It does not mount it. A plugin is built once, at startup, from the settings
-// it had then, so the honest thing to report is that a restart is needed --
-// rather than accepting the instance, showing it in the list, and leaving
-// someone to wonder why its tools never appear.
+// It does not mount it here: an instance arrives with nothing filled in, and a
+// plugin with no credentials would fail every call. It mounts itself the
+// moment its settings are complete, which is what the response says -- leaving
+// somebody to wonder why the tools never appeared is the failure this wording
+// exists to avoid.
 func (a *App) AddInstance(ctx context.Context, actor, name, typeName string) error {
 	if !instanceNamePattern.MatchString(name) {
 		return fmt.Errorf("a plugin name must be lowercase letters, digits, "+
@@ -407,13 +415,22 @@ func (a *App) overridesChanged(ctx context.Context, name string) error {
 // deploy. So they persist, and are shown instead -- an operator who has since
 // deleted the entry from their YAML can forget the removal deliberately, and
 // one who has not is not left with a name that quietly refuses to come back.
-func (a *App) staleRemovals() []sqlite.PluginOverride {
+func (a *App) staleRemovals(ctx context.Context) []sqlite.PluginOverride {
+	live := map[string]bool{}
+	for _, inst := range a.instances(ctx) {
+		live[inst.Name] = true
+	}
 	var out []sqlite.PluginOverride
 	for name, ov := range a.overrides() {
 		if !ov.Removed {
 			continue
 		}
-		if _, declared := a.cfg.Plugins[name]; declared {
+		// Still declared, so the override is doing its job and the instance's
+		// own row says so. Or the name has been taken since by something else
+		// -- an instance added in the dashboard, a remote server imported
+		// under it -- in which case reporting a removal beside a plugin that
+		// is working would describe a state nobody is in.
+		if live[name] {
 			continue
 		}
 		out = append(out, ov)

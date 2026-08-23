@@ -76,7 +76,7 @@ type Options struct {
 	// StaleRemovals lists removals whose configuration-file declaration has
 	// since gone, which are otherwise invisible and would silently apply if
 	// the name were declared again.
-	StaleRemovals func() []StaleRemoval
+	StaleRemovals func(ctx context.Context) []StaleRemoval
 
 	// PluginType reports what integration an instance is of, which is not the
 	// instance's own name once someone configures two of something.
