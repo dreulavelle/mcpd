@@ -203,6 +203,21 @@ type Server struct {
 	// confusingly, as a copied address that reaches the wrong listener.
 	PublicURL string `yaml:"public_url"`
 
+	// FrontendPublicURL is how a browser reaches the dashboard, when that is
+	// not this process serving TLS directly.
+	//
+	// It exists because PublicURL above is the MCP endpoint, and the two are
+	// different listeners that routinely differ in scheme: the MCP endpoint on
+	// https behind a self-signed certificate while the dashboard is plain HTTP
+	// on the LAN. Deciding the session cookie's Secure flag from PublicURL
+	// marks it Secure on a plain-HTTP dashboard, the browser then refuses to
+	// send it back, and signing in appears to do nothing.
+	//
+	// Set it only when something in front of this process terminates TLS for
+	// the dashboard. Empty means the connection decides, which is correct for
+	// a direct deployment.
+	FrontendPublicURL string `yaml:"frontend_public_url"`
+
 	// FrontendListen is the bind address for the admin dashboard.
 	//
 	// It is a separate listener from the MCP endpoint on purpose. The two have

@@ -99,6 +99,11 @@ type Options struct {
 	// PublicURL is the address clients reach, used to render a connect URL an
 	// operator can copy rather than assemble.
 	PublicURL string
+	// FrontendPublicURL is how a browser reaches this dashboard, when something
+	// in front of this process terminates TLS. Empty means the connection
+	// decides. It is deliberately not PublicURL: that is the MCP endpoint, a
+	// different listener that routinely differs in scheme.
+	FrontendPublicURL string
 
 	// PluginSettings returns a plugin's configuration block for display.
 	// Values that name credentials are withheld before they are sent.

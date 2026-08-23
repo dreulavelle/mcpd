@@ -22,3 +22,4 @@
 # A deployment's own config and secrets.
 /config.yaml
 /.env
+/.claude/worktrees/

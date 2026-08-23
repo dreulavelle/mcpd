@@ -339,11 +339,12 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 				}
 				return a.metrics.Handler()
 			}(),
-			MetricsPublic: cfg.Metrics.Public,
-			Pruner:        a.audit,
-			PublicURL:     cfg.Server.PublicURL,
-			Accounts:      a.accounts,
-			Catalog:       a.settingsCatalog,
+			MetricsPublic:     cfg.Metrics.Public,
+			Pruner:            a.audit,
+			PublicURL:         cfg.Server.PublicURL,
+			FrontendPublicURL: cfg.Server.FrontendPublicURL,
+			Accounts:          a.accounts,
+			Catalog:           a.settingsCatalog,
 			PluginType: func(instance string) string {
 				for _, inst := range a.instances(context.Background()) {
 					if inst.Name == instance {
