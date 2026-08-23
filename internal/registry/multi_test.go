@@ -26,7 +26,12 @@ type stubSource struct {
 	delay time.Duration
 	// closed records that Close reached it.
 	closed bool
+	// ranks makes this source one that publishes how often its servers are
+	// called, which is what a most-used listing covers.
+	ranks bool
 }
+
+func (s *stubSource) ReportsUses() bool { return s.ranks }
 
 func (s *stubSource) Close() error {
 	s.closed = true

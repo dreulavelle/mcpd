@@ -722,3 +722,53 @@ func TestSmitheryList_ReportsWhatSmitheryHolds(t *testing.T) {
 		t.Errorf("addable = %d, want 7: one of the eight only runs locally", status.Addable)
 	}
 }
+
+// TestSmitheryList_CarriesTheCallCountOntoTheEntry.
+//
+// The count was read, used to order the window, and thrown away before
+// anything outside this file could see it -- so the page was ordered by a
+// number nobody could check. It is now on the entry and rendered beside the
+// row, which is the difference between an ordering an operator can verify and
+// a badge asking to be believed.
+func TestSmitheryList_CarriesTheCallCountOntoTheEntry(t *testing.T) {
+	page, err := serveSmithery(t).List(context.Background(),
+		Query{Limit: MaxEntriesPerPage, IncludeUnaddable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) == 0 {
+		t.Fatal("no entries")
+	}
+	head := page.Entries[0]
+	switch {
+	case head.Uses == nil:
+		t.Fatalf("%s carries no call count", head.Name)
+	case *head.Uses != 87_579:
+		t.Errorf("%s reports %d calls, want the fixture's 87,579", head.Name, *head.Uses)
+	}
+	for _, e := range page.Entries {
+		if e.Uses == nil {
+			t.Errorf("%s carries no call count, and every Smithery row has one", e.Name)
+		}
+	}
+	// And the source says it publishes the figure, which is what a most-used
+	// listing is narrowed by.
+	if status, ok := statusOf(page, smitherySource); !ok || !status.Uses {
+		t.Error("Smithery does not report that it publishes a usage figure")
+	}
+}
+
+// TestSmithery_AFigureThatIsNotOneIsAbsentRatherThanZero.
+//
+// Untrusted text, and the one value with no honest rendering. Zero would say
+// this host measured the server and found nobody had called it, which would be
+// a number it had made up.
+func TestSmithery_AFigureThatIsNotOneIsAbsentRatherThanZero(t *testing.T) {
+	if got := smitheryUses(-1); got != nil {
+		t.Errorf("a negative count became %d, want no figure at all", *got)
+	}
+	got := smitheryUses(0)
+	if got == nil || *got != 0 {
+		t.Errorf("a measured zero became %v, want zero reported as zero", got)
+	}
+}
