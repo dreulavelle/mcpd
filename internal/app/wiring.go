@@ -94,6 +94,7 @@ func (a *App) registerPlugins(ctx context.Context) error {
 	// Said once, here, rather than from the instance list -- which the
 	// dashboard reads on every request.
 	a.shadowedNames()
+	a.overriddenNames()
 
 	for _, inst := range a.enabledInstances(ctx) {
 		name := inst.Name

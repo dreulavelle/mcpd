@@ -215,8 +215,21 @@ export interface PluginInstance {
    * name has never been a reliable way to tell them apart.
    */
   runtime?: "builtin" | "mcp";
-  /** Defined in the config file, so the dashboard cannot remove it. */
+  /**
+   * Declared in the configuration file.
+   *
+   * It can still be removed here. mcpd does not write that file -- it is
+   * mounted read-only in every deployment this ships as -- so what a removal
+   * records is an override that makes the host ignore the declaration, now and
+   * on every restart. The file itself is untouched, and the page says so.
+   */
   from_file: boolean;
+  /**
+   * The file's `required: true`: the deployment saying the host is meant not
+   * to run without this integration. Removing one takes a second, explicit
+   * yes.
+   */
+  required?: boolean;
   enabled: boolean;
   /** Serving now. False until every required setting has a value. */
   mounted: boolean;
@@ -224,6 +237,45 @@ export interface PluginInstance {
   missing?: string[];
   /** Why a fully configured instance still is not serving. */
   problem?: string;
+  /**
+   * Removed here while the configuration file still declares it.
+   *
+   * It stays in the list rather than vanishing, because somebody who removes
+   * the wrong thing has to be able to find it again to restore it.
+   */
+  removed?: boolean;
+  removed_by?: string;
+  removed_at?: string;
+  /** What the configuration file says about it, when it says anything. */
+  declaration?: PluginDeclaration;
+}
+
+/**
+ * The configuration file's entry for a plugin, shown read-only.
+ *
+ * Keys without values. This rides on a read-capability endpoint and a
+ * `settings:` block is where a credential usually is; the settings page is
+ * where values belong, and it redacts the secret ones.
+ */
+export interface PluginDeclaration {
+  type: string;
+  enabled: boolean;
+  required: boolean;
+  settings_keys?: string[];
+}
+
+/**
+ * A removal whose declaration is no longer in the configuration file.
+ *
+ * Kept rather than discarded: a host that started once against a truncated
+ * file must not forget every removal an operator made and resurrect them all
+ * on the next good deploy. Shown, it is something to forget deliberately.
+ */
+export interface StaleRemoval {
+  name: string;
+  declared_type: string;
+  removed_by: string;
+  removed_at: string;
 }
 
 export interface HealthCheck {
@@ -799,7 +851,11 @@ export const api = {
     request<{ types: PluginType[]; count: number }>("/api/plugin-types"),
 
   instances: () =>
-    request<{ instances: PluginInstance[]; count: number }>("/api/instances"),
+    request<{
+      instances: PluginInstance[];
+      count: number;
+      stale_removals?: StaleRemoval[];
+    }>("/api/instances"),
 
   addInstance: (name: string, type: string) =>
     request<{ status: string; note?: string }>(
@@ -810,10 +866,22 @@ export const api = {
       method: "PATCH", body: JSON.stringify({ enabled }),
     }),
 
-  removeInstance: (name: string) =>
-    request<{ status: string }>(`/api/instances/${encodeURIComponent(name)}`, {
-      method: "DELETE",
-    }),
+  /**
+   * Removes an instance, or overrides the configuration file's declaration of
+   * one. `acknowledgeRequired` says the operator has seen that the file marks
+   * it `required: true`; without it the host refuses that one case.
+   */
+  removeInstance: (name: string, acknowledgeRequired = false) =>
+    request<{ status: string }>(
+      `/api/instances/${encodeURIComponent(name)}`
+      + (acknowledgeRequired ? "?acknowledge_required=true" : ""),
+      { method: "DELETE" },
+    ),
+
+  /** Undoes a removal, putting the plugin back under the file's declaration. */
+  restoreInstance: (name: string) =>
+    request<{ status: string; note?: string }>(
+      `/api/instances/${encodeURIComponent(name)}/restore`, { method: "POST" }),
 
   /**
    * Browses the public catalogues.
