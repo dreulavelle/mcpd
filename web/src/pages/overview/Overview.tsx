@@ -1,15 +1,15 @@
 import { useCallback, useMemo, useState } from "react";
 import { ClipboardCheck } from "lucide-react";
 import {
-  api, type AuditRecord, type HealthReport, type Operation, type Plugin,
-  type PluginInstance, type TunnelInfo,
+  api, type AuditRecord, type HealthCheck, type HealthReport, type Operation,
+  type Plugin, type PluginInstance, type TunnelInfo,
 } from "@/lib/api";
 import { describeEvent, relative, when, who } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
 import { useSession } from "@/lib/session";
 import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
-import { healthTone, RiskBadge, StateBadge, StatusDot } from "@/components/status";
+import { Chip, healthTone, RiskBadge, StateBadge, StatusDot } from "@/components/status";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -191,6 +191,8 @@ export function Overview() {
           )}
         </Section>
 
+        <HostHealth health={snap.health} />
+
         <Section
           title="Lately"
           actions={
@@ -221,6 +223,103 @@ export function Overview() {
         </Section>
       </div>
     </>
+  );
+}
+
+const CHECK_LABEL: Record<HealthCheck["status"], string> = {
+  up: "Passing",
+  degraded: "Degraded",
+  down: "Down",
+};
+
+/**
+ * What `/api/health` actually said, check by check.
+ *
+ * This used to be a pill in the sidebar reading "All good", with the failing
+ * checks hidden in a tooltip. A binary with no context is decoration: it
+ * cannot say which check, or what the check complained about, and a tooltip is
+ * not somewhere a person on a phone can reach. The endpoint has always
+ * returned a list with a message on each entry, so the list is what gets
+ * rendered.
+ *
+ * Failing checks sort first. On a healthy host that changes nothing; on an
+ * unhealthy one it is the whole point.
+ */
+function HostHealth({ health }: { health: HealthReport | null }) {
+  const checks = useMemo(() => {
+    const rank: Record<HealthCheck["status"], number> = { down: 0, degraded: 1, up: 2 };
+    return [...(health?.checks ?? [])].sort(
+      (a, b) => rank[a.status] - rank[b.status] || a.name.localeCompare(b.name),
+    );
+  }, [health]);
+
+  const failing = checks.filter((c) => c.status !== "up");
+
+  return (
+    <Section
+      title="Host health"
+      description="Every check this host runs on itself, and what each one last said."
+    >
+      {health === null ? (
+        <Notice tone="problem">
+          Couldn't read <code className="font-mono">/api/health</code>, so this
+          says nothing either way about whether the host is well.
+        </Notice>
+      ) : checks.length === 0 ? (
+        <EmptyState title="No checks registered">
+          This build runs no health checks, so the status above is the whole
+          answer.
+        </EmptyState>
+      ) : (
+        <Card className="overflow-hidden p-0">
+          <div className="scroll-x">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Check</TableHead>
+                  <TableHead>State</TableHead>
+                  <TableHead>What it said</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {checks.map((c) => (
+                  <TableRow key={c.name}>
+                    <TableCell className="font-medium">
+                      {c.name}
+                      {/* Only said of a check that is failing. On a passing one
+                          it is noise; on a failing one it is the difference
+                          between "the host is down" and "one optional thing
+                          is". */}
+                      {c.status !== "up" && !c.critical && (
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                          not critical
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Chip tone={healthTone(c.status)}>
+                        <StatusDot tone={healthTone(c.status)} />
+                        {CHECK_LABEL[c.status]}
+                      </Chip>
+                    </TableCell>
+                    <TableCell className="max-w-[52ch] text-muted-foreground">
+                      {c.message || (c.status === "up" ? "Nothing to report." : "It gave no detail.")}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
+      )}
+
+      {failing.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {failing.length} of {checks.length} checks{" "}
+          {failing.length === 1 ? "is" : "are"} not passing.
+        </p>
+      )}
+    </Section>
   );
 }
 

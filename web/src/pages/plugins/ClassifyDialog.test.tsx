@@ -197,7 +197,7 @@ describe("when the descriptor changed underneath", () => {
 /**
  * A refusal is a fact about one descriptor, not about the dialog.
  *
- * ServerDetail mounts this dialog once and swaps its `tool`, so a conflict
+ * The tool list mounts this dialog once and swaps its `tool`, so a conflict
  * recorded while looking at one tool was still on screen when the next was
  * opened: the warning, a hash pair mixing the two, a diff comparing one tool's
  * descriptor against another's, and both decisions dead with no way out but
