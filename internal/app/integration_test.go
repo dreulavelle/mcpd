@@ -20,6 +20,14 @@ const (
 	tokenWildcard = "wildcard-admin-token-00000000000000000000"
 )
 
+// ptr supplies a value the way the startup file would.
+//
+// The moved settings are pointers on config.Legacy because presence is the
+// question there -- a file that says nothing about a key is different from one
+// that sets it to the default -- so a test that wants a deployment to have had
+// a value in its file says so the same way a file does.
+func ptr[T any](v T) *T { return &v }
+
 // newTestApp builds a fully wired host against a temporary database.
 func newTestApp(t *testing.T) *App {
 	t.Helper()
@@ -30,8 +38,8 @@ func newTestApp(t *testing.T) *App {
 
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
-	cfg.Storage.RelaxedDurability = true
-	cfg.Server.PublicURL = "https://mcp.test.invalid"
+	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
+	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")
 	cfg.Plugins = map[string]config.PluginConfig{
 		"echo": {Enabled: true, Required: true},
 	}
@@ -303,7 +311,7 @@ func TestNew_RefusesUnknownPlugin(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
-	cfg.Storage.RelaxedDurability = true
+	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Plugins = map[string]config.PluginConfig{"nonexistent": {Enabled: true}}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
 		ID: "scoped", SecretRef: "env:MCPD_TOKEN_SCOPED",

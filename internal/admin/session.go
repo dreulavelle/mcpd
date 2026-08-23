@@ -85,7 +85,7 @@ func (s *Server) secureCookies(r *http.Request) bool {
 	// self-signed certificate while the dashboard is plain HTTP on the LAN.
 	// Reading the wrong one marks this cookie Secure on a plain-HTTP origin,
 	// the browser drops it, and signing in appears to do nothing.
-	u, err := url.Parse(s.opts.FrontendPublicURL)
+	u, err := url.Parse(s.frontendPublicURL(r.Context()))
 	return err == nil && u.Scheme == "https"
 }
 
@@ -187,7 +187,7 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, sess, err := s.opts.Accounts.NewSession(r.Context(), user.ID, s.opts.SessionTTL)
+	token, sess, err := s.opts.Accounts.NewSession(r.Context(), user.ID, s.sessionTTL(r.Context()))
 	if err != nil {
 		s.opts.Log.Error("could not start a dashboard session", "error", err)
 		s.writeError(w, r, http.StatusInternalServerError, "could not start a session")
@@ -240,7 +240,7 @@ func (s *Server) handleRegisterFirst(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, sess, err := s.opts.Accounts.NewSession(r.Context(), user.ID, s.opts.SessionTTL)
+	token, sess, err := s.opts.Accounts.NewSession(r.Context(), user.ID, s.sessionTTL(r.Context()))
 	if err != nil {
 		s.opts.Log.Error("could not start a session for the first account", "error", err)
 		s.writeError(w, r, http.StatusInternalServerError, "account created, but signing in failed")

@@ -48,15 +48,21 @@ if [ ! -e "$CONFIG" ]; then
 	fi
 
 	echo "mcpd: no configuration in $DATA_DIR; generating one."
-	# public_url is baked into the generated file rather than forced from the
-	# environment on every start, because it is the one address an operator
-	# genuinely has to change -- behind a reverse proxy it is what tells mcpd
-	# the session cookie needs Secure. A runtime override would make editing
-	# the file look like it had no effect. The listen addresses are the
-	# opposite case and stay overridden: what the process binds inside the
-	# container is decided by the port mapping, not by anyone's editor.
-	MCPD_PUBLIC_URL="${MCPD_PUBLIC_URL:-http://localhost:${MCPD_PORT:-8080}}" \
-		mcpd -init "$DATA_DIR"
+	# The address to advertise is a setting in the database now, not a key in
+	# the generated file, so this seeds it -- exported only inside this branch,
+	# which runs exactly once, on the start that has no configuration and no
+	# database. Setting it on every start would mean an operator who corrects
+	# the address on the Settings page is overruled by a container default they
+	# cannot edit; mcpd would say the two disagree, but saying so every start
+	# is not a fix.
+	#
+	# The listen addresses are the opposite case and stay overridden on every
+	# start: what the process binds inside the container is decided by the port
+	# mapping, not by anyone's editor.
+	MCPD_PUBLIC_URL="${MCPD_PUBLIC_URL:-http://localhost:${MCPD_PORT:-8080}}"
+	export MCPD_PUBLIC_URL
+
+	mcpd -init "$DATA_DIR"
 
 	# mcpd -init can only report the address it binds, which inside a container
 	# is not the address anyone types. The port mapping is out here, so correct

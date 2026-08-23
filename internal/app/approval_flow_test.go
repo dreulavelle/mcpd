@@ -25,8 +25,8 @@ func newApprovalApp(t *testing.T) *App {
 
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "mcpd.db")
-	cfg.Storage.RelaxedDurability = true
-	cfg.Server.PublicURL = "https://mcp.test.invalid"
+	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
+	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")
 	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
 		ID: "user", SecretRef: "env:MCPD_TOKEN_APPROVER",

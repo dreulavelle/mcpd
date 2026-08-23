@@ -27,8 +27,8 @@ func fileApp(t *testing.T, dbPath string, plugins map[string]config.PluginConfig
 
 	cfg := config.Default()
 	cfg.Storage.Path = dbPath
-	cfg.Storage.RelaxedDurability = true
-	cfg.Server.PublicURL = "http://localhost:9080"
+	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
+	cfg.Legacy().Server.PublicURL = ptr("http://localhost:9080")
 	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
 	cfg.Plugins = plugins
 	if err := cfg.Validate(); err != nil {

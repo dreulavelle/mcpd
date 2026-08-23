@@ -53,17 +53,33 @@ func (s *Store) Int(ctx context.Context, key string, fallback int) int {
 	return parsed
 }
 
-// Minutes returns a stored duration expressed in minutes, or fallback.
+// Duration returns a stored duration counted in whole units of unit.
 //
-// Durations are stored as whole minutes rather than Go duration strings
-// because the dashboard renders them as a number box, and a value a person
-// typed should round-trip as the number they typed.
-func (s *Store) Minutes(ctx context.Context, key string, fallback time.Duration) time.Duration {
+// Durations are stored as a whole number of their own unit rather than as Go
+// duration strings, because the dashboard renders them as a number box and a
+// value a person typed should round-trip as the number they typed. The unit
+// is a property of the field, declared in the schema beside it.
+func (s *Store) Duration(ctx context.Context, key string, unit, fallback time.Duration) time.Duration {
 	n := s.Int(ctx, key, -1)
 	if n <= 0 {
 		return fallback
 	}
-	return time.Duration(n) * time.Minute
+	return time.Duration(n) * unit
+}
+
+// Minutes returns a stored duration expressed in minutes, or fallback.
+func (s *Store) Minutes(ctx context.Context, key string, fallback time.Duration) time.Duration {
+	return s.Duration(ctx, key, time.Minute, fallback)
+}
+
+// Seconds returns a stored duration expressed in seconds, or fallback.
+func (s *Store) Seconds(ctx context.Context, key string, fallback time.Duration) time.Duration {
+	return s.Duration(ctx, key, time.Second, fallback)
+}
+
+// Hours returns a stored duration expressed in hours, or fallback.
+func (s *Store) Hours(ctx context.Context, key string, fallback time.Duration) time.Duration {
+	return s.Duration(ctx, key, time.Hour, fallback)
 }
 
 // Strings returns a stored list, or fallback.

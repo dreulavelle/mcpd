@@ -79,13 +79,17 @@ func (a *App) ssoProviders(ctx context.Context) []sso.Config {
 // Authentication page saying why -- rather than being guessed at.
 func (a *App) buildSSO() {
 	a.ssoStates = sso.NewStateStore(a.db, time.Now)
-	base := strings.TrimSpace(a.cfg.Server.FrontendPublicURL)
 	a.sso = sso.NewService(sso.Options{
-		Providers:    a.ssoProviders,
-		RedirectBase: func() string { return base },
-		States:       a.ssoStates,
-		Log:          a.log.With("component", "sso"),
-		Now:          time.Now,
+		Providers: a.ssoProviders,
+		// Read per flow, not captured here. It is a setting, and an operator
+		// who has just corrected it on the Authentication page should be able
+		// to try signing in again rather than restart the host first.
+		RedirectBase: func() string {
+			return strings.TrimSpace(a.frontendPublicURL(context.Background()))
+		},
+		States: a.ssoStates,
+		Log:    a.log.With("component", "sso"),
+		Now:    time.Now,
 	})
 }
 

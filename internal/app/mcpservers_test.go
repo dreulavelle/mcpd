@@ -84,8 +84,8 @@ func newAppIn(t *testing.T, dir string) *App {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
-	cfg.Storage.RelaxedDurability = true
-	cfg.Server.PublicURL = "https://mcp.test.invalid"
+	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
+	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")
 	cfg.Plugins = nil
 	t.Setenv("MCPD_TOKEN_REMOTE", tokenRemote)
 	// Granted the wildcard rather than the server by name. A static token is

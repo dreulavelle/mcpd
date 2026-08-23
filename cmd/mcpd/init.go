@@ -76,7 +76,6 @@ func initialize(dir string) error {
 
 	gen := generatedConfig{
 		dbPath:         dbPath,
-		pluginsDir:     pluginsDir,
 		listen:         envOr("MCPD_LISTEN", defaultInitListen),
 		frontendListen: envOr("MCPD_FRONTEND_LISTEN", defaultInitFrontendListen),
 		publicURL:      envOr("MCPD_PUBLIC_URL", defaultInitPublicURL),
@@ -92,7 +91,7 @@ func initialize(dir string) error {
 
 	fmt.Printf(`Created a deployment in %s
 
-  config.yaml   configuration (no secrets in it)
+  config.yaml   where the database is, and where to bind. Nothing else.
   .env          generated secrets, mode 0600
   plugins/      drop out-of-process plugins here
   mcpd.db       created on first start
@@ -102,7 +101,9 @@ Start it:
   mcpd -config %s
 
 The dashboard is on %s and the MCP endpoint on %s. Open the dashboard and it
-asks you to create the first account.
+asks you to create the first account. Everything else -- the address to
+advertise, timeouts, logging, approvals, ChatGPT -- is on the Settings page,
+and every change there is recorded against whoever made it.
 
 Put TLS in front of it before it is reachable from any network you do not
 control.
@@ -169,9 +170,12 @@ func generateToken() (string, error) {
 
 // generatedConfig is what varies between one generated deployment and the
 // next. Everything else in the template is the same everywhere.
+//
+// publicURL is not written into the file -- it is a setting, seeded into the
+// database from MCPD_PUBLIC_URL on the first start -- but it is what the
+// message below tells the operator to connect to, so it is resolved here.
 type generatedConfig struct {
 	dbPath         string
-	pluginsDir     string
 	listen         string
 	frontendListen string
 	publicURL      string
@@ -180,125 +184,43 @@ type generatedConfig struct {
 func initialConfig(g generatedConfig) string {
 	tmpl := `# mcpd configuration.
 #
-# Generated on first start, and yours to edit -- mcpd never writes this file.
+# This is the whole of it, and it is short on purpose. Everything else mcpd can
+# be told to do is a setting in its database, managed from the dashboard, where
+# a change is recorded against whoever made it and can be read back. Editing a
+# file leaves no such record, which is why almost nothing is left in one.
 #
-# No secrets belong in it. Credentials are referenced by name and resolved at
-# startup from the environment, the .env beside this file, or systemd's
-# LoadCredential directory.
+# The four things here are the four that cannot live in the database:
+#
+#   storage.path      where the database is. It cannot say where it is
+#                     from inside itself.
+#   secret_key_ref    the key everything secret in the database is
+#                     encrypted under. A lock does not hold its own key.
+#   server.listen     where to bind. A bad address stored in the database
+#                     would lock you out with no page left to fix it on,
+#                     so the file is the way back in.
+#   server.frontend_listen
+#                     the same, for the dashboard you would fix it on.
+#
+# mcpd never writes this file.
 
 server:
-  # Loopback by default. mcpd speaks plain HTTP and carries bearer tokens, so
-  # put a TLS-terminating proxy in front of it before exposing it further.
-  #
-  # Under Docker this is overridden from the environment, because what the
+  # Under Docker these are overridden from the environment, because what the
   # process binds inside the container is decided by the port mapping rather
   # than by this file.
   listen: "__LISTEN__"
-
-  # The operator dashboard, on its own port so a firewall rule can distinguish
-  # it from the MCP endpoint.
   frontend_listen: "__FRONTEND_LISTEN__"
-  frontend_enabled: true
-
-  # The address assistants reach the MCP endpoint at -- the "listen" port
-  # above, not the dashboard. It is what the dashboard shows as a connection
-  # address, so it must match what clients actually use.
-  #
-  # Behind a reverse proxy, set it to the address people type. It is not
-  # cosmetic there: mcpd is reached over plain HTTP in that shape, so the
-  # scheme here is the only way it can know the session cookie needs Secure.
-  public_url: "__PUBLIC_URL__"
-
-  read_header_timeout: 10s
-  read_timeout: 60s
-  write_timeout: 120s
-  idle_timeout: 120s
-  shutdown_timeout: 30s
 
 storage:
   path: __DB__
-  plugins_dir: __PLUGINS__
-  busy_timeout: 5s
 
-  # Leave false. Under WAL, relaxed durability can lose the most recent
-  # transactions on power loss, and those transactions authorise
-  # infrastructure changes.
-  relaxed_durability: false
-
-# Key used to encrypt secrets stored in the database, so they can be set from
-# the dashboard without landing in plaintext beside the data they protect. The
-# key stays outside the database, which is what makes a stolen copy useless.
-#
-# It was generated into the .env beside this file. Keep it: replace it and
-# every credential already stored becomes unreadable.
+# Generated into the .env beside this file. Keep it: replace it and every
+# credential already stored becomes unreadable.
 secret_key_ref: env:MCPD_SECRET_KEY
-
-auth:
-  # People sign in to the dashboard with an email and password. The first
-  # account is made from the dashboard itself: a host with none offers to
-  # create one, and whoever does becomes the administrator.
-  accounts:
-    session_ttl: 12h
-
-  # Machine callers use keys issued from Settings -> Keys, which can be
-  # revoked without a restart and say in the audit trail which one acted.
-  #
-  # A token declared here still works, for a deployment that would rather
-  # keep its credentials in the file it already manages. It is matched before
-  # any key, holds no database row, and nothing in the dashboard can reach it:
-  #
-  #   static_tokens:
-  #     - id: ci
-  #       secret_ref: env:MCPD_TOKEN_CI
-  #       principal: svc:ci
-  #       role: user
-  #       plugins: ["echo"]
-
-approval:
-
-  proposal_ttl: 30m
-  approval_ttl: 15m
-  lease_ttl: 2m
-
-  # Highest risk a user may approve from a single yes/no prompt raised by
-  # their assistant. Above it the shortcut is withheld, not the decision: the
-  # assistant has to show the change in full and be told explicitly. Either way
-  # the person decides in the conversation.
-  inline_max_risk: medium
-
-logging:
-  level: info
-  format: json
-
-# OpenAI's Secure MCP Tunnel, running inside mcpd. This is how ChatGPT reaches
-# mcpd without an inbound port, public DNS, or a NAT rule.
-#
-# It runs in this process, so there is no request to authenticate and what the
-# tunnel may reach is decided here rather than by a bearer token.
-tunnel:
-  enabled: false
-  tunnel_id: ""
-  # A *runtime* API key, not an admin key.
-  api_key_ref: env:OPENAI_TUNNEL_API_KEY
-  principal: svc:chatgpt
-  role: user
-  plugins: ["echo"]
-  check_for_updates: true
-
-plugins:
-  # A test connection for checking that everything works end to end. It
-  # touches nothing outside mcpd. Leave it on until you have connected an
-  # assistant successfully, then turn it off.
-  echo:
-    enabled: true
-    required: false
 `
 	return strings.NewReplacer(
 		"__DB__", g.dbPath,
-		"__PLUGINS__", g.pluginsDir,
 		"__LISTEN__", g.listen,
 		"__FRONTEND_LISTEN__", g.frontendListen,
-		"__PUBLIC_URL__", g.publicURL,
 	).Replace(tmpl)
 }
 
