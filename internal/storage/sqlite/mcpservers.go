@@ -241,19 +241,27 @@ func (s *MCPServerStore) Snapshot(ctx context.Context, server string, seen []mcp
 	now := s.now().UnixMilli()
 
 	err := s.db.WriteTx(ctx, now, func(u *UnitOfWork) error {
-		var exists int
-		if err := u.queryRow(`SELECT COUNT(*) FROM mcp_servers WHERE name = ?`,
-			server).Scan(&exists); err != nil {
+		// One discovery, one sequence number, claimed by the same statement
+		// that proves the server exists. Every tool this discovery saw is
+		// stamped with it, so "the server no longer offers this" becomes a
+		// comparison the WHERE clause can make -- rather than a set difference
+		// computed in Go and then trusted.
+		claimed, err := u.ExecAffected(`
+			UPDATE mcp_servers SET discovery_seq = discovery_seq + 1, updated_at = ?
+			 WHERE name = ?`, now, server)
+		if err != nil {
 			return err
 		}
-		if exists == 0 {
+		if claimed == 0 {
 			return ErrNoSuchServer
 		}
+		var seq int64
+		if err := u.queryRow(`SELECT discovery_seq FROM mcp_servers WHERE name = ?`,
+			server).Scan(&seq); err != nil {
+			return err
+		}
 
-		keep := make(map[string]bool, len(seen))
 		for _, t := range seen {
-			keep[t.Name] = true
-
 			descriptor, err := json.Marshal(t.Descriptor)
 			if err != nil {
 				return err
@@ -263,10 +271,10 @@ func (s *MCPServerStore) Snapshot(ctx context.Context, server string, seen []mcp
 			inserted, err := u.ExecAffected(`
 				INSERT INTO mcp_server_tools
 					(server_name, tool_name, descriptor, descriptor_hash, state,
-					 problem, first_seen_at, last_seen_at)
-				VALUES (?,?,?,?,'pending',?,?,?)
+					 problem, first_seen_at, last_seen_at, last_seen_seq)
+				VALUES (?,?,?,?,'pending',?,?,?,?)
 				ON CONFLICT (server_name, tool_name) DO NOTHING`,
-				server, t.Name, string(descriptor), t.Hash, problem, now, now)
+				server, t.Name, string(descriptor), t.Hash, problem, now, now, seq)
 			if err != nil {
 				return err
 			}
@@ -277,10 +285,11 @@ func (s *MCPServerStore) Snapshot(ctx context.Context, server string, seen []mcp
 
 			changed, err := u.ExecAffected(`
 				UPDATE mcp_server_tools
-				   SET descriptor = ?, descriptor_hash = ?, problem = ?, last_seen_at = ?,
+				   SET descriptor = ?, descriptor_hash = ?, problem = ?,
+				       last_seen_at = ?, last_seen_seq = ?,
 				       state = CASE WHEN state = 'enabled' THEN 'pending' ELSE state END
 				 WHERE server_name = ? AND tool_name = ? AND descriptor_hash <> ?`,
-				string(descriptor), t.Hash, problem, now, server, t.Name, t.Hash)
+				string(descriptor), t.Hash, problem, now, seq, server, t.Name, t.Hash)
 			if err != nil {
 				return err
 			}
@@ -288,9 +297,10 @@ func (s *MCPServerStore) Snapshot(ctx context.Context, server string, seen []mcp
 				diff.Changed = append(diff.Changed, t.Name)
 			} else {
 				if _, err := u.ExecAffected(`
-					UPDATE mcp_server_tools SET last_seen_at = ?, problem = ?
+					UPDATE mcp_server_tools
+					   SET last_seen_at = ?, last_seen_seq = ?, problem = ?
 					 WHERE server_name = ? AND tool_name = ?`,
-					now, problem, server, t.Name); err != nil {
+					now, seq, problem, server, t.Name); err != nil {
 					return err
 				}
 				diff.Unchanged = append(diff.Unchanged, t.Name)
@@ -306,11 +316,45 @@ func (s *MCPServerStore) Snapshot(ctx context.Context, server string, seen []mcp
 			return err
 		}
 
-		withdrawn, err := s.disappeared(u, server, keep)
+		withdrawn, err := s.disappeared(u, server, seq)
 		if err != nil {
 			return err
 		}
 		diff.Removed = withdrawn
+
+		// A tool nobody ever classified, which the server no longer offers, is
+		// not a record of anything. Keeping it was the wrong reading of "keep
+		// withdrawn tools": what is worth keeping is a decision -- an
+		// administrator's yes or no -- and a tool that came and went before
+		// anyone looked at it carries neither.
+		//
+		// Without this, a server rotating unique tool names on every discovery
+		// grows this table without limit, until reading it materialises the
+		// whole history and removing the server holds the single writer while
+		// it cascades through all of it.
+		//
+		// The condition is in the WHERE rather than in Go: every tool seen in
+		// this discovery was just stamped with this transaction's timestamp,
+		// so an older one is exactly a tool that was not.
+		if _, err := u.ExecAffected(`
+			DELETE FROM mcp_server_tools
+			 WHERE server_name = ? AND ever_classified = 0 AND last_seen_seq < ?`,
+			server, seq); err != nil {
+			return err
+		}
+
+		// Second line, for a server that rotates names faster than discoveries
+		// prune them, or finds some other way to grow the table.
+		var stored int
+		if err := u.queryRow(`SELECT COUNT(*) FROM mcp_server_tools WHERE server_name = ?`,
+			server).Scan(&stored); err != nil {
+			return err
+		}
+		if stored > maxStoredTools {
+			return fmt.Errorf("%w: %s now has %d stored tools, past the %d this "+
+				"host keeps for one server; remove tools you have refused, or "+
+				"remove the server", ErrTooManyTools, server, stored, maxStoredTools)
+		}
 		return nil
 	})
 	if err != nil {
@@ -323,16 +367,26 @@ func (s *MCPServerStore) Snapshot(ctx context.Context, server string, seen []mcp
 	return diff, nil
 }
 
-// disappeared disables everything the server no longer offers.
+// disappeared disables everything the server no longer offers, and names it.
 //
-// Rows are kept rather than deleted. A grant is per plugin, so nothing here
-// widens or narrows access -- but the history of when a tool was first seen,
-// and the fact that it was once approved, is exactly what an operator needs
-// when it comes back.
-func (s *MCPServerStore) disappeared(u *UnitOfWork, server string, keep map[string]bool) ([]string, error) {
+// A tool is withdrawn exactly when this discovery did not stamp its sequence
+// onto it, which is a condition the WHERE clause carries rather than a set
+// difference assembled in Go and then trusted.
+//
+// A row that was already disabled is not reported. It was not being served, so
+// the server dropping it is not news -- and the operator's own refusal, which
+// is the reason most of them are disabled, has not changed.
+//
+// Rows are kept rather than deleted here. A grant is per plugin, so nothing
+// widens or narrows access -- but the fact that a tool was once approved, and
+// when it was first seen, is exactly what an operator needs when it comes
+// back. What is not kept is a tool nobody ever classified; that is pruned by
+// the caller, because there is no decision in it to preserve.
+func (s *MCPServerStore) disappeared(u *UnitOfWork, server string, seq int64) ([]string, error) {
 	rows, err := u.tx.QueryContext(u.ctx, `
 		SELECT tool_name FROM mcp_server_tools
-		 WHERE server_name = ? AND state <> 'disabled'`, server)
+		 WHERE server_name = ? AND state <> 'disabled' AND last_seen_seq < ?
+		 ORDER BY tool_name`, server, seq)
 	if err != nil {
 		return nil, err
 	}
@@ -343,25 +397,30 @@ func (s *MCPServerStore) disappeared(u *UnitOfWork, server string, keep map[stri
 			rows.Close()
 			return nil, err
 		}
-		if !keep[name] {
-			gone = append(gone, name)
-		}
+		gone = append(gone, name)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	for _, name := range gone {
-		if _, err := u.ExecAffected(`
-			UPDATE mcp_server_tools SET state = 'disabled'
-			 WHERE server_name = ? AND tool_name = ? AND state <> 'disabled'`,
-			server, name); err != nil {
-			return nil, err
-		}
+	if _, err := u.ExecAffected(`
+		UPDATE mcp_server_tools SET state = 'disabled'
+		 WHERE server_name = ? AND state <> 'disabled' AND last_seen_seq < ?`,
+		server, seq); err != nil {
+		return nil, err
 	}
 	return gone, nil
 }
+
+// maxStoredTools bounds how much of one server's history this host keeps.
+//
+// Reached only by a server that is misbehaving: an ordinary one's rows are
+// bounded by its catalogue, and the prune in Snapshot clears the rest.
+const maxStoredTools = 5000
+
+// ErrTooManyTools reports a server whose stored tools are past the cap.
+var ErrTooManyTools = errors.New("sqlite: too many stored tools for one server")
 
 // ErrToolClassification reports a classification that did not apply.
 var ErrToolClassification = errors.New("sqlite: the tool could not be classified")
@@ -382,7 +441,7 @@ func (s *MCPServerStore) ClassifyTool(ctx context.Context, server, tool, hash st
 	return s.db.WriteTx(ctx, s.now().UnixMilli(), func(u *UnitOfWork) error {
 		n, err := u.ExecAffected(`
 			UPDATE mcp_server_tools
-			   SET state = ?
+			   SET state = ?, ever_classified = 1
 			 WHERE server_name = ? AND tool_name = ? AND descriptor_hash = ?
 			   AND (? <> 'enabled' OR problem IS NULL)`,
 			string(state), server, tool, hash, string(state))

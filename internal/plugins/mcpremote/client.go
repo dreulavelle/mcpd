@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -135,43 +136,74 @@ func (c *conn) beginDialLocked(ctx context.Context) *dial {
 		}
 		session, err := client.Connect(dialCtx, transport, nil)
 
+		// The whole outcome is decided, recorded and published inside one
+		// critical section, and only a local survives it.
+		//
+		// Reading d.session back after unlocking was both a data race with
+		// the writes above and a correctness bug: close() could run in the
+		// gap, see its own c.current, close the session and set closed --
+		// and the waiter would then wake to a closed session with a nil
+		// error. Publishing under the lock means close() cannot interleave
+		// between the decision and the hand-off, because it needs the same
+		// mutex to make one.
+		var discard *mcp.ClientSession
+
 		c.mu.Lock()
-		d.session, d.err = session, err
-		c.pending = nil
+		if c.pending == d {
+			c.pending = nil
+		}
 		switch {
 		case err != nil:
-			// Nothing to keep.
+			d.err = err
 		case c.closed:
 			// Shutdown happened while this was in flight. The session is
-			// nobody's, so it is closed here rather than left open.
-			d.session, d.err = nil, errors.New("this server is shutting down")
+			// nobody's, so it is closed below rather than left open.
+			discard = session
+			d.err = errors.New("this server is shutting down")
 		default:
 			c.current = session
+			d.session = session
 		}
+		// Closing the channel here is what orders the writes above against
+		// every waiter's read of them: a receive on a closed channel happens
+		// after the close, which happens after these writes.
+		close(d.done)
 		c.mu.Unlock()
 
-		if session != nil && d.session == nil {
-			_ = session.Close()
+		if discard != nil {
+			_ = discard.Close()
 		}
-		close(d.done)
 	}()
 
 	return d
 }
 
-// drop closes and forgets the session, so the next call dials again.
+// drop closes the session the caller was using, and forgets it only if it is
+// still the current one.
 //
 // Called on any transport-level failure. A tool that returns an error does so
 // inside a successful result; an error out of CallTool means the conversation
 // itself broke, and reusing a broken session just fails the next call too.
-func (c *conn) drop() {
-	c.mu.Lock()
-	session := c.current
-	c.current = nil
-	c.mu.Unlock()
-	if session != nil {
-		_ = session.Close()
+//
+// It takes the session rather than reading c.current, because those are not
+// always the same one. Two callers share a session S; the first fails and
+// drops it; a third dials a replacement S2; the second caller -- still holding
+// S, and still failing on it -- would then close S2. Under sustained
+// concurrent failure that destroys healthy sessions as fast as they are made,
+// and the symptom is a server that reconnects endlessly and never settles.
+//
+// The failing session is always closed. Only the pointer comparison decides
+// whether c.current is cleared with it.
+func (c *conn) drop(session *mcp.ClientSession) {
+	if session == nil {
+		return
 	}
+	c.mu.Lock()
+	if c.current == session {
+		c.current = nil
+	}
+	c.mu.Unlock()
+	_ = session.Close()
 }
 
 // close tears the session down for good.
@@ -203,7 +235,7 @@ func (c *conn) ping(ctx context.Context) error {
 		return err
 	}
 	if err := session.Ping(ctx, nil); err != nil {
-		c.drop()
+		c.drop(session)
 		return err
 	}
 	return nil
@@ -294,9 +326,11 @@ func newHTTPClient(endpoint string, headers map[string]string) (*http.Client, er
 		ForceAttemptHTTP2:     true,
 	}
 
-	var transport http.RoundTripper = base
+	// Bounded first, so the limit is in force whether or not headers are
+	// configured and whatever is layered above it.
+	var transport http.RoundTripper = &boundedTransport{next: base, limit: maxResponseBytes}
 	if len(headers) > 0 {
-		transport = &headerTransport{allowed: allowed, headers: headers, next: base}
+		transport = &headerTransport{allowed: allowed, headers: headers, next: transport}
 	}
 
 	return &http.Client{
@@ -374,6 +408,64 @@ func isLocalIP(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsInterfaceLocalMulticast()
+}
+
+// maxResponseBytes bounds one response from a remote server.
+//
+// The caps in the runtime above -- on tool count, on descriptor size -- are
+// checked as the SDK yields tools, which is after it has decoded the whole
+// page. By then an oversized tools/list is already in memory, and marshalling
+// a descriptor to measure it allocates a second copy. A bound that is meant to
+// stop a server exhausting this host has to be where the bytes arrive.
+//
+// Generous, because it applies to a tool call's response as well as to a
+// listing, and a legitimate tool may return a lot. The standalone SSE stream
+// is disabled, so nothing here is a connection held open for the life of the
+// process -- every response this bounds is one request's answer.
+const maxResponseBytes = 32 << 20
+
+// errResponseTooLarge is what reading past the bound produces.
+var errResponseTooLarge = errors.New("the server sent more than this host will read in one response")
+
+// boundedTransport caps how much of a response body can be read.
+//
+// limit is a field rather than the constant so that a test can exercise the
+// bound without moving thirty-two megabytes through a loopback socket.
+type boundedTransport struct {
+	next  http.RoundTripper
+	limit int64
+}
+
+func (t *boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.next.RoundTrip(req)
+	if err != nil || resp.Body == nil {
+		return resp, err
+	}
+	limit := t.limit
+	if limit <= 0 {
+		limit = maxResponseBytes
+	}
+	// One byte of headroom, so a body of exactly the limit reads to EOF
+	// normally and only one past it fails.
+	resp.Body = &boundedBody{ReadCloser: resp.Body, remaining: limit + 1}
+	return resp, nil
+}
+
+type boundedBody struct {
+	io.ReadCloser
+	remaining int64
+}
+
+func (b *boundedBody) Read(p []byte) (int, error) {
+	if b.remaining <= 0 {
+		return 0, errResponseTooLarge
+	}
+	if int64(len(p)) > b.remaining {
+		p = p[:b.remaining]
+	}
+	n, err := b.ReadCloser.Read(p)
+	b.remaining -= int64(n)
+	return n, err
 }
 
 // headerTransport adds the configured headers to requests for the configured

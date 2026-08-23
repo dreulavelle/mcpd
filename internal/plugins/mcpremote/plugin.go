@@ -98,7 +98,7 @@ func New(opts Options) (*Plugin, error) {
 	// holding a scheme-less host produces an error carrying the credential.
 	// That error is the one the host records as the reason a plugin will not
 	// mount, which reaches the Plugins page and the /discover response.
-	redact := mcpservers.NewRedactor(opts.Document.Secrets(opts.Values))
+	redact := mcpservers.NewRedactor(opts.Document.SensitiveValues(opts.Values))
 
 	endpoint, headers, err := opts.Document.Resolve(opts.Values)
 	if err != nil {
@@ -270,7 +270,10 @@ func (p *Plugin) call(ctx context.Context, name string, args map[string]any) (an
 		// An error out of CallTool is the conversation breaking, not the tool
 		// refusing -- a tool's own failure arrives inside a result. So the
 		// session is dropped and the next call dials again.
-		p.conn.drop()
+		//
+		// The handle this call used, not whatever is current: by the time a
+		// slow failure lands, another caller may already have replaced it.
+		p.conn.drop(session)
 		p.setHealth(plugins.Unhealthy(p.redact.Error(err)))
 		return nil, fmt.Errorf("calling %s on %s failed: %s", name, p.name, p.redact.Error(err))
 	}
@@ -279,6 +282,15 @@ func (p *Plugin) call(ctx context.Context, name string, args map[string]any) (an
 	if result.IsError {
 		return nil, fmt.Errorf("%s reported: %s", name, p.redact.String(textOf(result)))
 	}
+
+	// A successful result is passed through as it came. Not an oversight: it
+	// is the hot path, it can be large, and scanning every byte of every
+	// response for a credential the far end already holds buys little. What it
+	// would prevent is a server reflecting our own token back to a caller that
+	// is already authorized for this plugin -- a smaller step than the one the
+	// server took by having the token at all. Error text and stored
+	// descriptors are different, because those persist and are read by people
+	// and models that never called anything.
 	if result.StructuredContent != nil {
 		return result.StructuredContent, nil
 	}
@@ -383,15 +395,17 @@ func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 	seen := map[string]bool{}
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
-			p.conn.drop()
+			p.conn.drop(session)
 			p.setHealth(plugins.Unhealthy(p.redact.Error(err)))
 			return nil, fmt.Errorf("listing the tools of %s failed: %s",
 				p.name, p.redact.Error(err))
 		}
 		if seen[tool.Name] {
 			// One name, two descriptors: there is no way to tell which one a
-			// call would reach, so neither is trustworthy.
-			return nil, fmt.Errorf("%s offered two tools called %q", p.name, tool.Name)
+			// call would reach, so neither is trustworthy. The name is the
+			// server's own text, so it goes out redacted like the rest of it.
+			return nil, fmt.Errorf("%s offered two tools called %q",
+				p.name, p.redact.String(tool.Name))
 		}
 		seen[tool.Name] = true
 
@@ -404,7 +418,7 @@ func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 				"than this host will take from one server", p.name, maxTools)
 		}
 
-		snapshot, size, err := snapshotOf(p.name, tool)
+		snapshot, size, err := snapshotOf(p.name, tool, p.redact)
 		if err != nil {
 			return nil, err
 		}
@@ -430,11 +444,16 @@ func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 // the reason recorded and can never be enabled. Either way the row is stored
 // rather than dropped, so an operator looking for a tool that never appeared
 // finds it with the reason beside it.
-func snapshotOf(prefix string, tool *mcp.Tool) (mcpservers.Tool, int, error) {
+func snapshotOf(prefix string, tool *mcp.Tool, redact *mcpservers.Redactor) (mcpservers.Tool, int, error) {
+	// Everything below this line is the server's text, and the server holds
+	// our credential -- it receives it on every request. Echoing it back in a
+	// name, a description or a schema would put it in SQLite and in front of
+	// a model, so it is blanked on the way in rather than at each of the
+	// places it would later come out.
 	descriptor := mcpservers.Descriptor{
-		Name:        tool.Name,
-		Title:       truncate(tool.Title, maxTitle),
-		Description: truncate(tool.Description, maxDescription),
+		Name:        redact.String(tool.Name),
+		Title:       redact.String(truncate(tool.Title, maxTitle)),
+		Description: redact.String(truncate(tool.Description, maxDescription)),
 	}
 
 	var problem string
@@ -454,6 +473,7 @@ func snapshotOf(prefix string, tool *mcp.Tool) (mcpservers.Tool, int, error) {
 		if err != nil {
 			return mcpservers.Tool{}, 0, fmt.Errorf("tool %q: %w", tool.Name, err)
 		}
+		encoded = []byte(redact.String(string(encoded)))
 		if len(encoded) > part.limit {
 			// Left unset rather than stored truncated: half a schema is not a
 			// schema, and storing one would let Inspect judge the tool
@@ -475,7 +495,7 @@ func snapshotOf(prefix string, tool *mcp.Tool) (mcpservers.Tool, int, error) {
 	size := len(descriptor.Name) + len(descriptor.Title) + len(descriptor.Description) +
 		len(descriptor.InputSchema) + len(descriptor.Annotations)
 	return mcpservers.Tool{
-		Name:       tool.Name,
+		Name:       descriptor.Name,
 		Descriptor: descriptor,
 		Hash:       hash,
 		Problem:    problem,

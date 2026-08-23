@@ -460,18 +460,38 @@ func (d *Document) Resolve(values map[string]string) (endpoint string, headers m
 	return endpoint, headers, nil
 }
 
-// Secrets returns the resolved values that must never appear in a log line, a
-// health message, or an error.
-func (d *Document) Secrets(values map[string]string) []string {
+// SensitiveValues returns every resolved value that must never appear in a log
+// line, a health message, or an error.
+//
+// Every one, not the ones the document called secret. `isSecret` is a field in
+// a third party's document, and letting it decide this would put the party
+// being defended against in charge of the defence: a server declaring its
+// Authorization header `isSecret: false` would keep the operator's pasted key
+// out of the redactor entirely, and every error path would then print it.
+//
+// So `isSecret` governs the two things it can honestly govern -- how the field
+// is rendered, and whether the value is encrypted at rest -- and governs
+// nothing here. The cost is that a diagnostic message may blank a value that
+// was not really a credential, such as a region. That is a message an operator
+// can still read: they know what they configured, and what an error has to
+// tell them is what went wrong, not what they typed.
+func (d *Document) SensitiveValues(values map[string]string) []string {
 	inputs, err := d.Inputs()
 	if err != nil {
-		return nil
+		// The document no longer parses, so which values belong to it cannot
+		// be established. Everything resolved for it is treated as sensitive,
+		// because guessing the other way is the one that leaks.
+		out := make([]string, 0, len(values))
+		for _, v := range values {
+			if v != "" {
+				out = append(out, v)
+			}
+		}
+		sort.Strings(out)
+		return out
 	}
 	var out []string
 	for _, in := range inputs {
-		if !in.Input.IsSecret {
-			continue
-		}
 		if v := values[in.Key]; v != "" {
 			out = append(out, v)
 		}

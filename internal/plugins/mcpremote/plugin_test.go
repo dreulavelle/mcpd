@@ -20,6 +20,11 @@ import (
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
+// testImpl is the client identity these tests dial with.
+func testImpl() *mcp.Implementation {
+	return &mcp.Implementation{Name: "mcpd", Title: "mcpd", Version: "test"}
+}
+
 func testDeps() plugins.Deps {
 	return plugins.Deps{
 		Instance: "weather",
@@ -463,7 +468,7 @@ func TestSnapshotOf_BoundsWhatAServerCanMakeUsStore(t *testing.T) {
 		Description: huge,
 		InputSchema: json.RawMessage(`{"type":"object"}`),
 	}
-	got, size, err := snapshotOf("weather", tool)
+	got, size, err := snapshotOf("weather", tool, mcpservers.NewRedactor(nil))
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -485,7 +490,7 @@ func TestSnapshotOf_BoundsWhatAServerCanMakeUsStore(t *testing.T) {
 	oversized := map[string]any{"type": "object", "description": strings.Repeat("s", maxInputSchema)}
 	got, _, err = snapshotOf("weather", &mcp.Tool{
 		Name: "getWeather", InputSchema: oversized,
-	})
+	}, mcpservers.NewRedactor(nil))
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}

@@ -1,7 +1,9 @@
 package mcpremote
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -392,6 +394,127 @@ func TestOrigin_NormalisesDefaultPortsAndCase(t *testing.T) {
 	} {
 		if got := same(tc.a, tc.b); got != tc.want {
 			t.Errorf("%s vs %s: same origin = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// TestRedirect_PlaintextIsADifferentOrigin.
+//
+// Called out separately because it is the variant that looks harmless: the
+// host is unchanged, only the scheme drops. Downgrading to http would put the
+// credential on the wire in the clear, so the scheme is part of the origin and
+// this is refused like any other hop off it.
+func TestRedirect_PlaintextIsADifferentOrigin(t *testing.T) {
+	plaintext := newRecorder(t)
+
+	// A TLS upstream that tries to send us to a plaintext address.
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plaintext.URL+"/", http.StatusFound)
+	}))
+	t.Cleanup(upstream.Close)
+
+	client, err := newHTTPClient(upstream.URL+"/mcp", map[string]string{"Authorization": operatorKey})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	// The fixture's certificate is not one this process trusts; borrow the
+	// server's own client so the test is about the redirect, not about TLS.
+	client.Transport = &headerTransport{
+		allowed: originOf(mustParse(t, upstream.URL+"/mcp")),
+		headers: map[string]string{"Authorization": operatorKey},
+		next:    upstream.Client().Transport,
+	}
+
+	resp, reqErr := client.Post(upstream.URL+"/mcp", "application/json", nil)
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	hits, auths := plaintext.seen()
+	for _, got := range auths {
+		if strings.Contains(got, "SUPER-SECRET") {
+			t.Errorf("the credential went out over plaintext http: %q", got)
+		}
+	}
+	if hits != 0 {
+		t.Errorf("a downgrade to http was followed %d time(s)", hits)
+	}
+	if reqErr == nil || !errors.Is(reqErr, errCrossOriginRedirect) {
+		t.Errorf("expected a cross-origin refusal, got %v", reqErr)
+	}
+}
+
+func mustParse(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// TestBoundedBody_StopsAnOversizedResponse is C10.
+//
+// The caps in the runtime above are checked as the SDK yields tools, which is
+// after it has decoded the whole page -- so a bound meant to stop a server
+// exhausting this host has to be where the bytes arrive.
+func TestBoundedBody_StopsAnOversizedResponse(t *testing.T) {
+	const limit = 1024
+
+	var size int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), size))
+	}))
+	t.Cleanup(srv.Close)
+
+	client := &http.Client{Transport: &boundedTransport{next: http.DefaultTransport, limit: limit}}
+
+	t.Run("a body at the limit reads normally", func(t *testing.T) {
+		size = limit
+		resp, err := client.Get(srv.URL)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if len(body) != limit {
+			t.Errorf("read %d bytes, want %d", len(body), limit)
+		}
+	})
+
+	t.Run("a body past the limit fails at read", func(t *testing.T) {
+		size = limit * 4
+		resp, err := client.Get(srv.URL)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		defer resp.Body.Close()
+		read, err := io.ReadAll(resp.Body)
+		if !errors.Is(err, errResponseTooLarge) {
+			t.Fatalf("error = %v, want errResponseTooLarge", err)
+		}
+		if len(read) > limit+1 {
+			t.Errorf("read %d bytes past the %d limit before failing", len(read), limit)
+		}
+	})
+}
+
+// The real client wires the bound in, whether or not headers are configured.
+func TestNewHTTPClient_AlwaysBoundsTheResponseBody(t *testing.T) {
+	for _, headers := range []map[string]string{nil, {"Authorization": operatorKey}} {
+		client, err := newHTTPClient("https://x.test/mcp", headers)
+		if err != nil {
+			t.Fatalf("client: %v", err)
+		}
+		transport := client.Transport
+		if h, ok := transport.(*headerTransport); ok {
+			transport = h.next
+		}
+		if _, ok := transport.(*boundedTransport); !ok {
+			t.Errorf("response bodies are not bounded with headers=%v: %T", headers != nil, transport)
 		}
 	}
 }

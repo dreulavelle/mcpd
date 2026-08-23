@@ -385,3 +385,126 @@ func names(tools []mcpservers.Tool) []string {
 	}
 	return out
 }
+
+// TestSnapshot_PrunesWithdrawnToolsNobodyClassified is C11.
+//
+// Keeping a withdrawn tool is right when somebody made a decision about it: a
+// refusal is a record worth having, and a return is worth recognising as a
+// return. It is wrong for a tool that came and went before anyone looked --
+// there is no decision to preserve, and a server rotating unique names on
+// every discovery would grow this table until reading it materialises the
+// whole history.
+func TestSnapshot_PrunesWithdrawnToolsNobodyClassified(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newMCPStore(t)
+	importFixture(t, s)
+
+	if _, err := s.Snapshot(ctx, "weather", []mcpservers.Tool{
+		tool("kept_enabled", "a"),
+		tool("kept_refused", "b"),
+		tool("pruned_pending", "c"),
+	}); err != nil {
+		t.Fatalf("first discovery: %v", err)
+	}
+
+	enable(t, s, "weather", "kept_enabled")
+	// A refusal is a classification too.
+	refuse(t, s, "weather", "kept_refused")
+	// pruned_pending is left as nobody looked at it.
+
+	// The server withdraws all three.
+	diff, err := s.Snapshot(ctx, "weather", []mcpservers.Tool{tool("something_else", "d")})
+	if err != nil {
+		t.Fatalf("second discovery: %v", err)
+	}
+	// kept_refused is not reported: it was already disabled, so it was not
+	// being served and the server dropping it is not news.
+	if strings.Join(diff.Removed, ",") != "kept_enabled,pruned_pending" {
+		t.Fatalf("withdrawn = %v, want the two that were still live", diff.Removed)
+	}
+
+	states := statesOf(t, s, "weather")
+	for _, name := range []string{"kept_enabled", "kept_refused"} {
+		if _, ok := states[name]; !ok {
+			t.Errorf("%s was classified by a person and must be kept", name)
+		} else if states[name] != mcpservers.ToolDisabled {
+			t.Errorf("%s = %q, want disabled", name, states[name])
+		}
+	}
+	if _, ok := states["pruned_pending"]; ok {
+		t.Error("a withdrawn tool nobody classified should not be kept")
+	}
+	if states["something_else"] != mcpservers.ToolPending {
+		t.Errorf("the new tool should be pending, got %q", states["something_else"])
+	}
+}
+
+// TestSnapshot_RotatingToolNamesDoNotAccumulate is the shape the prune exists
+// for: a server that offers a fresh set of names on every discovery.
+func TestSnapshot_RotatingToolNamesDoNotAccumulate(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newMCPStore(t)
+	importFixture(t, s)
+
+	for round := range 20 {
+		batch := make([]mcpservers.Tool, 0, 5)
+		for i := range 5 {
+			batch = append(batch, tool(fmt.Sprintf("round%d_tool%d", round, i), "x"))
+		}
+		if _, err := s.Snapshot(ctx, "weather", batch); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+	}
+
+	stored, err := s.Tools(ctx, "weather")
+	if err != nil {
+		t.Fatalf("tools: %v", err)
+	}
+	if len(stored) != 5 {
+		t.Errorf("after 20 rounds of 5 rotating names the table holds %d rows; "+
+			"only the current round should remain", len(stored))
+	}
+}
+
+// A classified tool that comes back is still recognised as a return, which is
+// the property the prune must not cost.
+func TestSnapshot_AClassifiedToolThatReturnsIsStillKnown(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newMCPStore(t)
+	importFixture(t, s)
+
+	if _, err := s.Snapshot(ctx, "weather", []mcpservers.Tool{tool("forecast", "a")}); err != nil {
+		t.Fatalf("first discovery: %v", err)
+	}
+	refuse(t, s, "weather", "forecast")
+
+	if _, err := s.Snapshot(ctx, "weather", []mcpservers.Tool{}); err != nil {
+		t.Fatalf("withdrawal: %v", err)
+	}
+	if _, err := s.Snapshot(ctx, "weather", []mcpservers.Tool{tool("forecast", "a")}); err != nil {
+		t.Fatalf("return: %v", err)
+	}
+
+	if got := statesOf(t, s, "weather")["forecast"]; got != mcpservers.ToolDisabled {
+		t.Errorf("a refused tool that reappears must still be refused, got %q", got)
+	}
+}
+
+func refuse(t *testing.T, s *MCPServerStore, server, name string) {
+	t.Helper()
+	tools, err := s.Tools(context.Background(), server)
+	if err != nil {
+		t.Fatalf("tools: %v", err)
+	}
+	for _, tl := range tools {
+		if tl.Name != name {
+			continue
+		}
+		if err := s.ClassifyTool(context.Background(), server, name, tl.Hash,
+			mcpservers.ToolDisabled); err != nil {
+			t.Fatalf("refuse %s: %v", name, err)
+		}
+		return
+	}
+	t.Fatalf("no tool named %q", name)
+}

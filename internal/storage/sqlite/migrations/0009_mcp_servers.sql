@@ -43,6 +43,15 @@ CREATE TABLE mcp_servers (
     -- a secret does not belong in a column beside the document.
     url            TEXT    NOT NULL,
     enabled        INTEGER NOT NULL DEFAULT 1,
+    -- Incremented once per discovery, and stamped onto every tool that
+    -- discovery saw.
+    --
+    -- A timestamp cannot do this job. Two discoveries inside the same
+    -- millisecond would carry the same value, and "not seen in the latest
+    -- discovery" would then quietly match nothing -- a prune that silently
+    -- stops working is worse than no prune, because the table grows and
+    -- nothing says so.
+    discovery_seq  INTEGER NOT NULL DEFAULT 0,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL,
     CHECK (enabled IN (0, 1)),
@@ -61,6 +70,15 @@ CREATE TABLE mcp_server_tools (
     -- administrator approves a descriptor, not a name.
     descriptor_hash TEXT    NOT NULL,
     state           TEXT    NOT NULL,
+    -- 1 once a person has said something about this tool, either way.
+    --
+    -- It is what separates a refusal from a withdrawal. Both leave a row in
+    -- `disabled`, and only one of them is a record worth keeping: an
+    -- administrator's no is a decision, while a tool the server stopped
+    -- offering before anyone looked at it is just noise. Without the
+    -- distinction, a server rotating tool names on every discovery grows this
+    -- table without limit.
+    ever_classified INTEGER NOT NULL DEFAULT 0,
     -- Why this tool cannot be enabled, when it cannot: an input schema that is
     -- not an object, a name outside the specification's charset, a qualified
     -- name too long to address. NULL means it is classifiable.
@@ -70,9 +88,18 @@ CREATE TABLE mcp_server_tools (
     problem         TEXT,
     first_seen_at   INTEGER NOT NULL,
     last_seen_at    INTEGER NOT NULL,
+    -- The server's discovery_seq when this tool was last offered. Comparing it
+    -- against the current one is what "the server no longer offers this" means,
+    -- and it is a comparison the WHERE clause can make.
+    last_seen_seq   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (server_name, tool_name),
-    CHECK (state IN ('pending', 'enabled', 'disabled'))
+    CHECK (state IN ('pending', 'enabled', 'disabled')),
+    CHECK (ever_classified IN (0, 1))
 ) STRICT, WITHOUT ROWID;
 
 -- Register reads exactly one shape: the enabled tools of one server.
 CREATE INDEX ix_mcp_server_tools_state ON mcp_server_tools (server_name, state);
+
+-- Discovery's two sweeps -- disable what was withdrawn, forget what nobody
+-- ever classified -- both select on how recently a tool was offered.
+CREATE INDEX ix_mcp_server_tools_seen ON mcp_server_tools (server_name, last_seen_seq);
