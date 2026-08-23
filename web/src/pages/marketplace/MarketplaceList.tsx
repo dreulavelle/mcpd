@@ -4,8 +4,8 @@ import { useLoader } from "@/lib/hooks";
 import { Link, useRouter } from "@/lib/router";
 import { Notice, PageHeader, Section } from "@/components/chrome";
 import { Button } from "@/components/ui/button";
-import { CatalogList } from "./CatalogList";
-import type { CatalogEntry } from "./catalog";
+import { CatalogList, type Installed } from "./CatalogList";
+import type { CatalogChoice } from "./catalog";
 import { ImportDialog } from "./ImportDialog";
 
 /**
@@ -18,32 +18,42 @@ import { ImportDialog } from "./ImportDialog";
  * the way in. /marketplace/{name} redirects to the plugin page for anyone who
  * bookmarked the old arrangement.
  *
- * The imported list is still read, for one reason: so the catalog can say
- * "already added" instead of offering a name the import would refuse.
+ * What is already here is still read, for two reasons: so the catalogue can
+ * say "already added" instead of offering something twice, and so a name
+ * collision is caught in the form rather than by the import refusing it.
  */
 export function MarketplaceList() {
   const { navigate } = useRouter();
   const loadServers = useCallback(() => api.mcpServers(), []);
   const { data, error } = useLoader(loadServers, "Couldn't read what is already added.", 20_000);
-  const [seed, setSeed] = useState<CatalogEntry | null>(null);
+  const [seed, setSeed] = useState<CatalogChoice | null>(null);
   const [importing, setImporting] = useState(false);
 
-  const installed = useMemo(
-    () => new Set((data?.servers ?? []).map((s) => s.name)),
-    [data],
-  );
+  const installed = useMemo<Installed>(() => {
+    const servers = data?.servers ?? [];
+    return {
+      names: new Set(servers.map((s) => s.name)),
+      // By the address it dials, which is the only thing about a catalogue
+      // entry and an installed server that is reliably the same. The local
+      // name was chosen here and the catalogue's name belongs to somebody
+      // else, so neither identifies the other.
+      byAddress: new Map(
+        servers.filter((s) => s.url).map((s) => [s.url, s.name] as const),
+      ),
+    };
+  }, [data]);
 
   function addCustom() {
     setSeed(null);
     setImporting(true);
   }
 
-  // The catalog's Add is the same dialog with the document filled in. There is
-  // deliberately no second import path: whatever the catalog hands over is
-  // validated, has its settings derived and has its tools classified exactly
-  // as a pasted document does.
-  function addFromCatalog(entry: CatalogEntry) {
-    setSeed(entry);
+  // The catalogue's Add is the same dialog with the document filled in. There
+  // is deliberately no second import path: whatever the catalogue hands over
+  // is validated, has its settings derived and has its tools classified
+  // exactly as a pasted document does.
+  function addFromCatalog(choice: CatalogChoice) {
+    setSeed(choice);
     setImporting(true);
   }
 
@@ -59,11 +69,12 @@ export function MarketplaceList() {
           new values into the state it already holds would leave a half-edited
           paste from the last attempt underneath. */}
       <ImportDialog
-        key={seed?.id ?? "custom"}
+        key={seed?.name ?? "custom"}
         open={importing}
         onOpenChange={setImporting}
-        seedName={seed?.suggestedName}
+        seedName={seed?.suggested_name}
         seedDocument={seed?.document}
+        taken={installed.names}
         // Straight to where it is managed. The next steps -- fill in what it
         // asks for, discover, classify -- all live on that page.
         onImported={(name) => navigate(`/plugins/${encodeURIComponent(name)}`)}
@@ -72,7 +83,7 @@ export function MarketplaceList() {
       {error && <Notice tone="problem">{error}</Notice>}
 
       <Section
-        title="Catalog"
+        title="Catalogue"
         description="Published servers, ready to add. Everything already added lives under Plugins."
       >
         <CatalogList installed={installed} onAdd={addFromCatalog} />

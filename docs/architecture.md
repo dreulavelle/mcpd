@@ -47,6 +47,17 @@ needs an inbound port, public DNS, or a NAT rule.
 
 ## The load-bearing decisions
 
+**What belongs here is settled by a test, not by taste.** mcpd is a control
+plane for MCP servers, and the test for any feature is: does it help somebody
+decide *which MCPs run, who can reach them, and what happened?* Rendering an
+integration's own data — a device topology, a metrics dashboard — fails it.
+Plugin tools return data to the model, not to mcpd's UI.
+
+This is written down because its absence let a bad idea get as far as a
+proposal. The idea was plausible, it was about a real integration, and nothing
+in this document said no to it — which is what a missing test looks like from
+the inside.
+
 **SQLite is the only authority.** Whether a change was approved is answered by
 a row, never by a message. Every executor reloads and revalidates before
 acting, so a lost, duplicated, or forged event costs latency at worst.

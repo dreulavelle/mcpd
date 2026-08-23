@@ -15,6 +15,9 @@ import App from "@/App";
  */
 const SESSION = {
   email: "smoke@example.com",
+  // Both, as the endpoint sends both: `name` is resolved and never empty,
+  // `display_name` is the stored value an edit field round-trips.
+  name: "Smoke Test",
   display_name: "Smoke Test",
   role: "admin" as const,
   plugins: ["*"],
@@ -60,6 +63,27 @@ function stubApi(role: "user" | "admin" = "admin") {
   vi.spyOn(api, "pluginTypes").mockResolvedValue({ types: [], count: 0 });
   vi.spyOn(api, "audit").mockResolvedValue({ records: [], count: 0 });
   vi.spyOn(api, "mcpServers").mockResolvedValue({ servers: [] });
+  vi.spyOn(api, "catalog").mockResolvedValue({
+    source: "registry.modelcontextprotocol.io",
+    entries: [{
+      name: "com.example/weather",
+      suggested_name: "weather",
+      title: "Weather",
+      description: "Forecasts and observations.",
+      version: "1.0.0",
+      transport: "streamable-http",
+      url: "https://weather.example/mcp",
+      updated_at: "2026-08-01T10:00:00Z",
+      addable: true,
+      source: "registry.modelcontextprotocol.io",
+    }],
+    stale: false,
+    retrieved_at: "2026-08-22T09:00:00Z",
+    sources: [{
+      source: "registry.modelcontextprotocol.io",
+      ok: true, stale: false, entries: 1,
+    }],
+  });
   vi.spyOn(api, "tunnel").mockResolvedValue({
     tunnels: [], can_manage: false, plugins: ["echo"], workspaces: [],
     assignments: {}, missing: "an OpenAI admin key and organization ID",
@@ -167,9 +191,9 @@ describe("reaching an admin-only section by URL", () => {
     window.history.replaceState(null, "", "/marketplace");
 
     render(<App />);
-    // Discovery, not an inventory: the catalog is what the page is for, and
-    // the catalog API is not merged yet.
-    expect(await screen.findByText("No catalog yet")).toBeInTheDocument();
+    // Discovery, not an inventory: the catalogue is what the page is for, and
+    // what is already installed is read only so the catalogue can say so.
+    expect(await screen.findByText("Weather")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add Custom MCP" })).toBeInTheDocument();
   });
 });
