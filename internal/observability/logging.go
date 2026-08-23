@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -61,11 +62,33 @@ func NewSwitchableLogger(w io.Writer, level slog.Level, format string) (*slog.Lo
 		Level:       &ctl.level,
 		ReplaceAttr: redactAttr,
 	}
+	// Both handlers write to one destination, and each of them guards its
+	// writer with a mutex of its own -- so between the two of them there is no
+	// lock at all. The shared one below is what makes a record that is still
+	// being written as JSON and one starting as text take turns.
+	dst := &syncWriter{w: w}
 	return slog.New(switchHandler{
-		json: slog.NewJSONHandler(w, opts),
-		text: slog.NewTextHandler(w, opts),
+		json: slog.NewJSONHandler(dst, opts),
+		text: slog.NewTextHandler(dst, opts),
 		ctl:  ctl,
 	}), ctl
+}
+
+// syncWriter serialises the writes of every handler that shares it.
+//
+// A format change does not wait for the records already in flight, so the two
+// handlers overlap by design rather than by accident. Without this the
+// overlap is an unsynchronised write to the same io.Writer: interleaved lines
+// at best, and whatever the writer does with concurrent calls at worst.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }
 
 // LogControl changes the level and the format of a running logger.
