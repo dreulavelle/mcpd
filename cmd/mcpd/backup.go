@@ -44,10 +44,12 @@ func backup(configPath, envPath, destination string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path:        cfg.Storage.Path,
-		BusyTimeout: cfg.Storage.BusyTimeout,
-	})
+	// The default lock wait, not the one this deployment configured. That
+	// setting is in the database this is about to open, and reading it would
+	// mean opening the database to decide how to open the database. A backup
+	// takes a snapshot and exits; if it has to wait a little longer for a lock
+	// than the running host would, nothing is worse for it.
+	db, err := sqlite.Open(ctx, sqlite.Options{Path: cfg.Storage.Path})
 	if err != nil {
 		return err
 	}

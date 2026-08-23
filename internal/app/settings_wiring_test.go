@@ -24,8 +24,8 @@ func newSettingsApp(t *testing.T) *App {
 
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "mcpd.db")
-	cfg.Storage.RelaxedDurability = true
-	cfg.Server.PublicURL = "http://localhost:9080"
+	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
+	cfg.Legacy().Server.PublicURL = ptr("http://localhost:9080")
 	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
 	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
@@ -33,8 +33,8 @@ func newSettingsApp(t *testing.T) *App {
 		Principal: "svc:scoped", Role: "admin", Plugins: []string{"*"},
 	}}
 	// File defaults the store must be able to override.
-	cfg.Approval.ProposalTTL = 30 * time.Minute
-	cfg.Tunnel.Enabled = false
+	cfg.Legacy().Approval.ProposalTTL = ptr(30 * time.Minute)
+	cfg.Legacy().Tunnel.Enabled = ptr(false)
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config invalid: %v", err)

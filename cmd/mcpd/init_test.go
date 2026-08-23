@@ -114,13 +114,12 @@ func TestInitializeDoesNotCompeteWithAnEnvironmentSecret(t *testing.T) {
 }
 
 // The container generates its config on first start and publishes 8080/8081,
-// so a generated file advertising the source defaults would send the dashboard
-// to an address nothing answers on.
+// so a generated file binding the source defaults would leave the dashboard on
+// a port nothing is mapped to.
 func TestInitializeTakesAddressesFromTheEnvironment(t *testing.T) {
 	clearEnv(t, generatedSecrets...)
 	t.Setenv("MCPD_LISTEN", ":8080")
 	t.Setenv("MCPD_FRONTEND_LISTEN", ":8081")
-	t.Setenv("MCPD_PUBLIC_URL", "http://localhost:9999")
 
 	dir := t.TempDir()
 	if err := initialize(dir); err != nil {
@@ -131,10 +130,77 @@ func TestInitializeTakesAddressesFromTheEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`listen: ":8080"`, `frontend_listen: ":8081"`, `public_url: "http://localhost:9999"`} {
+	for _, want := range []string{`listen: ":8080"`, `frontend_listen: ":8081"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("generated config is missing %q", want)
 		}
+	}
+}
+
+// The generated file is the minimum, and the minimum is a claim worth
+// defending: it is the whole argument for having moved everything else.
+//
+// Four values, and every one of them is here because it cannot be in the
+// database. Anything else appearing in this file is a key that could have been
+// a setting -- recorded, attributed, and changeable without an editor -- and
+// was not.
+func TestTheGeneratedConfigIsTheMinimum(t *testing.T) {
+	clearEnv(t, generatedSecrets...)
+	dir := t.TempDir()
+	if err := initialize(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var lines []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		lines = append(lines, trimmed)
+	}
+
+	want := []string{
+		"server:",
+		`listen: "127.0.0.1:9080"`,
+		`frontend_listen: "127.0.0.1:9090"`,
+		"storage:",
+		"path: " + filepath.Join(dir, "mcpd.db"),
+		"secret_key_ref: env:MCPD_SECRET_KEY",
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("the generated file has %d lines of configuration, want %d:\n%s",
+			len(lines), len(want), strings.Join(lines, "\n"))
+	}
+	for i, line := range lines {
+		if line != want[i] {
+			t.Errorf("line %d = %q, want %q", i+1, line, want[i])
+		}
+	}
+}
+
+// A generated deployment has to start, which means the file it generates has
+// to pass the validation the binary applies to it.
+func TestTheGeneratedConfigValidates(t *testing.T) {
+	clearEnv(t, generatedSecrets...)
+	dir := t.TempDir()
+	if err := initialize(dir); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("the config mcpd generates does not load: %v", err)
+	}
+	// And it supplies nothing that has moved, so a fresh deployment imports
+	// nothing and warns about nothing.
+	if cfg.Legacy().Any() {
+		t.Fatalf("the generated file still sets keys that live in the database: %v",
+			cfg.Legacy().Sources())
 	}
 }
 

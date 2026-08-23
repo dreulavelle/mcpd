@@ -45,6 +45,13 @@ add the next number. There is no down path.
 `WHERE` clause, not in Go before the write. If a claim can be lost to a race,
 it should match zero rows and say so.
 
+**Configuration has one authority per setting.** Four keys live in
+`config.yaml` — `storage.path`, `secret_key_ref`, and the two bind addresses —
+and every other setting lives in the database. The file is not consulted for a
+moved key; it seeds the store once on the first start after an upgrade, and a
+key left behind that disagrees is named in a startup warning. Silent
+disagreement between two sources is the failure mode this exists to remove.
+
 **Capabilities, not roles.** Check `principal.Can(auth.CapAdmin)`, never
 `role == "admin"`. Roles are `user` and `admin`; the map from roles to
 capabilities is the only place that knows the difference.

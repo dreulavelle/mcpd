@@ -10,9 +10,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/spoked/mcpd/internal/app"
@@ -65,12 +68,33 @@ func run() error {
 		return err
 	}
 
-	log := observability.NewLogger(os.Stdout,
-		observability.ParseLevel(cfg.Logging.Level), cfg.Logging.Format)
+	// Built before the database opens, because everything below has to be able
+	// to report a failure. How much it says and in what shape are settings, so
+	// it starts on the defaults and the control below hands it the stored
+	// values the moment they can be read.
+	log, logControl := observability.NewSwitchableLogger(os.Stdout, slog.LevelInfo, "json")
 
 	if *checkOnly {
 		for _, w := range cfg.Warnings() {
 			fmt.Fprintln(os.Stderr, "warning:", w)
+		}
+		// Named rather than validated. These keys are not configuration any
+		// more; they are what the first start after an upgrade imports, and
+		// after that they are ignored. Saying so here is the difference
+		// between an operator editing a file that does nothing and one who
+		// knows to open Settings.
+		if legacy := cfg.Legacy(); legacy.Any() {
+			var keys []string
+			for path := range legacy.Sources() {
+				keys = append(keys, path)
+			}
+			sort.Strings(keys)
+			fmt.Fprintf(os.Stderr,
+				"note: these are no longer read from this file, and live in the "+
+					"database instead:\n  - %s\n"+
+					"They are imported once, on the first start after upgrading. "+
+					"After that, change them on the Settings page.\n",
+				strings.Join(keys, "\n  - "))
 		}
 		fmt.Println("configuration is valid")
 		return nil
@@ -83,7 +107,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	application, err := app.New(ctx, cfg, log)
+	application, err := app.New(ctx, cfg, log, app.WithLogControl(logControl))
 	if err != nil {
 		return err
 	}

@@ -5,14 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 func validConfig() *Config {
 	c := Default()
-	c.Server.PublicURL = "https://mcp.example.net"
 	c.Storage.Path = "/var/lib/mcpd/mcpd.db"
 	c.Plugins = map[string]PluginConfig{"cnmaestro": {Enabled: true}}
 	c.Auth.StaticTokens = []StaticTokenConfig{{
@@ -42,12 +40,10 @@ func TestValidate_Rejects(t *testing.T) {
 		{"required but disabled plugin", func(c *Config) {
 			c.Plugins["cnmaestro"] = PluginConfig{Enabled: false, Required: true}
 		}, "required but not enabled"},
-		{"approval outliving proposal", func(c *Config) {
-			c.Approval.ApprovalTTL = c.Approval.ProposalTTL * 2
-		}, "outlive"},
-		{"negative session ttl", func(c *Config) {
-			c.Auth.Accounts.SessionTTL = -time.Minute
-		}, "session_ttl"},
+		{"no bind address", func(c *Config) { c.Server.Listen = "" }, "server.listen is required"},
+		{"one port for both listeners", func(c *Config) {
+			c.Server.FrontendListen = c.Server.Listen
+		}, "must differ"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,14 +73,59 @@ func TestValidate_RejectsSharedSecretReference(t *testing.T) {
 		t.Fatalf("expected a shared-secret error, got %v", err)
 	}
 }
-func TestWarnings_FlagsRelaxedDurability(t *testing.T) {
-	c := validConfig()
-	c.Storage.RelaxedDurability = true
-	if err := c.Validate(); err != nil {
-		t.Fatalf("relaxed durability should warn, not fail: %v", err)
+func TestEffectiveWarnings_FlagsRelaxedDurability(t *testing.T) {
+	got := Effective{PublicURL: "https://mcp.example.net", RelaxedDurability: true}.Warnings()
+	if len(got) == 0 || !strings.Contains(got[0], "durability") {
+		t.Fatalf("expected a warning about relaxed durability, got %v", got)
 	}
-	if len(c.Warnings()) == 0 {
-		t.Fatal("expected a warning about relaxed durability")
+}
+
+// The address lives in the database now, so a bad one cannot be a refusal:
+// refusing to start would take away the page it is corrected on. It has to be
+// a warning, and the warning has to actually fire.
+func TestEffectiveWarnings_AddressProblemsAreWarningsNotRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		eff  Effective
+		want string
+	}{
+		{"unset", Effective{}, "no public address is set"},
+		{"unparseable", Effective{PublicURL: "://nope"}, "not a usable URL"},
+		{"http against a self-signed listener",
+			Effective{PublicURL: "http://mcp.example.net", TLSSelfSigned: true},
+			"does not speak plaintext"},
+		{"plaintext on a network",
+			Effective{PublicURL: "http://192.168.50.125:9090"}, "in the clear"},
+		{"metrics with no dashboard to serve them",
+			Effective{PublicURL: "https://mcp.example.net", MetricsEnabled: true},
+			"nothing is exposing it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var found bool
+			for _, w := range tc.eff.Warnings() {
+				if strings.Contains(w, tc.want) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("warnings %v do not mention %q", tc.eff.Warnings(), tc.want)
+			}
+		})
+	}
+}
+
+// Loopback never leaves the machine, by name as well as by address, so it
+// needs no plaintext warning.
+func TestEffectiveWarnings_LoopbackIsQuiet(t *testing.T) {
+	for _, host := range []string{
+		"http://localhost:9090", "http://127.0.0.1:9090", "http://[::1]:9090",
+	} {
+		eff := Effective{PublicURL: host, FrontendEnabled: true}
+		for _, w := range eff.Warnings() {
+			if strings.Contains(w, "in the clear") {
+				t.Errorf("%s should not warn about plaintext: %s", host, w)
+			}
+		}
 	}
 }
 
@@ -155,7 +196,6 @@ func TestSecretResolver_ErrorsDoNotLeakValues(t *testing.T) {
 func TestEnvOverrides(t *testing.T) {
 	t.Setenv("MCPD_LISTEN", "0.0.0.0:9000")
 	t.Setenv("MCPD_FRONTEND_LISTEN", ":8081")
-	t.Setenv("MCPD_LOG_LEVEL", "debug")
 	t.Setenv("MCPD_PLUGIN_CNMAESTRO_ENABLED", "true")
 
 	c := validConfig()
@@ -170,9 +210,6 @@ func TestEnvOverrides(t *testing.T) {
 	if c.Server.FrontendListen != ":8081" {
 		t.Fatalf("frontend_listen = %q", c.Server.FrontendListen)
 	}
-	if c.Logging.Level != "debug" {
-		t.Fatalf("log level = %q", c.Logging.Level)
-	}
 	if !c.Plugins["cnmaestro"].Enabled {
 		t.Fatal("plugin enablement was not overridden")
 	}
@@ -183,13 +220,9 @@ func TestEnvOverrides(t *testing.T) {
 func TestEnvOverrides_RejectMalformedBoolean(t *testing.T) {
 	t.Setenv("MCPD_FRONTEND_ENABLED", "ture")
 
-	c := validConfig()
-	err := c.applyEnvOverrides()
-	if err == nil {
-		t.Fatal("a malformed boolean must be reported, not defaulted")
-	}
-	if !strings.Contains(err.Error(), "not a boolean") {
-		t.Fatalf("error should explain the problem, got %v", err)
+	if _, err := parseLegacy(nil); err == nil ||
+		!strings.Contains(err.Error(), "not a boolean") {
+		t.Fatalf("a malformed boolean must be reported, not defaulted; got %v", err)
 	}
 }
 
@@ -202,84 +235,6 @@ func TestEnvOverrides_UnsetLeavesFileValues(t *testing.T) {
 	}
 	if c.Server.Listen != original {
 		t.Fatalf("listen changed to %q with no override set", c.Server.Listen)
-	}
-}
-
-// Plaintext is refused for a public address but permitted on a private one:
-// that is where development happens, and the traffic does not cross a network
-// the operator does not control.
-func TestValidate_PlaintextPublicURL(t *testing.T) {
-	tests := []struct {
-		url   string
-		valid bool
-	}{
-		{"https://mcp.example.net", true},
-		{"http://localhost:9090", true},
-		{"http://127.0.0.1:9090", true},
-		{"http://192.168.50.125:9090", true},
-		{"http://10.0.0.5:9090", true},
-		{"http://172.16.4.1:9090", true},
-		{"http://[::1]:9090", true},
-		{"http://mcpd.local:9090", true},
-		{"http://mcpd.internal:9090", true},
-		// Publicly routable plaintext hands the token to anything on the path.
-		{"http://mcp.example.net", false},
-		{"http://8.8.8.8:9090", false},
-		{"ftp://mcp.example.net", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.url, func(t *testing.T) {
-			c := validConfig()
-			c.Server.PublicURL = tc.url
-			err := c.Validate()
-			if tc.valid && err != nil {
-				t.Fatalf("%s should be accepted: %v", tc.url, err)
-			}
-			if !tc.valid && err == nil {
-				t.Fatalf("%s should be refused", tc.url)
-			}
-		})
-	}
-}
-
-// A plaintext LAN address is allowed, but the operator must be told the token
-// is in the clear.
-func TestWarnings_FlagsPlaintextOnANetwork(t *testing.T) {
-	c := validConfig()
-	c.Server.PublicURL = "http://192.168.50.125:9090"
-
-	var found bool
-	for _, w := range c.Warnings() {
-		if strings.Contains(w, "in the clear") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected a plaintext warning, got %v", c.Warnings())
-	}
-
-	// Loopback never leaves the machine, so it needs no warning.
-	c.Server.PublicURL = "http://127.0.0.1:9090"
-	for _, w := range c.Warnings() {
-		if strings.Contains(w, "in the clear") {
-			t.Fatal("loopback should not produce a plaintext warning")
-		}
-	}
-}
-
-// Loopback never leaves the machine, by name as well as by address, so it
-// needs no plaintext warning.
-func TestWarnings_LoopbackNamesDoNotWarn(t *testing.T) {
-	for _, host := range []string{
-		"http://localhost:9090", "http://127.0.0.1:9090", "http://[::1]:9090",
-	} {
-		c := validConfig()
-		c.Server.PublicURL = host
-		for _, w := range c.Warnings() {
-			if strings.Contains(w, "in the clear") {
-				t.Errorf("%s should not warn about plaintext: %s", host, w)
-			}
-		}
 	}
 }
 

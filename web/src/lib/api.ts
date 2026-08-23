@@ -453,6 +453,8 @@ export interface SettingField {
   options?: string[];
   min?: number;
   max?: number;
+  /** What a duration counts in. Absent means minutes. */
+  unit?: "seconds" | "minutes" | "hours";
   required?: boolean;
   placeholder?: string;
 }

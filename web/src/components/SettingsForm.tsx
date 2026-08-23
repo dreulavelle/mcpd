@@ -166,7 +166,10 @@ function Field({ field, value, link, isSet, clearing, readOnly, onChange, onTogg
           onCheckedChange={(checked) => onChange(String(checked))}
         />
         <div className="space-y-0.5">
-          <Label htmlFor={id}>{field.label}</Label>
+          <Label htmlFor={id} className="flex flex-wrap items-center gap-2">
+            {field.label}
+            {field.apply === "restart" && <Chip tone="attention">needs a restart</Chip>}
+          </Label>
           {field.help && (
             <p className="text-xs text-muted-foreground">{field.help}</p>
           )}
@@ -217,7 +220,7 @@ function Field({ field, value, link, isSet, clearing, readOnly, onChange, onTogg
 
       {field.help && <p className="text-xs text-muted-foreground">{field.help}</p>}
       {field.kind === "duration" && (
-        <p className="text-xs text-muted-foreground">In minutes.</p>
+        <p className="text-xs text-muted-foreground">In {field.unit ?? "minutes"}.</p>
       )}
       {link && (
         <p className="text-xs"><Out href={link.href}>{link.label}</Out></p>
@@ -226,8 +229,13 @@ function Field({ field, value, link, isSet, clearing, readOnly, onChange, onTogg
   );
 }
 
-/** Only roles need this, and only to capitalise them. */
+/**
+ * Two cases. Roles want capitals, and "none" wants a word: the policy spells
+ * "no inline approval at all" as an absence, and an option reading "none" in a
+ * list of risk levels reads as a level rather than as the strictest setting.
+ */
 function optionLabel(key: string, option: string): string {
+  if (option === "none") return "Nothing";
   if (!key.endsWith("role")) return option;
   return { user: "User", admin: "Admin" }[option] ?? option;
 }

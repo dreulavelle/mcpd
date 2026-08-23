@@ -13,9 +13,11 @@ const envPrefix = "MCPD_"
 
 // applyEnvOverrides layers environment variables over the file.
 //
-// The set is deliberately small: only the settings a container image needs to
-// vary at run time without rewriting the config file. Everything else stays in
-// the file, where it is reviewable and version-controlled.
+// The set is deliberately small, and smaller than it was: what remains is the
+// three things a container has to decide for itself, because the port mapping
+// and the volume layout are not this file's to know. The overrides for keys
+// that have since moved into the database are in legacy.go, where they seed
+// the store on a first start rather than overriding it on every start.
 //
 // Secrets are not here. They are referenced from the file by name and resolved
 // through SecretResolver, so a credential never becomes a config field.
@@ -24,14 +26,7 @@ func (c *Config) applyEnvOverrides() error {
 
 	overrideString(&c.Server.Listen, "LISTEN")
 	overrideString(&c.Server.FrontendListen, "FRONTEND_LISTEN")
-	overrideString(&c.Server.PublicURL, "PUBLIC_URL")
 	overrideString(&c.Storage.Path, "STORAGE_PATH")
-	overrideString(&c.Logging.Level, "LOG_LEVEL")
-	overrideString(&c.Logging.Format, "LOG_FORMAT")
-
-	if err := overrideBool(&c.Server.FrontendEnabled, "FRONTEND_ENABLED"); err != nil {
-		errs = append(errs, err.Error())
-	}
 
 	// Plugin enablement, so an image can be shipped with everything compiled
 	// in and switched on per deployment.

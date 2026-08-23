@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
 	"log/slog"
@@ -15,8 +16,15 @@ func serverWithPublicURL(t *testing.T, accounts Accounts, publicURL string) *Ser
 	return NewServer(Options{
 		Log:               slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Accounts:          accounts,
-		FrontendPublicURL: publicURL,
+		FrontendPublicURL: fixed(publicURL),
 	})
+}
+
+// fixed adapts a constant address to the reader the server takes. The
+// addresses are settings now, read per request; a test that does not care
+// about that says so once here.
+func fixed(v string) func(context.Context) string {
+	return func(context.Context) string { return v }
 }
 
 func sessionCookieFrom(t *testing.T, res *http.Response) *http.Cookie {
@@ -171,7 +179,7 @@ func TestSessionCookie_TheMCPEndpointsSchemeDoesNotDecideTheDashboards(t *testin
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Accounts: &fakeAccounts{},
 		// The MCP endpoint serves TLS; the dashboard does not.
-		PublicURL: "https://192.168.50.125:9080",
+		PublicURL: fixed("https://192.168.50.125:9080"),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "http://192.168.50.125:9090/", nil)
@@ -187,7 +195,7 @@ func TestSessionCookie_TheDashboardsOwnURLStillWidens(t *testing.T) {
 	srv := NewServer(Options{
 		Log:               slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Accounts:          &fakeAccounts{},
-		FrontendPublicURL: "https://mcpd.example.com",
+		FrontendPublicURL: fixed("https://mcpd.example.com"),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "http://10.0.0.5:8081/", nil)

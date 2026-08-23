@@ -12,7 +12,7 @@ ExecStart=/usr/local/bin/mcpd --config /etc/mcpd/config.yaml
 Restart=on-failure
 RestartSec=5s
 
-# Must exceed the drain budget in server.shutdown_timeout plus the worker wait,
+# Must exceed the drain budget in Settings -> Timeouts plus the worker wait,
 # or systemd will SIGKILL mid-shutdown and leave an execution unsettled.
 TimeoutStopSec=60
 KillSignal=SIGTERM

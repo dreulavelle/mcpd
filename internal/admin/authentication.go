@@ -140,7 +140,7 @@ type redirectURIResponse struct {
 
 func (s *Server) handleAuthRedirectURIs(w http.ResponseWriter, r *http.Request) {
 	resp := redirectURIResponse{
-		Base: s.opts.FrontendPublicURL,
+		Base: s.frontendPublicURL(r.Context()),
 		URIs: map[string]string{},
 	}
 	for _, p := range []users.Provider{
@@ -415,7 +415,7 @@ func (s *Server) completeSignIn(w http.ResponseWriter, r *http.Request, state *s
 		return
 	}
 
-	token, sess, err := s.opts.Accounts.NewSession(ctx, user.ID, s.opts.SessionTTL)
+	token, sess, err := s.opts.Accounts.NewSession(ctx, user.ID, s.sessionTTL(ctx))
 	if err != nil {
 		s.opts.Log.Error("could not start a session after a provider sign-in", "error", err)
 		s.finish(w, r, "/", outcomeProvider)
@@ -540,7 +540,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// capability, so the session it gets is worth exactly one screen saying it
 	// is waiting -- which is a better answer than a form that succeeded and
 	// then asked them to sign in to find out nothing works.
-	token, sess, err := s.opts.Accounts.NewSession(r.Context(), user.ID, s.opts.SessionTTL)
+	token, sess, err := s.opts.Accounts.NewSession(r.Context(), user.ID, s.sessionTTL(r.Context()))
 	if err != nil {
 		s.opts.Log.Error("could not start a session for a new account", "error", err)
 		s.writeError(w, r, http.StatusInternalServerError,
