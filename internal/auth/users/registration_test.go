@@ -210,7 +210,7 @@ func TestPending_AuthenticatesAndHoldsNoCapability(t *testing.T) {
 	}
 
 	authorizer := auth.NewAuthorizer()
-	p := signedIn.Principal("ses_test")
+	p := signedIn.Principal("ses_test", signedIn.Plugins)
 	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove, auth.CapAdmin} {
 		if p.Can(c) {
 			t.Errorf("a pending account holds %q", c)
@@ -251,14 +251,14 @@ func TestApproveRegistration_IsAuditedWithTheActingAdministrator(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	approved, err := s.ApproveRegistration(ctx, "user:owner@example.com", pending.ID)
+	approved, err := s.ApproveRegistration(ctx, "user:owner@example.com", pending.ID, nil)
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	if approved.Status != StatusActive {
 		t.Errorf("status after approval = %q; want active", approved.Status)
 	}
-	if !approved.Principal("ses").Can(auth.CapRead) {
+	if !approved.Principal("ses", approved.Plugins).Can(auth.CapRead) {
 		t.Error("an approved account still holds nothing")
 	}
 
@@ -281,7 +281,7 @@ func TestApproveRegistration_IsAuditedWithTheActingAdministrator(t *testing.T) {
 	// Approving twice grants once. The second is refused by the condition in
 	// the WHERE clause rather than by a read before it, so two administrators
 	// racing produce one grant and one refusal.
-	if _, err := s.ApproveRegistration(ctx, "user:owner@example.com", pending.ID); !errors.Is(err, ErrNotPending) {
+	if _, err := s.ApproveRegistration(ctx, "user:owner@example.com", pending.ID, nil); !errors.Is(err, ErrNotPending) {
 		t.Errorf("approving twice = %v; want ErrNotPending", err)
 	}
 	if n := auditCount(t, db, "account.approved"); n != 1 {
@@ -576,7 +576,7 @@ func TestRegister_ThePasswordDoorAlwaysWaits(t *testing.T) {
 	if typed.Status != StatusPending {
 		t.Fatalf("status = %q; an address nobody checked must wait", typed.Status)
 	}
-	p := typed.Principal("ses")
+	p := typed.Principal("ses", typed.Plugins)
 	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove} {
 		if p.Can(c) {
 			t.Errorf("an unchecked address walked in holding %q", c)
@@ -644,7 +644,7 @@ func TestRegister_GrantsNoPluginAccess(t *testing.T) {
 
 	// Active, so it holds its capabilities -- and still reaches no
 	// integration, which is a grant an administrator makes deliberately.
-	p := u.Principal("ses")
+	p := u.Principal("ses", u.Plugins)
 	if !p.Can(auth.CapRead) {
 		t.Error("an approved account holds no capabilities at all")
 	}
@@ -744,7 +744,7 @@ func TestGuardLastAdmin_DoesNotCountAPendingAdministrator(t *testing.T) {
 	if promoted.Status != StatusPending {
 		t.Fatalf("status = %q; promoting must not approve", promoted.Status)
 	}
-	if promoted.Principal("ses").Can(auth.CapAdmin) {
+	if promoted.Principal("ses", promoted.Plugins).Can(auth.CapAdmin) {
 		t.Fatal("a pending account holds admin")
 	}
 
@@ -764,7 +764,7 @@ func TestGuardLastAdmin_DoesNotCountAPendingAdministrator(t *testing.T) {
 
 	// Once the pending administrator is approved it counts, and the owner can
 	// stand down.
-	if _, err := s.ApproveRegistration(ctx, "user:owner@example.com", pending.ID); err != nil {
+	if _, err := s.ApproveRegistration(ctx, "user:owner@example.com", pending.ID, nil); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	if _, err := s.Update(ctx, owner.ID, UpdateRequest{Role: &user}); err != nil {

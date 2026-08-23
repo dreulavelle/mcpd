@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/auth/users"
 )
 
@@ -23,13 +24,19 @@ import (
 // it belongs in an input where its owner can see it and replace it, and
 // nowhere that treats it as text to display.
 type userView struct {
-	ID          string   `json:"id"`
-	Email       string   `json:"email"`
-	Name        string   `json:"name"`
-	DisplayName string   `json:"display_name"`
-	Role        string   `json:"role"`
-	Plugins     []string `json:"plugins"`
-	Disabled    bool     `json:"disabled"`
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
+	// Plugins is the account's own grant, exactly as stored, so an edit form
+	// can round-trip it. Reaches is what the account actually reaches once its
+	// groups are unioned in, and is what a page should render -- the same
+	// distinction DisplayName and Name draw, for the same reason.
+	Plugins  []string       `json:"plugins"`
+	Reaches  []string       `json:"reaches"`
+	Groups   []groupRefView `json:"groups"`
+	Disabled bool           `json:"disabled"`
 	// Status is "active" or "pending", and is a different fact from Disabled.
 	// An administrator switched a disabled account off; a pending one is a
 	// registration nobody has decided about.
@@ -45,14 +52,19 @@ type userView struct {
 	Self bool `json:"self"`
 }
 
-func viewOfUser(u *users.User, self bool) userView {
+func viewOfUser(u *users.User, self bool, reaches []string, memberOf []groupRefView) userView {
+	if memberOf == nil {
+		memberOf = []groupRefView{}
+	}
 	v := userView{
 		ID:          u.ID,
 		Email:       u.Email,
 		Name:        u.Name(),
 		DisplayName: u.DisplayName,
 		Role:        string(u.Role),
-		Plugins:     u.Plugins,
+		Plugins:     nonNil(u.Plugins),
+		Reaches:     nonNil(reaches),
+		Groups:      memberOf,
 		Disabled:    u.Disabled,
 		Status:      statusOf(u),
 		HasPassword: u.HasPassword(),
@@ -63,6 +75,26 @@ func viewOfUser(u *users.User, self bool) userView {
 		v.LastLoginAt = u.LastLoginAt.Format(time.RFC3339)
 	}
 	return v
+}
+
+// viewUser renders an account with what it actually reaches.
+//
+// The groups are read per account rather than in one join with the list. A
+// dashboard page shows tens of accounts against a local SQLite file, and the
+// join that would save the queries would also mean two ways to ask what an
+// account belongs to.
+func (s *Server) viewUser(r *http.Request, u *users.User, self bool) userView {
+	var memberOf []groupRefView
+	if s.opts.Groups != nil {
+		list, err := s.opts.Groups.Of(r.Context(), groups.User(u.ID))
+		if err != nil {
+			s.opts.Log.Error("could not read an account's groups",
+				"account", u.ID, "error", err)
+		} else {
+			memberOf = viewOfGroupRefs(list)
+		}
+	}
+	return viewOfUser(u, self, s.grantsFor(r, u), memberOf)
 }
 
 // currentAccountID returns the signed-in account's identifier.
@@ -95,7 +127,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	self := s.currentAccountID(r)
 	out := make([]userView, len(list))
 	for i, u := range list {
-		out[i] = viewOfUser(u, u.ID == self)
+		out[i] = s.viewUser(r, u, u.ID == self)
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"users": out, "count": len(out)})
 }
@@ -106,6 +138,10 @@ type createUserRequest struct {
 	DisplayName string   `json:"display_name"`
 	Role        string   `json:"role"`
 	Plugins     []string `json:"plugins"`
+	// Groups the account joins as it is created. An empty list is the default
+	// and reaches nothing, which is what an account with no direct grants and
+	// no group has always been.
+	Groups []string `json:"groups"`
 }
 
 func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +159,8 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		DisplayName: req.DisplayName,
 		Role:        auth.Role(req.Role),
 		Plugins:     req.Plugins,
+		Groups:      req.Groups,
+		Actor:       auth.FromContext(r.Context()).ID,
 	})
 	switch {
 	case errors.Is(err, users.ErrDuplicateEmail):
@@ -142,7 +180,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.opts.Log.Info("account created", "email", user.Email,
 		"role", user.Role, "by", auth.FromContext(r.Context()).ID)
-	s.writeJSON(w, r, http.StatusCreated, viewOfUser(user, false))
+	s.writeJSON(w, r, http.StatusCreated, s.viewUser(r, user, false))
 }
 
 type updateUserRequest struct {
@@ -208,7 +246,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.opts.Log.Info("account updated", "email", user.Email,
 		"by", auth.FromContext(r.Context()).ID)
-	s.writeJSON(w, r, http.StatusOK, viewOfUser(user, user.ID == s.currentAccountID(r)))
+	s.writeJSON(w, r, http.StatusOK, s.viewUser(r, user, user.ID == s.currentAccountID(r)))
 }
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -307,5 +345,5 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.opts.Log.Info("account renamed itself", "account", id)
-	s.writeJSON(w, r, http.StatusOK, viewOfUser(user, true))
+	s.writeJSON(w, r, http.StatusOK, s.viewUser(r, user, true))
 }

@@ -162,7 +162,11 @@ export interface User {
   /** Raw, and only for an edit field. See `Session.display_name`. */
   display_name: string;
   role: Role;
+  /** The account's own grant, for an edit field. See `reaches`. */
   plugins: string[];
+  /** What it actually reaches: its own grant plus every group's. */
+  reaches: string[];
+  groups: GroupRef[];
   disabled: boolean;
   /** "pending" is waiting for an administrator; `disabled` is switched off. */
   status: AccountStatus;
@@ -174,12 +178,82 @@ export interface User {
   self: boolean;
 }
 
+/**
+ * A group is a name and a set of systems. Membership is what hands those
+ * systems to an account or a key; nothing else about a group grants anything.
+ */
+export interface Group {
+  id: string;
+  name: string;
+  description: string;
+  /** Empty means the group hands out nothing, which is what a new one does. */
+  plugins: string[];
+  members: number;
+  created_by: string;
+  created_at: string;
+}
+
+/** A group as it appears beside a member, where only the grant matters. */
+export interface GroupRef {
+  id: string;
+  name: string;
+  plugins: string[];
+}
+
+export interface GroupMember {
+  kind: "user" | "key";
+  id: string;
+  /** An address for an account, a name for a key. */
+  label: string;
+  added_by: string;
+  added_at: string;
+}
+
+/** A key is active until it is revoked or its expiry passes. */
+export type KeyStatus = "active" | "expired" | "revoked";
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  role: Role;
+  /** The key's own grant, for an edit field. See `reaches`. */
+  plugins: string[];
+  /** What it actually reaches: its own grant plus its groups'. */
+  reaches: string[];
+  groups: GroupRef[];
+  status: KeyStatus;
+  created_by: string;
+  created_at: string;
+  expires_at?: string;
+  last_used_at?: string;
+  revoked_at?: string;
+  revoked_by?: string;
+}
+
+export interface CreateKey {
+  name: string;
+  role: Role;
+  plugins: string[];
+  groups: string[];
+  /** RFC 3339, or absent for a key that never expires. */
+  expires_at?: string;
+}
+
+export interface UpdateKey {
+  name?: string;
+  role?: Role;
+  plugins?: string[];
+  /** A date to set one, "" to clear it, absent to leave it alone. */
+  expires_at?: string;
+}
+
 export interface CreateUser {
   email: string;
   password: string;
   display_name?: string;
   role: Role;
   plugins: string[];
+  groups?: string[];
 }
 
 export interface UpdateUser {
@@ -762,13 +836,73 @@ export const api = {
   registrations: () =>
     request<{ registrations: PendingRegistration[]; count: number }>("/api/registrations"),
 
-  approveRegistration: (id: string) =>
+  /**
+   * Approving may put the account into groups, which is what keeps it one
+   * decision: without it, whoever approves has to go to another page to say
+   * what the account may reach.
+   */
+  approveRegistration: (id: string, groups: string[] = []) =>
     request<User>(`/api/registrations/${encodeURIComponent(id)}/approve`,
-      { method: "POST" }),
+      { method: "POST", body: JSON.stringify({ groups }) }),
 
   rejectRegistration: (id: string) =>
     request<void>(`/api/registrations/${encodeURIComponent(id)}/reject`,
       { method: "POST" }),
+
+  groups: () => request<{ groups: Group[]; count: number }>("/api/groups"),
+
+  group: (id: string) =>
+    request<{ group: Group; members: GroupMember[] }>(
+      `/api/groups/${encodeURIComponent(id)}`),
+
+  createGroup: (body: { name: string; description?: string; plugins?: string[] }) =>
+    request<Group>("/api/groups", { method: "POST", body: JSON.stringify(body) }),
+
+  updateGroup: (
+    id: string,
+    body: { name?: string; description?: string; plugins?: string[] },
+  ) =>
+    request<Group>(`/api/groups/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  deleteGroup: (id: string) =>
+    request<void>(`/api/groups/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  addGroupMember: (id: string, kind: "user" | "key", memberId: string) =>
+    request<void>(`/api/groups/${encodeURIComponent(id)}/members`, {
+      method: "POST",
+      body: JSON.stringify({ kind, id: memberId }),
+    }),
+
+  removeGroupMember: (id: string, kind: "user" | "key", memberId: string) =>
+    request<void>(
+      `/api/groups/${encodeURIComponent(id)}/members/${kind}/${encodeURIComponent(memberId)}`,
+      { method: "DELETE" }),
+
+  keys: () => request<{ keys: ApiKey[]; count: number }>("/api/keys"),
+
+  /**
+   * Creates a key. The `secret` in the reply is the only time it exists — it is
+   * stored as a digest and no endpoint reads it back, so a caller that drops it
+   * cannot get it again.
+   */
+  createKey: (body: CreateKey) =>
+    request<{ key: ApiKey; secret: string }>("/api/keys", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateKey: (id: string, body: UpdateKey) =>
+    request<ApiKey>(`/api/keys/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  /** Revokes rather than deletes, so the trail can still name what acted. */
+  revokeKey: (id: string) =>
+    request<ApiKey>(`/api/keys/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
 
   users: () => request<{ users: User[]; count: number }>("/api/users"),
 

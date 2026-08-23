@@ -195,6 +195,14 @@ func (c *Config) Validate() error {
 
 var pluginNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 
+// reservedTokenIDPrefix is what a key created in the dashboard begins with.
+//
+// Spelled out here rather than imported from internal/auth/apikeys: config
+// validation runs before anything is built and has no business depending on a
+// store. The two are held together by a test that compares them, which is the
+// only kind of duplication worth having.
+const reservedTokenIDPrefix = "key_"
+
 // errRelaxedDurability is surfaced as a warning rather than a hard failure.
 var errRelaxedDurability = errors.New(
 	"config: storage.relaxed_durability is set; approvals may be lost on power failure")
@@ -215,6 +223,20 @@ func (c *Config) validateTokens() []error {
 			errs = append(errs, fmt.Errorf("config: duplicate token id %q", t.ID))
 		}
 		seenID[t.ID] = true
+
+		// A key issued from the dashboard carries a generated id beginning
+		// "key_", and both kinds of credential land in the same TokenID field
+		// and the same audit column. Refusing the prefix here is what makes a
+		// collision impossible rather than unlikely: identifiers are generated
+		// on one side, so the only way the two namespaces could meet is an
+		// operator choosing one, and that is refused where they can read the
+		// reason. An entry naming a credential therefore names exactly one.
+		if strings.HasPrefix(t.ID, reservedTokenIDPrefix) {
+			errs = append(errs, fmt.Errorf(
+				"config: %s.id %q begins with %q, which is reserved for keys "+
+					"created in the dashboard; pick another id",
+				where, t.ID, reservedTokenIDPrefix))
+		}
 
 		if strings.TrimSpace(t.SecretRef) == "" {
 			errs = append(errs, fmt.Errorf("config: %s.secret_ref is required; "+

@@ -88,11 +88,11 @@ func TestName_FallsBackToTheAddress(t *testing.T) {
 	if got := u.Name(); got != "Alice" {
 		t.Errorf("Name() = %q, want the display name", got)
 	}
-	if got := u.Principal("ses_1").DisplayName; got != "Alice" {
+	if got := u.Principal("ses_1", u.Plugins).DisplayName; got != "Alice" {
 		t.Errorf("principal DisplayName = %q", got)
 	}
 	// And the identity is never the name.
-	if got := u.Principal("ses_1").ID; got != "user:alice@example.com" {
+	if got := u.Principal("ses_1", u.Plugins).ID; got != "user:alice@example.com" {
 		t.Errorf("principal ID = %q, want it built from the address", got)
 	}
 }
@@ -290,7 +290,7 @@ func TestName_FallsBackForALegacyValueTheRulesRefuse(t *testing.T) {
 				t.Errorf("Name() = %q, want %q", got, want)
 			}
 			// The principal a page and a log line read is built from Name().
-			if got := u.Principal("ses_1").DisplayName; got != want {
+			if got := u.Principal("ses_1", u.Plugins).DisplayName; got != want {
 				t.Errorf("principal DisplayName = %q, want %q", got, want)
 			}
 			// The stored value is left alone, so its owner can see what is

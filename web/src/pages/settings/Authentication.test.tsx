@@ -13,6 +13,8 @@ function pendingUser(overrides: Partial<PendingRegistration> = {}): PendingRegis
     display_name: "",
     role: "user",
     plugins: ["*"],
+    reaches: ["*"],
+    groups: [],
     disabled: false,
     status: "pending",
     has_password: false,
@@ -31,6 +33,7 @@ function stub({ waiting = [] as PendingRegistration[], base = "https://mcpd.exam
   vi.spyOn(api, "registrations").mockResolvedValue({
     registrations: waiting, count: waiting.length,
   });
+  vi.spyOn(api, "groups").mockResolvedValue({ groups: [], count: 0 });
   vi.spyOn(api, "redirectURIs").mockResolvedValue({
     base,
     redirect_uris: base
@@ -112,6 +115,8 @@ describe("the authentication page", () => {
     await screen.findByText("Waiting for you");
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
 
-    await waitFor(() => expect(approve).toHaveBeenCalledWith("usr_9"));
+    // No group chosen means no group assigned, which is what an empty list
+    // says. Approving still grants nothing beyond the account itself.
+    await waitFor(() => expect(approve).toHaveBeenCalledWith("usr_9", []));
   });
 });

@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import {
-  api, ApiError, type PendingRegistration, type ProviderName,
+  api, ApiError, type Group, type PendingRegistration, type ProviderName,
 } from "@/lib/api";
 import { useLoader, usePoll } from "@/lib/hooks";
 import { Loading, Notice, Out, PageHeader } from "@/components/chrome";
@@ -9,6 +9,7 @@ import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -135,6 +136,7 @@ function RedirectURIs() {
  */
 function PendingQueue() {
   const [waiting, setWaiting] = useState<PendingRegistration[] | null>(null);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [error, setError] = useState("");
   const notify = useNotify();
 
@@ -142,6 +144,9 @@ function PendingQueue() {
     api.registrations()
       .then((r) => { setWaiting(r.registrations ?? []); setError(""); })
       .catch(() => setError("Couldn't load who is waiting."));
+    // Offered beside Approve so that saying yes and saying what they may reach
+    // are one action rather than two pages.
+    api.groups().then((r) => setGroups(r.groups ?? [])).catch(() => undefined);
   }, []);
   usePoll(load, 30_000);
 
@@ -163,12 +168,16 @@ function PendingQueue() {
                 <TableHead>Email</TableHead>
                 <TableHead>Signs in with</TableHead>
                 <TableHead>Asked</TableHead>
+                <TableHead>Put them in</TableHead>
                 <TableHead className="w-px" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {waiting.map((u) => (
-                <PendingRow key={u.id} user={u} onChanged={load} notify={notify} />
+                <PendingRow
+                  key={u.id} user={u} groups={groups}
+                  onChanged={load} notify={notify}
+                />
               ))}
             </TableBody>
           </Table>
@@ -178,13 +187,15 @@ function PendingQueue() {
   );
 }
 
-function PendingRow({ user, onChanged, notify }: {
+function PendingRow({ user, groups, onChanged, notify }: {
   user: PendingRegistration;
+  groups: Group[];
   onChanged: () => void;
   notify: Notify;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [group, setGroup] = useState("");
 
   const run = async (what: string, fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -220,11 +231,31 @@ function PendingRow({ user, onChanged, notify }: {
       <TableCell className="whitespace-nowrap text-muted-foreground">
         {new Date(user.created_at).toLocaleString()}
       </TableCell>
+      {/* An approved account with no grants sees an empty console, which used
+          to make this two decisions wearing the appearance of one. A group
+          chosen here is assigned in the same write as the approval. */}
+      <TableCell>
+        {groups.length === 0 ? (
+          <span className="text-xs text-muted-foreground">No groups yet</span>
+        ) : (
+          <div className="w-44">
+            <NativeSelect
+              aria-label={`Group for ${user.email}`} value={group}
+              disabled={busy} onChange={(e) => setGroup(e.target.value)}
+            >
+              <option value="">Nothing</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </NativeSelect>
+          </div>
+        )}
+      </TableCell>
       <TableCell className="whitespace-nowrap">
         <Button
           size="sm" disabled={busy}
           onClick={() => run(`Approved ${user.email}.`,
-            () => api.approveRegistration(user.id))}
+            () => api.approveRegistration(user.id, group ? [group] : []))}
         >
           Approve
         </Button>

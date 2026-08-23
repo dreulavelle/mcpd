@@ -13,6 +13,8 @@ function userView(overrides: Partial<User> = {}): User {
     display_name: "Alice A.",
     role: "user",
     plugins: ["*"],
+    reaches: ["*"],
+    groups: [],
     disabled: false,
     status: "active",
     has_password: true,
