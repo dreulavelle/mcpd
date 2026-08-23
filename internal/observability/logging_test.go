@@ -5,7 +5,9 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // How much mcpd says and in what shape are settings, and settings are in a
@@ -110,4 +112,60 @@ func TestSwitchableLogger_IsSafeUnderConcurrentUse(t *testing.T) {
 func TestLogControl_NilIsSafe(t *testing.T) {
 	var ctl *LogControl
 	ctl.Set(slog.LevelDebug, "text")
+}
+
+// overlapWriter records whether two goroutines were ever inside Write at the
+// same time. The sleep widens the window so an overlap that exists is seen,
+// rather than left to the race detector's sampling -- which missed this bug
+// on a fast machine and only caught it on a loaded CI runner.
+type overlapWriter struct {
+	inside  atomic.Int32
+	overlap atomic.Bool
+}
+
+func (w *overlapWriter) Write(p []byte) (int, error) {
+	if w.inside.Add(1) > 1 {
+		w.overlap.Store(true)
+	}
+	time.Sleep(20 * time.Microsecond)
+	w.inside.Add(-1)
+	return len(p), nil
+}
+
+// Both handlers write to one destination, and slog gives each handler a mutex
+// of its own -- so before the shared writer existed, a format change let a
+// record still being written as JSON and one starting as text reach the
+// destination at once. Whether that shows up as a torn line depends on the
+// writer, which is exactly why it must not be left to the writer.
+func TestSwitchableLogger_WritesDoNotOverlapAcrossAFormatChange(t *testing.T) {
+	w := &overlapWriter{}
+	log, ctl := NewSwitchableLogger(w, slog.LevelInfo, "json")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				log.Info("working", "n", j)
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < 100; j++ {
+			if j%2 == 0 {
+				ctl.Set(slog.LevelInfo, "text")
+			} else {
+				ctl.Set(slog.LevelInfo, "json")
+			}
+			time.Sleep(10 * time.Microsecond)
+		}
+	}()
+	wg.Wait()
+
+	if w.overlap.Load() {
+		t.Error("two handlers wrote to the destination at the same time")
+	}
 }
