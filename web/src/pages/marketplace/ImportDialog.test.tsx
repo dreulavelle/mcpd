@@ -138,3 +138,99 @@ describe("a name already in use", () => {
     await waitFor(() => expect(screen.getByLabelText("Name")).toHaveFocus());
   });
 });
+
+/**
+ * Where the detail went.
+ *
+ * Version, transport, endpoint, credential, catalogue and date used to be on
+ * every card in the listing. They are here instead: one person, one server,
+ * having decided to look. The credential line is the one they act on --
+ * needing an API key is better learned before pressing Add than after.
+ *
+ * None of it is imported. What is imported is the text in the box, by the same
+ * call a pasted document makes.
+ */
+describe("the detail behind a catalogued entry", () => {
+  const ENTRY = {
+    name: "com.example/weather",
+    suggested_name: "weather",
+    title: "Weather",
+    description: "Forecasts and observations.",
+    version: "1.0.0",
+    transport: "streamable-http",
+    url: "https://weather.example/mcp",
+    updated_at: "2026-08-01T10:00:00Z",
+    addable: true,
+    auth: "api_key",
+    source: "registry.modelcontextprotocol.io",
+  };
+
+  it("shows what the card no longer does", async () => {
+    renderWith(
+      <ImportDialog
+        open onOpenChange={() => {}} onImported={() => {}}
+        seedName="weather" seedDocument={DOCUMENT} seedEntry={ENTRY}
+      />,
+    );
+
+    expect(screen.getByText("1.0.0")).toBeInTheDocument();
+    expect(screen.getByText("streamable-http")).toBeInTheDocument();
+    expect(screen.getByText("https://weather.example/mcp")).toBeInTheDocument();
+    expect(screen.getByText("registry.modelcontextprotocol.io")).toBeInTheDocument();
+    // The one an operator has to do something about.
+    expect(screen.getByText("Needs an API key")).toBeInTheDocument();
+  });
+
+  it("says plainly when nothing has to be found first", async () => {
+    renderWith(
+      <ImportDialog
+        open onOpenChange={() => {}} onImported={() => {}}
+        seedName="weather" seedDocument={DOCUMENT}
+        seedEntry={{ ...ENTRY, auth: "none" }}
+      />,
+    );
+
+    expect(screen.getByText("No credential")).toBeInTheDocument();
+  });
+
+  /**
+   * Smithery versions a deployment rather than a release and Docker versions
+   * an image, so both leave the version blank. A dash there would read as a
+   * value somebody chose.
+   */
+  it("leaves out what the catalogue did not fill in", async () => {
+    renderWith(
+      <ImportDialog
+        open onOpenChange={() => {}} onImported={() => {}}
+        seedName="weather" seedDocument={DOCUMENT}
+        seedEntry={{ ...ENTRY, version: "", auth: "" }}
+      />,
+    );
+
+    expect(screen.queryByText("Version")).not.toBeInTheDocument();
+    expect(screen.queryByText("Credential")).not.toBeInTheDocument();
+    expect(screen.getByText("Transport")).toBeInTheDocument();
+  });
+
+  it("shows none of it for a pasted document, which has no catalogue entry", async () => {
+    renderWith(<ImportDialog open onOpenChange={() => {}} onImported={() => {}} />);
+
+    expect(screen.queryByText("Transport")).not.toBeInTheDocument();
+    expect(screen.queryByText("Catalogue")).not.toBeInTheDocument();
+  });
+
+  it("imports the document rather than anything shown beside it", async () => {
+    const importServer = vi.spyOn(api, "importMCPServer")
+      .mockResolvedValue({ status: "imported" });
+    renderWith(
+      <ImportDialog
+        open onOpenChange={() => {}} onImported={() => {}}
+        seedName="weather" seedDocument={DOCUMENT} seedEntry={ENTRY}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() =>
+      expect(importServer).toHaveBeenCalledWith("weather", DOCUMENT));
+  });
+});

@@ -610,6 +610,16 @@ export interface CatalogEntry {
    * `?include_unaddable=1` still asks for them.
    */
   reason?: string;
+  /**
+   * Whether importing will ask for a credential: "none" or "api_key". Empty
+   * where the entry cannot be imported at all and there is nothing to say.
+   *
+   * Worked out by this host from the document rather than taken from what a
+   * catalogue claims, so it means the same thing on every row -- and it means
+   * the thing an operator needs before clicking Add, which is whether they
+   * have to go and find a key first.
+   */
+  auth?: string;
   /** Which catalogue this entry came from, set on every entry. */
   source: string;
 }
