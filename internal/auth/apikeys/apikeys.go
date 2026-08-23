@@ -208,7 +208,7 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*K
 		}
 		joined := []string{}
 		for _, groupID := range req.Groups {
-			if _, err := groups.AddMemberTx(tx, actor, groupID,
+			if err := groups.AddMemberAudited(tx, actor, groupID,
 				groups.Key(id), stamp); err != nil {
 				return err
 			}
@@ -332,10 +332,11 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 	stamp := now.UnixMilli()
 	err = s.db.WriteTx(ctx, stamp, func(tx *sqlite.UnitOfWork) error {
 		var wasName, wasRole, wasPlugins string
-		var revoked sql.NullInt64
+		var wasExpiry, revoked sql.NullInt64
 		if err := tx.QueryRow(
-			`SELECT name, role, plugins_json, revoked_at FROM api_keys WHERE id = ?`, id).
-			Scan(&wasName, &wasRole, &wasPlugins, &revoked); err != nil {
+			`SELECT name, role, plugins_json, expires_at, revoked_at
+			   FROM api_keys WHERE id = ?`, id).
+			Scan(&wasName, &wasRole, &wasPlugins, &wasExpiry, &revoked); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -384,6 +385,12 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			sets = append(sets, "expires_at = ?")
 			args = append(args, ms)
 			detail["expires_at"] = expiryDetail(*req.ExpiresAt)
+			// The rule this feature holds every privilege change to: an entry
+			// with only the new value leaves "what did this widen"
+			// unanswerable. Extending a key from next month to next year is a
+			// grant of a year's more reach, and the trail has to say how much
+			// was added rather than only when it now ends.
+			detail["expires_at_before"] = expiryDetail(optionalTime(wasExpiry))
 		}
 		if len(detail) == 0 {
 			return nil

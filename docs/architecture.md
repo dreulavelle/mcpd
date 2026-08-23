@@ -562,6 +562,17 @@ refusal was right while a direct grant was the only kind — an account with non
 could never reach anything — and is wrong now that a group is how an account
 usually gets its reach.
 
+**The account that claims the instance is the exception, and it is not one.**
+`CreateFirst` still grants the wildcard. That looks like a breach of the rule
+and is not: the claimant is this host's administrator, with nobody above them
+to grant anything, and an administrator can grant themselves any plugin in two
+clicks. The wildcard therefore changes no security property — it only spares
+the very first person a console that shows them nothing until they have
+granted themselves access to see it. Default none is a rule about principals
+somebody else decides for: a new group, an account an administrator creates, a
+key, a self-registration. The claiming account is not one of those, and this
+paragraph exists so the point is not re-argued.
+
 **Deleting a group narrows, and strands nobody.** Its memberships go with it,
 every member keeps its own grant and every other group it is in, and nothing
 gains anything. It is allowed while members remain rather than refused, because
@@ -655,14 +666,32 @@ not in the settings history.
 | `group.member_added` | the group's name | id, member kind and id |
 | `group.member_removed` | the group's name | id, member kind and id |
 | `apikey.created` | the key's id | name, role, grant, groups, expiry |
-| `apikey.rescoped` | the key's id | each field, **and what it was** |
+| `apikey.rescoped` | the key's id | each field, **and what it was** — name, role, grant and expiry alike |
 | `apikey.revoked` | the key's id | name |
 
 Two rules run through the table. A privilege change records what it changed
 *from* as well as to, because an entry carrying only the new value leaves "what
-did this widen" unanswerable. And an act that changes nothing writes nothing:
-adding somebody who is already a member is not an error and is not an entry,
-because a trail that records non-events is one nobody reads carefully.
+did this widen" unanswerable — which is why a re-scope carries the previous
+name, role, grant *and* expiry, an extension from next month to next year
+being a grant of a year's more reach. And an act that changes nothing writes
+nothing: adding somebody who is already a member is not an error and is not an
+entry, because a trail that records non-events is one nobody reads carefully.
+
+**Every membership is one entry, whichever act produced it.** An administrator
+adding somebody on the Groups page, an account created straight into a group, a
+key issued into one, an approval assigning one, and a registration joining the
+default all go through `groups.AddMemberAudited` and all write
+`group.member_added`. The alternative — letting each act describe its own
+memberships and nothing else — makes "how did this person come to reach that
+plugin" answerable only by knowing in advance which act to look for, and leaves
+a hole wherever a path forgot. The act that caused it still names its groups in
+its own entry; that is context, not a second answer.
+
+A default-group membership is recorded against `system:registration` rather
+than against the registrant or an administrator. Neither of them decided it — a
+setting did — and attributing it to a person would put a decision in the trail
+they did not make, which is the same reason an auto-approved operation is
+attributed to `system:policy`.
 
 ## Telling what it is doing
 

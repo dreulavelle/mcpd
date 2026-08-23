@@ -310,3 +310,148 @@ func claimInstance(t *testing.T, s *Store) {
 		t.Fatalf("claim the instance: %v", err)
 	}
 }
+
+// countAudit reports how many entries of a kind the trail holds, and fails the
+// test if the chain no longer verifies -- an assertion about what is recorded
+// is worth nothing if the record can no longer be trusted.
+func countAudit(t *testing.T, db *sqlite.DB, kind string) int {
+	t.Helper()
+	ctx := context.Background()
+	store := sqlite.NewAuditStore(db)
+	records, err := store.Recent(ctx, 100)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	n := 0
+	for _, r := range records {
+		if r.Entry.Kind == kind {
+			n++
+		}
+	}
+	if _, err := store.VerifyChain(ctx); err != nil {
+		t.Fatalf("the audit chain no longer verifies: %v", err)
+	}
+	return n
+}
+
+// An account created straight into groups reaches what they reach the moment
+// the write commits, so the memberships have to be in the trail. Without them
+// an operator reading the record sees an account appear and has to infer the
+// grant, which is the exact question auditing membership exists to answer.
+func TestCreate_AuditsTheGroupsAnAccountIsCreatedInto(t *testing.T) {
+	s, gs, db := newStoreWithGroups(t)
+	ctx := context.Background()
+
+	var ids []string
+	for _, name := range []string{"Field", "NOC"} {
+		g, err := gs.Create(ctx, adminActor, groups.CreateRequest{
+			Name: name, Plugins: []string{"echo"},
+		})
+		if err != nil {
+			t.Fatalf("create group: %v", err)
+		}
+		ids = append(ids, g.ID)
+	}
+
+	u, err := s.Create(ctx, CreateRequest{
+		Email: "alice@example.com", Password: "a-sufficiently-long-passphrase",
+		Role: auth.RoleUser, Groups: ids, Actor: adminActor,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if got := countAudit(t, db, "group.member_added"); got != 2 {
+		t.Fatalf("group.member_added appears %d times, want 2", got)
+	}
+
+	// The entries name the administrator who did it and the account it was
+	// done to, which is what makes them an answer rather than a note.
+	records, err := sqlite.NewAuditStore(db).Recent(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range records {
+		if r.Entry.Kind != "group.member_added" {
+			continue
+		}
+		if r.Entry.Actor != adminActor {
+			t.Errorf("recorded against %q, want %q", r.Entry.Actor, adminActor)
+		}
+		if !strings.Contains(string(r.Entry.Detail), u.ID) {
+			t.Errorf("detail = %s; it must name the account (%s)", r.Entry.Detail, u.ID)
+		}
+	}
+}
+
+// The default group is nobody's decision at the moment it happens: the
+// registrant did not choose it and no administrator was asked. Attributing it
+// to either would put a decision in the trail that person did not make.
+func TestRegister_RecordsTheDefaultGroupAgainstTheSetting(t *testing.T) {
+	s, gs, db := newStoreWithGroups(t)
+	ctx := context.Background()
+	claimInstance(t, s)
+	if _, err := gs.Create(ctx, adminActor, groups.CreateRequest{
+		Name: "Read only", Plugins: []string{"echo"},
+	}); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	if _, err := s.Register(ctx, RegisterRequest{
+		Email: "stranger@example.com", Password: "a-sufficiently-long-passphrase",
+		Policy: RegistrationPolicy{Enabled: true, DefaultGroup: "Read only"},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if got := countAudit(t, db, "group.member_added"); got != 1 {
+		t.Fatalf("group.member_added appears %d times, want 1", got)
+	}
+	records, err := sqlite.NewAuditStore(db).Recent(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range records {
+		if r.Entry.Kind != "group.member_added" {
+			continue
+		}
+		if r.Entry.Actor != DefaultGroupActor {
+			t.Errorf("recorded against %q, want %q -- a setting did this, not a person",
+				r.Entry.Actor, DefaultGroupActor)
+		}
+		return
+	}
+	t.Fatal("group.member_added is not in the trail")
+}
+
+// Approving with a group is one membership and one entry, beside the approval
+// itself.
+func TestApproveRegistration_AuditsTheMembershipItCreates(t *testing.T) {
+	s, gs, db := newStoreWithGroups(t)
+	ctx := context.Background()
+	claimInstance(t, s)
+
+	g, err := gs.Create(ctx, adminActor, groups.CreateRequest{
+		Name: "Field", Plugins: []string{"cnmaestro"},
+	})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	u, err := s.Register(ctx, RegisterRequest{
+		Email: "stranger@example.com", Password: "a-sufficiently-long-passphrase",
+		Policy: RegistrationPolicy{Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if got := countAudit(t, db, "group.member_added"); got != 0 {
+		t.Fatalf("group.member_added appears %d times before approval, want 0", got)
+	}
+
+	if _, err := s.ApproveRegistration(ctx, adminActor, u.ID, []string{g.ID}); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if got := countAudit(t, db, "group.member_added"); got != 1 {
+		t.Errorf("group.member_added appears %d times after approval, want 1", got)
+	}
+}

@@ -14,6 +14,15 @@ import (
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
 
+// DefaultGroupActor is what a default-group membership is recorded against.
+//
+// A registration joining the configured group is nobody's decision at the
+// moment it happens: the registrant did not choose it and no administrator was
+// asked. Attributing it to either would put a decision in the trail that
+// person did not make, which is the same reason an auto-approved operation is
+// attributed to system:policy rather than to whoever proposed it.
+const DefaultGroupActor = "system:registration"
+
 // ErrLastCredential reports unlinking the only thing an account can sign in
 // with. An account nobody can sign in to is not a locked account, it is a
 // deleted one that still appears in the list.
@@ -330,7 +339,7 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 		// it reaches nothing. A pending account holds no capability whatever
 		// its membership says, so joining now costs nothing and means approval
 		// is one decision rather than two.
-		joined, err := joinDefaultGroup(tx, actor, u.ID, req.Policy.DefaultGroup, now)
+		joined, err := joinDefaultGroup(tx, u.ID, req.Policy.DefaultGroup, now)
 		if err != nil {
 			return err
 		}
@@ -372,7 +381,7 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 // refusing registrations -- it must stop granting, which is what happens when
 // no row matches. What it does do is say so in the audit entry, by listing no
 // groups where the operator expected one.
-func joinDefaultGroup(tx *sqlite.UnitOfWork, actor, userID, name string, now int64) ([]string, error) {
+func joinDefaultGroup(tx *sqlite.UnitOfWork, userID, name string, now int64) ([]string, error) {
 	if strings.TrimSpace(name) == "" {
 		return []string{}, nil
 	}
@@ -385,7 +394,13 @@ func joinDefaultGroup(tx *sqlite.UnitOfWork, actor, userID, name string, now int
 	if err != nil {
 		return nil, err
 	}
-	if _, err := groups.AddMemberTx(tx, actor, groupID, groups.User(userID), now); err != nil {
+	// Not the registrant, and not the administrator either -- neither of them
+	// decided this. A setting did, and the actor says so, the way an
+	// auto-approved operation is attributed to system:policy rather than to
+	// whoever proposed it. Recording it as `self:<address>` would read as
+	// somebody putting themselves into a group.
+	if err := groups.AddMemberAudited(tx, DefaultGroupActor, groupID,
+		groups.User(userID), now); err != nil {
 		return nil, err
 	}
 	return []string{groupID}, nil
@@ -632,7 +647,7 @@ func (s *Store) ApproveRegistration(ctx context.Context, actor, id string, group
 		}
 		joined := []string{}
 		for _, groupID := range groupIDs {
-			if _, err := groups.AddMemberTx(tx, actor, groupID,
+			if err := groups.AddMemberAudited(tx, actor, groupID,
 				groups.User(id), now); err != nil {
 				return err
 			}

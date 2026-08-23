@@ -537,3 +537,117 @@ func TestGenerateSecret(t *testing.T) {
 		t.Errorf("secret body is %d characters, want 43", got)
 	}
 }
+
+// detailOf returns the detail of the most recent entry of a kind, and fails
+// if the chain no longer verifies. Recent is newest first, which is what lets
+// a test make two changes and assert on the second.
+func detailOf(t *testing.T, db *sqlite.DB, kind string) string {
+	t.Helper()
+	ctx := context.Background()
+	store := sqlite.NewAuditStore(db)
+	records, err := store.Recent(ctx, 100)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	if _, err := store.VerifyChain(ctx); err != nil {
+		t.Fatalf("the audit chain no longer verifies: %v", err)
+	}
+	for _, r := range records {
+		if r.Entry.Kind == kind {
+			return string(r.Entry.Detail)
+		}
+	}
+	t.Fatalf("%s is not in the trail", kind)
+	return ""
+}
+
+// Extending a key from next month to next year is a grant of a year's more
+// reach. An entry naming only the new date says when it ends and not how much
+// was added, which is the same failure an entry naming only a new plugin list
+// would be.
+func TestUpdate_RecordsThePriorExpiry(t *testing.T) {
+	s, _, db, _ := newStore(t)
+	ctx := context.Background()
+
+	first := testClock.Add(24 * time.Hour)
+	key, _ := mustCreate(t, s, CreateRequest{
+		Name: "agent", Role: auth.RoleUser, ExpiresAt: &first,
+	})
+
+	extended := testClock.Add(365 * 24 * time.Hour)
+	if _, err := s.Update(ctx, admin, key.ID, UpdateRequest{
+		ExpiresAt: ptr(&extended),
+	}); err != nil {
+		t.Fatalf("rescope: %v", err)
+	}
+
+	detail := detailOf(t, db, "apikey.rescoped")
+	if !strings.Contains(detail, "expires_at_before") {
+		t.Fatalf("detail = %s; it must carry the expiry it replaced", detail)
+	}
+	if !strings.Contains(detail, first.UTC().Format(time.RFC3339)) {
+		t.Errorf("detail = %s; it must name the previous date %s",
+			detail, first.UTC().Format(time.RFC3339))
+	}
+	if !strings.Contains(detail, extended.UTC().Format(time.RFC3339)) {
+		t.Errorf("detail = %s; it must name the new date", detail)
+	}
+}
+
+// Setting an expiry on a key that had none, and clearing one, are both changes
+// to how long a credential lives. Both have to say what they changed from --
+// "no expiry" included, which reads as null rather than as an absent field.
+func TestUpdate_RecordsAnExpiryArrivingAndLeaving(t *testing.T) {
+	s, _, db, _ := newStore(t)
+	ctx := context.Background()
+	key, _ := mustCreate(t, s, CreateRequest{Name: "agent", Role: auth.RoleUser})
+
+	at := testClock.Add(24 * time.Hour)
+	if _, err := s.Update(ctx, admin, key.ID, UpdateRequest{ExpiresAt: ptr(&at)}); err != nil {
+		t.Fatalf("set an expiry: %v", err)
+	}
+	detail := detailOf(t, db, "apikey.rescoped")
+	if !strings.Contains(detail, `"expires_at_before":null`) {
+		t.Errorf("detail = %s; a key that never expired must record that", detail)
+	}
+
+	var none *time.Time
+	if _, err := s.Update(ctx, admin, key.ID, UpdateRequest{ExpiresAt: ptr(none)}); err != nil {
+		t.Fatalf("clear the expiry: %v", err)
+	}
+	// The most recent entry now, which is the clearing one.
+	detail = detailOf(t, db, "apikey.rescoped")
+	if !strings.Contains(detail, at.UTC().Format(time.RFC3339)) {
+		t.Errorf("detail = %s; clearing an expiry must name the one it removed", detail)
+	}
+	if !strings.Contains(detail, `"expires_at":null`) {
+		t.Errorf("detail = %s; the key now never expires and the entry must say so", detail)
+	}
+}
+
+// A key issued into a group is a membership like any other, and reads the same
+// in the trail as one an administrator added on the Groups page.
+func TestCreate_AuditsTheGroupsAKeyIsIssuedInto(t *testing.T) {
+	s, gs, db, _ := newStore(t)
+	ctx := context.Background()
+
+	g, err := gs.Create(ctx, admin, groups.CreateRequest{
+		Name: "Field", Plugins: []string{"cnmaestro"},
+	})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	key, _ := mustCreate(t, s, CreateRequest{
+		Name: "agent", Role: auth.RoleUser, Groups: []string{g.ID},
+	})
+
+	detail := detailOf(t, db, "group.member_added")
+	if !strings.Contains(detail, key.ID) {
+		t.Errorf("detail = %s; it must name the key (%s)", detail, key.ID)
+	}
+	if !strings.Contains(detail, `"kind":"key"`) {
+		t.Errorf("detail = %s; it must say the member is a key", detail)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

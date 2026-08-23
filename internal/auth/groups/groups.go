@@ -568,28 +568,49 @@ func (s *Store) AddMember(ctx context.Context, actor, groupID string, subject Su
 	}
 	now := s.now().UnixMilli()
 	return s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		name, err := groupName(tx, groupID)
-		if err != nil {
-			return err
-		}
-		added, err := AddMemberTx(tx, actor, groupID, subject, now)
-		if err != nil {
-			return err
-		}
-		if !added {
-			return nil
-		}
-		return tx.AppendAudit(sqlite.AdminAct{
-			Kind:    "group.member_added",
-			Actor:   actor,
-			Subject: name,
-			Action:  "add_member",
-			Detail: map[string]any{
-				"group": groupID,
-				"kind":  string(subject.Kind),
-				"id":    subject.ID,
-			},
-		})
+		return AddMemberAudited(tx, actor, groupID, subject, now)
+	})
+}
+
+// AddMemberAudited inserts a membership and records it, inside a transaction
+// somebody else owns.
+//
+// Every membership goes through here, whichever act produced it: an
+// administrator adding somebody to a group, an account created straight into
+// one, a key issued into one, an approval assigning one, or a registration
+// joining the default. That is the point of the function existing. A trail is
+// only useful for "how did this person come to reach that plugin" if it holds
+// every membership, and a second path that inserted one without recording it
+// would leave exactly the gap the record exists to close -- reach changed, and
+// nothing says how.
+//
+// One entry kind for one fact, so a membership reads the same however it
+// arose. The act that caused it names its groups in its own entry too, which
+// is context rather than a second answer.
+func AddMemberAudited(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject, now int64) error {
+	name, err := groupName(tx, groupID)
+	if err != nil {
+		return err
+	}
+	added, err := AddMemberTx(tx, actor, groupID, subject, now)
+	if err != nil {
+		return err
+	}
+	// Already a member: nothing changed, so nothing is recorded. A trail that
+	// carries non-events is one nobody reads carefully.
+	if !added {
+		return nil
+	}
+	return tx.AppendAudit(sqlite.AdminAct{
+		Kind:    "group.member_added",
+		Actor:   actor,
+		Subject: name,
+		Action:  "add_member",
+		Detail: map[string]any{
+			"group": groupID,
+			"kind":  string(subject.Kind),
+			"id":    subject.ID,
+		},
 	})
 }
 

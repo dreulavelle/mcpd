@@ -142,8 +142,14 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 		if actor == "" {
 			actor = "system"
 		}
+		// Recorded, not merely inserted. An account created into a group
+		// reaches whatever that group reaches from the moment this commits,
+		// and a membership written without an entry would leave "how did this
+		// person come to reach that plugin" answerable only by inference. It
+		// is the same entry the Groups page produces, because one membership
+		// fact should read the same however it arose.
 		for _, groupID := range req.Groups {
-			if _, err := groups.AddMemberTx(tx, actor, groupID,
+			if err := groups.AddMemberAudited(tx, actor, groupID,
 				groups.User(u.ID), now); err != nil {
 				return err
 			}
@@ -172,6 +178,15 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 // The first account is always an administrator. There is nobody to grant it
 // the role afterwards, and an instance whose first account cannot manage
 // accounts is one nobody can finish setting up.
+//
+// It is also granted the wildcard, and that is not the breach of default-none
+// it resembles. The claimant is this host's administrator with nobody above
+// them, and an administrator can grant themselves any plugin whenever they
+// like -- so the wildcard changes no security property, and withholding it
+// would only mean the first person to arrive sees an empty console until they
+// have granted themselves access to look at it. Default none is a rule about
+// principals somebody else decides for: a new group, an account an
+// administrator creates, a key, a self-registration. This is none of those.
 func (s *Store) CreateFirst(ctx context.Context, email, password, displayName string) (*User, error) {
 	normalized, err := NormalizeEmail(email)
 	if err != nil {
