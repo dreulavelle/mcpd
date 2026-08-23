@@ -46,3 +46,20 @@ export function useSession(): Session | null {
 export function useCan(capability: Capability): boolean {
   return useContext(SessionContext).can(capability);
 }
+
+/**
+ * What to call the signed-in person, wherever the console names them.
+ *
+ * One function rather than `display_name || email` at each call site, because
+ * the answer is about to change: a display name people can set themselves is
+ * on its way, and when it arrives every place that names an account has to
+ * start preferring it on the same day. This is that place. The preference is
+ * already expressed, so the endpoint landing changes nothing here -- what it
+ * changes is how often the first branch is the one taken.
+ *
+ * Trimmed, because a name of spaces is not a name and would render as a blank
+ * where an email belongs.
+ */
+export function signedInAs(session: Session | null): string {
+  return session?.display_name?.trim() || session?.email || "";
+}
