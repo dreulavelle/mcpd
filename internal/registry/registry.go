@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -56,11 +55,6 @@ const (
 	maxReasonRunes      = 512
 	maxQueryRunes       = 128
 	maxCursorRunes      = 512
-	// maxIconURLRunes bounds an icon address. Twice the longest icon URL any
-	// of the four catalogues serves today, and short of the 2048 a general
-	// URL is allowed: this one is going into an <img src> on an operator's
-	// page, and there is no honest icon at the far end of a kilobyte of URL.
-	maxIconURLRunes     = 1024
 	maxSchemaLabelRunes = 96
 )
 
@@ -82,15 +76,6 @@ type Entry struct {
 	// offers nothing this host can reach.
 	Transport string `json:"transport,omitempty"`
 	URL       string `json:"url,omitempty"`
-	// Icon is an address for a small image the catalogue offers for this
-	// server, absent when it offers none this host will pass on.
-	//
-	// A third party's URL, bound for an <img src> on an administrator's page,
-	// so it is validated rather than relayed: see safeIconURL. Nothing here
-	// fetches it, follows it or checks that anything is behind it -- the
-	// browser does that, and the page is written so that a dead host costs a
-	// placeholder rather than a broken row.
-	Icon string `json:"icon,omitempty"`
 	// UpdatedAt is when the catalogue last changed the entry.
 	UpdatedAt time.Time `json:"updated_at"`
 	// Addable reports that this host would accept the document. It is decided
@@ -371,52 +356,6 @@ func opaque(s string, maxRunes int) string {
 		}
 	}
 	return s
-}
-
-// safeIconURL bounds an icon address a catalogue offered, or returns nothing.
-//
-// This is the one field here that a browser will act on rather than render.
-// It becomes an <img src> on an administrator's page, so the rule is
-// allow-list and not sanitise: https, an absolute URL with a host, no
-// credentials in it, no control characters, and short. Anything else is
-// omitted, because an icon is decoration and a decoration is never worth
-// relaxing a rule for.
-//
-// https only, and not merely "not javascript:". A data: URI would let a
-// catalogue put arbitrary bytes -- an SVG carries script -- into the page's
-// own origin; a http: one would be a mixed-content request from a dashboard
-// that is served over TLS. Neither is a picture worth having.
-//
-// Nothing here fetches it. This host does not proxy, resolve, prefetch or
-// validate what is behind the URL: doing so would turn every catalogue row
-// into a request this deployment makes to an address a third party chose,
-// which is the shape of a server-side request forgery whatever the intent.
-// The browser fetches it, from the operator's machine, with no credential of
-// this host's attached.
-func safeIconURL(raw string) string {
-	trimmed := opaque(strings.TrimSpace(raw), maxIconURLRunes)
-	if trimmed == "" {
-		return ""
-	}
-	u, err := url.Parse(trimmed)
-	switch {
-	case err != nil:
-		return ""
-	case !strings.EqualFold(u.Scheme, "https"):
-		return ""
-	case u.Opaque != "":
-		// "https:something" is not a URL with a host; it is a scheme and an
-		// opaque tail, and what a browser does with one is not worth finding
-		// out.
-		return ""
-	case u.User != nil:
-		// Credentials in an image URL are either somebody's mistake or
-		// somebody's trick. Either way they are not sent from here.
-		return ""
-	case u.Host == "":
-		return ""
-	}
-	return trimmed
 }
 
 // SuggestName derives a local plugin name from a catalogue name.
