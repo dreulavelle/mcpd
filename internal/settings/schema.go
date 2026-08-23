@@ -172,6 +172,15 @@ const (
 	KeyRegistrationApproval = "auth.registration.require_approval"
 	KeyRegistrationDomains  = "auth.registration.allowed_domains"
 
+	// KeyRegistrationDefaultGroup names a group every new registration joins.
+	//
+	// Empty is the default and joins none, which keeps the zero value of this
+	// feature at "reaches nothing" like every other default here. It holds a
+	// group's name rather than its identifier because an operator types it
+	// into this field, and a name is the thing they can type; a name matching
+	// no group grants nothing rather than failing the registration.
+	KeyRegistrationDefaultGroup = "auth.registration.default_group"
+
 	// The identity providers. Each is a switch, a client id and a secret; only
 	// Entra needs a fourth thing, and it needs it badly enough that the flow
 	// refuses to run without it.
@@ -354,6 +363,14 @@ func schema() []Group {
 						"provider this says who may have an account; through the " +
 						"password form it only says what may be typed, which is why " +
 						"those wait for you.",
+				},
+				{
+					Key: KeyRegistrationDefaultGroup, Label: "Put new accounts in",
+					Kind: KindString, Group: "registration", Apply: ApplyLive,
+					Placeholder: "Read only",
+					Help: "The name of a group. Empty means none, and a new " +
+						"account then reaches nothing until you grant it " +
+						"something.",
 				},
 			},
 		},

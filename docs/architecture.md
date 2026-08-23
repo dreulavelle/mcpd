@@ -35,6 +35,8 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/auth` | Principals, roles, capabilities, static tokens |
 | `internal/auth/users` | Accounts, passwords, browser sessions, registration |
 | `internal/auth/sso` | Signing in through Google, GitHub or Entra |
+| `internal/auth/groups` | Groups, membership, and the one union that decides reach |
+| `internal/auth/apikeys` | Bearer credentials this host issued, and the verifier over them |
 | `internal/storage/sqlite` | Schema, migrations, every transaction |
 | `internal/tunnel` | The embedded OpenAI tunnel client, one per connector |
 | `internal/settings` | Runtime configuration in the database |
@@ -295,14 +297,17 @@ to create one and the registrant becomes administrator; the emptiness check
 runs inside the write transaction, so two browsers racing an unclaimed instance
 produce one administrator and one refusal.
 
-**Machines** present a static bearer token from `auth.static_tokens`. The
-tunnel presents nothing — it authenticates to OpenAI's control plane with a
+**Machines** present a bearer token: one declared in `auth.static_tokens`, or
+one an administrator created in the dashboard. Both are the same kind of thing
+and go through the same authorization; see *Groups, and keys this host issued*.
+The tunnel presents nothing — it authenticates to OpenAI's control plane with a
 runtime key and carries its identity from configuration.
 
 Roles are `user` and `admin`. A user reads, proposes, and approves; an admin
-additionally changes settings, makes tunnels, manages accounts, and clears
-history. Capabilities (`read`, `propose`, `approve`, `admin`) are what code
-checks — never the role directly.
+additionally changes settings, makes tunnels, manages accounts, issues keys,
+and clears history. Capabilities (`read`, `propose`, `approve`, `admin`) are
+what code checks — never the role directly. What a caller may *reach* is a
+separate axis and is decided by groups.
 
 **A display name is a rendering, never an identity.** An account is identified
 by its address, and that is what every audit record, every guard and every
@@ -516,6 +521,149 @@ needs mcpd reachable from the public internet, which is the one thing a tunnel
 avoids. OpenAI's documentation states the authorization server "is not
 automatically tunneled".
 
+## Groups, and keys this host issued
+
+Two axes, and keeping them apart is the whole design. A **role** decides what a
+caller may *do* — read, propose, approve, administer — and `roleCapabilities`
+is the only thing that knows the difference. A **group** decides what a caller
+may *reach*: which plugins, and nothing else.
+
+**Capability-carrying groups are a non-goal, not an omission.** With two roles
+and four capabilities, a second bundle-of-rights mechanism would mean "why can
+this person approve" is answerable only by reading both, and neither would be
+explainable on its own. If the capability set ever needs to be finer than two
+roles, the answer is more roles, in the one map that already decides.
+
+**Effective grants are a union, computed in one place.** What a subject reaches
+is its own grants unioned with the grants of every group it belongs to, and
+`groups.Effective` is the only function in the process that works it out — one
+SQL statement covering both subject kinds and both sources, so there is nothing
+to keep in step. It is the same arrangement `Principal.Can` has for
+capabilities: one choke point, so a rule applied there is applied everywhere.
+Computing it in a second place would be the bug, which is why `User.Principal`
+takes the grants as an argument rather than reading them off the row — a method
+on an account cannot answer a question about other rows, and requiring the
+value is what stops a staler answer being assembled elsewhere.
+
+It is resolved per request, never frozen when a session or a key was issued.
+That is what makes taking somebody out of a group take effect on their next
+call rather than the next restart, and it is the property `Can` already had for
+a pending account.
+
+**Default none, at every level.** A new group grants nothing. A subject in no
+group reaches nothing. A new key reaches nothing. The wildcard absorbs, so a
+grant is never rendered as smaller than it means, and an empty list denies
+everything — the reading a principal has always taken of one. The direction
+matters more than the convenience: this is the same reason self-registration
+went from `["*"]` to `[]`.
+
+An account's *direct* grant may now be empty, which used to be refused. That
+refusal was right while a direct grant was the only kind — an account with none
+could never reach anything — and is wrong now that a group is how an account
+usually gets its reach.
+
+**Deleting a group narrows, and strands nobody.** Its memberships go with it,
+every member keeps its own grant and every other group it is in, and nothing
+gains anything. It is allowed while members remain rather than refused, because
+a group that has to be emptied first is one an operator empties in a hurry with
+no record of what it held; the entry records the grant and how many members
+lost it, and the page confirms with the count.
+
+### A key is a principal
+
+A static token in `auth.static_tokens` already carries a principal, a role and
+a plugin list — it is an API key declared in a file. So a key is not a parallel
+system: it is that declaration moved into the database, and what moving it buys
+is revocation, an optional expiry, a last-used timestamp, and grants that
+follow a group rather than a file.
+
+**Only `CapAdmin` may create one**, because a key acts on this host with a role
+and a reach and issuing one hands out both.
+
+**A key has an identity of its own**, `key:<id>`, so the trail names *which key*
+acted rather than a shared service identity. That is the reason the feature is
+worth building: with a standing rule able to authorise a write unasked, "which
+agent did this" has to be answerable. The identifier and not the name, because
+a name is a rendering its owner can change.
+
+**The secret is shown once.** It exists in the reply to the request that created
+it and nowhere else: what is stored is a SHA-256, no endpoint reads one back,
+no log line carries one, and no error body does. The digest is unsalted and
+that is correct here for the same reason it is for a session token — 256 bits
+from a CSPRNG has no dictionary to precompute, and a salt would only prevent
+the lookup by digest that verification depends on.
+
+**Revocation takes effect on the next request.** Nothing about a key is cached
+between calls. The row is deleted by nobody: a revoked key keeps its row,
+because an audit entry naming an identifier that resolves to nothing does not
+answer the question the entry exists for.
+
+**Expired and revoked are different facts, and the difference is
+operator-facing.** An administrator chasing a connector that stopped working
+needs to know which; a caller probing credentials must learn only that its
+credential was not accepted. So the store returns distinct errors, the host
+logs which, the Keys page shows the status — and `apikeys.Verifier` flattens
+every refusal to `ErrUnauthenticated` on the way out.
+
+**The last-used stamp is written at most once a minute**, guarded in the `WHERE`
+clause. A write on every request would put SQLite's single writer on the hot
+path of every tool call to answer a question nobody asks to the second.
+
+### Static tokens are untouched
+
+They are how a live deployment and its connectors authenticate, so they keep
+working, unchanged, and nothing migrates them. `apikeys.Verifier` tries the
+static set first — matched in memory, reaching no table — and only a credential
+no file entry matches costs a query. A file token has no row, so no group can
+widen or narrow it and no dashboard action can touch it.
+
+**The two id namespaces cannot meet.** A key's identifier is generated and
+begins `key_`; a file token's is chosen by an operator, and config validation
+refuses one with that prefix. Deciding at startup, where the operator reads the
+reason, beats deciding at verification time by whichever verifier answered
+first — both land in the same `TokenID` field and the same audit column, and an
+entry naming a credential has to name exactly one.
+
+### Approval is one decision again
+
+SSO left this open: a freshly approved account got `Plugins: []` and an empty
+console, so approving a stranger decided two things while presenting itself as
+one. Groups close it from both ends. `auth.registration.default_group` names a
+group every registration joins — empty by default, so the zero value still
+grants nothing and an operator has to fill it in — and approving may assign
+groups in the same transaction as the status change, so there is no window in
+which an approved account exists reaching nothing.
+
+The setting holds a *name* rather than an identifier, because an operator types
+it into a field and a name is what they can type. A name matching no group
+grants nothing rather than failing the registration: a group renamed or deleted
+underneath a setting nobody has revisited must stop granting, not start
+refusing sign-ups.
+
+### What is audited
+
+Every act here changes what somebody can reach, so every one of them appends to
+the hash-chained trail inside the transaction that performed it, naming the
+principal who acted — beside approving a registration and classifying a tool,
+not in the settings history.
+
+| entry | subject | detail |
+|---|---|---|
+| `group.created` | the group's name | id, grant |
+| `group.updated` | the group's name | id, grant, **the grant it replaced** |
+| `group.deleted` | the group's name | id, grant, how many members lost it |
+| `group.member_added` | the group's name | id, member kind and id |
+| `group.member_removed` | the group's name | id, member kind and id |
+| `apikey.created` | the key's id | name, role, grant, groups, expiry |
+| `apikey.rescoped` | the key's id | each field, **and what it was** |
+| `apikey.revoked` | the key's id | name |
+
+Two rules run through the table. A privilege change records what it changed
+*from* as well as to, because an entry carrying only the new value leaves "what
+did this widen" unanswerable. And an act that changes nothing writes nothing:
+adding somebody who is already a member is not an error and is not an entry,
+because a trail that records non-events is one nobody reads carefully.
+
 ## Telling what it is doing
 
 `/health/live` and `/health/ready` are on the MCP listener because a load
@@ -560,8 +708,8 @@ invent series this host then has to carry.
 Tables: `operations`, `operation_transitions`, `execution_attempts`,
 `idempotency_records`, `outbox_events`, `audit_events`, `audit_prune_gate`,
 `plugin_state`, `plugin_overrides`, `settings`, `settings_history`, `users`,
-`user_sessions`, `user_identities`, `sso_states`, `mcp_servers`,
-`mcp_server_tools`.
+`user_sessions`, `user_identities`, `sso_states`, `groups`, `group_members`,
+`api_keys`, `mcp_servers`, `mcp_server_tools`.
 
 Migrations are forward-only and checksummed; a changed file that has already
 run is an error rather than a silent divergence. There is no down path —

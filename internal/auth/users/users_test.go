@@ -95,14 +95,32 @@ func TestCreate_EmailIsNormalisedAndUnique(t *testing.T) {
 	}
 }
 
-func TestCreate_RejectsEmptyPluginGrant(t *testing.T) {
+// An empty direct grant used to be refused, because it was the only kind of
+// grant there was and an account with none could never reach anything. Groups
+// changed that fact: an account whose reach comes from a group is created with
+// nothing of its own, and refusing it would refuse the ordinary arrangement.
+//
+// What has not changed is what empty means. The account is created, and it
+// reaches nothing until something grants it something.
+func TestCreate_AllowsAnEmptyGrantAndItReachesNothing(t *testing.T) {
 	s, _ := newStore(t)
-	_, err := s.Create(context.Background(), CreateRequest{
+	ctx := context.Background()
+	u, err := s.Create(ctx, CreateRequest{
 		Email: "b@example.com", Password: "a-sufficiently-long-passphrase",
 		Role: auth.RoleUser,
 	})
-	if err == nil {
-		t.Fatal("an account granting no plugins reaches nothing; creating one must be refused")
+	if err != nil {
+		t.Fatalf("create with no direct grant: %v", err)
+	}
+	granted, err := s.EffectiveGrants(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("effective grants: %v", err)
+	}
+	if len(granted) != 0 {
+		t.Fatalf("granted = %v; an account in no group with no grants reaches nothing", granted)
+	}
+	if u.Principal("ses", granted).CanAccessPlugin("echo") {
+		t.Error("an account with no grants reached a plugin")
 	}
 }
 
@@ -168,7 +186,7 @@ func TestSessions(t *testing.T) {
 
 	// The principal names the session rather than only the person, so the
 	// trail can tell two sign-ins apart.
-	p := got.Principal(resolved.ID)
+	p := got.Principal(resolved.ID, got.Plugins)
 	if p.ID != "user:alice@example.com" || p.TokenID != sess.ID {
 		t.Fatalf("principal = %+v", p)
 	}
@@ -376,7 +394,7 @@ func TestRolesSeparateOperatingFromAdministering(t *testing.T) {
 	admin := mustCreate(t, s, "admin@example.com", auth.RoleAdmin)
 	user := mustCreate(t, s, "user@example.com", auth.RoleUser)
 
-	up := user.Principal("ses_u")
+	up := user.Principal("ses_u", user.Plugins)
 	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove} {
 		if !up.Can(c) {
 			t.Errorf("a user should hold %s", c)
@@ -386,7 +404,7 @@ func TestRolesSeparateOperatingFromAdministering(t *testing.T) {
 		t.Error("a user must not hold admin; that is the line between the two roles")
 	}
 
-	ap := admin.Principal("ses_a")
+	ap := admin.Principal("ses_a", admin.Plugins)
 	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove, auth.CapAdmin} {
 		if !ap.Can(c) {
 			t.Errorf("an administrator should hold %s", c)

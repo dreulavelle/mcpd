@@ -26,7 +26,7 @@ type Registrations interface {
 	LinkIdentity(ctx context.Context, actor string, i users.Identity) error
 	UnlinkIdentity(ctx context.Context, actor, userID string, provider users.Provider) error
 	PendingRegistrations(ctx context.Context) ([]*users.User, error)
-	ApproveRegistration(ctx context.Context, actor, id string) (*users.User, error)
+	ApproveRegistration(ctx context.Context, actor, id string, groupIDs []string) (*users.User, error)
 	RejectRegistration(ctx context.Context, actor, id string) error
 }
 
@@ -548,7 +548,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, r, token, sess.ExpiresAt)
-	s.writeJSON(w, r, http.StatusCreated, sessionView(user, sess))
+	s.writeJSON(w, r, http.StatusCreated, sessionView(user, sess, s.grantsFor(r, user)))
 }
 
 // --- the pending queue ------------------------------------------------------
@@ -583,7 +583,7 @@ func (s *Server) handleListRegistrations(w http.ResponseWriter, r *http.Request)
 	}
 	out := make([]registrationView, len(list))
 	for i, u := range list {
-		out[i] = registrationView{userView: viewOfUser(u, false), Providers: []string{}}
+		out[i] = registrationView{userView: s.viewUser(r, u, false), Providers: []string{}}
 		// A query per waiting account. The queue is short by construction --
 		// it is what nobody has decided about yet -- and a join would put the
 		// shape of this page into the store.
@@ -608,8 +608,23 @@ func (s *Server) handleApproveRegistration(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
 		return
 	}
+	// Approving may assign groups, and that is what makes it one decision
+	// rather than two. Before groups existed, an approved account had an empty
+	// grant and an empty console, and whoever approved it had to go to another
+	// page to decide what it may reach. Sending none is still legitimate and
+	// still means none.
+	//
+	// A body is optional: the pending queue's plain Approve button sends
+	// nothing, and an empty request is not a malformed one.
+	var req struct {
+		Groups []string `json:"groups"`
+	}
+	if r.ContentLength > 0 && !s.decode(w, r, &req) {
+		return
+	}
 	actor := auth.FromContext(r.Context()).ID
-	user, err := s.opts.Identities.ApproveRegistration(r.Context(), actor, r.PathValue("id"))
+	user, err := s.opts.Identities.ApproveRegistration(
+		r.Context(), actor, r.PathValue("id"), req.Groups)
 	switch {
 	case errors.Is(err, users.ErrNotFound):
 		s.writeError(w, r, http.StatusNotFound, "no such account")
@@ -623,7 +638,7 @@ func (s *Server) handleApproveRegistration(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.opts.Log.Info("registration approved", "email", user.Email, "by", actor)
-	s.writeJSON(w, r, http.StatusOK, viewOfUser(user, false))
+	s.writeJSON(w, r, http.StatusOK, s.viewUser(r, user, false))
 }
 
 func (s *Server) handleRejectRegistration(w http.ResponseWriter, r *http.Request) {

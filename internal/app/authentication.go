@@ -29,6 +29,7 @@ func (a *App) registrationPolicy(ctx context.Context) users.RegistrationPolicy {
 		Enabled:         a.settings.Bool(ctx, settings.KeyRegistrationEnabled, false),
 		RequireApproval: a.settings.Bool(ctx, settings.KeyRegistrationApproval, true),
 		AllowedDomains:  a.settings.Strings(ctx, settings.KeyRegistrationDomains, nil),
+		DefaultGroup:    a.settings.String(ctx, settings.KeyRegistrationDefaultGroup, ""),
 	}
 }
 

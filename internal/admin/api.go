@@ -100,6 +100,22 @@ type Options struct {
 	// different questions; see Registrations.
 	Identities Registrations
 
+	// Groups grant plugin access. They are the second half of the one
+	// authorization model: a role says what a caller may do, a group says what
+	// it may reach, and both an account and an API key draw their reach the
+	// same way.
+	Groups Groups
+
+	// Keys are the bearer credentials this host issued itself. Nil leaves the
+	// routes answering "not configured" rather than panicking.
+	Keys Keys
+
+	// KeyGrants resolves what a key reaches, through the same union an account
+	// goes through. A function rather than a method on Keys, because the union
+	// belongs to the groups package and nothing here should be able to compute
+	// a second answer.
+	KeyGrants func(ctx context.Context, keyID string) ([]string, error)
+
 	// SSO runs the provider flows, or is nil when this build was wired
 	// without them. Nil is a refusal rather than a panic: the sign-in page
 	// asks what is available and is told nothing.
@@ -417,6 +433,31 @@ func (s *Server) routes() {
 	// because it is part of setting one up, and because it names how this
 	// deployment is reached.
 	api("GET /api/auth/redirect-uris", s.handleAuthRedirectURIs, auth.CapAdmin)
+	// Groups. Reading one tells you what an account or a key can reach, and
+	// writing one changes it for every member at once, so both are an
+	// administrator's -- the same right that lists accounts, for the same
+	// reason.
+	api("GET /api/groups", s.handleListGroups, auth.CapAdmin)
+	api("POST /api/groups", s.handleCreateGroup, auth.CapAdmin)
+	api("GET /api/groups/{id}", s.handleGetGroup, auth.CapAdmin)
+	api("PATCH /api/groups/{id}", s.handleUpdateGroup, auth.CapAdmin)
+	api("DELETE /api/groups/{id}", s.handleDeleteGroup, auth.CapAdmin)
+	// Membership is the grant itself: adding somebody to a group is the moment
+	// they gain whatever it reaches.
+	api("POST /api/groups/{id}/members", s.handleAddGroupMember, auth.CapAdmin)
+	api("DELETE /api/groups/{id}/members/{kind}/{member}", s.handleRemoveGroupMember, auth.CapAdmin)
+	// API keys. Only an administrator may create one, which is the owner's
+	// rule and the right one: a key is a credential that acts on this host
+	// with a role and a reach, and issuing one is handing out both.
+	//
+	// There is no route that reads a secret back. The only response that has
+	// ever carried one is the reply to the request that created it.
+	api("GET /api/keys", s.handleListKeys, auth.CapAdmin)
+	api("POST /api/keys", s.handleCreateKey, auth.CapAdmin)
+	api("PATCH /api/keys/{id}", s.handleUpdateKey, auth.CapAdmin)
+	// Revoked rather than deleted: an audit entry naming an identifier that
+	// resolves to nothing would not answer "which agent did this".
+	api("POST /api/keys/{id}/revoke", s.handleRevokeKey, auth.CapAdmin)
 	api("GET /api/registrations", s.handleListRegistrations, auth.CapAdmin)
 	api("POST /api/registrations/{id}/approve", s.handleApproveRegistration, auth.CapAdmin)
 	api("POST /api/registrations/{id}/reject", s.handleRejectRegistration, auth.CapAdmin)
