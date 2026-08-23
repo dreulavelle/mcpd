@@ -468,7 +468,7 @@ func TestMCPServer_PluginsPageCannotBrickStartup(t *testing.T) {
 	if !strings.Contains(err.Error(), "/api/mcp-servers/weather") {
 		t.Errorf("the refusal should name the endpoint that works: %v", err)
 	}
-	err = a.RemoveInstance(ctx, "tester", "weather")
+	err = a.RemoveInstance(ctx, "tester", "weather", false)
 	if err == nil {
 		t.Fatal("the plugins endpoint must not remove a remote MCP server")
 	}

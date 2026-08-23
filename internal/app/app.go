@@ -71,6 +71,16 @@ type App struct {
 	mcpMu      sync.RWMutex
 	mcpServers map[string]mcpservers.Server
 
+	// pluginOverrides is what the dashboard has said about the plugins the
+	// configuration file declares: removed, or switched on or off. It is a
+	// store rather than a settings key because it overrides the deployment's
+	// own configuration, which is an administrative act and belongs in the
+	// audit trail. Cached beside it for the same reason the servers are --
+	// instances() reads it on nearly every request.
+	pluginOverrides *sqlite.PluginOverrideStore
+	overrideMu      sync.RWMutex
+	overrideCache   map[string]sqlite.PluginOverride
+
 	// catalog browses the public catalogues of MCP servers. Each source holds
 	// its own TTL cache and reaches the network only when a request asks it
 	// to; nil when the deployment has switched every source off.
@@ -147,10 +157,19 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		catalog:    buildCatalog(cfg.Catalog, metrics, log),
 		serving:    make(chan struct{}),
 		health:     observability.NewHealthRegistry(2 * time.Second),
+
+		pluginOverrides: sqlite.NewPluginOverrideStore(db, time.Now),
+		overrideCache:   map[string]sqlite.PluginOverride{},
 	}
 	// Loaded before anything asks what is configured: a remote server is an
 	// instance, and instances() must be complete the first time it is called.
 	if err := a.loadMCPServers(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// Same reason, and before anything reads the instance list: a removal
+	// applied one request late is a plugin served once after it was removed.
+	if err := a.loadOverrides(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -346,13 +365,37 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Instances: func(ctx context.Context) []admin.PluginInstanceInfo {
 				out := make([]admin.PluginInstanceInfo, 0)
 				for _, inst := range a.instances(ctx) {
-					_, missing := a.ready(ctx, inst)
-					out = append(out, admin.PluginInstanceInfo{
+					info := admin.PluginInstanceInfo{
 						Name: inst.Name, Type: inst.Type,
 						Runtime:  string(inst.Runtime),
 						FromFile: inst.FromFile, Enabled: inst.Enabled,
-						Missing: missing,
-						Problem: a.reconcileProblem(inst.Name),
+						Required:  inst.Required,
+						Removed:   inst.Removed,
+						RemovedBy: inst.RemovedBy,
+						RemovedAt: inst.RemovedAt,
+						Problem:   a.reconcileProblem(inst.Name),
+					}
+					// A removed instance is not waiting on anything: it is not
+					// going to mount whatever is filled in, and listing its
+					// unset fields would read as the reason it is not running.
+					if !inst.Removed {
+						_, info.Missing = a.ready(ctx, inst)
+					}
+					if inst.FromFile {
+						info.Declaration = a.declarationFor(inst.Name)
+					}
+					out = append(out, info)
+				}
+				return out
+			},
+			StaleRemovals: func() []admin.StaleRemoval {
+				out := make([]admin.StaleRemoval, 0)
+				for _, ov := range a.staleRemovals() {
+					out = append(out, admin.StaleRemoval{
+						Name:         ov.Name,
+						DeclaredType: ov.DeclaredType,
+						RemovedBy:    ov.Actor,
+						RemovedAt:    ov.UpdatedAt,
 					})
 				}
 				return out
@@ -378,6 +421,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			},
 			AddPlugin:        a.AddInstance,
 			RemovePlugin:     a.RemoveInstance,
+			RestorePlugin:    a.RestoreInstance,
 			SetPluginEnabled: a.SetInstanceEnabled,
 			SessionTTL:       cfg.Auth.Accounts.SessionTTL,
 			Plugins:          func() []string { return a.manager.Names() },

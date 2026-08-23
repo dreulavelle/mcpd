@@ -226,21 +226,37 @@ func (a *App) watchPluginSettings() {
 		if len(touched) == 0 {
 			return
 		}
-		// Detached from the write that triggered it: the reconcile outlives
-		// the request, and a plugin's Start may reach an upstream system that
-		// is slower than the operator's browser is willing to wait.
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), reconcileTimeout)
-			defer cancel()
-			for name := range touched {
-				if err := a.reconcileInstance(ctx, name); err != nil {
-					// Reported on the plugin's own health rather than thrown
-					// away, since the operator who just saved is looking at it.
-					a.log.Warn("plugin did not take up its new settings",
-						"plugin", name, "error", err)
-					a.manager.SetHealth(name, plugins.Unhealthy(err.Error()))
-				}
-			}
-		}()
+		names := make([]string, 0, len(touched))
+		for name := range touched {
+			names = append(names, name)
+		}
+		a.reconcileDetached(names...)
 	})
+}
+
+// reconcileDetached brings instances in line with their configuration, out of
+// band.
+//
+// Detached from the write that triggered it: the reconcile outlives the
+// request, and a plugin's Start may reach an upstream system that is slower
+// than the operator's browser is willing to wait. Every caller is a write that
+// has already been recorded, so a reconcile that fails costs a plugin marked
+// unhealthy rather than a change that half happened.
+func (a *App) reconcileDetached(names ...string) {
+	if len(names) == 0 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), reconcileTimeout)
+		defer cancel()
+		for _, name := range names {
+			if err := a.reconcileInstance(ctx, name); err != nil {
+				// Reported on the plugin's own health rather than thrown
+				// away, since the operator who just saved is looking at it.
+				a.log.Warn("plugin did not take up its new configuration",
+					"plugin", name, "error", err)
+				a.manager.SetHealth(name, plugins.Unhealthy(err.Error()))
+			}
+		}
+	}()
 }
