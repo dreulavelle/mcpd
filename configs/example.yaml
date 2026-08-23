@@ -13,6 +13,13 @@ server:
   # The address assistants reach the MCP endpoint at -- the `listen` port
   # above, not the dashboard. It is what the dashboard shows as a connection
   # address, so it must match what clients actually use.
+  #
+  # Behind a proxy that terminates TLS this is not cosmetic. mcpd is reached
+  # over plain HTTP in that shape, so it cannot tell from the connection that
+  # browsers are speaking https -- and this is what tells it the dashboard's
+  # session cookie needs Secure. X-Forwarded-Proto deliberately does not
+  # count: a header is set by whoever is talking to this process, and nothing
+  # here can tell a proxy's from a caller's.
   public_url: "https://mcp.example.net"
 
   tls:

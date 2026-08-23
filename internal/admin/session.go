@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
@@ -45,32 +46,69 @@ const sessionCookie = "mcpd_session"
 // csrfHeader carries the token the page echoes back.
 const csrfHeader = "X-CSRF-Token"
 
+// secureCookies reports whether the session cookie must carry Secure.
+//
+// Two facts, and the second is the one that matters. Serving TLS directly
+// settles it -- the connection is encrypted and the browser will honour the
+// flag. But the ordinary production shape for this host is an FQDN with a
+// reverse proxy terminating TLS and forwarding plain HTTP, and in that shape
+// r.TLS is nil while every browser in the world is speaking https. Deciding
+// from r.TLS alone issues the session cookie without Secure to exactly the
+// deployments that did the right thing, and the browser will then send that
+// cookie over plain http to the same host -- so a single downgraded request
+// hands over the session.
+//
+// The configured public URL is what settles the second case. It is what an
+// operator wrote down about how this host is reached, which makes it the only
+// statement about the scheme that a client cannot make.
+//
+// Not X-Forwarded-Proto. A forwarded header is set by whoever is talking to
+// this process, and nothing here can tell a proxy's header from a caller's:
+// the MCP host refuses to trust X-Forwarded-For for the same reason. A header
+// that a client can set is not a fact about the deployment.
+//
+// It only ever widens. A configured http URL cannot turn Secure off on a
+// connection that really is TLS, and a public URL that does not parse falls
+// back to the connection rather than to a guess.
+func (s *Server) secureCookies(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	u, err := url.Parse(s.opts.PublicURL)
+	return err == nil && u.Scheme == "https"
+}
+
 // setSessionCookie issues the cookie for a new sign-in.
 //
-// Secure is conditional because the dashboard is routinely reached over plain
-// HTTP on a loopback or LAN address, and a Secure cookie on such an origin is
-// silently dropped -- which presents as "signing in does nothing". Browsers
-// already treat localhost as a secure context, so nothing is lost there.
-func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
+// Secure is conditional because the dashboard is also routinely reached over
+// plain HTTP on a loopback or LAN address, and a Secure cookie on such an
+// origin is silently dropped -- which presents as "signing in does nothing".
+// Browsers already treat localhost as a secure context, so nothing is lost
+// there.
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    token,
 		Path:     "/",
 		Expires:  expires,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   s.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 }
 
-func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+// clearSessionCookie removes it. The attributes have to match the ones it was
+// set with, Secure included: a clear that omits Secure on an https deployment
+// does not replace the cookie the browser is holding, so the stale one stays
+// and signing out appears not to work.
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   s.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -139,7 +177,7 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.opts.Log.Info("dashboard sign-in", "user", user.Email, "session", sess.ID)
-	setSessionCookie(w, r, token, sess.ExpiresAt)
+	s.setSessionCookie(w, r, token, sess.ExpiresAt)
 	s.writeJSON(w, r, http.StatusOK, sessionView(user, sess))
 }
 
@@ -188,7 +226,7 @@ func (s *Server) handleRegisterFirst(w http.ResponseWriter, r *http.Request) {
 	}
 	s.opts.Log.Info("first account registered; this instance is now claimed",
 		"email", user.Email, "id", user.ID)
-	setSessionCookie(w, r, token, sess.ExpiresAt)
+	s.setSessionCookie(w, r, token, sess.ExpiresAt)
 	s.writeJSON(w, r, http.StatusCreated, sessionView(user, sess))
 }
 
@@ -201,7 +239,7 @@ func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request) {
 	}
 	// The cookie is cleared whether or not the row was found, so a stale
 	// cookie cannot keep presenting itself.
-	clearSessionCookie(w, r)
+	s.clearSessionCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -262,7 +300,7 @@ func (s *Server) principalFor(w http.ResponseWriter, r *http.Request) (*auth.Pri
 		}
 		// A cookie that no longer resolves is cleared, so the browser stops
 		// presenting it and the page can tell it needs to sign in again.
-		clearSessionCookie(w, r)
+		s.clearSessionCookie(w, r)
 	}
 
 	token, ok := auth.BearerToken(r)

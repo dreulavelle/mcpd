@@ -396,6 +396,17 @@ dropped except `CAP_NET_BIND_SERVICE`, and a syscall filter.
 The container image is distroless, non-root (uid 65532), read-only root
 filesystem, with `/tmp` on tmpfs.
 
+**Behind a reverse proxy, mcpd should not serve TLS itself.** The ordinary
+shape is an FQDN with Caddy, nginx or Cloudflare terminating TLS and forwarding
+plain HTTP, and the right setting for that is `tls.mode: off`; `self-signed` is
+for reaching mcpd directly, where the alternative is a browser warning on every
+visit. Set `server.public_url` to the address people actually type. It is not
+cosmetic: mcpd is reached over plain HTTP in that shape, so `r.TLS` is nil and
+the configured scheme is the only way it can know the session cookie needs
+`Secure`. `X-Forwarded-Proto` deliberately does not count — a header is set by
+whoever is talking to this process, and nothing here can tell a proxy's from a
+caller's.
+
 ## Plugins are not architecture
 
 What an integration does belongs with the integration. Each has its own
