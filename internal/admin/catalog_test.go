@@ -225,9 +225,72 @@ func TestCatalog_PassesTheSearchAndCursorThrough(t *testing.T) {
 			return registry.Page{Source: "fake"}, nil
 		},
 	})
-	request(t, s, http.MethodGet, "/api/catalog?q=weather&cursor=abc&limit=5", nil)
+	request(t, s, http.MethodGet,
+		"/api/catalog?q=weather&cursor=abc&limit=5&sort=most-used&source=docker/mcp-registry", nil)
 	if got.Search != "weather" || got.Cursor != "abc" || got.Limit != 5 {
 		t.Errorf("query = %+v", got)
+	}
+	if got.Sort != registry.SortMostUsed || got.Source != "docker/mcp-registry" {
+		t.Errorf("sort = %q, source = %q", got.Sort, got.Source)
+	}
+}
+
+// TestCatalog_AnOrderThisHostDoesNotHaveIsRefused.
+//
+// Not quietly replaced with the default. A caller who asks for "mostused" and
+// receives the ordinary listing has a page that looks sorted, is not, and says
+// nothing either way -- and the refusal names the orders that do exist, so the
+// next request can be a correct one.
+func TestCatalog_AnOrderThisHostDoesNotHaveIsRefused(t *testing.T) {
+	asked := false
+	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+		List: func(context.Context, registry.Query) (registry.Page, error) {
+			asked = true
+			return registry.Page{Source: "fake"}, nil
+		},
+	})
+	res := request(t, s, http.MethodGet, "/api/catalog?sort=mostused", nil)
+	if res.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", res.Code)
+	}
+	if asked {
+		t.Error("a catalogue was read for a request that could not be answered")
+	}
+	if body := res.Body.String(); !strings.Contains(body, "most-used") {
+		t.Errorf("the refusal does not say what this host sorts by: %s", body)
+	}
+}
+
+// TestCatalog_AQuestionThisHostCannotAnswerIsNotACatalogueBeingDown.
+//
+// Both refusals are the caller's mistake, and answering either with "the
+// catalogue could not be read" would send an operator looking for a network
+// fault that is not there.
+func TestCatalog_AQuestionThisHostCannotAnswerIsNotACatalogueBeingDown(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+		err   error
+		says  string
+	}{
+		{"unknown catalogue", "?source=nowhere", registry.ErrUnknownSource, "browses"},
+		{"no ranked catalogue", "?sort=most-used", registry.ErrSortUnavailable, "how often"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+				List: func(context.Context, registry.Query) (registry.Page, error) {
+					return registry.Page{}, tc.err
+				},
+				Source: func() string { return "registry.modelcontextprotocol.io" },
+			})
+			res := request(t, s, http.MethodGet, "/api/catalog"+tc.query, nil)
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 rather than a bad gateway", res.Code)
+			}
+			if body := res.Body.String(); !strings.Contains(body, tc.says) {
+				t.Errorf("the refusal does not explain itself: %s", body)
+			}
+		})
 	}
 }
 
