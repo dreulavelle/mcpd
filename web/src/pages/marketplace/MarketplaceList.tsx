@@ -1,146 +1,88 @@
-import { useCallback, useState } from "react";
-import { Store } from "lucide-react";
-import { api, type MCPServer } from "@/lib/api";
-import { when } from "@/lib/format";
+import { useCallback, useMemo, useState } from "react";
+import { api } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
-import { Link } from "@/lib/router";
-import { EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
-import { Chip, StatusDot } from "@/components/status";
+import { Link, useRouter } from "@/lib/router";
+import { Notice, PageHeader, Section } from "@/components/chrome";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
+import { CatalogList } from "./CatalogList";
+import type { CatalogEntry } from "./catalog";
 import { ImportDialog } from "./ImportDialog";
 
 /**
- * Remote MCP servers.
+ * Where a remote MCP server is found and added. Not where one is managed.
  *
- * The counts are the point of the list: a server with pending tools is one
- * somebody has to look at, and it is the only thing here that needs a person.
- * Everything else — is it enabled, is it mounted — is state to glance at.
+ * The two used to be the same page, so an installed server appeared here and
+ * again under Plugins, and looking after one meant bouncing between them. A
+ * server that is installed is a plugin -- same endpoint shape, same scoping,
+ * same audit -- so it is managed with the other plugins, and this page is only
+ * the way in. /marketplace/{name} redirects to the plugin page for anyone who
+ * bookmarked the old arrangement.
+ *
+ * The imported list is still read, for one reason: so the catalog can say
+ * "already added" instead of offering a name the import would refuse.
  */
 export function MarketplaceList() {
-  const load = useCallback(() => api.mcpServers(), []);
-  const { data, error, reload } = useLoader(load, "Couldn't load remote servers.", 20_000);
+  const { navigate } = useRouter();
+  const loadServers = useCallback(() => api.mcpServers(), []);
+  const { data, error } = useLoader(loadServers, "Couldn't read what is already added.", 20_000);
+  const [seed, setSeed] = useState<CatalogEntry | null>(null);
   const [importing, setImporting] = useState(false);
-  const servers = data?.servers ?? [];
-  const pending = servers.reduce((n, s) => n + s.pending, 0);
+
+  const installed = useMemo(
+    () => new Set((data?.servers ?? []).map((s) => s.name)),
+    [data],
+  );
+
+  function addCustom() {
+    setSeed(null);
+    setImporting(true);
+  }
+
+  // The catalog's Add is the same dialog with the document filled in. There is
+  // deliberately no second import path: whatever the catalog hands over is
+  // validated, has its settings derived and has its tools classified exactly
+  // as a pasted document does.
+  function addFromCatalog(entry: CatalogEntry) {
+    setSeed(entry);
+    setImporting(true);
+  }
 
   return (
     <>
       <PageHeader
         title="Marketplace"
-        lede="Servers somebody else runs, mounted here as ordinary plugins. Nothing a remote server offers is served until an administrator has read it and said yes."
-        actions={<Button onClick={() => setImporting(true)}>Import a server</Button>}
+        lede="Servers somebody else runs, which you can add to this host. Adding one makes it a plugin: the same endpoint shape, the same scoping, the same audit — and nothing it offers is served until an administrator has read it and said yes."
+        actions={<Button onClick={addCustom}>Add Custom MCP</Button>}
       />
 
+      {/* Keyed on the seed so the dialog is built fresh for each one. Feeding
+          new values into the state it already holds would leave a half-edited
+          paste from the last attempt underneath. */}
       <ImportDialog
+        key={seed?.id ?? "custom"}
         open={importing}
         onOpenChange={setImporting}
-        onImported={reload}
+        seedName={seed?.suggestedName}
+        seedDocument={seed?.document}
+        // Straight to where it is managed. The next steps -- fill in what it
+        // asks for, discover, classify -- all live on that page.
+        onImported={(name) => navigate(`/plugins/${encodeURIComponent(name)}`)}
       />
 
       {error && <Notice tone="problem">{error}</Notice>}
 
-      {pending > 0 && (
-        <Notice tone="attention">
-          {pending} {pending === 1 ? "tool is" : "tools are"} waiting to be
-          classified. Until then they are not served.
-        </Notice>
-      )}
+      <Section
+        title="Catalog"
+        description="Published servers, ready to add. Everything already added lives under Plugins."
+      >
+        <CatalogList installed={installed} onAdd={addFromCatalog} />
+      </Section>
 
-      {data === null && !error ? (
-        <Loading rows={3} />
-      ) : servers.length === 0 ? (
-        <EmptyState mark={<Store />} title="No remote servers">
-          Import one from its published <code className="font-mono">server.json</code>{" "}
-          and it becomes a plugin like any other — same endpoint shape, same
-          scoping, same audit.
-        </EmptyState>
-      ) : (
-        <Card className="mt-4 overflow-hidden p-0">
-          <div className="scroll-x">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Server</TableHead>
-                  <TableHead>State</TableHead>
-                  <TableHead className="text-right">Served</TableHead>
-                  <TableHead className="text-right">Waiting</TableHead>
-                  <TableHead className="text-right">Refused</TableHead>
-                  <TableHead>Last change</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {servers.map((s) => <Row key={s.name} server={s} />)}
-              </TableBody>
-            </Table>
-          </div>
-        </Card>
-      )}
+      <p className="mt-6 text-sm text-muted-foreground">
+        Anything already added is on the{" "}
+        <Link to="/plugins" className="text-primary hover:underline">Plugins</Link>{" "}
+        page, where its tools are classified and its credentials are typed in.
+      </p>
     </>
-  );
-}
-
-function Row({ server: s }: { server: MCPServer }) {
-  return (
-    <TableRow>
-      <TableCell>
-        <Link
-          to={`/marketplace/${encodeURIComponent(s.name)}`}
-          className="font-medium hover:underline"
-        >
-          {s.name}
-        </Link>
-        <div className="max-w-[46ch] truncate text-xs text-muted-foreground">
-          {s.title && s.title !== s.name ? `${s.title} — ` : ""}
-          {s.description || s.url}
-        </div>
-      </TableCell>
-      <TableCell><ServerState server={s} /></TableCell>
-      <TableCell className="text-right tabular-nums">{s.enabled_tools}</TableCell>
-      <TableCell className="text-right tabular-nums">
-        {s.pending > 0
-          ? <span className="font-medium text-attention">{s.pending}</span>
-          : <span className="text-muted-foreground">0</span>}
-      </TableCell>
-      <TableCell className="text-right tabular-nums text-muted-foreground">
-        {s.disabled}
-      </TableCell>
-      <TableCell className="whitespace-nowrap text-muted-foreground">
-        {when(s.updated_at)}
-      </TableCell>
-    </TableRow>
-  );
-}
-
-/**
- * Where a server stands, in one chip.
- *
- * "Unreadable" first, because a row this build can no longer parse can only be
- * listed and removed — none of the other states apply to it, and offering them
- * would be offering things that do nothing.
- */
-export function ServerState({ server: s }: { server: MCPServer }) {
-  if (!s.readable) {
-    return <Chip tone="problem">Unreadable document</Chip>;
-  }
-  if (!s.enabled) {
-    return <Chip tone="neutral">Switched off</Chip>;
-  }
-  if (s.mounted) {
-    return (
-      <Chip tone="good">
-        <StatusDot tone="good" />
-        Serving
-      </Chip>
-    );
-  }
-  return (
-    <Chip tone="attention">
-      <StatusDot tone="attention" />
-      {s.enabled_tools === 0 ? "No tools enabled" : "Not mounted"}
-    </Chip>
   );
 }

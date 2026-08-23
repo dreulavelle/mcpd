@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { capabilitiesOf, roleCan, type Capability } from "./capabilities";
-import { capabilityFor, covers, NAV, visibleNav } from "./nav";
+import {
+  capabilityFor, covers, NAV, redirectFor, visibleNav, type Requirement,
+} from "./nav";
 
 /** A `can` predicate for a fixed set of capabilities. */
 function holding(...held: Capability[]) {
@@ -42,12 +44,25 @@ describe("navigation gating", () => {
     expect(labels).toContain("Marketplace");
   });
 
+  // Settings is how the *host* is configured. Your own account moved to
+  // /profile, reached by clicking your name, so Account is no longer a child
+  // here -- and Settings stopped meaning two different things.
   it("keeps Settings for a user but drops the Users page inside it", () => {
     const settings = visibleNav(holding("read"))
       .flatMap((g) => g.items)
       .find((i) => i.path === "/settings");
     expect(settings).toBeDefined();
-    expect(settings?.children?.map((c) => c.label)).toEqual(["General", "Account"]);
+    expect(settings?.children?.map((c) => c.label)).toEqual(["General"]);
+  });
+
+  // It is in the map because the router judges every path against the map.
+  // It is out of the sidebar because it already has a way in, and the same
+  // destination listed twice is a menu that has stopped being a summary.
+  it("keeps the profile out of the sidebar while keeping it in the map", () => {
+    const labels = visibleNav(holding("read", "propose", "approve", "admin"))
+      .flatMap((g) => g.items.map((i) => i.label));
+    expect(labels).not.toContain("Profile");
+    expect(capabilityFor("/profile")).toBe("signed-in");
   });
 
   // A parent left standing over nothing is a dead end: it looks like a section
@@ -64,16 +79,51 @@ describe("navigation gating", () => {
 
   // Nothing in the map may be reachable by default. A section added without a
   // capability would be visible to everyone, which is the failure the
-  // declarative map exists to make impossible to introduce quietly.
-  it("gives every entry an explicit capability", () => {
+  // declarative map exists to make impossible to introduce quietly. An
+  // ungated one has to say "signed-in" out loud, which an omission cannot do.
+  it("gives every entry an explicit requirement", () => {
+    const known: Requirement[] = ["read", "propose", "approve", "admin", "signed-in"];
     for (const group of NAV) {
       for (const item of group.items) {
-        expect(item.capability).toBeTruthy();
+        expect(known).toContain(item.capability);
         for (const child of item.children ?? []) {
-          expect(child.capability).toBeTruthy();
+          expect(known).toContain(child.capability);
         }
       }
     }
+  });
+});
+
+/**
+ * Two things moved, and somebody has both addresses bookmarked.
+ *
+ * An installed remote server was managed under /marketplace though it is a
+ * plugin; your own account was managed under /settings though settings are the
+ * host's. Neither may 404 for it.
+ */
+describe("paths that moved", () => {
+  it("sends an installed remote server to its plugin page", () => {
+    expect(redirectFor("/marketplace/weather")).toBe("/plugins/weather");
+  });
+
+  // Encoded once and left that way. Decoding to re-encode is a round trip with
+  // an escaping bug to lose and nothing to gain.
+  it("carries an awkward name across unchanged", () => {
+    expect(redirectFor("/marketplace/one%20two")).toBe("/plugins/one%20two");
+  });
+
+  it("leaves the marketplace itself alone", () => {
+    expect(redirectFor("/marketplace")).toBeNull();
+  });
+
+  it("sends the old account page to the profile", () => {
+    expect(redirectFor("/settings/account")).toBe("/profile");
+  });
+
+  it("has nothing to say about a path that did not move", () => {
+    expect(redirectFor("/plugins/weather")).toBeNull();
+    expect(redirectFor("/settings")).toBeNull();
+    expect(redirectFor("/")).toBeNull();
   });
 });
 
@@ -104,7 +154,7 @@ describe("which entry covers a path", () => {
  * with no gate at all.
  */
 describe("the capability a path requires", () => {
-  const cases: [string, string | null][] = [
+  const cases: [string, Requirement | null][] = [
     ["/", "read"],
     ["/approvals", "read"],
     ["/audit", "read"],
@@ -112,8 +162,10 @@ describe("the capability a path requires", () => {
     ["/tunnels", "read"],
     ["/marketplace", "admin"],
     ["/settings", "read"],
-    ["/settings/account", "read"],
     ["/settings/users", "admin"],
+    // Your own profile is not an administrative surface, and gating it on
+    // read would be reflex rather than a rule.
+    ["/profile", "signed-in"],
   ];
 
   for (const [path, expected] of cases) {
@@ -124,7 +176,6 @@ describe("the capability a path requires", () => {
 
   it("judges a detail page by its section", () => {
     expect(capabilityFor("/approvals/op-7")).toBe("read");
-    expect(capabilityFor("/marketplace/weather")).toBe("admin");
     expect(capabilityFor("/plugins/cnmaestro")).toBe("read");
   });
 

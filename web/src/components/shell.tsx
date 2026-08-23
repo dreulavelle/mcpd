@@ -1,16 +1,12 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { LogOut, Menu, X } from "lucide-react";
-import { api, type HealthReport } from "@/lib/api";
 import type { Capability } from "@/lib/capabilities";
-import { usePoll } from "@/lib/hooks";
 import { covers, visibleNav, type NavItem } from "@/lib/nav";
 import { Link, useRouter } from "@/lib/router";
 import { signedInAs, useCan, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { healthTone, StatusDot } from "./status";
 
 function NavLink({ item, badge, onNavigate }: {
   item: NavItem;
@@ -122,63 +118,51 @@ function Sidebar({ badges, onNavigate }: {
   );
 }
 
-function HealthPill({ health }: { health: HealthReport | null }) {
-  if (!health) return null;
-  const tone = healthTone(health.status);
-  const label = health.status === "up" ? "All good"
-    : health.status === "down" ? "Problem" : "Degraded";
-  const failing = (health.checks ?? []).filter((c) => c.status !== "up");
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
-        >
-          <StatusDot tone={tone} />
-          {label}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        {failing.length === 0
-          ? `Every check passing (${health.checks?.length ?? 0}).`
-          : failing.map((c) => (
-            <div key={c.name}>
-              {c.name}: {c.status}{c.message ? ` — ${c.message}` : ""}
-            </div>
-          ))}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
 /**
- * Who is signed in, whether the host is well, and the way out.
+ * Who is signed in, and the way out.
  *
  * Pinned under the navigation rather than sitting in the top-right corner.
  * These are the console's standing facts and not the current page's, so they
  * belong with the other standing furniture; the corner they used to occupy is
- * the one a page's own actions want. It is outside the scrolling list on
- * purpose -- the state of the host should not be something you have to scroll
- * a menu to find out.
+ * the one a page's own actions want.
+ *
+ * The name is the way to your profile, because that is where people look for
+ * it. Sign-out stays a control of its own beside it rather than something
+ * nested inside the link: a misclick that ends the session when you meant to
+ * read your own capabilities is a bad trade.
+ *
+ * What is no longer here is the health pill. "All good" on its own was
+ * decoration -- a binary with nowhere to ask what it was about -- and the
+ * checks behind it are content on the Overview now.
  */
-function SidebarFooter({ health, onSignOut }: {
-  health: HealthReport | null;
+function SidebarFooter({ onSignOut, onNavigate }: {
   onSignOut: () => void;
+  onNavigate?: () => void;
 }) {
   const session = useSession();
+  const { path } = useRouter();
+  const current = path === "/profile";
 
   return (
-    <div className="shrink-0 space-y-1 border-t p-3">
-      <HealthPill health={health} />
+    <div className="shrink-0 border-t p-3">
       <div className="flex items-center gap-1">
-        {/* The email as the title even when it is also the text: once display
-            names are settable the visible line stops being the address, and
-            the address is what identifies the account to an administrator. */}
-        <span className="min-w-0 flex-1 truncate px-2 text-sm" title={session?.email}>
-          {signedInAs(session)}
-        </span>
+        {/* The email as the title even when it is also the text: a display
+            name people can set means the visible line stops being the address,
+            and the address is what identifies the account to an
+            administrator. */}
+        <Link
+          to="/profile"
+          onClick={onNavigate}
+          current={current}
+          className={cn(
+            "min-w-0 flex-1 truncate rounded-md px-2 py-1 text-sm transition-colors",
+            current
+              ? "bg-accent font-medium text-accent-foreground"
+              : "hover:bg-accent/60",
+          )}
+        >
+          <span title={session?.email}>{signedInAs(session)}</span>
+        </Link>
         <Button
           variant="ghost" size="icon-sm"
           aria-label="Sign out" onClick={onSignOut}
@@ -217,14 +201,7 @@ export function Shell({ badges, onSignOut, children }: {
   onSignOut: () => void;
   children: ReactNode;
 }) {
-  const [health, setHealth] = useState<HealthReport | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  const pollHealth = useCallback(() => {
-    api.health().then(setHealth).catch(() => setHealth(null));
-  }, []);
-  usePoll(pollHealth, 20_000);
-
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
 
   return (
@@ -235,7 +212,7 @@ export function Shell({ badges, onSignOut, children }: {
         <Brand />
         <Separator />
         <Sidebar badges={badges} />
-        <SidebarFooter health={health} onSignOut={onSignOut} />
+        <SidebarFooter onSignOut={onSignOut} />
       </aside>
 
       {drawerOpen && (
@@ -250,19 +227,20 @@ export function Shell({ badges, onSignOut, children }: {
             <Brand />
             <Separator />
             <Sidebar badges={badges} onNavigate={closeDrawer} />
-            <SidebarFooter health={health} onSignOut={onSignOut} />
+            <SidebarFooter onSignOut={onSignOut} onNavigate={closeDrawer} />
           </aside>
         </div>
       )}
 
       <div className="flex min-w-0 flex-col">
-        {/* Narrow windows only. With the health, the account and the way out
-            moved into the sidebar there is nothing left for a wide window's top
-            bar to hold -- every page draws its own heading -- so rather than
-            leave an empty strip across the top, the bar goes with them. It
-            survives here because a collapsed sidebar still needs a handle to
-            open it, and because health and sign-out should not be a drawer
-            away: they ride along beside the handle. */}
+        {/* Narrow windows only. With the account and the way out moved into the
+            sidebar there is nothing left for a wide window's top bar to hold --
+            every page draws its own heading -- so rather than leave an empty
+            strip across the top, the bar goes with them. It survives here
+            because a collapsed sidebar still needs a handle to open it, and
+            because signing out should not be a drawer away. Health is not here
+            any more: it is content on the Overview, which a phone reaches like
+            any other page. */}
         <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur lg:hidden">
           <Button
             variant="ghost" size="icon-sm"
@@ -277,7 +255,6 @@ export function Shell({ badges, onSignOut, children }: {
 
           <span className="flex-1" />
 
-          <HealthPill health={health} />
           <Button
             variant="ghost" size="icon-sm"
             aria-label="Sign out" onClick={onSignOut}

@@ -82,7 +82,7 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
   /**
    * A refusal, and the descriptor it is a refusal of.
    *
-   * `hash` is load-bearing rather than bookkeeping. ServerDetail mounts this
+   * `hash` is load-bearing rather than bookkeeping. The tool list mounts this
    * dialog once and swaps its `tool`, so a refusal held as a bare flag
    * followed the operator to whatever they opened next: the warning, a hash
    * pair mixing two tools, a diff comparing one tool's descriptor against

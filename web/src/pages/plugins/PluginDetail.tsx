@@ -5,7 +5,7 @@ import {
 } from "@/lib/api";
 import { unprefixed } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
-import { Link, useRouter } from "@/lib/router";
+import { useRouter } from "@/lib/router";
 import { useCan } from "@/lib/session";
 import {
   Copyable, Loading, Notice, PageHeader, Section,
@@ -15,14 +15,20 @@ import { Chip, healthTone, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { RemoteServer } from "./RemoteServer";
 
 /**
- * One plugin.
+ * One plugin, whatever kind it is.
  *
  * A page of its own rather than an expander in the list, because everything
  * here is long: a settings form, two tool catalogues, an address, and a
  * connector. The console this replaces put all of it inside a row and the file
  * that did so grew to twenty kilobytes doing it.
+ *
+ * A remote MCP server is managed here too. It used to send the operator to a
+ * Marketplace page for its tools while its credentials stayed here, which is
+ * one thing in two places and a link to bounce between them. Marketplace is
+ * for finding a server; this is for running one.
  */
 export function PluginDetail({ name }: { name: string }) {
   const [plugin, setPlugin] = useState<Plugin | null>(null);
@@ -135,13 +141,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
         {runtime === "mcp" && (
           <Notice tone="info">
             This is somebody else's server, mounted here. It cannot propose
-            changes, and only the tools an administrator classified are served.{" "}
-            <Link
-              to={`/marketplace/${encodeURIComponent(name)}`}
-              className="font-medium underline underline-offset-4"
-            >
-              Manage its tools in the Marketplace
-            </Link>.
+            changes, and only the tools an administrator classified are served.
           </Notice>
         )}
 
@@ -156,7 +156,17 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
           </Section>
         )}
 
-        {running && (
+        {/* Everything that is true of this plugin *because* it is somebody
+            else's server: its tool snapshot, what has been classified, the
+            document it was added from, and whether it is switched on. It goes
+            after the settings, which are the credentials the document asked
+            for and the reason it is not serving yet. */}
+        {runtime === "mcp" && <RemoteServer name={name} onChanged={onChanged} />}
+
+        {/* The remote panel lists tools in far more detail -- and in three
+            states rather than two -- so this pair of cards would be a worse
+            second copy of it. */}
+        {running && runtime !== "mcp" && (
           <Section title="Tools">
             <div className="grid gap-4 lg:grid-cols-2">
               <Card>
@@ -201,7 +211,9 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
           </>
         )}
 
-        <RemoveControl name={name} instance={instance} onChanged={onChanged} />
+        <RemoveControl
+          name={name} instance={instance} runtime={runtime} onChanged={onChanged}
+        />
       </div>
     </>
   );
@@ -223,9 +235,10 @@ function ToolList({ tools, tone }: { tools: string[]; tone?: "attention" }) {
 }
 
 /** Removing an instance, where it can be done and where it cannot. */
-function RemoveControl({ name, instance, onChanged }: {
+function RemoveControl({ name, instance, runtime, onChanged }: {
   name: string;
   instance: PluginInstance | null;
+  runtime: "builtin" | "mcp";
   onChanged: () => void;
 }) {
   const mayRemove = useCan("admin");
@@ -234,6 +247,13 @@ function RemoveControl({ name, instance, onChanged }: {
   const [busy, setBusy] = useState(false);
 
   if (!mayRemove || !instance) return null;
+
+  // A remote server is removed by the endpoint that owns its document, which
+  // takes the tool approvals and the settings with it. `DELETE /api/instances`
+  // refuses one outright -- there is no instances. key to delete -- so this
+  // button would have been an error message with a delay in front of it. The
+  // remote panel above carries the one that works.
+  if (runtime === "mcp") return null;
 
   // An instance from the file would come back on the next start, so offering
   // to remove it here would be offering something that does not stick.
