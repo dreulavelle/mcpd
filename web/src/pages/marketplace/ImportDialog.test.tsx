@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { renderWith } from "@/test/render";
 import { ImportDialog } from "./ImportDialog";
 
@@ -75,5 +75,66 @@ describe("adding a remote MCP server", () => {
 
     expect(await screen.findByText(/not valid JSON/i)).toBeInTheDocument();
     expect(importServer).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The suggested name collides far more often than it looks like it should.
+ *
+ * A great many published servers are named `something/mcp`, so the catalogue
+ * suggests `mcp` for all of them and the second one an operator adds is
+ * refused. The refusal is correct and the timing is not: it costs a round trip
+ * and reads as a failure rather than as a field to change.
+ */
+describe("a name already in use", () => {
+  it("is refused in the form, before anything is sent", async () => {
+    const importServer = vi.spyOn(api, "importMCPServer");
+    renderWith(
+      <ImportDialog
+        open onOpenChange={() => {}} onImported={() => {}}
+        seedName="mcp" seedDocument={DOCUMENT}
+        taken={new Set(["mcp"])}
+      />,
+    );
+
+    expect(screen.getByText(/is already here/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+    expect(importServer).not.toHaveBeenCalled();
+  });
+
+  it("clears once a free name is typed", async () => {
+    renderWith(
+      <ImportDialog
+        open onOpenChange={() => {}} onImported={() => {}}
+        seedName="mcp" seedDocument={DOCUMENT}
+        taken={new Set(["mcp"])}
+      />,
+    );
+
+    await userEvent.type(screen.getByLabelText("Name"), "-linear");
+    expect(screen.queryByText(/is already here/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add" })).toBeEnabled();
+  });
+
+  /**
+   * The page cannot know every name -- a built-in plugin holds one too -- so
+   * the server still refuses some. Its sentence goes next to the box it is
+   * about, and takes the cursor with it.
+   */
+  it("puts the server's refusal on the field, not at the top of the dialog", async () => {
+    vi.spyOn(api, "importMCPServer").mockRejectedValue(
+      new ApiError(400, "bad_request", 'a plugin named "weather" already exists'),
+    );
+    renderWith(
+      <ImportDialog
+        open onOpenChange={() => {}} onImported={() => {}}
+        seedName="weather" seedDocument={DOCUMENT}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(await screen.findByText(/already exists/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Name")).toHaveFocus());
   });
 });

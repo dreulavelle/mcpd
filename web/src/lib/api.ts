@@ -437,6 +437,83 @@ export interface MCPServer {
   disabled: number;
 }
 
+/* -- the public catalogue -------------------------------------------------- */
+
+/**
+ * One server a public catalogue offers.
+ *
+ * Not a document. The listing carries what is needed to choose between
+ * entries; the `server.json` itself is a second call, so browsing a hundred
+ * servers does not mean holding a hundred documents nobody asked for.
+ */
+export interface CatalogEntry {
+  /** The catalogue's own identifier -- "io.github.example/weather". */
+  name: string;
+  /**
+   * A legal plugin name derived from `name`, ready to prefill the import
+   * form. Only a suggestion: many registry names end in `/mcp`, so this
+   * collides often and the operator is expected to change it.
+   */
+  suggested_name: string;
+  title: string;
+  description: string;
+  version: string;
+  /** From the document this host would dial, absent when there is nothing to dial. */
+  transport?: string;
+  url?: string;
+  updated_at: string;
+  /**
+   * Whether this host would accept the document, decided by handing it to the
+   * same two calls the import endpoint makes. False for roughly half of what
+   * the catalogues publish -- servers that only run locally, which this host
+   * does not run.
+   */
+  addable: boolean;
+  /** Why not. Present exactly when `addable` is false. */
+  reason?: string;
+  /** Which catalogue this entry came from, set on every entry. */
+  source: string;
+}
+
+/** How one catalogue fared on one request. */
+export interface CatalogSource {
+  source: string;
+  /** False when the catalogue could not be reached and nothing was held for it. */
+  ok: boolean;
+  stale: boolean;
+  retrieved_at?: string;
+  /** How many entries it contributed, after deduplication. */
+  entries: number;
+  error?: string;
+}
+
+/** One page of a browse or a search. */
+export interface CatalogPage {
+  /** Every catalogue that answered, comma-separated. */
+  source: string;
+  entries: CatalogEntry[];
+  /** Opaque, and absent at the end of the listing. */
+  next_cursor?: string;
+  /** True when a catalogue could not be reached and what it last said was served. */
+  stale: boolean;
+  retrieved_at: string;
+  sources: CatalogSource[];
+}
+
+/** One entry together with the document that would be imported. */
+export interface CatalogDetail extends CatalogEntry {
+  /**
+   * The `server.json` itself.
+   *
+   * Unknown rather than a shape: the document is validated against a vendored
+   * schema on the server, and a type here would be a second, weaker opinion
+   * about what a valid one looks like.
+   */
+  document: unknown;
+  stale: boolean;
+  retrieved_at: string;
+}
+
 /** What one discovery changed. */
 export interface MCPDiff {
   added?: string[];
@@ -667,6 +744,39 @@ export const api = {
     request<{ status: string }>(`/api/instances/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }),
+
+  /**
+   * Browses the public catalogues.
+   *
+   * `refresh` bypasses the cache for one request, which is the escape hatch
+   * for an administrator standing in front of a catalogue that is visibly
+   * behind. It is not the default for the same reason it exists: every other
+   * answer is held for as long as the catalogue itself asked.
+   */
+  catalog: (q: { search?: string; cursor?: string; limit?: number; refresh?: boolean } = {}) => {
+    const params = new URLSearchParams();
+    if (q.search) params.set("q", q.search);
+    if (q.cursor) params.set("cursor", q.cursor);
+    if (q.limit) params.set("limit", String(q.limit));
+    if (q.refresh) params.set("refresh", "1");
+    const query = params.toString();
+    return request<CatalogPage>(query ? `/api/catalog?${query}` : "/api/catalog");
+  },
+
+  /**
+   * One entry, with the document that would be imported.
+   *
+   * The name carries a slash -- "io.github.example/weather" -- and the route
+   * is a trailing wildcard, so the separator is left alone and only what sits
+   * either side of it is escaped. Encoding the whole string would send `%2F`
+   * and address a server nobody published.
+   */
+  catalogEntry: (name: string, refresh = false) => {
+    const path = name.split("/").map(encodeURIComponent).join("/");
+    return request<CatalogDetail>(
+      refresh ? `/api/catalog/${path}?refresh=1` : `/api/catalog/${path}`,
+    );
+  },
 
   mcpServers: () => request<{ servers: MCPServer[] }>("/api/mcp-servers"),
 
