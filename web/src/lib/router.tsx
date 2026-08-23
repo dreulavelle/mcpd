@@ -4,18 +4,8 @@ import {
 } from "react";
 
 /**
- * The console's routing.
- *
- * Hand-rolled rather than a router dependency, because what the console needs
- * from routing is a path and a way to change it. There are no nested layouts,
- * no loaders, no route-level data, and no redirect chains: a section, an
- * optional record within it, and the back button working. That is thirty lines
- * against a dependency to keep in step, and this repository's standing
- * preference is the thirty lines.
- *
- * Real paths rather than a hash, because `staticHandler` already serves
- * index.html for any path it has no file for, so a reload on /approvals/op-1
- * resolves. A hash would work too and read worse in a bookmark.
+ * The console's routing, hand-rolled. Real paths rather than a hash, which
+ * works because `staticHandler` serves index.html for any unknown path.
  */
 
 interface RouterValue {
@@ -51,8 +41,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     if (options?.replace) window.history.replaceState(null, "", next);
     else window.history.pushState(null, "", next);
     setPath(next);
-    // A new page starts at the top. Without this, opening a detail from the
-    // bottom of a long list lands halfway down the detail.
+    // Without this, opening a detail from the bottom of a long list lands
+    // halfway down the detail.
     window.scrollTo(0, 0);
   }, []);
 
@@ -64,12 +54,7 @@ export function useRouter(): RouterValue {
   return useContext(RouterContext);
 }
 
-/**
- * Splits the current path into its segments.
- *
- * "/marketplace/weather/tools" is ["marketplace", "weather", "tools"]. The
- * root is an empty array.
- */
+/** "/plugins/weather" is ["plugins", "weather"]; the root is an empty array. */
 export function useSegments(): string[] {
   const { path } = useRouter();
   return useMemo(
@@ -79,11 +64,8 @@ export function useSegments(): string[] {
 }
 
 /**
- * An internal link.
- *
- * Renders a real anchor so the address is in the status bar and a middle-click
- * opens a tab, and intercepts only the plain left click. Handing every click
- * to the router would break both.
+ * An internal link. A real anchor, intercepting only the plain left click, so
+ * middle-click and the status bar still work.
  */
 export function Link({ to, className, children, onClick, current }: {
   to: string;

@@ -13,13 +13,8 @@ import {
 import { Separator } from "@/components/ui/separator";
 
 /**
- * What the far end claims about a tool, presented as a claim.
- *
- * The MCP specification says plainly that a client must not rely on
- * annotations from an untrusted server, and every remote server is untrusted.
- * They are worth showing -- a server that says a tool is read-only is offering
- * a starting point -- and they are never worth believing, so the source is
- * named on the same line as the value.
+ * What the far end *claims* about a tool. The specification says a client must
+ * not rely on these, so the source is named on the same line as the value.
  */
 function Annotations({ tool }: { tool: MCPTool }) {
   const a = tool.descriptor.annotations;
@@ -62,13 +57,10 @@ function Annotations({ tool }: { tool: MCPTool }) {
 /**
  * Deciding whether one remote tool may be served.
  *
- * What is classified is a *descriptor* rather than a name: the hash of the
- * description and schema shown here travels with the decision and is part of
- * the `WHERE` clause in SQL. If a discovery replaced the descriptor while this
- * dialog was open, the write matches nothing and comes back 409 — and the
- * answer is to show what is there now and make the operator read it again,
- * never to resend with the newer hash. Resending would record a decision about
- * something nobody looked at.
+ * What is classified is a *descriptor*, not a name: its hash travels with the
+ * decision and is part of the `WHERE` clause. A 409 means discovery replaced it
+ * while this was open, and the answer is to make the operator read it again --
+ * never to resend with the newer hash.
  */
 export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
   server: string;
@@ -80,18 +72,10 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
   const notify = useNotify();
   const [busy, setBusy] = useState<MCPToolState | null>(null);
   /**
-   * A refusal, and the descriptor it is a refusal of.
-   *
-   * `hash` is load-bearing rather than bookkeeping. The tool list mounts this
-   * dialog once and swaps its `tool`, so a refusal held as a bare flag
-   * followed the operator to whatever they opened next: the warning, a hash
-   * pair mixing two tools, a diff comparing one tool's descriptor against
-   * another's, and both decisions dead. Keyed to the descriptor, a refusal
-   * simply does not apply to a different one, whatever path led there.
-   *
-   * `current` is what is stored now, and is legitimately null when the server
-   * withdrew the tool between the read and the decision -- which is why the
-   * refusal cannot be derived from it either.
+   * A refusal, keyed to the descriptor it refused. The list mounts this dialog
+   * once and swaps `tool`, so a bare flag followed the operator to the next
+   * tool and killed both decisions. `current` is legitimately null when the
+   * server withdrew the tool.
    */
   const [conflict, setConflict] =
     useState<{ hash: string; current: MCPTool | null } | null>(null);
@@ -111,9 +95,7 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
       onDone();
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        // Re-read rather than trust the error text: what the operator needs is
-        // the descriptor that is there now, side by side with the one they
-        // were reading.
+        // Re-read: the operator needs the descriptor that is there now.
         const current = await api.mcpServerTools(server)
           .then((r) => (r.tools ?? []).find((t) => t.name === tool.name) ?? null)
           .catch(() => null);
@@ -131,13 +113,7 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
   const changed = conflict?.hash === tool.descriptor_hash;
   const current = changed ? conflict.current : null;
 
-  /**
-   * The one way this dialog opens and shuts.
-   *
-   * Every dismissal -- ESC, the overlay, the X, the footer button -- goes
-   * through here, so none of them can be the one that forgets to drop the
-   * refusal.
-   */
+/** Every dismissal goes through here, so none can forget to drop the refusal. */
   function setOpen(next: boolean) {
     if (!next) setConflict(null);
     onOpenChange(next);
@@ -236,9 +212,7 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
           >
             {busy === "disabled" ? "Saving…" : "Do not serve it"}
           </Button>
-          {/* Closes through the same path as ESC and the overlay. Calling the
-              prop directly skipped the reset the wrapper does, which is how a
-              refusal outlived the tool it belonged to. */}
+          {/* The same path as ESC and the overlay; calling the prop skips the reset. */}
           <Button variant="ghost" onClick={() => close()}>
             {changed ? "Close and re-read" : "Cancel"}
           </Button>

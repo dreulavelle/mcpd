@@ -17,30 +17,17 @@ import { Users } from "@/pages/settings/Users";
 import { Tunnels } from "@/pages/tunnels/Tunnels";
 
 /**
- * What a path renders, gated by what it takes to render it.
- *
- * Three things are deliberately separate here. `redirectFor` decides *where*,
- * `page()` decides *what* and knows nothing about permissions, and `Gate`
- * decides *whether* by reading the answer out of `lib/nav.ts` -- the same map
- * the sidebar is built from, so there is one table of capabilities rather than
- * two that happen to agree.
- *
- * Gating at the top rather than per case also means a section cannot be added
- * without one. The arrangement this replaces wrote `required=` into each
- * branch, and Overview had already been missed.
- *
- * None of this is access control. The server authorises every call again; this
- * is so a URL typed by hand meets a sentence rather than a page that renders
- * its chrome and then fails every fetch.
+ * What a path renders. `Gate` reads the capability out of `lib/nav.ts` and
+ * gates at the top, so a section cannot be added without one. Not access
+ * control: the server authorises every call again.
  */
 export function Routes() {
   const { path, navigate } = useRouter();
   const segments = useSegments();
   const [section, param] = segments;
 
-  // Before the gate rather than after it: a bookmark of a path that moved
-  // should land where the page went, not on a refusal for the capability the
-  // old section happened to need.
+  // Before the gate: a bookmark of a path that moved should land where the page
+  // went, not on a refusal for the old section's capability.
   const moved = redirectFor(path);
   useEffect(() => {
     if (moved) navigate(moved, { replace: true });
@@ -57,13 +44,10 @@ export function Routes() {
       case "audit":
         return <Audit />;
 
-      // Where everything mcpd serves is managed, remote servers included.
       case "plugins":
         return param ? <PluginDetail name={param} /> : <PluginsList />;
 
-      // Discovery only, and nothing below it. /marketplace/{name} used to be an
-      // installed server and is redirected above; anything deeper never named
-      // a page here.
+      // Discovery only. /marketplace/{name} is redirected above.
       case "marketplace":
         return param ? null : <MarketplaceList />;
 
@@ -86,8 +70,7 @@ export function Routes() {
     }
   }
 
-  // Nothing while the redirect above lands. Rendering the old page for a frame
-  // would fetch for a section the operator is already leaving.
+  // Rendering the old page for a frame would fetch for a section being left.
   if (moved) return null;
 
   const body = page();
@@ -97,18 +80,15 @@ export function Routes() {
 
 function Gate({ path, children }: { path: string; children: ReactNode }) {
   const required = capabilityFor(path);
-  // `useCan` is a hook, so it is asked unconditionally. "read" stands in for
-  // the two answers that are not a capability; neither of them uses the reply.
+  // Asked unconditionally, because it is a hook. "read" stands in for the two
+  // answers that are not a capability; neither uses the reply.
   const holds = useCan(
     required === null || required === "signed-in" ? "read" : required,
   );
 
-  // A path the map does not cover is not a path this console serves, whatever
-  // the switch above was willing to build for it.
+  // A path the map does not cover is not one this console serves, whatever the
+  // switch above was willing to build.
   if (required === null) return <NotFound />;
-  // Being signed in is the whole requirement. Your own profile is not an
-  // administrative surface, and this is the one answer the map can give that
-  // means "no capability", rather than an omission that reads the same way.
   if (required === "signed-in" || holds) return <>{children}</>;
 
   return (

@@ -6,14 +6,7 @@ import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Tone } from "./status";
 
-/**
- * Raising a toast.
- *
- * Named, because it is passed down through pages to the rows that actually
- * report something and each of those was otherwise restating the signature --
- * one of them narrowed the tone to "good", which was a lie the compiler could
- * not catch because it was never asked to raise anything else.
- */
+/** Raising a toast. Named, because pages pass it down to the rows that report. */
 export type Notify = (tone: Tone, text: string) => void;
 
 interface Toast {
@@ -41,11 +34,8 @@ const TONE: Record<Tone, string> = {
 };
 
 /**
- * One toast stack for the whole console, mounted above the router.
- *
- * Per-page stacks meant a confirmation vanished the moment the action it
- * confirmed navigated somewhere -- which is exactly when a save is worth
- * confirming.
+ * One stack for the whole console, above the router: a per-page one vanishes
+ * exactly when the action it confirms navigates away.
  */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);

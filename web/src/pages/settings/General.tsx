@@ -16,17 +16,8 @@ const LINKS = {
 };
 
 /**
- * The host's own configuration.
- *
- * Readable by anyone who may read, because understanding what this host will
- * do is most of understanding the deployment; writable only by an
- * administrator, which the form enforces by rendering read-only rather than by
- * letting somebody fill a field in and then meet a 403.
- *
- * A plugin's settings are not here. An integration is independent of the host:
- * somebody configuring Cambium should not have to find it in a list of the
- * host's own switches, and should not meet it there by accident while changing
- * something else.
+ * The host's own configuration: read to see, admin to change, and read-only
+ * rather than a form that meets a 403. A plugin's settings live on its page.
  */
 export function General() {
   const mayWrite = useCan("admin");

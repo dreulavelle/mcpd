@@ -485,26 +485,38 @@ describe("what a card shows", () => {
   });
 
   /**
-   * Many entries have no icon, and some of the URLs that exist are dead. A
-   * broken-image glyph in a list is worse than a neutral mark, and either is
-   * better than a row whose layout waits on a third party.
+   * Two entries in five publish an icon, and some of the URLs that exist are
+   * dead. A grid where the rest are blank reads worse than one with no
+   * pictures at all, so every entry gets a generated monogram in the same box.
    */
-  it("falls back to a placeholder when there is no icon", async () => {
+  it("draws a monogram when there is no icon", async () => {
     await render({ load: catalog([TICKETS]) });
 
     await screen.findByText("Tickets");
     expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector("svg text")).toHaveTextContent("TI");
   });
 
-  it("falls back to a placeholder when the icon will not load", async () => {
+  it("falls back to the monogram when the icon will not load", async () => {
     await render({ load: catalog([WEATHER]) });
 
     await screen.findByText("Weather");
     const icon = document.querySelector("img")!;
     fireEvent.error(icon);
     await waitFor(() => expect(document.querySelector("img")).toBeNull());
+    expect(document.querySelector("svg text")).toHaveTextContent("WE");
     // Still a row, still an Add.
     expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
+  });
+
+  // The box is the same either way, so nothing on the row moves when an image
+  // arrives or gives up.
+  it("keeps the icon box the same size whichever it draws", async () => {
+    await render({ load: catalog([WEATHER, TICKETS]) });
+
+    await screen.findByText("Tickets");
+    const boxes = [...document.querySelectorAll("span.size-9")];
+    expect(boxes).toHaveLength(2);
   });
 });
 
