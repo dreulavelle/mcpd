@@ -190,6 +190,13 @@ dashboard can change, and a secret in it is a reference rather than a value.
 | `echo` | Nothing real — a worked example, including an approval-gated write | Bundled |
 | `cnmaestro` | Cambium cnMaestro: Wi-Fi and fixed-wireless estates | Read-only |
 
+A remote MCP server somebody else runs is the third kind. Paste its
+`server.json`, or find it in the dashboard's catalogue of the official MCP
+registry — either way it is the same import, and nothing it offers is served
+until an administrator has read each tool and enabled it. Servers published
+only as something to run locally are listed but cannot be added; mcpd connects
+to remote servers and does not execute packages.
+
 Anything else is a plugin you write. See below.
 
 ## Status

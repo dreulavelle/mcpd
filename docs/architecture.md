@@ -39,6 +39,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/settings` | Runtime configuration in the database |
 | `internal/mcpservers` | server.json, and the snapshot of a remote server's tools |
 | `internal/plugins/mcpremote` | Mounting a remote MCP server as a plugin |
+| `internal/registry` | Browsing a public catalogue of MCP servers |
 | `internal/messaging` | In-process bus and outbox publisher |
 | `internal/servertls` | Self-signed CA and certificate issuance |
 | `internal/config` | File and environment configuration, validation |
@@ -282,6 +283,58 @@ LAN is an ordinary thing to configure and is not made safer by being refused.
 
 Rate limiting is per server as well as per tool, because thirty tools behind one
 address are one upstream.
+
+## The catalogue
+
+Hand-authoring a `server.json` to add a server somebody else already published
+is copying. `internal/registry` browses the official MCP registry so an
+operator can pick one instead.
+
+**It finds documents; it does not install them.** Selecting an entry hands its
+`server.json` to the same import endpoint a paste goes through, and everything
+downstream is unchanged: the same validation, the same derived settings, the
+same discovery, the same per-tool approval. There is no second import path,
+which is the only way to be sure the catalogue cannot become a way around one
+of those steps.
+
+That is also what decides whether an entry is offered at all. Addability is not
+"does it have a `remotes` array" — it is `mcpservers.Parse` returning nil, the
+same call the import endpoint makes. A document with remotes this host will not
+dial, or a credential written into its own text, imports as a refusal; offering
+an Add button for one would be offering a button that fails.
+
+**Remote servers only.** Roughly a tenth of the registry is published solely as
+something to run locally, which this host does not do. Those are listed with
+the reason rather than filtered out, because "why is the thing I came for not
+here" is a worse question than a greyed-out row that answers it.
+
+**Nothing about the catalogue is on a request path or a startup path.** The
+client is constructed at boot and reaches nothing; the first fetch happens on
+the first request that asks for one. Answers are cached with a TTL, and a
+catalogue that cannot be reached serves what it last saw, marked stale with the
+time it was fetched. A third party being down is not this deployment's failure
+and is not worth a page that will not render — but neither is it worth
+pretending the data is current.
+
+**The registry's content is a third party's text, arriving in whatever quantity
+they choose to send.** The response is bounded before it is decoded, the entry
+count per page is capped, and every field is bounded and stripped of control
+and invisible-formatting characters before it is stored or returned.
+
+**Deduplicate by name.** The registry holds every version of every server and
+returns them all unless asked otherwise. The query asks for `version=latest`
+and the deduplication runs anyway: "the far end promises one row per name" is
+exactly the kind of promise whose failure shows up as a catalogue page listing
+the same server four times.
+
+Browsing takes `admin`. Everything it returns is public; the privilege is
+making this host reach a third party from inside the deployment. Nothing about
+it changes state, so nothing about it is audited — importing what it found is,
+like any other import.
+
+The client is behind an interface so a second catalogue can be added without
+touching a caller. There is one implementation, and adding another is a
+decision nobody has made.
 
 ## Tunnels
 

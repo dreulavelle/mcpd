@@ -131,6 +131,11 @@ type Options struct {
 	// MCPServers manages remote MCP servers: importing one, discovering what
 	// it offers, and classifying each tool before any of them is served.
 	MCPServers MCPServerAPI
+
+	// ServerCatalog browses a public registry of MCP servers, so an operator can
+	// pick one rather than hand-author a server.json. It only finds
+	// documents; importing one goes through MCPServers like any other paste.
+	ServerCatalog CatalogAPI
 }
 
 // BootstrapSetting is a value that must be known before the database opens and
@@ -277,6 +282,15 @@ func (s *Server) routes() {
 	// credentials, which is not a read of local state.
 	api("POST /api/mcp-servers/{name}/discover", s.handleDiscoverMCPServer, auth.CapAdmin)
 	api("PATCH /api/mcp-servers/{name}/tools/{tool}", s.handleClassifyMCPTool, auth.CapAdmin)
+	// The public catalogue. Administrator rather than operator because
+	// browsing it makes this host reach a third party, which is a request an
+	// operator should not be able to cause; what comes back is public.
+	//
+	// The entry route takes a wildcard because a registry name carries a
+	// slash -- "io.github.example/weather" -- which a single path segment
+	// cannot hold.
+	api("GET /api/catalog", s.handleListCatalog, auth.CapAdmin)
+	api("GET /api/catalog/{name...}", s.handleGetCatalogEntry, auth.CapAdmin)
 	// Accounts decide who can reach anything else here, so administering them
 	// is an administrator's right.
 	api("GET /api/users", s.handleListUsers, auth.CapAdmin)
