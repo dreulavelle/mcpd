@@ -32,18 +32,42 @@ const (
 )
 
 // Process is a running plugin subprocess.
+//
+// Requests are multiplexed over the pipe rather than serialised behind one
+// round trip. The write lock covers the write and nothing else; a response is
+// matched back to its caller by id, which is what the id was always for. What
+// that buys is not throughput so much as independence: one slow call no longer
+// spends every other caller's deadline, and one caller giving up no longer
+// ends the process for everybody else.
 type Process struct {
 	name string
 	log  *slog.Logger
 
+	// cmd is nil for a Process driven over pipes by a test. Kill and Stop
+	// both cope, so the subprocess is the only optional part of this.
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
 
-	// writeMu serialises requests. The protocol is one frame at a time in each
-	// direction, so a plugin never has to multiplex.
-	writeMu sync.Mutex
-	nextID  atomic.Uint64
+	// writeSlot is a mutex that can be given up on. A plugin that has stopped
+	// reading its stdin will eventually block a writer, and a sync.Mutex would
+	// then queue every other caller behind it with no way out -- which is the
+	// shape this file exists to remove. Acquiring it selects on the caller's
+	// context, so a caller that cannot get the pipe fails on its own deadline
+	// rather than on somebody else's work.
+	writeSlot chan struct{}
+	nextID    atomic.Uint64
+
+	// pending maps an in-flight request id to the channel its response will
+	// arrive on. A nil map means the read loop has stopped.
+	pendingMu sync.Mutex
+	pending   map[uint64]chan *Response
+
+	// readDone closes when the read loop stops, for any reason; readErr says
+	// why. A caller blocked on a response is woken by it, so a plugin that
+	// closes its output does not leave every caller to time out separately.
+	readDone chan struct{}
+	readErr  error
 
 	// exited is closed when the subprocess terminates, so a call in flight
 	// fails immediately rather than blocking until its timeout.
@@ -106,21 +130,38 @@ func Spawn(ctx context.Context, dir string, m Manifest, env map[string]string, l
 		return nil, fmt.Errorf("external: start plugin %s: %w", m.Name, err)
 	}
 
-	p := &Process{
-		name:   m.Name,
-		log:    log,
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: bufio.NewReaderSize(stdout, 64<<10),
-		exited: make(chan struct{}),
-	}
+	p := newProcess(m.Name, stdin, stdout, log)
+	p.cmd = cmd
 
 	// A plugin's stderr becomes host log lines rather than being discarded,
 	// which is often the only way to diagnose one that will not start.
 	go p.drainStderr(stderr)
 	go p.reap()
+	go p.readLoop()
 
 	return p, nil
+}
+
+// newProcess builds the half of a Process that needs only a pair of pipes.
+//
+// Spawn adds the subprocess; a test supplies its own pipes and drives the far
+// end itself, which is the only way to exercise multiplexing, a plugin that
+// answers out of order, and a plugin that never answers at all without
+// compiling a binary for each case.
+func newProcess(name string, stdin io.WriteCloser, stdout io.Reader, log *slog.Logger) *Process {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Process{
+		name:      name,
+		log:       log,
+		stdin:     stdin,
+		stdout:    bufio.NewReaderSize(stdout, 64<<10),
+		writeSlot: make(chan struct{}, 1),
+		pending:   make(map[uint64]chan *Response),
+		readDone:  make(chan struct{}),
+		exited:    make(chan struct{}),
+	}
 }
 
 // buildEnv assembles the subprocess environment.
@@ -159,16 +200,82 @@ func (p *Process) reap() {
 	}
 }
 
+// readLoop is the only reader of the plugin's stdout.
+//
+// One goroutine owns the pipe for the process's whole life, which is what
+// makes concurrent calls safe: nothing else advances the stream, so no caller
+// can consume another's frame or leave the reader stopped mid-line.
+func (p *Process) readLoop() {
+	defer p.stopReading()
+
+	for {
+		frame, err := p.readFrame()
+		if err != nil {
+			p.readErr = err
+			return
+		}
+
+		var resp Response
+		if err := json.Unmarshal(frame, &resp); err != nil {
+			// One unreadable frame is not a reason to abandon the stream: a
+			// whole line was consumed, so the reader is still aligned, and
+			// whoever was waiting on that id will time out and say so.
+			p.log.Warn("discarding an unreadable frame from a plugin",
+				"plugin", p.name, "error", err)
+			continue
+		}
+		p.deliver(&resp)
+	}
+}
+
+// stopReading wakes every caller still waiting. Without it, a plugin that
+// closed its output would leave each of them to discover that by timeout.
+func (p *Process) stopReading() {
+	p.pendingMu.Lock()
+	waiters := p.pending
+	// Nil rather than empty: a call arriving after this point must be refused
+	// outright rather than registered on a map nothing will ever read.
+	p.pending = nil
+	p.pendingMu.Unlock()
+
+	close(p.readDone)
+	for _, ch := range waiters {
+		close(ch)
+	}
+}
+
+// deliver hands a response to whoever is waiting for it.
+func (p *Process) deliver(resp *Response) {
+	p.pendingMu.Lock()
+	ch, waiting := p.pending[resp.ID]
+	if waiting {
+		delete(p.pending, resp.ID)
+	}
+	p.pendingMu.Unlock()
+
+	if !waiting {
+		// A response to a call that has already given up. Discarding it by id
+		// is the point: before this, the next caller read it as their own.
+		p.log.Warn("discarding a plugin response nobody is waiting for",
+			"plugin", p.name, "id", resp.ID)
+		return
+	}
+	// Buffered by one and written only here, so this cannot block even if the
+	// caller stopped selecting on it a moment ago.
+	ch <- resp
+}
+
 // Call sends a request and waits for its response.
 //
-// The protocol is strictly request/response with one frame in flight, so the
-// write lock is held across the round trip. That serialises a plugin's work,
-// which is the right default: a plugin author should not have to make their
-// integration concurrency-safe to be usable.
+// Waiting happens off the write lock, so a plugin taking two minutes over one
+// mutation does not spend the deadline of every read queued behind it -- which
+// is what used to make a single slow call look like a plugin-wide failure.
 func (p *Process) Call(ctx context.Context, method string, params any, result any) error {
 	select {
 	case <-p.exited:
 		return fmt.Errorf("external: plugin %s is not running", p.name)
+	case <-p.readDone:
+		return fmt.Errorf("external: plugin %s is not answering: %w", p.name, p.readErr)
 	default:
 	}
 
@@ -186,63 +293,98 @@ func (p *Process) Call(ctx context.Context, method string, params any, result an
 
 	req := Request{ID: p.nextID.Add(1), Method: method, Params: raw}
 
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
+	// Registered before the write. A plugin fast enough to answer between the
+	// two would otherwise have its response discarded as unclaimed, and the
+	// caller would wait out a whole timeout for a reply that already arrived.
+	replies, err := p.register(req.ID)
+	if err != nil {
+		return err
+	}
+	defer p.forget(req.ID)
 
-	done := make(chan error, 1)
-	go func() { done <- p.roundTrip(req, result) }()
+	if err := p.write(ctx, req); err != nil {
+		return err
+	}
 
 	select {
-	case err := <-done:
-		return err
+	case resp, ok := <-replies:
+		if !ok {
+			// The read loop stopped. Whatever it hit is the real failure.
+			return fmt.Errorf("external: plugin %s stopped answering during %s: %w",
+				p.name, method, p.readErr)
+		}
+		return decodeResponse(resp, result)
 	case <-p.exited:
 		return fmt.Errorf("external: plugin %s exited during %s: %w", p.name, method, p.exitErr)
 	case <-ctx.Done():
-		// A plugin that stops answering cannot be left holding the pipe: the
-		// next call would block behind it forever. Killing it is the only way
-		// to recover the channel.
-		p.log.Error("plugin call timed out; terminating the process",
-			"plugin", p.name, "method", method)
-		p.Kill()
+		// Only this call fails. The process is deliberately left alone: it was
+		// killed here once, which took down every other caller -- including
+		// the ones about to succeed -- to recover a pipe that was not blocked.
+		// A late answer is discarded by id, and a plugin that has genuinely
+		// stopped answering fails every call and reports itself unhealthy.
+		p.log.Warn("plugin call timed out", "plugin", p.name, "method", method,
+			"timeout", timeoutFor(method))
 		return fmt.Errorf("external: plugin %s did not answer %s within %s",
 			p.name, method, timeoutFor(method))
 	}
 }
 
-func (p *Process) roundTrip(req Request, result any) error {
+// register claims an id and the channel its answer will arrive on.
+func (p *Process) register(id uint64) (chan *Response, error) {
+	ch := make(chan *Response, 1)
+	p.pendingMu.Lock()
+	defer p.pendingMu.Unlock()
+	if p.pending == nil {
+		return nil, fmt.Errorf("external: plugin %s is not answering: %w", p.name, p.readErr)
+	}
+	p.pending[id] = ch
+	return ch, nil
+}
+
+// forget drops a claim. Delivery removes it too, so this is a no-op on the
+// path where an answer arrived and a cleanup on every other.
+func (p *Process) forget(id uint64) {
+	p.pendingMu.Lock()
+	delete(p.pending, id)
+	p.pendingMu.Unlock()
+}
+
+// write puts one frame on the pipe, holding the slot for exactly that long.
+func (p *Process) write(ctx context.Context, req Request) error {
 	line, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
-	if _, err := p.stdin.Write(append(line, '\n')); err != nil {
+	line = append(line, '\n')
+
+	select {
+	case p.writeSlot <- struct{}{}:
+	case <-ctx.Done():
+		return fmt.Errorf("external: plugin %s did not free its input for %s within %s",
+			p.name, req.Method, timeoutFor(req.Method))
+	case <-p.exited:
+		return fmt.Errorf("external: plugin %s exited before %s was sent: %w",
+			p.name, req.Method, p.exitErr)
+	case <-p.readDone:
+		return fmt.Errorf("external: plugin %s is not answering: %w", p.name, p.readErr)
+	}
+	defer func() { <-p.writeSlot }()
+
+	if _, err := p.stdin.Write(line); err != nil {
 		return fmt.Errorf("external: write to plugin %s: %w", p.name, err)
 	}
+	return nil
+}
 
-	for {
-		frame, err := p.readFrame()
-		if err != nil {
-			return err
-		}
-
-		var resp Response
-		if err := json.Unmarshal(frame, &resp); err != nil {
-			return fmt.Errorf("external: plugin %s sent an unreadable frame: %w", p.name, err)
-		}
-		// A stale response from a previous timed-out call must not be mistaken
-		// for this one's.
-		if resp.ID != req.ID {
-			p.log.Warn("discarding a plugin response with an unexpected id",
-				"plugin", p.name, "want", req.ID, "got", resp.ID)
-			continue
-		}
-		if resp.Error != nil {
-			return resp.Error
-		}
-		if result == nil || len(resp.Result) == 0 {
-			return nil
-		}
-		return json.Unmarshal(resp.Result, result)
+// decodeResponse turns one answer into the caller's result.
+func decodeResponse(resp *Response, result any) error {
+	if resp.Error != nil {
+		return resp.Error
 	}
+	if result == nil || len(resp.Result) == 0 {
+		return nil
+	}
+	return json.Unmarshal(resp.Result, result)
 }
 
 // readFrame reads one line, refusing anything over the frame cap.
@@ -258,6 +400,9 @@ func (p *Process) readFrame() ([]byte, error) {
 		}
 		buf = append(buf, chunk...)
 		if len(buf) > maxFrame {
+			// The rest of the line has not been read, so the stream position is
+			// no longer known and no later frame can be trusted. This is the
+			// one case where the process still has to go.
 			p.Kill()
 			return nil, fmt.Errorf("external: plugin %s sent a frame over %d bytes", p.name, maxFrame)
 		}
@@ -283,7 +428,6 @@ func timeoutFor(method string) time.Duration {
 
 // Stop asks the plugin to exit, then kills it if it does not.
 func (p *Process) Stop(ctx context.Context) error {
-	var err error
 	p.stopOnce.Do(func() {
 		shutdownCtx, cancel := context.WithTimeout(ctx, shutdownCallTimeout)
 		defer cancel()
@@ -293,6 +437,11 @@ func (p *Process) Stop(ctx context.Context) error {
 		_ = p.Call(shutdownCtx, MethodShutdown, nil, nil)
 		_ = p.stdin.Close()
 
+		if p.cmd == nil {
+			// Driven over pipes rather than by a subprocess. Closing the input
+			// is the whole of the shutdown; there is nothing to wait for.
+			return
+		}
 		select {
 		case <-p.exited:
 		case <-time.After(shutdownCallTimeout):
@@ -301,12 +450,12 @@ func (p *Process) Stop(ctx context.Context) error {
 			<-p.exited
 		}
 	})
-	return err
+	return nil
 }
 
 // Kill terminates the subprocess immediately.
 func (p *Process) Kill() {
-	if p.cmd.Process != nil {
+	if p.cmd != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
 	}
 }

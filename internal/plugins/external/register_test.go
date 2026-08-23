@@ -89,7 +89,7 @@ func TestExternalPlugin_RegisterMountsToolsAndMutations(t *testing.T) {
 
 	manager := plugins.NewManager(quietLog(), "test",
 		func(context.Context, string, auth.Capability) error { return nil },
-		stubApprovals{}, nil)
+		stubApprovals{}, nil, nil)
 	if err := manager.Register(ctx, p, "echo", true); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestExternalPlugin_CarriesDeclaredVerifiability(t *testing.T) {
 
 	manager := plugins.NewManager(quietLog(), "test",
 		func(context.Context, string, auth.Capability) error { return nil },
-		stubApprovals{}, nil)
+		stubApprovals{}, nil, nil)
 	if err := manager.Register(ctx, p, "echo", true); err != nil {
 		t.Fatalf("register: %v", err)
 	}

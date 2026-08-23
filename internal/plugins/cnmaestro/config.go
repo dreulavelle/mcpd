@@ -75,6 +75,42 @@ type Config struct {
 
 	// Timeout bounds a single upstream request.
 	Timeout time.Duration `yaml:"timeout" json:"timeout"`
+
+	// InventoryCacheSeconds is how long a read of how the estate is *arranged*
+	// may be reused: networks, sites, towers, WLANs, AP groups, tenants. Those
+	// change when a person changes them, which is not something that happens
+	// between two tool calls in one conversation.
+	//
+	// A pointer because zero and absent mean different things. Absent takes
+	// the default; zero switches caching of these reads off, and an operator
+	// who typed zero meant it.
+	//
+	// Nothing else is affected either way: what may be cached at all is an
+	// allow-list in readcache.go, and alarms, events, connected clients and
+	// statistics are not on it whatever this says.
+	InventoryCacheSeconds *int `yaml:"inventory_cache_seconds" json:"inventory_cache_seconds,omitempty"`
+
+	// DeviceCacheSeconds is how long a device listing or a single device
+	// record may be reused, on the same terms.
+	//
+	// Short on purpose, and short for a reason worth stating: a device's state
+	// feeds a model that then decides something, so a stale answer is a
+	// correctness problem rather than a freshness one. What makes a short
+	// window defensible is that cnMaestro's own view is already behind -- the
+	// controller learns a device has gone offline on its own polling interval,
+	// measured in minutes -- so a few seconds here adds nothing measurable to
+	// an error that is already there, while removing the second and third full
+	// pagination walk of one estate inside a single conversation.
+	//
+	// Set it to zero if that trade is not one this deployment wants to make.
+	DeviceCacheSeconds *int `yaml:"device_cache_seconds" json:"device_cache_seconds,omitempty"`
+
+	// InventoryCacheTTL and DeviceCacheTTL are the resolved forms of the two
+	// above, filled by withDefaults. Not configured directly: a duration in a
+	// settings form is a string somebody has to get right, and a number of
+	// seconds is not.
+	InventoryCacheTTL time.Duration `yaml:"-" json:"-"`
+	DeviceCacheTTL    time.Duration `yaml:"-" json:"-"`
 }
 
 const (
@@ -123,6 +159,20 @@ func (c *Config) withDefaults() {
 	if c.Timeout <= 0 {
 		c.Timeout = defaultTimeout
 	}
+	c.InventoryCacheTTL = resolveTTL(c.InventoryCacheSeconds, defaultInventoryTTL)
+	c.DeviceCacheTTL = resolveTTL(c.DeviceCacheSeconds, defaultDeviceTTL)
+}
+
+// resolveTTL turns a configured number of seconds into a duration, keeping the
+// difference between "not set" and "set to none".
+func resolveTTL(seconds *int, fallback time.Duration) time.Duration {
+	if seconds == nil {
+		return fallback
+	}
+	if *seconds <= 0 {
+		return 0
+	}
+	return time.Duration(*seconds) * time.Second
 }
 
 // Validate reports configuration that cannot work.

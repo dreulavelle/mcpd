@@ -50,6 +50,7 @@ type Manager struct {
 
 	approvals ApprovalService
 	inline    InlinePolicy
+	observer  ToolObserver
 
 	mu      sync.RWMutex
 	mounted map[string]*Mounted
@@ -61,7 +62,7 @@ type Manager struct {
 
 // NewManager returns an empty manager. middleware is the host gate applied to
 // every tool call; version identifies the host in MCP handshakes.
-func NewManager(log *slog.Logger, version string, middleware ToolMiddleware, approvals ApprovalService, inline InlinePolicy) *Manager {
+func NewManager(log *slog.Logger, version string, middleware ToolMiddleware, approvals ApprovalService, inline InlinePolicy, observer ToolObserver) *Manager {
 	if middleware == nil {
 		// A nil gate would mean unauthenticated tool access, so refuse to
 		// operate rather than defaulting to permissive.
@@ -69,12 +70,16 @@ func NewManager(log *slog.Logger, version string, middleware ToolMiddleware, app
 			return errors.New("plugins: no authorization middleware configured")
 		}
 	}
+	if observer == nil {
+		observer = noObserver{}
+	}
 	return &Manager{
 		log:        log,
 		version:    version,
 		middleware: middleware,
 		approvals:  approvals,
 		inline:     inline,
+		observer:   observer,
 		mounted:    make(map[string]*Mounted),
 	}
 }
@@ -160,7 +165,7 @@ func (m *Manager) build(ctx context.Context, d Descriptor, p Plugin, required bo
 	// error. A plugin -- especially an out-of-process one the operator dropped
 	// in -- must not be able to take the host down that way, so registration
 	// is recovered and reported as a failed mount.
-	if err := attachAll(srv, reg, m.middleware, m.approvals, m.inline, m.log); err != nil {
+	if err := attachAll(srv, reg, m.middleware, m.approvals, m.inline, m.observer, m.log); err != nil {
 		return nil, fmt.Errorf("plugins: %s: %w", d.Name, err)
 	}
 
@@ -414,7 +419,7 @@ func (m *Manager) BuildServer(names []string) (*mcp.Server, error) {
 		if mounted == nil {
 			continue
 		}
-		if err := attachAll(srv, mounted.Registry, m.middleware, m.approvals, m.inline, m.log); err != nil {
+		if err := attachAll(srv, mounted.Registry, m.middleware, m.approvals, m.inline, m.observer, m.log); err != nil {
 			return nil, fmt.Errorf("plugins: aggregate %s: %w", name, err)
 		}
 	}
@@ -505,7 +510,7 @@ func (m *Manager) All() []*Mounted {
 
 // attachAll wires every tool and mutation onto an MCP server, converting a
 // panic from the SDK into an error.
-func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals ApprovalService, inline InlinePolicy, log *slog.Logger) (err error) {
+func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals ApprovalService, inline InlinePolicy, obs ToolObserver, log *slog.Logger) (err error) {
 	defer func() {
 		if v := recover(); v != nil {
 			err = fmt.Errorf("tool registration failed: %v", v)
@@ -521,12 +526,16 @@ func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals Appr
 	// tool and loses only what it must.
 	perTool := reg.descriptor.EffectiveRuntime() == RuntimeMCP
 
+	if obs == nil {
+		obs = noObserver{}
+	}
+
 	for _, t := range reg.tools {
 		if !perTool {
-			t.attach(srv, mw)
+			t.attach(srv, mw, obs)
 			continue
 		}
-		if failure := attachOne(func() { t.attach(srv, mw) }); failure != nil {
+		if failure := attachOne(func() { t.attach(srv, mw, obs) }); failure != nil {
 			log.Error("skipping a remote tool the MCP SDK refused",
 				"plugin", reg.descriptor.Name, "tool", t.qualified, "error", failure)
 		}
@@ -547,7 +556,7 @@ func attachAll(srv *mcp.Server, reg *Registry, mw ToolMiddleware, approvals Appr
 			return fmt.Errorf("registers mutations but no approval service is configured")
 		}
 		for _, mu := range reg.mutations {
-			mu.attach(srv, mw, approvals, inline)
+			mu.attach(srv, mw, approvals, inline, obs)
 		}
 		attachApprovalTools(srv, reg.descriptor.Name, approvals, mw)
 	}

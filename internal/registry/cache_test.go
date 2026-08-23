@@ -380,9 +380,7 @@ func TestCached_KeysAreBounded(t *testing.T) {
 	if _, err := cache.List(context.Background(), huge); err != nil {
 		t.Fatal(err)
 	}
-	cache.store.mu.Lock()
-	defer cache.store.mu.Unlock()
-	for key := range cache.store.entries {
+	for _, key := range cache.store.Keys() {
 		if len(key) > maxQueryRunes*4+maxCursorRunes*4+64 {
 			t.Errorf("a cache key is %d bytes; the bounds should have cut it", len(key))
 		}

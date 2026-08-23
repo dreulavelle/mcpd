@@ -128,7 +128,7 @@ func TestDockerCatalogEntry_ALocalContainerIsListedAndNotOffered(t *testing.T) {
 // every time somebody opens the page.
 func TestCatalog_EverySourceOffLeavesNoCatalogue(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if catalog := buildCatalog(config.Catalog{}, log); catalog != nil {
+	if catalog := buildCatalog(config.Catalog{}, nil, log); catalog != nil {
 		t.Fatalf("catalog = %+v, want none when every source is off", catalog)
 	}
 	if api := catalogAPI(nil); api.List != nil || api.Get != nil || api.Source != nil {
@@ -136,13 +136,13 @@ func TestCatalog_EverySourceOffLeavesNoCatalogue(t *testing.T) {
 	}
 
 	// And one source on is one source, not four.
-	only := buildCatalog(config.Catalog{Official: true}, log)
+	only := buildCatalog(config.Catalog{Official: true}, nil, log)
 	if got := only.Sources(); len(got) != 1 || got[0] != "registry.modelcontextprotocol.io" {
 		t.Errorf("sources = %v, want just the official registry", got)
 	}
 	t.Cleanup(func() { _ = only.Close() })
 
-	both := buildCatalog(config.Catalog{Official: true, Docker: true}, log)
+	both := buildCatalog(config.Catalog{Official: true, Docker: true}, nil, log)
 	t.Cleanup(func() { _ = both.Close() })
 	want := []string{"registry.modelcontextprotocol.io", "docker/mcp-registry"}
 	if got := both.Sources(); strings.Join(got, ",") != strings.Join(want, ",") {
@@ -169,7 +169,7 @@ func TestCatalog_PreferenceOrderIsByDistanceFromThePublisher(t *testing.T) {
 		Official: true, Docker: true, Smithery: true, PulseMCP: true,
 		PulseMCPAPIKeyRef: "env:MCPD_TEST_PULSEMCP_KEY",
 		PulseMCPTenant:    "a-tenant",
-	}, log)
+	}, nil, log)
 	if all == nil {
 		t.Fatal("catalog = nil, want four sources")
 	}
@@ -200,7 +200,7 @@ func TestCatalog_PulseMCPWithAnUnreadableKeyIsLeftOut(t *testing.T) {
 		PulseMCP:          true,
 		PulseMCPAPIKeyRef: "env:MCPD_TEST_A_VARIABLE_THAT_IS_NOT_SET",
 		PulseMCPTenant:    "a-tenant",
-	}, log)
+	}, nil, log)
 	if catalog == nil {
 		t.Fatal("catalog = nil, want the official registry to survive")
 	}
@@ -216,7 +216,7 @@ func TestCatalog_PulseMCPWithAnUnreadableKeyIsLeftOut(t *testing.T) {
 		PulseMCP:          true,
 		PulseMCPAPIKeyRef: "env:MCPD_TEST_A_VARIABLE_THAT_IS_NOT_SET",
 		PulseMCPTenant:    "a-tenant",
-	}, log)
+	}, nil, log)
 	if alone != nil {
 		t.Errorf("catalog = %+v, want none when the only source could not be built", alone)
 	}

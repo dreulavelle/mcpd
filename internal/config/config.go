@@ -29,9 +29,42 @@ type Config struct {
 	// the feature.
 	SecretKeyRef string `yaml:"secret_key_ref"`
 
+	Metrics Metrics                 `yaml:"metrics"`
 	Tunnel  Tunnel                  `yaml:"tunnel"`
 	Catalog Catalog                 `yaml:"catalog"`
 	Plugins map[string]PluginConfig `yaml:"plugins"`
+}
+
+// Metrics configures the Prometheus endpoint.
+//
+// It is served on the *dashboard* listener, not the MCP one, and that is the
+// decision worth writing down. /health/ready is unauthenticated because a load
+// balancer in front of the MCP port has to reach it without a credential.
+// Nothing in front of that port needs metrics, and metrics say a great deal
+// more: which integrations are mounted, what each of their tools is called,
+// how long a named upstream takes to answer, and how often calls fail. The MCP
+// listener is the one reached by a third party through a tunnel, so a series
+// naming every plugin and tool must not be on it. The dashboard listener has
+// the audience this is for -- operators, on an internal interface -- and is
+// already where the rest of the operational detail lives.
+//
+// Because it is behind the dashboard's own gate it takes `read`, which a
+// scraper satisfies with a static token exactly as any other machine caller
+// does. Public drops that for a deployment where the port is already fenced
+// off to a monitoring network and a token is one more thing to rotate.
+type Metrics struct {
+	// Enabled builds the collectors and serves GET /metrics. On by default:
+	// what it exposes is bounded by the same listener the dashboard is on, and
+	// a host nobody can see the state of is worse to operate.
+	Enabled bool `yaml:"enabled"`
+
+	// Public serves /metrics without authentication.
+	//
+	// Off by default and deliberately not the recommendation. It exists
+	// because a Prometheus scraped from inside a private network is a common
+	// shape and refusing to support it would only produce a token pasted into
+	// a scrape config and never rotated.
+	Public bool `yaml:"public"`
 }
 
 // Catalog says which public catalogues of MCP servers the dashboard browses.
@@ -393,6 +426,7 @@ func Default() *Config {
 		// were off. PulseMCP is off because it cannot answer without a key it
 		// has to be issued by hand; see Catalog.
 		Catalog: Catalog{Official: true, Docker: true, Smithery: true},
+		Metrics: Metrics{Enabled: true},
 		Logging: Logging{Level: "info", Format: "json"},
 		Plugins: map[string]PluginConfig{},
 	}
