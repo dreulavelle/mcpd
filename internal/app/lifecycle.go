@@ -249,6 +249,15 @@ func (a *App) Shutdown() error {
 		}
 	}
 
+	// The catalogue caches own the refreshes that run behind a served answer.
+	// Nobody is waiting for one, so without this the process would be held
+	// open on the way out by work whose result nothing will read.
+	if a.catalog != nil {
+		if err := a.catalog.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	// 3. Stop plugins, in reverse registration order.
 	pluginCtx, pluginCancel := context.WithTimeout(ctx, 10*time.Second)
 	if err := a.manager.Shutdown(pluginCtx); err != nil {

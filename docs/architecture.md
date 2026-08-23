@@ -39,7 +39,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/settings` | Runtime configuration in the database |
 | `internal/mcpservers` | server.json, and the snapshot of a remote server's tools |
 | `internal/plugins/mcpremote` | Mounting a remote MCP server as a plugin |
-| `internal/registry` | Browsing a public catalogue of MCP servers |
+| `internal/registry` | Browsing the public catalogues of MCP servers |
 | `internal/messaging` | In-process bus and outbox publisher |
 | `internal/servertls` | Self-signed CA and certificate issuance |
 | `internal/config` | File and environment configuration, validation |
@@ -316,8 +316,19 @@ address are one upstream.
 ## The catalogue
 
 Hand-authoring a `server.json` to add a server somebody else already published
-is copying. `internal/registry` browses the official MCP registry so an
-operator can pick one instead.
+is copying. `internal/registry` browses the public catalogues of MCP servers so
+an operator can pick one instead.
+
+Two of them today. The **official MCP registry** is where a publisher registers
+a server themselves. **Docker's MCP catalogue** is built from
+[docker/mcp-registry](https://github.com/docker/mcp-registry), which is MIT
+licensed — the notice travels with the vendored fixtures and with every
+document composed from an entry, in its `_meta`. Both are on by default and
+either can be switched off under `catalog:` in the configuration file; a
+deployment with none gets an endpoint that says so.
+
+Reading a catalogue is an HTTPS fetch of somebody's metadata. Nothing about
+Docker's involves Docker: no daemon, no container, no image.
 
 **It finds documents; it does not install them.** Selecting an entry hands its
 `server.json` to the same import endpoint a paste goes through, and everything
@@ -340,38 +351,108 @@ and so is not the leaf it otherwise would be. The alternative was to
 re-implement the acceptance rule beside the catalogue, which is the same bug
 with an extra copy of the code to keep in step.
 
-**Remote servers only.** Roughly a tenth of the registry is published solely as
-something to run locally, which this host does not do. Those are listed with
-the reason rather than filtered out, because "why is the thing I came for not
-here" is a worse question than a greyed-out row that answers it.
+**Remote servers only.** Roughly half of the official registry, and three
+quarters of Docker's catalogue, is published solely as something to run
+locally — an npm package, a container, a command. This host does not run those.
+They are listed with the reason rather than filtered out, because "why is the
+thing I came for not here" is a worse question than a greyed-out row that
+answers it. Docker's `type: server` and `type: poci` entries are exactly that
+case, and so is an entry reachable only through an OAuth flow Docker's own
+gateway performs: this host sends a credential an operator configured, and the
+entry does not say which header would carry the one that flow obtains.
 
-**Nothing about the catalogue is on a request path or a startup path.** The
-client is constructed at boot and reaches nothing; the first fetch happens on
-the first request that asks for one. Answers are cached with a TTL, and a
-catalogue that cannot be reached serves what it last saw, marked stale with the
-time it was fetched. A third party being down is not this deployment's failure
-and is not worth a page that will not render — but neither is it worth
-pretending the data is current.
+**A composed document is still a document.** Docker's format is not
+`server.json`, so an entry is translated into one — the derived name says where
+it came from, `${ENV}` in a header becomes a `{placeholder}` with a variable
+behind it marked secret, and the result goes to the same import endpoint, is
+judged by the same two calls, and is stored verbatim as composed. The
+translation is byte-stable, because the import path hashes what it stores.
+
+**Five `server.json` formats are read, not one.** Every dated schema published
+to date is vendored beside the current one, and an earlier document is
+translated into the internal model explicitly rather than parsed optimistically.
+What actually moved between them is small and is listed in `schema.go`:
+2025-07-09 spelled an input's flags `is_required` and `is_secret`, and
+`remotes[].variables` — the map that says what a `{placeholder}` in a url means
+— arrived only with 2025-12-11. The first is read under both spellings and
+OR-ed, because that direction can only add protection to a credential and the
+other can only remove it. The second is not read where the format does not
+define it: an earlier document carrying a url placeholder is refused with its
+version named, because substituting from a map the format never had would be
+this host inventing a meaning and then dialling the address it produced. A
+`$schema` that is none of the five is still refused — the pin is by URI, so the
+right date at the wrong address is not that format.
+
+**Nothing about the catalogue is on a startup path.** Every client is
+constructed at boot and reaches nothing; the first fetch happens on the first
+request that asks for one. A catalogue that cannot be reached serves what it
+last saw, marked stale with the time it was fetched. A third party being down
+is not this deployment's failure and is not worth a page that will not render —
+but neither is it worth pretending the data is current.
+
+**How long an answer is reused is the catalogue's to say.** A single hardcoded
+TTL is wrong in both directions at once, and measurably so: the official
+registry sends no `Cache-Control` and no validator at all, Docker's CDN sends
+an `ETag` and a `Last-Modified` and no policy, and other catalogues send
+`no-cache` or grant four hours to a shared cache and a day of
+`stale-while-revalidate`. So `Cache-Control` is honoured where it is sent —
+`s-maxage` in preference to `max-age`, because mcpd is a shared cache and not
+one person's browser — `Age` is deducted, and the configured default stands in
+only where a catalogue said nothing. `no-cache` with no validator to revalidate
+against becomes a very short life rather than being ignored. A stale answer
+inside the window a catalogue granted is served immediately and refreshed
+behind it, one refresh per key, owned by the cache and cancelled at shutdown.
+A refresh sends `If-None-Match` and `If-Modified-Since` when a validator is
+held, which turns re-reading Docker's 567 KiB catalogue into a `304`. One
+`server.json` is held longer than a listing, because it is a different question
+keyed by a stable name; "no such server" is held for seconds, because a name
+that 404s today is a server published tomorrow. `?refresh=1` bypasses all of it
+for one request, for the administrator standing in front of a catalogue that is
+visibly behind.
+
+**One source's failure is one source's.** Sources are asked concurrently and
+the whole fan-out is bounded, so the slowest catalogue does not decide how long
+a page takes. What arrived is served, and the response says which catalogues
+answered, which were stale, how many entries each contributed, and what went
+wrong with the rest — a shorter list that does not name the missing catalogue
+reads as "there is nothing else" rather than as "we could not ask". A page is
+an error only when nothing answered at all.
+
+**The memory bound is on the process, not on each catalogue.** One store behind
+every cache, because a cap each source gets its own copy of is a cap a fourth
+source silently quadruples.
 
 **The registry's content is a third party's text, arriving in whatever quantity
 they choose to send.** The response is bounded before it is decoded, the entry
 count per page is capped, and every field is bounded and stripped of control
 and invisible-formatting characters before it is stored or returned.
 
-**Deduplicate by name.** The registry holds every version of every server and
-returns them all unless asked otherwise. The query asks for `version=latest`
-and the deduplication runs anyway: "the far end promises one row per name" is
-exactly the kind of promise whose failure shows up as a catalogue page listing
-the same server four times.
+**Deduplicate by name within a catalogue, by address across them.** The
+official registry holds every version of every server and returns them all
+unless asked otherwise; the query asks for `version=latest` and the
+deduplication runs anyway, because "the far end promises one row per name" is
+exactly the kind of promise whose failure shows up as a page listing the same
+server four times.
+
+Across catalogues a name cannot do the job — the official registry calls it
+`app.linear/linear` and Docker calls it `linear`, and no rule turns one into the
+other. The address does: thirty-two of the entries the two share resolve to the
+same URL, and two entries that dial one endpoint are one server however they
+are named. The official registry's copy is the one kept, because that is where
+the party who operates the server registered it. An entry with no address falls
+back to its own catalogue's name, since nothing can establish that two
+unreachable entries are the same thing.
 
 Browsing takes `admin`. Everything it returns is public; the privilege is
 making this host reach a third party from inside the deployment. Nothing about
 it changes state, so nothing about it is audited — importing what it found is,
 like any other import.
 
-The client is behind an interface so a second catalogue can be added without
-touching a caller. There is one implementation, and adding another is a
-decision nobody has made.
+Every client is behind one interface, and the cache and the multiplexer are
+themselves clients over clients: a cache in front of each source, so that one
+being down is that source's staleness rather than the page's, and the
+multiplexer in front of the caches, so that the handler still talks to a single
+catalogue.
 
 ## Tunnels
 

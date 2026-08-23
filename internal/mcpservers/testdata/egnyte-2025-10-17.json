@@ -1,0 +1,27 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "com.egnyte/mcp-server",
+  "description": "Egnyte's remote MCP server for secure AI access, search, upload and file management in your account.",
+  "title": "Egnyte Remote MCP Server",
+  "version": "1.0.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp-server.egnyte.com/mcp",
+      "headers": [
+        {
+          "description": "OAuth 2.0 Bearer token for Egnyte authentication. Obtain via OAuth flow at https://mcp-oauth.egnyte.com/domain_picker.html",
+          "isRequired": true,
+          "isSecret": true,
+          "name": "Authorization"
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "authorizationUrl": "https://mcp-oauth.egnyte.com/domain_picker.html",
+      "documentationUrl": "https://developers.egnyte.com/api-docs/remote-mcp-server"
+    }
+  }
+}

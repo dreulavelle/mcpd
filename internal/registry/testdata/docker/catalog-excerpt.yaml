@@ -1,0 +1,226 @@
+version: 3
+name: docker-mcp
+displayName: Docker MCP Catalog
+registry:
+  context7:
+    description: Pull up-to-date, version-specific documentation and code examples for any library or framework straight into your prompt.
+    title: Context7
+    type: remote
+    dateAdded: "2025-05-05T20:08:35Z"
+    ref: ""
+    readme: http://desktop.docker.com/mcp/catalog/v3/readme/context7.md
+    toolsUrl: http://desktop.docker.com/mcp/catalog/v3/tools/context7.json
+    source: ""
+    remote:
+      transport_type: streamable-http
+      url: https://mcp.context7.com/mcp
+      headers:
+        CONTEXT7_API_KEY: "${CONTEXT7_API_KEY}"
+    icon: https://avatars.githubusercontent.com/u/74989412?s=200&v=4
+    tools: []
+    secrets:
+      - name: context7.api_key
+        env: CONTEXT7_API_KEY
+        example: <YOUR_API_KEY>
+    prompts: 0
+    resources: {}
+    metadata:
+      category: documentation
+      tags:
+        - documentation
+        - developer-tools
+        - code-examples
+        - remote
+      license: Apache License 2.0
+      owner: docker
+  apify:
+    description: Apify is the world's largest marketplace of tools for web scraping, data extraction, and web automation. You can extract structured data from social media, e-commerce, search engines, maps, travel sites, or any other website.
+    title: Apify Remote
+    type: remote
+    dateAdded: "2025-09-08T19:03:35Z"
+    ref: ""
+    readme: http://desktop.docker.com/mcp/catalog/v3/readme/apify.md
+    toolsUrl: http://desktop.docker.com/mcp/catalog/v3/tools/apify.json
+    source: ""
+    remote:
+      transport_type: streamable-http
+      url: https://mcp.apify.com
+      headers:
+        Authorization: "Bearer ${APIFY_API_KEY}"
+    icon: https://www.google.com/s2/favicons?domain=apify.com&sz=64
+    tools: []
+    secrets:
+      - name: apify.api_key
+        env: APIFY_API_KEY
+        example: <YOUR_API_KEY>
+    prompts: 0
+    resources: {}
+    metadata:
+      category: automation
+      tags:
+        - automation
+        - web-scraping
+        - data-extraction
+        - remote
+      license: Apache License 2.0
+      owner: docker
+  astro-docs:
+    description: Access the latest Astro web framework documentation, guides, and API references.
+    title: Astro Docs
+    type: remote
+    dateAdded: "2025-09-08T19:03:35Z"
+    ref: ""
+    readme: http://desktop.docker.com/mcp/catalog/v3/readme/astro-docs.md
+    toolsUrl: http://desktop.docker.com/mcp/catalog/v3/tools/astro-docs.json
+    source: ""
+    upstream: https://github.com/withastro/docs-mcp
+    remote:
+      transport_type: streamable-http
+      url: https://mcp.docs.astro.build/mcp
+    icon: https://astro.build/favicon.svg
+    tools:
+      - name: search_astro_docs
+    prompts: 0
+    resources: {}
+    metadata:
+      category: documentation
+      tags:
+        - documentation
+        - astro
+        - web-framework
+        - remote
+      license: Apache License 2.0
+      owner: docker
+  curl:
+    description: Standard curl tool.
+    title: Curl
+    type: poci
+    dateAdded: "2025-05-05T20:04:34Z"
+    ref: ""
+    readme: http://desktop.docker.com/mcp/catalog/v3/readme/curl.md
+    toolsUrl: http://desktop.docker.com/mcp/catalog/v3/tools/curl.json
+    source: ""
+    icon: https://avatars.githubusercontent.com/u/16928085?s=200&v=4
+    tools:
+      - name: curl
+        description: Run a curl command.
+        parameters:
+          type: object
+          properties:
+            args:
+              type: array
+              description: The arguments to pass to curl
+              items:
+                type: string
+          required:
+            - args
+        container:
+          image: alpine/curl@sha256:1a4d725751c5bd50297ee243db5d4df8ac5aabdf7030dd40dcec3bc3fdaa1cfa
+          command:
+            - '{{args|into}}'
+    prompts: 0
+    resources: {}
+    metadata:
+      category: devops
+      tags:
+        - http
+      license: Apache License 2.0
+      owner: docker
+  dodo-payments:
+    description: Tools for cross-border payments, taxes, and compliance.
+    title: Dodo Payments
+    type: remote
+    dateAdded: "2025-09-08T19:03:35Z"
+    ref: ""
+    readme: http://desktop.docker.com/mcp/catalog/v3/readme/dodo-payments.md
+    toolsUrl: http://desktop.docker.com/mcp/catalog/v3/tools/dodo-payments.json
+    source: ""
+    remote:
+      transport_type: sse
+      url: https://mcp.dodopayments.com/sse
+      headers:
+        Authorization: "Bearer ${DODO_PAYMENTS_API_KEY}"
+    icon: https://www.google.com/s2/favicons?domain=dodopayments.com&sz=64
+    tools: []
+    secrets:
+      - name: dodo-payments.api_key
+        env: DODO_PAYMENTS_API_KEY
+        example: <YOUR_API_KEY>
+    prompts: 0
+    resources: {}
+    metadata:
+      category: payments
+      tags:
+        - payments
+        - finance
+        - transactions
+        - remote
+      license: Apache License 2.0
+      owner: docker
+  linear:
+    description: Track issues, plan sprints, and manage product development with a fast, keyboard-first interface designed for software teams.
+    title: Linear
+    type: remote
+    dynamic:
+      tools: true
+    dateAdded: "2025-09-08T19:03:35Z"
+    ref: ""
+    readme: http://desktop.docker.com/mcp/catalog/v3/readme/linear.md
+    source: ""
+    remote:
+      transport_type: streamable-http
+      url: https://mcp.linear.app/mcp
+    icon: https://www.google.com/s2/favicons?domain=linear.app&sz=64
+    tools: []
+    prompts: 0
+    resources: {}
+    metadata:
+      category: productivity
+      tags:
+        - productivity
+        - project-management
+        - issue-tracking
+        - remote
+      license: Apache License 2.0
+      owner: docker
+    oauth:
+      providers:
+        - provider: linear
+          secret: linear.personal_access_token
+          env: LINEAR_PERSONAL_ACCESS_TOKEN
+  SQLite:
+    description: Database interaction and business intelligence capabilities.
+    title: SQLite (Archived)
+    type: server
+    dateAdded: "2025-05-05T20:08:35Z"
+    image: mcp/sqlite@sha256:efbc05ccace18df122f26b674bd1730c76ece716551df2b3961d519909c34696
+    ref: ""
+    readme: http://desktop.docker.com/mcp/catalog/v3/readme/SQLite.md
+    toolsUrl: http://desktop.docker.com/mcp/catalog/v3/tools/SQLite.json
+    source: https://github.com/modelcontextprotocol/servers/tree/b4ee623039a6c60053ce67269701ad9e95073306/src/sqlite
+    upstream: https://github.com/modelcontextprotocol/servers
+    icon: https://avatars.githubusercontent.com/u/48680494?v=4
+    tools:
+      - name: append_insight
+      - name: create_table
+      - name: describe_table
+      - name: list_tables
+      - name: read_query
+      - name: write_query
+    command:
+      - --db-path
+      - /mcp/db.sqlite
+    volumes:
+      - mcp-sqlite:/mcp
+    prompts: 0
+    resources: {}
+    metadata:
+      pulls: 64495
+      stars: 17
+      githubStars: 89767
+      category: database
+      tags:
+        - sqlite
+        - database
+      license: Other
+      owner: modelcontextprotocol

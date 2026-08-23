@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func validConfig() *Config {
@@ -298,5 +300,50 @@ func TestPluginConfig_ResolvedType(t *testing.T) {
 			t.Errorf("PluginConfig{Type:%q}.ResolvedType(%q) = %q, want %q",
 				tc.typ, tc.name, got, tc.want)
 		}
+	}
+}
+
+// Both catalogues are on unless a deployment says otherwise, and saying
+// otherwise has to work: a bool that defaults true is only switchable if the
+// file's absent key leaves the default alone and its explicit false wins.
+func TestCatalog_DefaultsOnAndCanBeSwitchedOff(t *testing.T) {
+	if def := Default(); !def.Catalog.Official || !def.Catalog.Docker {
+		t.Errorf("catalog = %+v, want both sources on by default", def.Catalog)
+	}
+
+	tests := []struct {
+		name         string
+		yaml         string
+		wantOfficial bool
+		wantDocker   bool
+		wantEnabled  bool
+	}{
+		{name: "no catalog block at all", yaml: "",
+			wantOfficial: true, wantDocker: true, wantEnabled: true},
+		{name: "the official registry only",
+			yaml:         "catalog:\n  docker: false\n",
+			wantOfficial: true, wantEnabled: true},
+		{name: "docker only",
+			yaml:       "catalog:\n  official: false\n",
+			wantDocker: true, wantEnabled: true},
+		{name: "no catalogue at all",
+			yaml: "catalog:\n  official: false\n  docker: false\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			if err := yaml.Unmarshal([]byte(tc.yaml), c); err != nil {
+				t.Fatal(err)
+			}
+			if c.Catalog.Official != tc.wantOfficial {
+				t.Errorf("official = %v, want %v", c.Catalog.Official, tc.wantOfficial)
+			}
+			if c.Catalog.Docker != tc.wantDocker {
+				t.Errorf("docker = %v, want %v", c.Catalog.Docker, tc.wantDocker)
+			}
+			if c.Catalog.Enabled() != tc.wantEnabled {
+				t.Errorf("enabled = %v, want %v", c.Catalog.Enabled(), tc.wantEnabled)
+			}
+		})
 	}
 }

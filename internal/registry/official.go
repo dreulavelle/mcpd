@@ -104,6 +104,18 @@ func (o *Official) Source() string { return officialSource }
 // far end promises one row per name" is exactly the kind of promise that turns
 // a catalogue page into a list of the same server four times.
 func (o *Official) List(ctx context.Context, q Query) (Page, error) {
+	return o.ListIfChanged(ctx, q, Validators{})
+}
+
+// ListIfChanged is List with the previous answer's validators.
+//
+// The official registry sends none today -- no ETag, no Last-Modified, no
+// Cache-Control -- so this makes an unconditional request and reports a zero
+// Freshness, which leaves the cache on its configured default. It is written
+// anyway because the cost is a header the far end ignores, and because a
+// registry that starts sending one should not need a code change to be
+// believed.
+func (o *Official) ListIfChanged(ctx context.Context, q Query, v Validators) (Page, error) {
 	// Normalised again rather than assumed. The cache in front applies this so
 	// its keys match the requests they stand for, and this client is also
 	// usable on its own; the operation is idempotent, so doing it twice costs
@@ -124,8 +136,9 @@ func (o *Official) List(ctx context.Context, q Query) (Page, error) {
 	}
 
 	var body listResponse
-	if err := o.fetch(ctx, "/v0/servers?"+values.Encode(), &body); err != nil {
-		return Page{}, err
+	freshness, err := o.fetch(ctx, "/v0/servers?"+values.Encode(), v, &body)
+	if err != nil {
+		return Page{Freshness: freshness}, err
 	}
 
 	kept := dedupe(body.Servers)
@@ -135,26 +148,40 @@ func (o *Official) List(ctx context.Context, q Query) (Page, error) {
 		if !ok {
 			continue
 		}
+		entry.Source = o.Source()
 		entries = append(entries, entry)
 	}
-	return Page{
+	page := Page{
 		Source:      o.Source(),
 		Entries:     entries,
 		NextCursor:  opaque(body.Metadata.NextCursor, maxCursorRunes),
 		RetrievedAt: time.Now().UTC(),
-	}, nil
+		Freshness:   freshness,
+	}
+	page.Sources = []SourceStatus{{
+		Source: o.Source(), OK: true,
+		RetrievedAt: page.RetrievedAt, Entries: len(entries),
+	}}
+	return page, nil
 }
 
 // Get returns one entry and its document.
 func (o *Official) Get(ctx context.Context, name string) (Detail, error) {
+	return o.GetIfChanged(ctx, name, Validators{})
+}
+
+// GetIfChanged is Get with the previous answer's validators. See ListIfChanged
+// for why it is written for a registry that offers none.
+func (o *Official) GetIfChanged(ctx context.Context, name string, v Validators) (Detail, error) {
 	trimmed := clean(name, maxNameRunes)
 	if trimmed == "" {
 		return Detail{}, ErrNotFound
 	}
 	var raw catalogueEntry
 	path := "/v0/servers/" + url.PathEscape(trimmed) + "/versions/latest"
-	if err := o.fetch(ctx, path, &raw); err != nil {
-		return Detail{}, err
+	freshness, err := o.fetch(ctx, path, v, &raw)
+	if err != nil {
+		return Detail{Freshness: freshness}, err
 	}
 	// The same filter the list applies. An entry the catalogue does not show
 	// must not be reachable by typing its name: a withdrawn server is
@@ -166,6 +193,7 @@ func (o *Official) Get(ctx context.Context, name string) (Detail, error) {
 	if !ok {
 		return Detail{}, ErrNotFound
 	}
+	entry.Source = o.Source()
 	document := raw.Server
 	if len(document) > MaxDocumentBytes {
 		// describe() already refused it as addable; the document itself is
@@ -176,52 +204,58 @@ func (o *Official) Get(ctx context.Context, name string) (Detail, error) {
 	return Detail{
 		Entry:       entry,
 		Document:    document,
-		Source:      o.Source(),
 		RetrievedAt: time.Now().UTC(),
+		Freshness:   freshness,
 	}, nil
 }
 
-// fetch performs one bounded GET and decodes it.
-func (o *Official) fetch(ctx context.Context, path string, out any) error {
+// fetch performs one bounded, optionally conditional GET and decodes it.
+//
+// The Freshness it returns is meaningful on the ErrNotModified path too: that
+// is how a 304 renews what the cache holds, and how a new ETag arriving with
+// one is picked up.
+func (o *Official) fetch(ctx context.Context, path string, v Validators, out any) (Freshness, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.base+path, nil)
 	if err != nil {
-		return fmt.Errorf("registry: %w", err)
+		return Freshness{}, fmt.Errorf("registry: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", o.agent)
+	applyValidators(req, v)
 
 	resp, err := o.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("registry: %s could not be reached: %w", o.Source(), err)
+		return Freshness{}, fmt.Errorf("registry: %s could not be reached: %w", o.Source(), err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return ErrNotFound
-	}
-	if resp.StatusCode != http.StatusOK {
+	freshness := readFreshness(resp)
+	switch resp.StatusCode {
+	case http.StatusNotModified:
+		return freshness, ErrNotModified
+	case http.StatusNotFound:
+		return freshness, ErrNotFound
+	case http.StatusOK:
+	default:
 		// The body is a third party's error text, so it is drained and
 		// discarded rather than passed through. The status is the fact.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
-		return fmt.Errorf("registry: %s answered %s", o.Source(), resp.Status)
+		return Freshness{}, fmt.Errorf("registry: %s answered %s", o.Source(), resp.Status)
 	}
 
-	// Bounded before decoding, not after. A JSON decoder reading an unbounded
-	// body from a third party is a memory limit set by somebody else.
-	limited := io.LimitReader(resp.Body, MaxResponseBytes+1)
-	data, err := io.ReadAll(limited)
+	data, err := readBounded(resp.Body, MaxResponseBytes)
 	if err != nil {
-		return fmt.Errorf("registry: reading from %s: %w", o.Source(), err)
+		return Freshness{}, fmt.Errorf("registry: reading from %s: %w", o.Source(), err)
 	}
-	if len(data) > MaxResponseBytes {
-		return fmt.Errorf("registry: %s returned more than %d MiB in one page",
+	if data == nil {
+		return Freshness{}, fmt.Errorf("registry: %s returned more than %d MiB in one page",
 			o.Source(), MaxResponseBytes>>20)
 	}
 	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("registry: %s returned something this host cannot read: %w",
+		return Freshness{}, fmt.Errorf("registry: %s returned something this host cannot read: %w",
 			o.Source(), err)
 	}
-	return nil
+	return freshness, nil
 }
 
 // --- the registry's wire format --------------------------------------------
@@ -387,5 +421,6 @@ func better(a officialMeta, aOrder int, b officialMeta, bOrder int) bool {
 }
 
 // compile-time check that the official registry satisfies the contract the
-// cache and the handler are written against.
-var _ Client = (*Official)(nil)
+// cache and the handler are written against, including the conditional half
+// the cache uses wherever a catalogue offers a validator.
+var _ Revalidating = (*Official)(nil)

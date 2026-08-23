@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/spoked/mcpd/internal/registry"
 )
@@ -53,6 +54,35 @@ const (
 	catalogMaxLimit     = 100
 )
 
+// catalogContext adds an explicit refresh to a request when the operator asked
+// for one.
+//
+// The escape hatch for a catalogue that is visibly behind. Every answer here
+// is held for as long as the catalogue itself asked, which is right almost
+// always and unhelpful in the one case that matters: a server published a
+// minute ago that an administrator is standing in front of the dashboard
+// waiting for. Rather than shorten the cache for everyone, ?refresh=1 asks
+// again now, for one request.
+//
+// It is CapAdmin like the rest of the catalogue, and that is what keeps it
+// from being a way to make this host hammer a third party: the people who can
+// press it are the people who could restart the process.
+func catalogContext(r *http.Request) context.Context {
+	if truthy(r.URL.Query().Get("refresh")) {
+		return registry.WithRefresh(r.Context())
+	}
+	return r.Context()
+}
+
+// truthy reads a query-string flag the way a person would write one.
+func truthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 // handleListCatalog browses the public registry.
 //
 // Administrator rather than operator, and the reason is the network rather
@@ -65,7 +95,7 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 			"no server catalogue is configured")
 		return
 	}
-	page, err := s.opts.ServerCatalog.List(r.Context(), registry.Query{
+	page, err := s.opts.ServerCatalog.List(catalogContext(r), registry.Query{
 		Search: r.URL.Query().Get("q"),
 		Cursor: r.URL.Query().Get("cursor"),
 		Limit:  parseLimit(r.URL.Query().Get("limit"), catalogDefaultLimit, catalogMaxLimit),
@@ -75,10 +105,14 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusBadGateway, unreachable(s.opts.ServerCatalog))
 		return
 	}
-	// Entries is never null. A page rendering `entries.map` over null is a
-	// blank screen with an error in a console nobody has open.
+	// Entries and Sources are never null. A page rendering `entries.map` over
+	// null is a blank screen with an error in a console nobody has open, and
+	// the same is true of the list of catalogues that answered.
 	if page.Entries == nil {
 		page.Entries = []registry.Entry{}
+	}
+	if page.Sources == nil {
+		page.Sources = []registry.SourceStatus{}
 	}
 	s.writeJSON(w, r, http.StatusOK, page)
 }
@@ -99,7 +133,7 @@ func (s *Server) handleGetCatalogEntry(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusBadRequest, "a server name is required")
 		return
 	}
-	detail, err := s.opts.ServerCatalog.Get(r.Context(), name)
+	detail, err := s.opts.ServerCatalog.Get(catalogContext(r), name)
 	switch {
 	case errors.Is(err, registry.ErrNotFound):
 		s.writeError(w, r, http.StatusNotFound,

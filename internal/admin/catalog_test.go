@@ -43,7 +43,6 @@ func okCatalog() CatalogAPI {
 			return registry.Detail{
 				Entry:       page.Entries[0],
 				Document:    json.RawMessage(`{"name":"io.example/weather"}`),
-				Source:      page.Source,
 				RetrievedAt: page.RetrievedAt,
 			}, nil
 		},
@@ -240,5 +239,65 @@ func TestCatalog_UnconfiguredIsRefusedNotFatal(t *testing.T) {
 		if got := request(t, s, http.MethodGet, path, nil).Code; got != http.StatusServiceUnavailable {
 			t.Errorf("%s: status = %d, want 503", path, got)
 		}
+	}
+}
+
+// TestCatalog_AnOperatorCanAskAgain.
+//
+// Every answer is held for as long as the catalogue itself asked, which is
+// right almost always and unhelpful in the one case that matters: a server
+// published a minute ago that an administrator is standing in front of the
+// dashboard waiting for. ?refresh=1 asks again now, for one request, rather
+// than shortening the cache for everybody.
+func TestCatalog_AnOperatorCanAskAgain(t *testing.T) {
+	var asked []bool
+	api := okCatalog()
+	list, get := api.List, api.Get
+	api.List = func(ctx context.Context, q registry.Query) (registry.Page, error) {
+		asked = append(asked, registry.RefreshRequested(ctx))
+		return list(ctx, q)
+	}
+	api.Get = func(ctx context.Context, name string) (registry.Detail, error) {
+		asked = append(asked, registry.RefreshRequested(ctx))
+		return get(ctx, name)
+	}
+	s := newCatalogDashboard(t, auth.RoleAdmin, api)
+
+	for _, path := range []string{
+		"/api/catalog",
+		"/api/catalog?refresh=1",
+		"/api/catalog/io.example/weather",
+		"/api/catalog/io.example/weather?refresh=true",
+	} {
+		if w := request(t, s, http.MethodGet, path, nil); w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d: %s", path, w.Code, w.Body)
+		}
+	}
+
+	want := []bool{false, true, false, true}
+	if len(asked) != len(want) {
+		t.Fatalf("saw %v, want %v", asked, want)
+	}
+	for i := range want {
+		if asked[i] != want[i] {
+			t.Errorf("request %d carried refresh=%v, want %v", i, asked[i], want[i])
+		}
+	}
+}
+
+// TestCatalog_SourcesIsNeverNull.
+//
+// The list of catalogues that answered is what makes a shorter page honest
+// rather than merely short, and a page rendering `sources.map` over null is a
+// blank screen with an error in a console nobody has open.
+func TestCatalog_SourcesIsNeverNull(t *testing.T) {
+	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+		List: func(context.Context, registry.Query) (registry.Page, error) {
+			return registry.Page{Source: "fake"}, nil
+		},
+	})
+	w := request(t, s, http.MethodGet, "/api/catalog", nil)
+	if !strings.Contains(w.Body.String(), `"sources":[]`) {
+		t.Errorf("body = %s, want an empty list rather than null", w.Body)
 	}
 }
