@@ -110,7 +110,15 @@ function UserRow({ user, onChanged, notify }: {
     <TableRow className={user.disabled ? "opacity-55" : undefined}>
       <TableCell>
         <span className="flex flex-wrap items-center gap-2">
-          {user.email}
+          {/* The name when there is one, and the address always. People can
+              now set their own name, so the list would otherwise not show
+              what the rest of the console calls them -- and the address is
+              what every grant and every audit record is keyed on, so it can
+              never be the thing that is dropped. */}
+          {user.name !== user.email && <span className="font-medium">{user.name}</span>}
+          <span className={user.name !== user.email ? "text-muted-foreground" : undefined}>
+            {user.email}
+          </span>
           {user.self && <Chip tone="info">you</Chip>}
           {user.disabled && <Chip>disabled</Chip>}
         </span>

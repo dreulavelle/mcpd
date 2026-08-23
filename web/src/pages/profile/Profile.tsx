@@ -1,9 +1,9 @@
 import { useCallback, useState } from "react";
-import { api, ApiError, type Meta, type User } from "@/lib/api";
+import { api, ApiError, type Meta, type Session, type User } from "@/lib/api";
 import { capabilitiesOf, type Capability } from "@/lib/capabilities";
 import { whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
-import { signedInAs, useCan, useSession } from "@/lib/session";
+import { signedInAs, useAdoptSession, useCan, useSession } from "@/lib/session";
 import { Detail, Notice, PageHeader, Section } from "@/components/chrome";
 import { Chip } from "@/components/status";
 import { useNotify } from "@/components/toast";
@@ -29,10 +29,11 @@ const CAPABILITY_MEANING: Record<Capability, string> = {
  *
  * It answers "what am I allowed to do here", which was previously answerable
  * only by hunting for a control that was missing, and it is where the things
- * about your own account are changed -- as far as the API allows, which today
- * is not far. `PATCH /api/users/{id}` takes the admin capability, so an
- * administrator can edit their own account here and everybody else is told to
- * ask one. That is honest; a form that always answered 403 would not be.
+ * about your own account are changed. Naming yourself is one of them and needs
+ * no capability beyond being signed in: `PATCH /api/account` carries no
+ * identifier, so it can only ever edit the account the request authenticated
+ * as. Changing a password still has no self-service endpoint, so that form is
+ * offered to an administrator and explained to everybody else.
  */
 export function Profile() {
   const session = useSession();
@@ -48,7 +49,7 @@ export function Profile() {
     () => (mayEditAccounts ? api.users() : Promise.resolve({ users: [], count: 0 })),
     [mayEditAccounts],
   );
-  const { data: users, error: usersError, reload } = useLoader(loadSelf, "Couldn't load your account.");
+  const { data: users, error: usersError } = useLoader(loadSelf, "Couldn't load your account.");
   const self: User | undefined = (users?.users ?? []).find((u) => u.self);
 
   if (!session) return null;
@@ -88,12 +89,7 @@ export function Profile() {
           <Notice tone="problem">{usersError}</Notice>
         )}
 
-        <DisplayName
-          current={session.display_name}
-          self={self}
-          mayEdit={mayEditAccounts}
-          onSaved={reload}
-        />
+        <DisplayName session={session} />
 
         <ChangePassword email={session.email} self={self} mayEdit={mayEditAccounts} />
 
@@ -129,52 +125,48 @@ export function Profile() {
 /**
  * The name the console calls you by.
  *
- * `display_name` already travels end to end -- the session carries it and
- * `signedInAs` already prefers it over the address. What is missing is a way
- * to set your own, so this writes through the endpoint that exists:
- * `PATCH /api/users/{id}`, which is administrator-only. Until a self-service
- * endpoint lands, somebody without admin is told so rather than shown a field
- * that saves nothing.
+ * Self-service, and no capability beyond being signed in. `PATCH /api/account`
+ * carries no identifier, so it can only ever edit the account the request
+ * authenticated as -- which is what lets it take `read` where naming somebody
+ * else still takes `admin`. Before it existed this section could only tell a
+ * non-administrator to go and ask one to type their name for them.
+ *
+ * The field holds `display_name`, the stored value, and the heading renders
+ * `name`, the resolved one. That is not pedantry: `name` falls back to the
+ * address, so seeding the box with it would offer to save the fallback as a
+ * name, and the next reader could not tell a person called by their address
+ * from one who typed their address in.
+ *
+ * Emptying it is a real edit and is allowed. It clears the name, and the
+ * console goes back to the address.
  */
-function DisplayName({ current, self, mayEdit, onSaved }: {
-  current: string;
-  self: User | undefined;
-  mayEdit: boolean;
-  onSaved: () => void;
-}) {
+function DisplayName({ session }: { session: Session }) {
   const notify = useNotify();
-  const [name, setName] = useState(current);
+  const adopt = useAdoptSession();
+  const [name, setName] = useState(session.display_name);
   const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (!mayEdit) {
-    return (
-      <Section title="Name">
-        <p className="text-sm text-muted-foreground">
-          {current
-            ? <>The console calls you <strong>{current}</strong>.</>
-            : "You have no display name, so the console uses your email address."}{" "}
-          Changing it needs the account endpoint, which takes the admin
-          capability today — ask an administrator until mcpd grows a
-          self-service one.
-        </p>
-      </Section>
-    );
-  }
+  const next = name.trim();
+  const unchanged = next === session.display_name.trim();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!self) return;
     setBusy(true);
     setProblem("");
     try {
-      await api.updateUser(self.id, { display_name: name.trim() });
-      // The session's copy of the name is stale until it is fetched again, and
-      // the sidebar reads it from there. Saying so beats a page that looks
-      // like it ignored the change.
-      notify("good", "Saved. Reload to see it in the sidebar.");
-      onSaved();
+      const saved = await api.updateAccount(next);
+      // The sidebar names you from the session, so the session is the thing
+      // that has to change. Pushing the server's own answer back rather than
+      // what was typed keeps the console showing what is stored -- including
+      // the address, when the name was cleared.
+      adopt({ ...session, name: saved.name, display_name: saved.display_name });
+      setName(saved.display_name);
+      notify("good", next ? "Saved." : "Cleared. The console will use your address.");
     } catch (err) {
+      // The server's sentence, not a paraphrase. It is the only thing that
+      // knows whether this was too long, carried a character that breaks a log
+      // line in two, or collided with somebody else's address.
       setProblem(err instanceof ApiError ? err.detail : "Couldn't change it.");
     } finally {
       setBusy(false);
@@ -184,7 +176,7 @@ function DisplayName({ current, self, mayEdit, onSaved }: {
   return (
     <Section
       title="Name"
-      description="What the console calls you. Your email is what identifies the account."
+      description="What the console calls you. Your email is what identifies the account, and that is what every audit record is keyed on."
     >
       <Card>
         <CardContent>
@@ -193,12 +185,23 @@ function DisplayName({ current, self, mayEdit, onSaved }: {
             <div className="space-y-1.5">
               <Label htmlFor="profile-name">Display name</Label>
               <Input
-                id="profile-name" value={name} placeholder="Not set"
+                id="profile-name" value={name}
+                placeholder={session.email}
                 autoComplete="name"
-                onChange={(e) => setName(e.target.value)}
+                aria-describedby="profile-name-help"
+                aria-invalid={problem ? true : undefined}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setProblem("");
+                }}
               />
+              <p id="profile-name-help" className="text-xs text-muted-foreground">
+                {session.display_name.trim()
+                  ? "Leave it empty to go back to being called by your address."
+                  : "Not set, so the console calls you by your address."}
+              </p>
             </div>
-            <Button type="submit" disabled={busy || !self || name.trim() === current.trim()}>
+            <Button type="submit" disabled={busy || unchanged}>
               {busy ? "Saving…" : "Save"}
             </Button>
           </form>

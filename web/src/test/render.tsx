@@ -6,17 +6,31 @@ import { SessionProvider } from "@/lib/session";
 import { ToastProvider } from "@/components/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-/** A signed-in person, with only the parts a test cares about spelled out. */
+/**
+ * A signed-in person, with only the parts a test cares about spelled out.
+ *
+ * `name` is resolved from `display_name` the way the server resolves it, so a
+ * test that overrides one gets a session that could actually have come off the
+ * wire. Spelling both out by hand is how a fixture ends up with a blank name
+ * the real endpoint would never send.
+ */
 export function sessionFor(role: Role, overrides: Partial<Session> = {}): Session {
-  return {
-    email: `${role}@example.com`,
-    display_name: role === "admin" ? "An Admin" : "A User",
+  const email = `${role}@example.com`;
+  const displayName = role === "admin" ? "An Admin" : "A User";
+  const base: Session = {
+    email,
+    name: displayName,
+    display_name: displayName,
     role,
     plugins: ["*"],
     csrf_token: "test-csrf",
     expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-    ...overrides,
   };
+  const merged = { ...base, ...overrides };
+  if (overrides.display_name !== undefined && overrides.name === undefined) {
+    merged.name = overrides.display_name.trim() || merged.email;
+  }
+  return merged;
 }
 
 /**
@@ -29,16 +43,18 @@ export function sessionFor(role: Role, overrides: Partial<Session> = {}): Sessio
  */
 export function renderWith(
   ui: ReactElement,
-  { session = sessionFor("admin"), path = "/" }: {
+  { session = sessionFor("admin"), path = "/", onSession }: {
     session?: Session | null;
     path?: string;
+    /** Where a session the page changed goes. Only renaming yourself does. */
+    onSession?: (session: Session) => void;
   } = {},
 ): RenderResult {
   window.history.replaceState(null, "", path);
 
   function Providers({ children }: { children: ReactNode }) {
     return (
-      <SessionProvider session={session}>
+      <SessionProvider session={session} onSession={onSession}>
         <TooltipProvider delayDuration={0}>
           <ToastProvider>
             <RouterProvider>{children}</RouterProvider>

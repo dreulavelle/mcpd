@@ -101,6 +101,16 @@ export type Role = "user" | "admin";
 /** The signed-in person, as returned by the session endpoints. */
 export interface Session {
   email: string;
+  /**
+   * What to render. Never empty: the server resolves it, falling back to the
+   * address, and re-checks the stored value against the rules on the way out.
+   */
+  name: string;
+  /**
+   * What is stored, which may be empty. It belongs in an edit field so a value
+   * round-trips; rendering it anywhere else would persist the fallback into
+   * the box somebody then saves.
+   */
   display_name: string;
   role: Role;
   plugins: string[];
@@ -111,6 +121,9 @@ export interface Session {
 export interface User {
   id: string;
   email: string;
+  /** Resolved, and never empty. See `Session.name`. */
+  name: string;
+  /** Raw, and only for an edit field. See `Session.display_name`. */
   display_name: string;
   role: Role;
   plugins: string[];
@@ -537,6 +550,19 @@ export const api = {
     request<User>(`/api/users/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(body),
+    }),
+
+  /**
+   * Renames the account the request authenticated as.
+   *
+   * It carries no identifier and cannot address another account, which is
+   * what lets it take `read` rather than `admin`. Naming somebody else is
+   * still `updateUser`, and still administration.
+   */
+  updateAccount: (displayName: string) =>
+    request<User>("/api/account", {
+      method: "PATCH",
+      body: JSON.stringify({ display_name: displayName }),
     }),
 
   deleteUser: (id: string) =>

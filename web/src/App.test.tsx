@@ -15,6 +15,9 @@ import App from "@/App";
  */
 const SESSION = {
   email: "smoke@example.com",
+  // Both, as the endpoint sends both: `name` is resolved and never empty,
+  // `display_name` is the stored value an edit field round-trips.
+  name: "Smoke Test",
   display_name: "Smoke Test",
   role: "admin" as const,
   plugins: ["*"],

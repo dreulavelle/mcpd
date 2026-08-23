@@ -7,7 +7,7 @@ import {
 import { describeEvent, relative, when, who } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
-import { useSession } from "@/lib/session";
+import { hasOwnName, signedInAs, useSession } from "@/lib/session";
 import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
 import { Chip, healthTone, RiskBadge, StateBadge, StatusDot } from "@/components/status";
 import { Card, CardContent } from "@/components/ui/card";
@@ -67,7 +67,10 @@ export function Overview() {
   const unhealthy = snap.plugins.filter((p) => p.health !== "healthy");
   const notRunning = snap.instances.filter((i) => i.enabled && !i.mounted);
   const connected = (snap.tunnels?.tunnels ?? []).filter((t) => t.state === "connected");
-  const greeting = session?.display_name?.split(" ")[0] || null;
+  // The first word of the resolved name, and only when the account has one of
+  // its own. `name` falls back to the address, and "Hello, ops@example.com" is
+  // worse than no greeting at all.
+  const greeting = hasOwnName(session) ? signedInAs(session).split(" ")[0] : null;
 
   if (!loaded) {
     return (
