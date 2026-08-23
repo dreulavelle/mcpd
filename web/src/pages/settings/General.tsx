@@ -24,7 +24,11 @@ export function General() {
   const load = useCallback(() => api.settings(), []);
   const { data, error, reload } = useLoader(load, "Couldn't load settings.");
 
-  const groups = (data?.groups ?? []).filter((g) => g.section !== "plugins");
+  // A plugin's settings live on its page, and the sign-in ones live on
+  // Authentication beside the queue of people waiting to be let in — which is
+  // the question they raise.
+  const groups = (data?.groups ?? [])
+    .filter((g) => g.section !== "plugins" && g.section !== "authentication");
 
   return (
     <>

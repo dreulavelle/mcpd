@@ -114,6 +114,11 @@ function UserRow({ user, onChanged, notify }: {
           </span>
           {user.self && <Chip tone="info">you</Chip>}
           {user.disabled && <Chip>disabled</Chip>}
+          {/* Waiting is not switched off. The account holds nothing until an
+              administrator decides, and the decision is made on the
+              Authentication page beside the rules that produced it. */}
+          {user.status === "pending" && <Chip tone="attention">waiting</Chip>}
+          {!user.has_password && <Chip>signs in with a provider</Chip>}
         </span>
         {error && <div className="mt-1 text-xs text-problem">{error}</div>}
       </TableCell>

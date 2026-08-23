@@ -23,6 +23,10 @@ const SESSION = {
   plugins: ["*"],
   csrf_token: "test-csrf",
   expires_at: "2026-08-23T13:51:51Z",
+  // An ordinary account: somebody decided about it, and it has a password.
+  // A pending one is the interesting case and gets its own test.
+  status: "active" as const,
+  has_password: true,
 };
 
 function stubApi(role: "user" | "admin" = "admin") {
@@ -101,6 +105,14 @@ function stubApi(role: "user" | "admin" = "admin") {
     default: "Every change is put to a person unless a rule authorises it.",
   });
   vi.spyOn(api, "mcpServerTools").mockResolvedValue({ tools: [], count: 0 });
+  // A host with no providers and no sign-ups, which is what an upgrade
+  // produces: the console must draw the password form and nothing else.
+  vi.spyOn(api, "authOptions").mockResolvedValue({
+    providers: [], registration: false, approval: true,
+  });
+  vi.spyOn(api, "identities").mockResolvedValue({ identities: [], available: [] });
+  vi.spyOn(api, "registrations").mockResolvedValue({ registrations: [], count: 0 });
+  vi.spyOn(api, "redirectURIs").mockResolvedValue({ base: "", redirect_uris: {} });
 }
 
 describe("the console", () => {

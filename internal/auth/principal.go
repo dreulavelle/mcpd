@@ -95,11 +95,32 @@ type Principal struct {
 	// TokenID identifies the credential used, for revocation and audit. It is
 	// never the credential itself.
 	TokenID string
+
+	// Pending reports a registration nobody has approved yet.
+	//
+	// It is separate from the role rather than a role of its own, because it
+	// is not a smaller set of rights -- it is the absence of a decision. The
+	// person has proved who they are, which is what lets them see a page
+	// saying so; what they have not got is anybody's word that they may do
+	// anything here.
+	//
+	// The zero value is the safe one and that is deliberate. Every principal
+	// that is not an account -- a static token, the tunnel's identity -- is
+	// constructed without touching this field and is therefore not pending,
+	// which is what those callers have always been.
+	Pending bool
 }
 
 // Can reports whether the principal holds a capability.
+//
+// A pending registration holds none, whatever its row says its role is. The
+// check belongs here rather than in each handler for the same reason the
+// role-to-capability map does: this is the one function every authorization
+// decision in the process goes through, so a capability that is withheld here
+// is withheld everywhere -- the dashboard API, the MCP endpoint, a tool call,
+// and anything added later that forgets pending accounts exist.
 func (p *Principal) Can(c Capability) bool {
-	if p == nil {
+	if p == nil || p.Pending {
 		return false
 	}
 	return slices.Contains(roleCapabilities[p.Role], c)
@@ -169,7 +190,7 @@ func Anonymous() *Principal {
 // nothing.
 func (p Principal) Equal(other Principal) bool {
 	if p.ID != other.ID || p.Role != other.Role ||
-		p.TokenID != other.TokenID {
+		p.TokenID != other.TokenID || p.Pending != other.Pending {
 		return false
 	}
 	if len(p.Plugins) != len(other.Plugins) {

@@ -30,7 +30,7 @@ func NewStore(db *sqlite.DB, now func() time.Time) *Store {
 }
 
 const userColumns = `id, email, password_hash, display_name, role, plugins_json,
-	                 disabled, created_at, updated_at, last_login_at`
+	                 disabled, status, created_at, updated_at, last_login_at`
 
 // --- accounts --------------------------------------------------------------
 
@@ -411,9 +411,15 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 				return err
 			}
 		}
-		// Sessions cascade on the foreign key, but saying so here keeps the
-		// behaviour true of a database restored without foreign keys on.
+		// Sessions and linked providers cascade on the foreign key, but saying
+		// so here keeps the behaviour true of a database restored without
+		// foreign keys on. The identities matter more than the sessions do: a
+		// row left behind would reserve a provider account against the person
+		// ever having an account here again.
 		if err := tx.Exec(`DELETE FROM user_sessions WHERE user_id = ?`, id); err != nil {
+			return err
+		}
+		if err := tx.Exec(`DELETE FROM user_identities WHERE user_id = ?`, id); err != nil {
 			return err
 		}
 		return tx.Exec(`DELETE FROM users WHERE id = ?`, id)
@@ -441,6 +447,18 @@ func guardLastAdmin(tx *sqlite.UnitOfWork, excludingID string) error {
 // cost the same time, because an unmatched address is still compared against a
 // decoy hash. Together those keep the sign-in form from answering "does this
 // account exist?".
+//
+// An account with no password of its own is refused explicitly, by name,
+// before anything is compared. Leaving it to the comparison would work today
+// -- the sentinel is not a bcrypt hash and bcrypt refuses it -- and would be
+// the wrong kind of correct: it would make "an SSO-only account cannot be
+// signed in to with a password" a property of a string constant rather than a
+// rule the code states. The decoy is still compared so the refusal costs the
+// same time as any other.
+//
+// A pending account is deliberately not refused here. It has to be able to
+// prove who it is in order to be shown a page saying it is waiting; what it
+// does not get is any capability, and that is settled on the principal.
 func (s *Store) Authenticate(ctx context.Context, email, password string) (*User, error) {
 	u, err := s.ByEmail(ctx, email)
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -448,16 +466,16 @@ func (s *Store) Authenticate(ctx context.Context, email, password string) (*User
 	}
 
 	hash := dummyHash
-	if u != nil && !u.Disabled {
+	if u != nil && !u.Disabled && u.HasPassword() {
 		hash = u.PasswordHash
 	}
-	if !comparePassword(hash, password) {
+	matched := comparePassword(hash, password)
+	switch {
+	case u == nil || u.Disabled:
 		return nil, ErrInvalidCredentials
-	}
-	// A disabled account matches the decoy above, never its own hash, so this
-	// is unreachable by a correct password on a disabled account. It stands as
-	// a second gate rather than a comment.
-	if u == nil || u.Disabled {
+	case !u.HasPassword():
+		return nil, ErrNoPassword
+	case !matched:
 		return nil, ErrInvalidCredentials
 	}
 	return u, nil
@@ -479,12 +497,13 @@ func (s *Store) scanUser(row rowScanner) (*User, error) {
 		role        string
 		pluginsJSON string
 		disabled    int
+		status      string
 		created     int64
 		updated     int64
 		lastLogin   sql.NullInt64
 	)
 	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &role,
-		&pluginsJSON, &disabled, &created, &updated, &lastLogin)
+		&pluginsJSON, &disabled, &status, &created, &updated, &lastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -496,6 +515,14 @@ func (s *Store) scanUser(row rowScanner) (*User, error) {
 	}
 	u.Role = auth.Role(role)
 	u.Disabled = disabled != 0
+	// An unrecognised status reads as pending rather than active. A row whose
+	// status this build does not understand is one nobody here has decided
+	// about, and the safe reading of "I do not know what this means" is no
+	// capabilities rather than all of them.
+	u.Status = Status(status)
+	if !u.Status.Valid() {
+		u.Status = StatusPending
+	}
 	u.CreatedAt = time.UnixMilli(created).UTC()
 	u.UpdatedAt = time.UnixMilli(updated).UTC()
 	if lastLogin.Valid {

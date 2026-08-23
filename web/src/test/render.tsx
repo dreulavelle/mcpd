@@ -25,6 +25,8 @@ export function sessionFor(role: Role, overrides: Partial<Session> = {}): Sessio
     plugins: ["*"],
     csrf_token: "test-csrf",
     expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    status: "active",
+    has_password: true,
   };
   const merged = { ...base, ...overrides };
   if (overrides.display_name !== undefined && overrides.name === undefined) {

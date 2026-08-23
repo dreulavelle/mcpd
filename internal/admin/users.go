@@ -30,8 +30,16 @@ type userView struct {
 	Role        string   `json:"role"`
 	Plugins     []string `json:"plugins"`
 	Disabled    bool     `json:"disabled"`
-	CreatedAt   string   `json:"created_at"`
-	LastLoginAt string   `json:"last_login_at,omitempty"`
+	// Status is "active" or "pending", and is a different fact from Disabled.
+	// An administrator switched a disabled account off; a pending one is a
+	// registration nobody has decided about.
+	Status string `json:"status"`
+	// HasPassword is false for an account that only signs in through a
+	// provider, which the Users page shows so that "why can I not reset this
+	// password" has an answer on the page.
+	HasPassword bool   `json:"has_password"`
+	CreatedAt   string `json:"created_at"`
+	LastLoginAt string `json:"last_login_at,omitempty"`
 	// Self marks the account making the request, so the page can warn before
 	// someone edits themselves out of their own access.
 	Self bool `json:"self"`
@@ -46,6 +54,8 @@ func viewOfUser(u *users.User, self bool) userView {
 		Role:        string(u.Role),
 		Plugins:     u.Plugins,
 		Disabled:    u.Disabled,
+		Status:      statusOf(u),
+		HasPassword: u.HasPassword(),
 		CreatedAt:   u.CreatedAt.Format(time.RFC3339),
 		Self:        self,
 	}

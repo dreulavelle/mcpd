@@ -12,6 +12,7 @@ import { PluginDetail } from "@/pages/plugins/PluginDetail";
 import { PluginsList } from "@/pages/plugins/PluginsList";
 import { Profile } from "@/pages/profile/Profile";
 import { ApprovalPolicy } from "@/pages/settings/ApprovalPolicy";
+import { Authentication } from "@/pages/settings/Authentication";
 import { General } from "@/pages/settings/General";
 import { Users } from "@/pages/settings/Users";
 import { Tunnels } from "@/pages/tunnels/Tunnels";
@@ -61,6 +62,7 @@ export function Routes() {
         switch (param) {
           case undefined: return <General />;
           case "policy": return <ApprovalPolicy />;
+          case "authentication": return <Authentication />;
           case "users": return <Users />;
           default: return null;
         }

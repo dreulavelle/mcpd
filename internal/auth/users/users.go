@@ -51,7 +51,83 @@ var (
 	// address. A name is for reading; letting one read as somebody else's
 	// identity is how a list of who did what stops being one.
 	ErrNameCollides = errors.New("users: that name is another account's address")
+	// ErrNoPassword reports a sign-in attempt against an account that has no
+	// password to compare against. It is never shown to whoever is signing in
+	// -- the form answers one way for every failure -- but the sign-in path
+	// has to be able to tell this apart from a wrong password, so that a hash
+	// column holding a sentinel is refused by name rather than by happening
+	// not to compare equal.
+	ErrNoPassword = errors.New("users: that account signs in with an identity provider")
+	// ErrNotPending reports an approval or rejection of an account that is not
+	// waiting for one.
+	ErrNotPending = errors.New("users: that account is not waiting for approval")
+	// ErrIdentityLinked reports a provider identity already attached to an
+	// account -- either this one, or somebody else's.
+	ErrIdentityLinked = errors.New("users: that provider account is already linked")
+	// ErrUnclaimed reports a provider sign-in against an instance that has no
+	// accounts. Claiming an instance is what makes somebody its administrator,
+	// and completing a flow at a third party is not a claim mcpd can honour:
+	// whoever held an account at the provider would become the owner of any
+	// fresh host they could reach.
+	ErrUnclaimed = errors.New("users: this instance has not been claimed yet")
+	// ErrRegistrationClosed reports a self-registration on a host that is not
+	// accepting them.
+	ErrRegistrationClosed = errors.New("users: this host is not accepting registrations")
+	// ErrDomainNotAllowed reports an address outside the configured
+	// allow-list.
+	ErrDomainNotAllowed = errors.New("users: that email domain is not allowed to register here")
+	// ErrAddressTaken reports a provider identity whose address already
+	// belongs to an account it is not linked to.
+	//
+	// This is the refusal that stops the takeover SSO invites. It is separate
+	// from ErrDuplicateEmail because the thing to say is different: the
+	// account exists, it is probably yours, and the way to attach the provider
+	// to it is to sign in and link it -- not to have the provider claim it on
+	// the strength of an address.
+	ErrAddressTaken = errors.New("users: an account already uses that email address")
 )
+
+// Status is what has been decided about an account.
+//
+// Deliberately not folded into Disabled. "An administrator switched this off"
+// and "nobody has looked at this yet" are different facts about an account,
+// they are reached by different acts, and the words shown to the person differ
+// -- so they are different columns. A pending account may authenticate, which
+// is how it proves who it is; it holds no capability at all until somebody
+// decides.
+type Status string
+
+const (
+	// StatusActive is an account somebody decided about, or one that predates
+	// there being anything to decide.
+	StatusActive Status = "active"
+	// StatusPending is a registration waiting for an administrator.
+	StatusPending Status = "pending"
+)
+
+// Valid reports whether s is a recognised status.
+func (s Status) Valid() bool {
+	switch s {
+	case StatusActive, StatusPending:
+		return true
+	}
+	return false
+}
+
+func (s Status) String() string { return string(s) }
+
+// NoPassword is what an account with no password of its own stores.
+//
+// password_hash is NOT NULL, and making it nullable would spread the question
+// "is there a password here" across every read. This value answers it in the
+// column, and answers it in a way that cannot go wrong by accident: it is not
+// a bcrypt hash, so bcrypt.CompareHashAndPassword refuses it structurally
+// (ErrHashTooShort) whatever is presented against it. No password produces it
+// and none can match it.
+//
+// The sentinel is the second gate rather than the first. comparePassword is
+// never reached for such an account, because Authenticate refuses it by name.
+const NoPassword = "!"
 
 // User is a local identity that can sign in to the dashboard.
 type User struct {
@@ -62,10 +138,21 @@ type User struct {
 	Role         auth.Role
 	Plugins      []string
 	Disabled     bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	LastLoginAt  *time.Time
+	// Status is active, or pending when a registration is waiting for an
+	// administrator. Not the same axis as Disabled; see Status.
+	Status      Status
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	LastLoginAt *time.Time
 }
+
+// HasPassword reports whether an account can be signed in to with a password.
+func (u *User) HasPassword() bool {
+	return u.PasswordHash != NoPassword && u.PasswordHash != ""
+}
+
+// Pending reports an account waiting for an administrator's decision.
+func (u *User) Pending() bool { return u.Status == StatusPending }
 
 // Name is what to render wherever this account is shown.
 //
@@ -117,6 +204,11 @@ func (u *User) Principal(sessionID string) *auth.Principal {
 		Role:        u.Role,
 		Plugins:     append([]string(nil), u.Plugins...),
 		TokenID:     sessionID,
+		// Carried onto the principal rather than checked by whoever holds the
+		// user, so that every capability check in the process refuses a
+		// pending account without having been told that pending accounts
+		// exist.
+		Pending: u.Pending(),
 	}
 }
 
