@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -112,6 +113,7 @@ func (m *memRepo) Transition(_ context.Context, req TransitionRequest) (*Operati
 		op.ApprovedAt = &t
 		e := req.Approval.ApprovalExpiresAt
 		op.ApprovalExpiresAt = &e
+		op.AuthorizedByRule = req.Approval.AuthorizedByRule
 	}
 	m.record(req.Audit, req.Event)
 	cp := *op
@@ -741,5 +743,72 @@ func TestExecutor_NoPreconditionsRecordsThatDriftWasNotChecked(t *testing.T) {
 	}
 	if detail["drift"] != "not_checked" {
 		t.Fatalf("audit drift = %v, want not_checked", detail["drift"])
+	}
+}
+
+// The hole one step later than the propose-time check: a change a standing
+// rule authorised as routine, whose re-plan immediately before execution says
+// it is not. Nobody ever looked at this change, so the authorisation does not
+// cover what is now about to happen, and the write must not go out.
+func TestExecutor_RefusesAnAutoApprovedChangeWhoseRiskWasRaised(t *testing.T) {
+	repo := newMemRepo()
+	op := approvedOp(t)
+	op.Risk = RiskLow
+	op.ApprovedBy = PolicyActor
+	op.AuthorizedByRule = "routine-radio"
+	repo.put(op)
+
+	raised := RiskHigh
+	runner := &fakeRunner{planFn: func(json.RawMessage) (PlanResult, error) {
+		return PlanResult{
+			Preconditions: json.RawMessage(`{"channel":"36"}`),
+			Desired:       json.RawMessage(`{"channel":"149"}`),
+			RiskOverride:  &raised,
+		}, nil
+	}}
+
+	if err := newExecutor(repo, runner).Execute(context.Background(), "op_exec"); err != nil {
+		t.Fatal(err)
+	}
+
+	if runner.applyCalls.Load() != 0 {
+		t.Fatal("nothing may be written upstream once the authorisation no longer covers the change")
+	}
+	stored, _ := repo.Get(context.Background(), "op_exec")
+	if stored.State != StateFailed {
+		t.Fatalf("state = %s, want failed", stored.State)
+	}
+	if stored.ErrorCode != CodeRiskRaised {
+		t.Fatalf("error_code = %q, want %q", stored.ErrorCode, CodeRiskRaised)
+	}
+	if !strings.Contains(stored.ErrorDetail, "routine-radio") {
+		t.Errorf("the refusal must name the rule it outran: %q", stored.ErrorDetail)
+	}
+}
+
+// The same raise where a person approved is not a refusal. They looked at this
+// change and said yes to it; a reclassification does not unmake their decision,
+// and treating it as one would make every approval provisional.
+func TestExecutor_ARaisedRiskDoesNotUnmakeAHumanApproval(t *testing.T) {
+	repo := newMemRepo()
+	op := approvedOp(t)
+	op.Risk = RiskLow
+	repo.put(op)
+
+	raised := RiskHigh
+	runner := &fakeRunner{planFn: func(json.RawMessage) (PlanResult, error) {
+		return PlanResult{
+			Preconditions: json.RawMessage(`{"channel":"36"}`),
+			Desired:       json.RawMessage(`{"channel":"149"}`),
+			RiskOverride:  &raised,
+		}, nil
+	}}
+
+	if err := newExecutor(repo, runner).Execute(context.Background(), "op_exec"); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repo.Get(context.Background(), "op_exec")
+	if stored.State != StateSucceeded {
+		t.Fatalf("state = %s, want succeeded (%s)", stored.State, stored.ErrorDetail)
 	}
 }
