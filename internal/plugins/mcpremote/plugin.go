@@ -105,6 +105,17 @@ func New(opts Options) (*Plugin, error) {
 		return nil, errors.New(redact.Error(err))
 	}
 
+	// The connection pins the configured headers to the configured address, so
+	// it has to be built from both together.
+	conn, err := newConn(endpoint, headers, &mcp.Implementation{
+		Name:    "mcpd",
+		Title:   "mcpd",
+		Version: opts.Document.Version,
+	})
+	if err != nil {
+		return nil, errors.New(redact.Error(err))
+	}
+
 	p := &Plugin{
 		name:  opts.Instance,
 		doc:   opts.Document,
@@ -112,14 +123,10 @@ func New(opts Options) (*Plugin, error) {
 		// Held for diagnostics only, and never put in a health message: the
 		// URL may carry a token that a variable substituted into it.
 		endpoint: endpoint,
-		conn: newConn(endpoint, headers, &mcp.Implementation{
-			Name:    "mcpd",
-			Title:   "mcpd",
-			Version: opts.Document.Version,
-		}),
-		budget: newBudget(opts.RequestsPerSecond),
-		redact: redact,
-		deps:   opts.Deps,
+		conn:     conn,
+		budget:   newBudget(opts.RequestsPerSecond),
+		redact:   redact,
+		deps:     opts.Deps,
 		health: plugins.Health{State: plugins.DegradedState,
 			Message: "not connected yet", CheckedAt: opts.Deps.Now()},
 	}

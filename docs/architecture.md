@@ -232,6 +232,21 @@ become settings fields, so a credential is typed into the dashboard, encrypted
 at rest, and resolved store-then-file-then-default like every other — never read
 out of the document.
 
+**A credential goes to the address it was configured for, and nowhere else.**
+The configured headers are pinned to the configured origin — scheme, host and
+port — in two places independently: the client refuses a redirect off it, and
+the transport that injects them checks again before it does. Go's own defence
+does not reach this. The standard library strips `Authorization` and `Cookie` on
+a cross-domain redirect, but only for headers set on the original request; it
+cannot see one a RoundTripper adds per hop, which is what this one does. Without
+the pin, a server answering `302 Location: https://attacker.example/` — after a
+compromise, a DNS change, or an expired domain someone else registered — is
+handed the operator's API key. The same check refuses a hop that reaches further
+into the deployment's own network than the configured endpoint already did, so a
+public server cannot steer this host at a metadata service. It is judged against
+the endpoint rather than absolutely, because a server on loopback or on the
+LAN is an ordinary thing to configure and is not made safer by being refused.
+
 Rate limiting is per server as well as per tool, because thirty tools behind one
 address are one upstream.
 
