@@ -12,6 +12,7 @@ import {
 import {
   AssuranceBadge, RiskBadge, StateBadge, VerifiedBadge,
 } from "@/components/status";
+import { Lifecycle } from "./Lifecycle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -92,6 +93,13 @@ function Body({ operation: op, audit, onChanged }: {
             )}
           </Notice>
         )}
+
+        <Section
+          title="Where this stands"
+          description="What has happened, what can still happen, and what the record will prove afterwards."
+        >
+          <Lifecycle operation={op} audit={audit} />
+        </Section>
 
         <WhatThisProves operation={op} />
 
