@@ -59,6 +59,10 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 		return nil, fmt.Errorf(`users: account %s grants no plugin access; `+
 			`list plugins explicitly or use ["*"]`, email)
 	}
+	displayName, err := ValidateDisplayName(req.DisplayName)
+	if err != nil {
+		return nil, err
+	}
 	hash, err := HashPassword(req.Password)
 	if err != nil {
 		return nil, err
@@ -72,7 +76,7 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 		ID:           id,
 		Email:        email,
 		PasswordHash: hash,
-		DisplayName:  strings.TrimSpace(req.DisplayName),
+		DisplayName:  displayName,
 		Role:         req.Role,
 		Plugins:      req.Plugins,
 	}
@@ -83,12 +87,35 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 
 	now := s.now().UnixMilli()
 	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		return tx.Exec(`
+		// Both directions of the same rule: the new address must not already
+		// be somebody's display name, and the new display name must not be
+		// somebody's address. The two are rendered in the same places, and a
+		// list of who did what stops being one the moment two rows read as
+		// the same person.
+		//
+		// Conditions in the statement rather than checks before it. Two
+		// administrators adding accounts at once would each read a table
+		// without the other's row and both proceed.
+		affected, err := tx.ExecAffected(`
 			INSERT INTO users (id, email, password_hash, display_name, role,
 			                   plugins_json, disabled, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,0,?,?)`,
+			SELECT ?,?,?,?,?,?,0,?,?
+			WHERE NOT EXISTS (
+				SELECT 1 FROM users WHERE lower(display_name) = ?
+			)
+			AND (? = '' OR NOT EXISTS (
+				SELECT 1 FROM users WHERE email = lower(?)
+			))`,
 			u.ID, u.Email, u.PasswordHash, u.DisplayName, string(u.Role),
-			string(plugins), now, now)
+			string(plugins), now, now,
+			u.Email, u.DisplayName, u.DisplayName)
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return ErrNameCollides
+		}
+		return nil
 	})
 	if isUniqueViolation(err) {
 		return nil, ErrDuplicateEmail
@@ -126,11 +153,16 @@ func (s *Store) CreateFirst(ctx context.Context, email, password, displayName st
 		return nil, err
 	}
 
+	name, err := ValidateDisplayName(displayName)
+	if err != nil {
+		return nil, err
+	}
+
 	u := &User{
 		ID:           id,
 		Email:        normalized,
 		PasswordHash: hash,
-		DisplayName:  strings.TrimSpace(displayName),
+		DisplayName:  name,
 		Role:         auth.RoleAdmin,
 		Plugins:      []string{auth.Wildcard},
 	}
@@ -232,6 +264,14 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 		return nil, fmt.Errorf(`users: an account granting no plugin access reaches nothing; ` +
 			`list plugins explicitly or use ["*"]`)
 	}
+	var displayName string
+	if req.DisplayName != nil {
+		validated, err := ValidateDisplayName(*req.DisplayName)
+		if err != nil {
+			return nil, err
+		}
+		displayName = validated
+	}
 
 	now := s.now().UnixMilli()
 	err := s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
@@ -264,9 +304,22 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 
 		sets := []string{"updated_at = ?"}
 		args := []any{now}
+		// A guard that only applies when a name is being set. It goes into
+		// the WHERE clause below rather than into a check up here, so that
+		// two accounts racing for the same name produce one write and one
+		// refusal instead of two writes.
+		guard := ""
+		var guardArgs []any
 		if req.DisplayName != nil {
 			sets = append(sets, "display_name = ?")
-			args = append(args, strings.TrimSpace(*req.DisplayName))
+			args = append(args, displayName)
+			if displayName != "" {
+				guard = ` AND NOT EXISTS (
+					SELECT 1 FROM users other
+					WHERE other.id <> ? AND other.email = lower(?)
+				)`
+				guardArgs = append(guardArgs, id, displayName)
+			}
 		}
 		if req.Role != nil {
 			sets = append(sets, "role = ?")
@@ -285,9 +338,16 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 			args = append(args, boolInt(*req.Disabled))
 		}
 		args = append(args, id)
-		if err := tx.Exec(
-			`UPDATE users SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
+		args = append(args, guardArgs...)
+		affected, err := tx.ExecAffected(
+			`UPDATE users SET `+strings.Join(sets, ", ")+` WHERE id = ?`+guard, args...)
+		if err != nil {
 			return err
+		}
+		if affected == 0 {
+			// The row is there -- it was read at the top of this transaction
+			// -- so the only condition that can have failed is the guard.
+			return ErrNameCollides
 		}
 
 		// A disabled account must not keep browsing on a session it already
