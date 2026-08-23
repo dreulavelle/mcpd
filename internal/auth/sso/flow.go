@@ -194,6 +194,34 @@ func (s *Service) Start(ctx context.Context, req StartRequest) (*Started, error)
 	}, nil
 }
 
+// Abandon retires a state whose flow ended at the provider.
+//
+// Somebody who presses cancel has created a row, and single use should mean
+// used or abandoned rather than used or lingering: without this, a cancelled
+// flow leaves its state valid until it expires, which is a window in which a
+// captured link is still worth something to whoever also holds the binding.
+//
+// Claimed through exactly the same guard as a completion, which is the point.
+// A state issued for another provider, or presented without the binding it was
+// issued to, retires nothing -- cancelling one flow must never consume
+// somebody else's row, and the guard that already refuses that on the way in
+// is the one to reuse rather than a laxer one written for this path.
+//
+// Best effort, and deliberately so. Whoever is being redirected has already
+// been told the provider refused, and a second refusal about a state would
+// answer a question nobody asked. Nil means there was nothing this host was
+// waiting for -- the ordinary case for a callback carrying no state at all.
+func (s *Service) Abandon(ctx context.Context, provider users.Provider, state, binding string) *State {
+	if s.states == nil || state == "" || binding == "" {
+		return nil
+	}
+	st, err := s.states.Claim(ctx, provider, state, binding)
+	if err != nil {
+		return nil
+	}
+	return st
+}
+
 // Complete claims the state and exchanges the code for an identity.
 //
 // The state is claimed first, before anything is sent to the provider. A
@@ -277,6 +305,14 @@ func (s *Service) completeOIDC(ctx context.Context, c Config, st *State, code st
 	}
 	if tok.IDToken == "" {
 		return nil, fmt.Errorf("%w: %s returned no id token", ErrProvider, d.Issuer)
+	}
+	// Start always binds a nonce to an OIDC flow, so a state without one did
+	// not come from there. Refusing rather than verifying without it: an empty
+	// nonce would otherwise mean "do not check", and a check that switches
+	// itself off when its input is missing is not a check.
+	if st.Nonce == "" {
+		return nil, fmt.Errorf("%w: that sign-in carried no nonce to check against",
+			ErrProvider)
 	}
 
 	claims, err := s.verifyIDToken(ctx, c, d, tok.IDToken, st.Nonce)

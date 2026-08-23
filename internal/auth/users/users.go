@@ -337,6 +337,27 @@ func ValidateDisplayName(raw string) (string, error) {
 	return name, nil
 }
 
+// SafeDisplayName returns a name if it is usable here, and "" if it is not.
+//
+// For a name nobody here typed -- one that arrived from an identity provider
+// alongside a sign-in. The rules ValidateDisplayName enforces are about what
+// this host is willing to render, and every one of them is met by real names:
+// an emoji joined with U+200D, an Arabic name carrying a bidirectional mark,
+// or simply a long one. Refusing the sign-in over any of those would make an
+// account impossible for that person, over a field that is cosmetic and is
+// never an identity.
+//
+// So the name is dropped and the account renders as its address, which is what
+// an account with no name has always done. A name somebody types is still
+// checked and still refused with a reason: they can see the field and fix it.
+func SafeDisplayName(raw string) string {
+	name, err := ValidateDisplayName(raw)
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
 // --- addresses -------------------------------------------------------------
 
 // NormalizeEmail lowercases and trims an address, and checks that it parses.

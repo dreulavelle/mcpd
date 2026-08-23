@@ -389,7 +389,28 @@ not a signed cookie: a self-contained token verifies just as well the tenth time
 it is replayed. Beside it, a short-lived cookie this host sets on the browser
 that started the flow — a state nobody can bind to a browser is one anybody can
 hand to anybody, which is how a person is signed in as an account they do not
-own without noticing. PKCE (S256) and a nonce where the provider is OIDC.
+own without noticing. PKCE (S256) and a nonce where the provider is OIDC, and
+the nonce comparison is unconditional: an empty expectation would otherwise
+mean "do not check", and a check that switches itself off when its input is
+missing is not one.
+
+**Cancelling retires the state too.** Single use has to mean used *or
+abandoned*, never used or lingering. The provider-error branch used to redirect
+before the state was ever claimed, so pressing cancel left a live row for the
+rest of its ten minutes and the branch answered for a provider the state was
+not issued for. It now claims through the same guard a completion does — best
+effort, since whoever is being redirected has already been told the provider
+said no, and a state it could not claim simply costs them the return to where
+the flow began.
+
+**The state table is bounded where it is written, not by a ticker.** The
+endpoint that issues one needs no credential, so anybody who can reach the
+dashboard can cause an insert. Issuing purges the expired rows in the same
+transaction, which caps what is held at one TTL's worth whatever the rate; the
+background sweep runs on the TTL and is for a host nobody is signing in to. A
+cap on live states was considered and refused — it turns a flood into a
+lockout, refusing sign-ins to the people the host exists for while costing
+whoever caused it nothing.
 
 **The ID token's signature is verified even though it arrived over TLS from the
 token endpoint.** The specification permits skipping it there and the reasoning
@@ -424,11 +445,52 @@ and is deliberately not started.
 **Registration is off by default and an upgrade does not open it.** The zero
 value of the policy accepts nothing, for the same reason the approval policy's
 zero value asks about everything: a setting that loosens on upgrade is the wrong
-direction to be wrong in. Approval is optional and defaults to on. An optional
-email-domain allow-list bounds who may ask. All three are applied in one
-function, so a password registration and a provider registration cannot diverge
-— one door that checks the policy and one that does not is how a host ends up
-refusing sign-ups on a form while accepting them through Google.
+direction to be wrong in. An optional email-domain allow-list bounds who may
+ask. Every rule is applied in one function, so a password registration and a
+provider registration cannot diverge — one door that checks the policy and one
+that does not is how a host ends up refusing sign-ups on a form while accepting
+them through Google.
+
+**The password door proves nothing, so it always waits.** Each provider
+establishes the address before this host sees it. A form establishes that
+somebody can type. That difference is what `RegistrationPolicy.StatusFor`
+encodes, and it is the whole of the rule: approval-off lets a *proved* address
+in without an administrator, and a password registration lands pending
+regardless.
+
+The combination it removes is the one worth naming. With registration on,
+approval off, and an allow-list of `corp.com` — three switches a settings form
+presents as independent — any anonymous caller could otherwise create an
+*active* account for `boss@corp.com` and walk in holding read, propose and
+approve. The allow-list means "who may have an account" through a provider and
+only "what may be typed" through a form. Refusing in the code that acts on the
+values rather than by cross-checking fields in the form: a form-level check is
+one more thing to keep in step with the code that reads them. The setting says
+so at the control, so it is a rule an operator reads rather than discovers.
+
+**A self-registered account reaches nothing until somebody grants it
+something.** The wildcard was the obvious default and the wrong one: it made
+approving a stranger decide two things at once while presenting itself as one
+— whether this person may have an account, and what they may reach. An empty
+grant denies everything, which is the reading a principal has always taken of
+one, and the Users page shows "Nothing" until an administrator lists some.
+
+**A provider's display name is dropped rather than refused.** Every rule
+`ValidateDisplayName` enforces is met by real names — an emoji joined with
+U+200D, an Arabic name carrying a bidirectional mark, a long one — and nobody
+here typed it. Refusing the registration over it would make an account
+impossible for that person while the browser said the provider did not finish
+and the log showed a validation error about a field they never filled in. The
+name is cosmetic and never an identity, so an unusable one is discarded and the
+account renders as its address. A name somebody types is still refused with a
+reason: they can see the field and fix it.
+
+**"Administrator" in the last-administrator guard means one who can
+administer.** The role, not disabled, *and* not pending. A pending account holds
+no capability whatever its row says, so counting one there would let the last
+real administrator demote, disable or delete themselves — leaving a host with
+nobody holding `admin` and nobody able to approve the pending account the guard
+counted, which is not recoverable from inside the dashboard.
 
 **Approving a registration is a privilege grant.** It is the moment somebody
 gains the ability to do anything here, so it appends to the hash-chained trail

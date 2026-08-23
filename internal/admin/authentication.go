@@ -88,10 +88,14 @@ type authOptionsResponse struct {
 	Providers []sso.Descriptor `json:"providers"`
 	// Registration reports whether somebody without an account may ask for
 	// one with an email and a password.
+	//
+	// Whether it will then wait for an administrator is deliberately not here,
+	// because there is nothing to report: a password registration always
+	// waits. The setting that switches approval off applies to the providers,
+	// which check the address; nothing checks one typed into this form. A
+	// field saying "approval: false" would be read by the form as "you can
+	// start straight away", which would be false.
 	Registration bool `json:"registration"`
-	// Approval reports that a new account waits for an administrator, so the
-	// form can say so before somebody fills it in rather than afterwards.
-	Approval bool `json:"approval"`
 }
 
 func (s *Server) handleAuthOptions(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +105,6 @@ func (s *Server) handleAuthOptions(w http.ResponseWriter, r *http.Request) {
 	}
 	policy := s.registrationPolicy(r.Context())
 	resp.Registration = policy.Enabled
-	resp.Approval = policy.RequireApproval
 	s.writeJSON(w, r, http.StatusOK, resp)
 }
 
@@ -265,16 +268,40 @@ const (
 // error page on this host's own domain with no way back to the sign-in form.
 func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	provider := users.Provider(r.PathValue("provider"))
-	if s.opts.SSO == nil || !provider.Valid() {
+	// Identities as well as SSO: a build wired with the flows and no account
+	// store would complete a round trip and then dereference nothing. Every
+	// other handler here checks it, and a callback is the one that arrives
+	// with somebody's browser attached.
+	if s.opts.SSO == nil || s.opts.Identities == nil || !provider.Valid() {
 		http.NotFound(w, r)
 		return
 	}
 	q := r.URL.Query()
 	if e := q.Get("error"); e != "" {
 		// The provider refused, usually because somebody pressed cancel.
-		s.opts.Log.Info("a provider refused a sign-in",
-			"provider", provider, "error", e)
-		s.finish(w, r, "/", outcomeProvider)
+		//
+		// The state is retired all the same, and through the same guard a
+		// completion goes through. A cancelled flow that left its row behind
+		// would mean single use was really "used or lingering": the state
+		// stays valid until it expires, and this branch would have answered
+		// for it without ever having looked at it. Retiring it here is what
+		// makes pressing cancel end the flow rather than merely leave it.
+		//
+		// Best effort. A state this host is not waiting for, one issued for
+		// another provider, or one presented without its binding retires
+		// nothing and is not worth a second refusal -- whoever is being
+		// redirected has already been told the provider said no. What it costs
+		// is the return: with no row there is nothing to say where the flow
+		// began, so they land on the sign-in page rather than where they were.
+		abandoned := s.opts.SSO.Abandon(
+			r.Context(), provider, q.Get("state"), ssoBinding(r))
+		returnTo := "/"
+		if abandoned != nil {
+			returnTo = abandoned.ReturnTo
+		}
+		s.opts.Log.Info("a provider refused a sign-in", "provider", provider,
+			"error", e, "state_retired", abandoned != nil)
+		s.finish(w, r, returnTo, outcomeProvider)
 		return
 	}
 
@@ -303,22 +330,27 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 
 // completeLink attaches the provider to the account that started the flow.
 func (s *Server) completeLink(w http.ResponseWriter, r *http.Request, state *sso.State, identity *sso.Identity) {
-	// The session is checked again here, against the account the flow was
-	// started for. A state is single-use and bound to the browser, so this is
-	// a second gate rather than the only one -- but the first gate is about
-	// the browser and this one is about the account, and somebody who signed
-	// out and back in as somebody else in another tab is exactly the case
-	// where those differ.
-	if s.currentAccountID(r) != state.UserID {
+	// The session is resolved once, and it decides both things: whether this
+	// is still the account the flow was started for, and what the audit entry
+	// names. A state is single-use and bound to the browser, so this is a
+	// second gate rather than the only one -- but the first gate is about the
+	// browser and this one is about the account, and somebody who signed out
+	// and back in as somebody else in another tab is exactly where they
+	// differ.
+	//
+	// There is deliberately no fallback actor. The value of the trail is that
+	// the actor is the account that acted, and falling back to the address the
+	// provider reported would write an entry naming somebody who may not be
+	// the account being linked -- which is the confusion this endpoint exists
+	// to prevent, recorded as if it were a fact.
+	signedIn, _, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r))
+	if err != nil || signedIn.ID != state.UserID {
 		s.finish(w, r, state.ReturnTo, outcomeWrongAccount)
 		return
 	}
-	actor := "user:" + identity.Email
-	if u, _, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r)); err == nil {
-		actor = "user:" + u.Email
-	}
+	actor := "user:" + signedIn.Email
 
-	err := s.opts.Identities.LinkIdentity(r.Context(), actor, users.Identity{
+	err = s.opts.Identities.LinkIdentity(r.Context(), actor, users.Identity{
 		Provider: identity.Provider,
 		Subject:  identity.Subject,
 		UserID:   state.UserID,
@@ -521,20 +553,52 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 // --- the pending queue ------------------------------------------------------
 
+// registrationView is a pending account plus how it got here.
+//
+// The providers are on the row because approving is a privilege grant and the
+// provider is what decides how much the address is worth. "alice@corp.com,
+// proved by your Entra directory" and "alice@corp.com, typed into a form" are
+// the same string and completely different facts, and an administrator
+// deciding between yes and no is exactly who needs to be able to tell them
+// apart.
+type registrationView struct {
+	userView
+	// Providers names the identity providers this registration arrived
+	// through. Empty means somebody typed the address into the form, and
+	// nothing has checked it.
+	Providers []string `json:"providers"`
+}
+
 func (s *Server) handleListRegistrations(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Identities == nil {
 		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
 		return
 	}
-	list, err := s.opts.Identities.PendingRegistrations(r.Context())
+	ctx := r.Context()
+	list, err := s.opts.Identities.PendingRegistrations(ctx)
 	if err != nil {
 		s.opts.Log.Error("could not read pending registrations", "error", err)
 		s.writeError(w, r, http.StatusInternalServerError, "could not read pending registrations")
 		return
 	}
-	out := make([]userView, len(list))
+	out := make([]registrationView, len(list))
 	for i, u := range list {
-		out[i] = viewOfUser(u, false)
+		out[i] = registrationView{userView: viewOfUser(u, false), Providers: []string{}}
+		// A query per waiting account. The queue is short by construction --
+		// it is what nobody has decided about yet -- and a join would put the
+		// shape of this page into the store.
+		linked, err := s.opts.Identities.IdentitiesFor(ctx, u.ID)
+		if err != nil {
+			// A registration that cannot say how it arrived is still one an
+			// administrator has to decide about. Losing the label is better
+			// than losing the row.
+			s.opts.Log.Warn("could not read a registration's providers",
+				"account", u.ID, "error", err)
+			continue
+		}
+		for _, l := range linked {
+			out[i].Providers = append(out[i].Providers, sso.Label(l.Provider))
+		}
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"registrations": out, "count": len(out)})
 }
@@ -653,8 +717,13 @@ func (s *Server) handleUnlinkIdentity(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusNotFound, "that provider is not linked to this account")
 		return
 	case errors.Is(err, users.ErrLastCredential):
+		// Not "set a password first": there is no endpoint that lets an
+		// account set its own, so that would be an instruction the person
+		// cannot carry out. Changing a password is PATCH /api/users/{id} and
+		// takes an administrator, which is what the profile page already says.
 		s.writeError(w, r, http.StatusConflict,
-			"that is the only way this account can sign in; set a password first")
+			"that is the only way this account can sign in; "+
+				"ask an administrator to set a password first")
 		return
 	case err != nil:
 		s.opts.Log.Error("could not unlink a provider", "error", err)

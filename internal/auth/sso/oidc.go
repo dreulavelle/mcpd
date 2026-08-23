@@ -45,6 +45,17 @@ const discoveryTTL = time.Hour
 // stream of requests at the provider.
 const jwksTTL = 15 * time.Minute
 
+// jwksRefetchFloor bounds how often an unknown key id can send this host back
+// to a provider.
+//
+// A token naming a key that does not exist is what a rotation looks like from
+// here, and it is also what a made-up token looks like. Without a floor the
+// second turns one refused sign-in into one request at the provider, at
+// whatever rate somebody cares to send them -- from an endpoint that needs no
+// credential. A minute is far below any real rotation interval and far above
+// any useful amplification.
+const jwksRefetchFloor = time.Minute
+
 // issuerBase returns the address a provider publishes its metadata under.
 func issuerBase(c Config) (string, error) {
 	switch c.Provider {
@@ -154,7 +165,11 @@ func (k jwk) key() (*rsa.PublicKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: signing key %q has an unreadable exponent", ErrProvider, k.Kid)
 		}
-		if len(e) == 0 || len(e) > 8 {
+		// Four bytes, because that is what the destination is: the exponent
+		// goes into an int, and anything wider is either a key this host
+		// cannot represent or a number chosen to see what happens when it is
+		// truncated into one. Every real RSA exponent is 65537.
+		if len(e) == 0 || len(e) > 4 {
 			return nil, fmt.Errorf("%w: signing key %q has an unusable exponent", ErrProvider, k.Kid)
 		}
 		return &rsa.PublicKey{
@@ -185,11 +200,14 @@ func (k jwk) key() (*rsa.PublicKey, error) {
 
 // signingKey resolves a key id against a provider's key set.
 //
-// A miss refetches once, because that is what key rotation looks like from
-// here: a token signed with a key published after the set was cached. The
-// refetch is bounded by the cache's own freshness -- a set fetched moments ago
-// is not fetched again -- so a token carrying an invented key id costs one
-// request rather than one per attempt.
+// A miss refetches, because that is what key rotation looks like from here: a
+// token signed with a key published after the set was cached. It is also what
+// a token carrying an invented key id looks like, and the two are
+// indistinguishable at this point -- so the refetch is floored at
+// jwksRefetchFloor rather than being taken on every miss. A set fetched within
+// the floor is used as it stands and the sign-in is refused, which is what
+// keeps a stream of made-up tokens from becoming a stream of requests at the
+// provider.
 func (s *Service) signingKey(ctx context.Context, d *discovery, kid string) (*rsa.PublicKey, error) {
 	set, err := s.keySet(ctx, d, false)
 	if err != nil {
@@ -197,6 +215,11 @@ func (s *Service) signingKey(ctx context.Context, d *discovery, kid string) (*rs
 	}
 	if k, ok := find(set, kid); ok {
 		return k.key()
+	}
+	if e := s.cache.Get("jwks:" + d.JWKSURI); e != nil &&
+		s.now().Sub(e.FetchedAt) < jwksRefetchFloor {
+		return nil, fmt.Errorf("%w: %s does not publish a signing key %q",
+			ErrProvider, d.Issuer, kid)
 	}
 	// Worth a line: a key set that has fallen behind presents as every sign-in
 	// failing, and this is the only place that says why.
@@ -212,7 +235,18 @@ func (s *Service) signingKey(ctx context.Context, d *discovery, kid string) (*rs
 }
 
 func find(set *jwks, kid string) (jwk, bool) {
+	// `use` says what a key is published for, and a set may carry encryption
+	// keys beside the signing ones. Verifying a signature against a key its
+	// owner said was not for signing is using it for something they did not
+	// publish it for; an entry that says nothing is treated as a signing key,
+	// which is what the field's absence has always meant.
+	usable := make([]jwk, 0, len(set.Keys))
 	for _, k := range set.Keys {
+		if k.Use == "" || k.Use == "sig" {
+			usable = append(usable, k)
+		}
+	}
+	for _, k := range usable {
 		if k.Kid == kid {
 			return k, true
 		}
@@ -221,8 +255,8 @@ func find(set *jwks, kid string) (jwk, bool) {
 	// such a provider carries no kid to match. One key and no kid is not
 	// ambiguous; anything else is, and falls through to a refusal rather than
 	// to a guess.
-	if kid == "" && len(set.Keys) == 1 {
-		return set.Keys[0], true
+	if kid == "" && len(usable) == 1 {
+		return usable[0], true
 	}
 	return jwk{}, false
 }
@@ -394,7 +428,7 @@ func (s *Service) verifyIDToken(ctx context.Context, c Config, d *discovery, raw
 		return nil, fmt.Errorf("%w: the id token has expired", ErrProvider)
 	case claims.NotBefore != 0 && now.Add(clockSkew).Before(time.Unix(claims.NotBefore, 0)):
 		return nil, fmt.Errorf("%w: the id token is not valid yet", ErrProvider)
-	case nonce != "" && claims.Nonce != nonce:
+	case claims.Nonce != nonce:
 		// The nonce ties this token to the authorization request this host
 		// made. A token that verifies but carries somebody else's nonce is a
 		// replayed token, which is the case a signature check alone permits.

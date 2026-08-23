@@ -108,7 +108,7 @@ function stubApi(role: "user" | "admin" = "admin") {
   // A host with no providers and no sign-ups, which is what an upgrade
   // produces: the console must draw the password form and nothing else.
   vi.spyOn(api, "authOptions").mockResolvedValue({
-    providers: [], registration: false, approval: true,
+    providers: [], registration: false,
   });
   vi.spyOn(api, "identities").mockResolvedValue({ identities: [], available: [] });
   vi.spyOn(api, "registrations").mockResolvedValue({ registrations: [], count: 0 });

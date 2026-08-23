@@ -83,6 +83,23 @@ func (s *StateStore) Issue(ctx context.Context, st State) (state, binding string
 
 	now := s.now()
 	err = s.db.WriteTx(ctx, now.UnixMilli(), func(tx *sqlite.UnitOfWork) error {
+		// Expired rows go in the same transaction as the row being written.
+		//
+		// This is what actually bounds the table, and it matters because the
+		// endpoint that reaches here needs no credential: anybody who can
+		// reach the dashboard can cause one insert per call. A background
+		// ticker alone would let the table and the write-ahead log grow to
+		// whatever arrives between two of its ticks, on the one connection
+		// every other write in this process shares. Purging here caps what is
+		// held at the states issued inside one TTL, whatever the rate.
+		//
+		// A cap on live states was considered and refused: it would turn a
+		// flood into a lockout, refusing sign-ins to the people the host
+		// exists for while costing whoever caused it nothing.
+		if err := tx.Exec(`DELETE FROM sso_states WHERE expires_at < ?`,
+			now.UnixMilli()); err != nil {
+			return err
+		}
 		return tx.Exec(`
 			INSERT INTO sso_states (state_hash, provider, purpose, binding_hash,
 			                        user_id, code_verifier, nonce, redirect_uri,

@@ -61,8 +61,12 @@ CREATE TABLE user_identities (
     -- and for explaining a link later; never consulted to decide who a
     -- sign-in is.
     email      TEXT    NOT NULL DEFAULT '',
-    -- Who linked it: the account itself, or 'system:registration' when the
-    -- link and the account were made together by a self-registration.
+    -- Who linked it: 'user:<address>' when an account attached a provider to
+    -- itself, and 'self:<address>' when the link and the account were made
+    -- together by a self-registration. The two are kept apart because they are
+    -- different acts -- one was performed by somebody who had already proved
+    -- they own the account, and the other by somebody who did not have one
+    -- yet.
     linked_by  TEXT    NOT NULL,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (provider, subject),

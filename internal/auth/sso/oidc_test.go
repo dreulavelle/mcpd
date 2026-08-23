@@ -201,6 +201,16 @@ func TestVerifyIDToken_Refusals(t *testing.T) {
 			want:   "does not carry this request's nonce",
 		},
 		{
+			// The comparison is unconditional. It used to be skipped when the
+			// expected nonce was empty, which made "nothing to check against"
+			// mean "do not check" -- and a check that switches itself off when
+			// its input is missing is not a check. Start always binds one, so
+			// an empty expectation is a state that did not come from there.
+			name:  "nothing to check the nonce against",
+			nonce: " ",
+			want:  "does not carry this request's nonce",
+		},
+		{
 			name:   "no subject",
 			claims: func(cl map[string]any) { delete(cl, "sub") },
 			want:   "names no subject",

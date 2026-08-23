@@ -119,13 +119,31 @@ export interface ProviderDescriptor {
   label: string;
 }
 
-/** What the signed-out page may offer, before anybody has signed in. */
+/**
+ * What the signed-out page may offer, before anybody has signed in.
+ *
+ * There is deliberately no "will it wait for approval" here. A password
+ * registration always waits: the setting that switches approval off applies to
+ * the providers, which check the address, and nothing checks one typed into a
+ * form. A field saying otherwise would have the form promise something false.
+ */
 export interface AuthOptions {
   providers: ProviderDescriptor[];
   /** Whether somebody without an account may ask for one. */
   registration: boolean;
-  /** Whether a new account waits for an administrator. */
-  approval: boolean;
+}
+
+/**
+ * An account waiting for an administrator, and how it got here.
+ *
+ * The providers are on the row because approving is a privilege grant and the
+ * provider is what decides how much the address is worth: "alice@corp.com,
+ * proved by your directory" and "alice@corp.com, typed into a form" are the
+ * same string and completely different facts.
+ */
+export interface PendingRegistration extends User {
+  /** Provider labels. Empty means somebody typed the address into the form. */
+  providers: string[];
 }
 
 /** A provider linked to the signed-in account. */
@@ -742,7 +760,7 @@ export const api = {
       "/api/auth/redirect-uris"),
 
   registrations: () =>
-    request<{ registrations: User[]; count: number }>("/api/registrations"),
+    request<{ registrations: PendingRegistration[]; count: number }>("/api/registrations"),
 
   approveRegistration: (id: string) =>
     request<User>(`/api/registrations/${encodeURIComponent(id)}/approve`,

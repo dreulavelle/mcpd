@@ -61,10 +61,49 @@ type RegistrationPolicy struct {
 	// Enabled opens registration at all.
 	Enabled bool
 	// RequireApproval lands a new account pending rather than active.
+	//
+	// It decides that for a registration whose address a provider has proved.
+	// It cannot make a password registration active; see StatusFor.
 	RequireApproval bool
 	// AllowedDomains restricts which addresses may register. Empty allows any
 	// address, which is only reachable once Enabled is deliberately set.
 	AllowedDomains []string
+}
+
+// StatusFor reports what a registration lands as, given whether anybody has
+// established that the address belongs to whoever is asking.
+//
+// This is the whole of the rule, and it is one function because the difference
+// it encodes is the one thing about registration that is easy to get wrong.
+//
+// Each of the three providers proves the address before this host ever sees
+// it: Google states `email_verified`, GitHub is asked for the primary *and*
+// verified entry, and an Entra token is minted by one directory for one of its
+// own members. A password registration proves nothing at all -- the address is
+// a string somebody typed into a form, and nothing between the form and the
+// row has checked that they can receive mail at it.
+//
+// So the allow-list means two different things through the two doors. Through
+// a provider, "anyone at corp.com" is a statement about who may have an
+// account. Through the form it is a statement about what may be typed, which
+// is no statement at all: an anonymous caller types `boss@corp.com` and, if
+// the approval step were off, walks in holding read, propose and approve.
+// That is the exact outcome the rest of this feature is built to prevent,
+// reached through the one door that checks nothing.
+//
+// The switch is therefore not permitted to reach that combination. Turning
+// approval off lets a *proved* address in without an administrator, and a
+// password registration waits regardless -- the setting's own help says so, at
+// the control, so this is a rule an operator reads rather than one they
+// discover. Refusing here rather than in the settings form is deliberate: a
+// cross-field check in a form is one more thing that has to be kept in step
+// with the code that acts on the values, and this is the code that acts on
+// them.
+func (p RegistrationPolicy) StatusFor(addressProved bool) Status {
+	if !addressProved || p.RequireApproval {
+		return StatusPending
+	}
+	return StatusActive
 }
 
 // Allows reports whether an address may register under this policy.
@@ -148,8 +187,20 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 	if err := req.Policy.Allows(email); err != nil {
 		return nil, err
 	}
-	displayName, err := ValidateDisplayName(req.DisplayName)
-	if err != nil {
+	// A name typed into a form is the person's own, and a rule it breaks is
+	// something they can be told about and correct. A name that arrived from a
+	// provider is neither: nobody here typed it, and refusing the whole
+	// registration over it would make an account impossible for anybody whose
+	// GitHub profile carries an emoji with a zero-width joiner in it, or whose
+	// name is written in a script that needs a bidirectional mark, or who
+	// simply has a long one -- while the browser said the provider did not
+	// finish and the log showed a validation error about a field they never
+	// filled in. The name is cosmetic and never an identity, so an unusable
+	// one is dropped and the account renders as its address.
+	displayName := ""
+	if req.Identity != nil {
+		displayName = SafeDisplayName(req.DisplayName)
+	} else if displayName, err = ValidateDisplayName(req.DisplayName); err != nil {
 		return nil, err
 	}
 
@@ -170,23 +221,30 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 		return nil, err
 	}
 
-	status := StatusActive
-	if req.Policy.RequireApproval {
-		status = StatusPending
-	}
+	// A provider proved the address; a form did not. That is the whole of what
+	// decides whether this account is usable straight away.
+	status := req.Policy.StatusFor(req.Identity != nil)
 
-	// A self-registration is an ordinary user: it reads, proposes and
-	// approves, and reaches every mounted integration. Narrower would need a
-	// choice nobody is present to make, and the account holds none of it until
-	// somebody approves anyway when approval is required. What an
-	// administrator does afterwards on the Users page is unchanged.
+	// It reaches nothing until somebody grants it something.
+	//
+	// The wildcard was the obvious default and is the wrong one. A
+	// self-registered account is the least-known principal on the host, and
+	// handing it every mounted integration means an approval decides two
+	// things at once while presenting itself as one: whether this person may
+	// have an account, and what they may reach. Those are separate decisions
+	// and only the first is being made on the Authentication page.
+	//
+	// An empty grant denies everything -- the same reading the Principal has
+	// always taken of one -- so the account signs in, sees the console, and
+	// reaches no integration until an administrator lists some on the Users
+	// page, where the row says "Nothing" until they do.
 	u := &User{
 		ID:           id,
 		Email:        email,
 		PasswordHash: hash,
 		DisplayName:  displayName,
 		Role:         auth.RoleUser,
-		Plugins:      []string{auth.Wildcard},
+		Plugins:      []string{},
 		Status:       status,
 	}
 	plugins, err := json.Marshal(u.Plugins)

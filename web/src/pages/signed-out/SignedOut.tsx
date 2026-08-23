@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import {
   api, ApiError, type AuthOptions, type Meta, type ProviderName, type Session,
 } from "@/lib/api";
+import { consumeSSOOutcome } from "@/lib/sso";
 import { Notice } from "@/components/chrome";
 import { Brand } from "@/components/shell";
 import { Button } from "@/components/ui/button";
@@ -94,13 +95,20 @@ export function SignIn({ meta, auth, notice, onDone }: {
   meta: Meta | null;
   /** What this host offers. Null while it is still being asked. */
   auth: AuthOptions | null;
-  /** A message from a provider round trip that has just come back refused. */
+  /**
+   * A message from a provider round trip that has just come back refused.
+   * Omitted in the app, which lets this screen take the one the URL carried.
+   */
   notice?: string;
   onDone: (s: Session) => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(notice ?? "");
+  // Taken, not read. The `address_taken` message tells somebody to sign in and
+  // link the provider from their profile -- so leaving it behind would have it
+  // reappear on the profile page they were just sent to, as a failure, next to
+  // the button that is the thing it asked them to press.
+  const [error, setError] = useState(() => notice ?? consumeSSOOutcome());
   const [busy, setBusy] = useState(false);
   const [signingUp, setSigningUp] = useState(false);
 
@@ -122,12 +130,7 @@ export function SignIn({ meta, auth, notice, onDone }: {
   }
 
   if (signingUp) {
-    return (
-      <SignUp
-        meta={meta} approval={auth?.approval ?? true}
-        onDone={onDone} onCancel={() => setSigningUp(false)}
-      />
-    );
+    return <SignUp meta={meta} onDone={onDone} onCancel={() => setSigningUp(false)} />;
   }
 
   const providers = auth?.providers ?? [];
@@ -181,11 +184,17 @@ export function SignIn({ meta, auth, notice, onDone }: {
   );
 }
 
-/** Asking for an account on a host somebody already owns. */
-function SignUp({ meta, approval, onDone, onCancel }: {
+/**
+ * Asking for an account on a host somebody already owns.
+ *
+ * It always waits for an administrator, whatever the host's approval setting
+ * says, and the form says so up front rather than at the end. Nothing between
+ * this form and the row has checked that the person can receive mail at the
+ * address they typed — which is the difference between this and the provider
+ * buttons above it, and the reason the setting cannot switch this off.
+ */
+function SignUp({ meta, onDone, onCancel }: {
   meta: Meta | null;
-  /** Whether the account will wait for an administrator. */
-  approval: boolean;
   onDone: (s: Session) => void;
   onCancel: () => void;
 }) {
@@ -214,9 +223,7 @@ function SignUp({ meta, approval, onDone, onCancel }: {
   return (
     <SignedOutCard meta={meta} error={error} title="Ask for an account">
       <p className="text-sm text-muted-foreground">
-        {approval
-          ? "An administrator has to say yes before you can do anything here."
-          : "You can start using mcpd as soon as this is done."}
+        An administrator has to say yes before you can do anything here.
       </p>
 
       <form className="space-y-4" onSubmit={submit}>

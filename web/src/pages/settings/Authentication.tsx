@@ -1,5 +1,7 @@
 import { useCallback, useState } from "react";
-import { api, ApiError, type ProviderName, type User } from "@/lib/api";
+import {
+  api, ApiError, type PendingRegistration, type ProviderName,
+} from "@/lib/api";
 import { useLoader, usePoll } from "@/lib/hooks";
 import { Loading, Notice, Out, PageHeader } from "@/components/chrome";
 import { SettingsForm } from "@/components/SettingsForm";
@@ -132,7 +134,7 @@ function RedirectURIs() {
  * grant and is recorded as one.
  */
 function PendingQueue() {
-  const [waiting, setWaiting] = useState<User[] | null>(null);
+  const [waiting, setWaiting] = useState<PendingRegistration[] | null>(null);
   const [error, setError] = useState("");
   const notify = useNotify();
 
@@ -177,7 +179,7 @@ function PendingQueue() {
 }
 
 function PendingRow({ user, onChanged, notify }: {
-  user: User;
+  user: PendingRegistration;
   onChanged: () => void;
   notify: Notify;
 }) {
@@ -210,8 +212,10 @@ function PendingRow({ user, onChanged, notify }: {
         </span>
         {error && <div className="mt-1 text-xs text-problem">{error}</div>}
       </TableCell>
+      {/* What proved the address, which is what the decision turns on. A
+          provider checked it before mcpd saw it; the form checked nothing. */}
       <TableCell className="text-muted-foreground">
-        {user.has_password ? "A password" : "A provider"}
+        {user.providers.length > 0 ? user.providers.join(", ") : "A password — unchecked"}
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">
         {new Date(user.created_at).toLocaleString()}

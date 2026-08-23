@@ -93,11 +93,18 @@ func (a *App) buildSSO() {
 // Hygiene rather than correctness: expiry is a condition of the claim, so a row
 // that outlives it stops being usable whether or not it is deleted. What this
 // prevents is a table growing without bound on a host people sign in to often.
+//
+// On the TTL rather than the hour, and it is the second line of defence rather
+// than the first. Issuing a state purges the expired ones in the same
+// transaction, which is what bounds the table on a host being hammered; this
+// clears up on a host where nobody is signing in at all, and matching the TTL
+// means a row outlives its usefulness by minutes rather than by most of an
+// hour.
 func (a *App) purgeSSOStates(ctx context.Context) error {
 	if a.ssoStates == nil {
 		return nil
 	}
-	ticker := time.NewTicker(time.Hour)
+	ticker := time.NewTicker(sso.StateTTL)
 	defer ticker.Stop()
 	for {
 		select {

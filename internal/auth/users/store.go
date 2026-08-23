@@ -275,11 +275,11 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 
 	now := s.now().UnixMilli()
 	err := s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		var role string
+		var role, status string
 		var disabled int
 		if err := tx.QueryRow(
-			`SELECT role, disabled FROM users WHERE id = ?`, id).
-			Scan(&role, &disabled); err != nil {
+			`SELECT role, disabled, status FROM users WHERE id = ?`, id).
+			Scan(&role, &disabled, &status); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -288,7 +288,14 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 
 		// Losing administrator rights, whether by role change or by being
 		// switched off, is the same event as far as the guard is concerned.
-		wasAdmin := auth.Role(role) == auth.RoleAdmin && disabled == 0
+		//
+		// A pending account was never an administrator to lose it, whatever
+		// its role column says: it holds no capability at all. Counting one
+		// here would mean promoting a pending registration registered as the
+		// host gaining an administrator, and the last real one could then edit
+		// themselves out.
+		wasAdmin := auth.Role(role) == auth.RoleAdmin && disabled == 0 &&
+			Status(status) != StatusPending
 		stillAdmin := wasAdmin
 		if req.Role != nil {
 			stillAdmin = *req.Role == auth.RoleAdmin && stillAdmin
@@ -396,17 +403,20 @@ func (s *Store) SetPassword(ctx context.Context, id, password string) error {
 func (s *Store) Delete(ctx context.Context, id string) error {
 	now := s.now().UnixMilli()
 	return s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		var role string
+		var role, status string
 		var disabled int
 		if err := tx.QueryRow(
-			`SELECT role, disabled FROM users WHERE id = ?`, id).
-			Scan(&role, &disabled); err != nil {
+			`SELECT role, disabled, status FROM users WHERE id = ?`, id).
+			Scan(&role, &disabled, &status); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
 			return err
 		}
-		if auth.Role(role) == auth.RoleAdmin && disabled == 0 {
+		// Same reading as Update's: an account nobody has approved was never
+		// an administrator, so deleting one takes nothing away.
+		if auth.Role(role) == auth.RoleAdmin && disabled == 0 &&
+			Status(status) != StatusPending {
 			if err := guardLastAdmin(tx, id); err != nil {
 				return err
 			}
@@ -427,11 +437,21 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 }
 
 // guardLastAdmin refuses an edit that would leave no enabled administrator.
+//
+// "Administrator" here means one who can actually administer: the role, not
+// disabled, and not waiting for approval. The status clause is the one that is
+// easy to leave out, and leaving it out is not a cosmetic miscount. A pending
+// account holds no capability whatever its row says its role is, so a pending
+// administrator counted here would let the last real one demote, disable or
+// delete themselves -- leaving a host with nobody holding admin, and nobody
+// able to approve the pending account the guard counted. There is no way back
+// from that from inside the dashboard.
 func guardLastAdmin(tx *sqlite.UnitOfWork, excludingID string) error {
 	var others int
 	if err := tx.QueryRow(`
 		SELECT COUNT(*) FROM users
-		WHERE role = 'admin' AND disabled = 0 AND id <> ?`, excludingID).
+		WHERE role = 'admin' AND disabled = 0 AND status <> ? AND id <> ?`,
+		string(StatusPending), excludingID).
 		Scan(&others); err != nil {
 		return err
 	}

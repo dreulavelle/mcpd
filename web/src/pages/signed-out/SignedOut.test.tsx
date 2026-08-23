@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type Meta, type Session } from "@/lib/api";
+import { consumeSSOOutcome, resetSSOOutcome } from "@/lib/sso";
 import App from "@/App";
 import { AwaitingApproval, SignIn } from "./SignedOut";
 
@@ -28,7 +29,7 @@ const SESSION: Session = {
  */
 describe("the sign-in screen", () => {
   it("shows only the password form on a host with nothing else turned on", () => {
-    render(<SignIn meta={META} auth={{ providers: [], registration: false, approval: true }}
+    render(<SignIn meta={META} auth={{ providers: [], registration: false }}
       onDone={() => undefined} />);
 
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
@@ -54,7 +55,6 @@ describe("the sign-in screen", () => {
           { provider: "github", label: "GitHub" },
         ],
         registration: false,
-        approval: true,
       }}
       onDone={() => undefined}
     />);
@@ -63,13 +63,18 @@ describe("the sign-in screen", () => {
     expect(screen.getByRole("button", { name: "Continue with GitHub" })).toBeInTheDocument();
   });
 
-  // The form says what will happen before it is filled in rather than
-  // afterwards, because "your account is waiting" is a surprise at the end and
-  // an expectation at the start.
-  it("says an account will wait when approval is on", async () => {
+  // The password form always waits, whatever the host's approval setting says,
+  // and it says so before somebody fills it in rather than afterwards.
+  //
+  // Nothing between this form and the row has checked that the person can
+  // receive mail at the address they typed, which is the difference between it
+  // and the provider buttons above it. `approval` is deliberately not on
+  // AuthOptions any more: a field saying "false" would have this form promise
+  // something that is not true.
+  it("says an account will wait for an administrator", async () => {
     render(<SignIn
       meta={META}
-      auth={{ providers: [], registration: true, approval: true }}
+      auth={{ providers: [], registration: true }}
       onDone={() => undefined}
     />);
 
@@ -77,17 +82,23 @@ describe("the sign-in screen", () => {
     expect(screen.getByRole("heading", { name: "Ask for an account" }))
       .toBeInTheDocument();
     expect(screen.getByText(/administrator has to say yes/i)).toBeInTheDocument();
+    expect(screen.queryByText(/as soon as this is done/i)).toBeNull();
   });
 
-  it("says an account will work straight away when it will", async () => {
-    render(<SignIn
-      meta={META}
-      auth={{ providers: [], registration: true, approval: false }}
-      onDone={() => undefined}
-    />);
+  // Taken, not read, and this is the case that makes the difference.
+  //
+  // `address_taken` tells somebody to sign in and link the provider from their
+  // profile. Leaving the outcome behind would have that same message reappear
+  // on the profile page they were just sent to, as a failure, beside the button
+  // it asked them to press.
+  it("spends the outcome it shows", async () => {
+    resetSSOOutcome();
+    window.history.replaceState(null, "", "/?sso_error=address_taken");
 
-    await userEvent.click(screen.getByRole("button", { name: "Ask for one" }));
-    expect(screen.getByText(/as soon as this is done/i)).toBeInTheDocument();
+    render(<SignIn meta={META} auth={null} onDone={() => undefined} />);
+    expect(screen.getByText(/already uses that email address/i)).toBeInTheDocument();
+
+    expect(consumeSSOOutcome()).toBe("");
   });
 
   // A refused round trip has nowhere to say so but the address bar, and the
@@ -131,7 +142,7 @@ describe("an account waiting for approval", () => {
   it("is the whole of the console the app draws for one", async () => {
     vi.spyOn(api, "meta").mockResolvedValue(META);
     vi.spyOn(api, "authOptions").mockResolvedValue({
-      providers: [], registration: true, approval: true,
+      providers: [], registration: true,
     });
     vi.spyOn(api, "session").mockResolvedValue({ ...SESSION, status: "pending" });
 

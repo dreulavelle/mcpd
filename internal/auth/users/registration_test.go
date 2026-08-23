@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -541,6 +542,233 @@ func TestRegister_RefusedWhenRegistrationIsClosed(t *testing.T) {
 				t.Fatalf("register = %v; want ErrRegistrationClosed", err)
 			}
 		})
+	}
+}
+
+// The password door proves nothing about the address, so it waits whatever the
+// approval setting says.
+//
+// The bug this exists for: with registration on, approval off and an allow-list
+// of corp.com -- three switches a settings form presents as independent -- any
+// anonymous caller could create an *active* account for any address at
+// corp.com and walk in holding read, propose and approve. The allow-list means
+// "who may have an account" through a provider that checked the address, and
+// only "what may be typed" through a form that did not.
+func TestRegister_ThePasswordDoorAlwaysWaits(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStoreWithDB(t)
+	claim(t, s)
+
+	// The dangerous combination, spelled out: open, no approval step, and a
+	// domain somebody would want to impersonate.
+	policy := RegistrationPolicy{
+		Enabled: true, RequireApproval: false, AllowedDomains: []string{"corp.com"},
+	}
+
+	typed, err := s.Register(ctx, RegisterRequest{
+		Email:    "boss@corp.com",
+		Password: "a-sufficiently-long-passphrase",
+		Policy:   policy,
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if typed.Status != StatusPending {
+		t.Fatalf("status = %q; an address nobody checked must wait", typed.Status)
+	}
+	p := typed.Principal("ses")
+	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove} {
+		if p.Can(c) {
+			t.Errorf("an unchecked address walked in holding %q", c)
+		}
+	}
+
+	// A provider checked the address, so the same policy lets it straight in.
+	proved, err := s.Register(ctx, RegisterRequest{
+		Email: "someone@corp.com",
+		Identity: &Identity{
+			Provider: ProviderGoogle, Subject: "google-someone", Email: "someone@corp.com",
+		},
+		Policy: policy,
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if proved.Status != StatusActive {
+		t.Errorf("status = %q; a proved address may skip the queue when the "+
+			"operator turned approval off", proved.Status)
+	}
+}
+
+func TestRegistrationPolicy_StatusFor(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy RegistrationPolicy
+		proved bool
+		want   Status
+	}{
+		{"proved, approval off", RegistrationPolicy{Enabled: true}, true, StatusActive},
+		{"proved, approval on", RegistrationPolicy{Enabled: true, RequireApproval: true}, true, StatusPending},
+		{"unproved, approval off", RegistrationPolicy{Enabled: true}, false, StatusPending},
+		{"unproved, approval on", RegistrationPolicy{Enabled: true, RequireApproval: true}, false, StatusPending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.policy.StatusFor(tc.proved); got != tc.want {
+				t.Errorf("StatusFor(%v) = %q; want %q", tc.proved, got, tc.want)
+			}
+		})
+	}
+}
+
+// A self-registration reaches nothing until an administrator lists something.
+//
+// The wildcard was the obvious default and the wrong one: it made approving a
+// stranger decide two things at once while presenting itself as one -- whether
+// they may have an account, and what they may reach.
+func TestRegister_GrantsNoPluginAccess(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStoreWithDB(t)
+	claim(t, s)
+
+	u, err := s.Register(ctx, RegisterRequest{
+		Email:    "newcomer@example.com",
+		Identity: &Identity{Provider: ProviderGoogle, Subject: "google-newcomer"},
+		Policy:   openPolicy(),
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if len(u.Plugins) != 0 {
+		t.Fatalf("plugins = %v; a self-registered account starts reaching nothing", u.Plugins)
+	}
+
+	// Active, so it holds its capabilities -- and still reaches no
+	// integration, which is a grant an administrator makes deliberately.
+	p := u.Principal("ses")
+	if !p.Can(auth.CapRead) {
+		t.Error("an approved account holds no capabilities at all")
+	}
+	if p.CanAccessPlugin("echo") || p.CanAccessPlugin(auth.Wildcard) {
+		t.Error("a self-registered account reaches an integration nobody granted it")
+	}
+}
+
+// A provider's display name is not something anybody here typed, and the rules
+// about what this host will render are met by real names: an emoji joined with
+// U+200D, or a name carrying a bidirectional mark. Refusing the registration
+// over one would make an account impossible for that person while the browser
+// said the provider did not finish.
+func TestRegister_DropsAProviderNameThisHostWillNotRender(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStoreWithDB(t)
+	claim(t, s)
+
+	for _, tc := range []struct {
+		name string
+		from string
+	}{
+		{"an emoji with a zero-width joiner", "Alice \U0001F468‍\U0001F4BB"},
+		{"a name carrying a right-to-left mark", "‏سارة"},
+		{"a name over the length bound", strings.Repeat("n", MaxDisplayNameRunes+1)},
+		{"a name with a newline in it", "Alice\nSmith"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			email := "person" + strconv.Itoa(len(tc.name)) + "@example.com"
+			u, err := s.Register(ctx, RegisterRequest{
+				Email:       email,
+				DisplayName: tc.from,
+				Identity: &Identity{
+					Provider: ProviderGitHub, Subject: "github-" + email, Email: email,
+				},
+				Policy: openPolicy(),
+			})
+			if err != nil {
+				t.Fatalf("a provider name this host will not render refused the account: %v", err)
+			}
+			if u.DisplayName != "" {
+				t.Errorf("display name = %q; an unusable one is dropped", u.DisplayName)
+			}
+			// And the account renders as its address, which is what an account
+			// with no name has always done.
+			if u.Name() != email {
+				t.Errorf("Name() = %q; want the address", u.Name())
+			}
+		})
+	}
+
+	// A name somebody typed is still refused with a reason: they can see the
+	// field and fix it.
+	if _, err := s.Register(ctx, RegisterRequest{
+		Email:       "typed@example.com",
+		Password:    "a-sufficiently-long-passphrase",
+		DisplayName: "Typed\nName",
+		Policy:      openPolicy(),
+	}); err == nil {
+		t.Error("a name typed into the form was accepted with a control character in it")
+	}
+}
+
+// The last-administrator guard counts administrators who can administer.
+//
+// The bug this exists for: the guard predates `status` and counted a pending
+// account's role. A pending administrator holds no capability, so if the only
+// real one then demoted themselves the guard permitted it -- leaving a host
+// with nobody holding admin, and nobody able to approve the pending account
+// the guard had counted. There is no way back from that from inside the
+// dashboard.
+func TestGuardLastAdmin_DoesNotCountAPendingAdministrator(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStoreWithDB(t)
+	owner := claim(t, s)
+
+	pending, err := s.Register(ctx, RegisterRequest{
+		Email:    "newcomer@example.com",
+		Password: "a-sufficiently-long-passphrase",
+		Policy:   RegistrationPolicy{Enabled: true, RequireApproval: true},
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Promoted while still waiting. Permitted -- the role is a grant somebody
+	// may make in advance -- and it must not register as the host gaining an
+	// administrator.
+	admin := auth.RoleAdmin
+	if _, err := s.Update(ctx, pending.ID, UpdateRequest{Role: &admin}); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	promoted, err := s.ByID(ctx, pending.ID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if promoted.Status != StatusPending {
+		t.Fatalf("status = %q; promoting must not approve", promoted.Status)
+	}
+	if promoted.Principal("ses").Can(auth.CapAdmin) {
+		t.Fatal("a pending account holds admin")
+	}
+
+	// Now the only real administrator tries to edit themselves out. Each of
+	// the three ways has to be refused.
+	user := auth.RoleUser
+	if _, err := s.Update(ctx, owner.ID, UpdateRequest{Role: &user}); !errors.Is(err, ErrLastAdmin) {
+		t.Errorf("demoting the last real administrator = %v; want ErrLastAdmin", err)
+	}
+	disabled := true
+	if _, err := s.Update(ctx, owner.ID, UpdateRequest{Disabled: &disabled}); !errors.Is(err, ErrLastAdmin) {
+		t.Errorf("disabling the last real administrator = %v; want ErrLastAdmin", err)
+	}
+	if err := s.Delete(ctx, owner.ID); !errors.Is(err, ErrLastAdmin) {
+		t.Errorf("deleting the last real administrator = %v; want ErrLastAdmin", err)
+	}
+
+	// Once the pending administrator is approved it counts, and the owner can
+	// stand down.
+	if _, err := s.ApproveRegistration(ctx, "user:owner@example.com", pending.ID); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if _, err := s.Update(ctx, owner.ID, UpdateRequest{Role: &user}); err != nil {
+		t.Errorf("with a second real administrator, standing down was refused: %v", err)
 	}
 }
 

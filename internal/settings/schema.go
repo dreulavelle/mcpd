@@ -336,14 +336,24 @@ func schema() []Group {
 					Key: KeyRegistrationApproval, Label: "Approve each one first",
 					Kind: KindBool, Group: "registration", Apply: ApplyLive,
 					Default: true,
+					// The second sentence is the load-bearing one and belongs
+					// here rather than in a paragraph somewhere: turning this
+					// off is safe for a provider, which checked the address,
+					// and would not be safe for the form, which did not.
 					Help: "New accounts wait here until you say yes. They can sign in " +
-						"and see they are waiting, and can do nothing else.",
+						"and see they are waiting, and can do nothing else. " +
+						"Turning this off applies to Google, GitHub and Microsoft only " +
+						"— sign-ups with a password always wait, because nothing has " +
+						"checked the address.",
 				},
 				{
 					Key: KeyRegistrationDomains, Label: "Only these email domains",
 					Kind: KindList, Group: "registration", Apply: ApplyLive,
 					Placeholder: "corp.com, corp.co.uk",
-					Help:        "Comma separated. Empty means any address.",
+					Help: "Comma separated. Empty means any address. Through a " +
+						"provider this says who may have an account; through the " +
+						"password form it only says what may be typed, which is why " +
+						"those wait for you.",
 				},
 			},
 		},

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -219,6 +220,94 @@ func TestSSOCallback_AForgedStateIsRefusedAndSentBack(t *testing.T) {
 	}
 }
 
+// Pressing cancel retires the row that flow created.
+//
+// The bug this exists for: the provider-error branch returned before Complete
+// ran, so Claim never happened. A cancelled flow left its state unconsumed and
+// usable for the rest of its ten minutes by anybody holding the state and the
+// binding, and the branch answered for a provider the state was not issued
+// for. Single use has to mean used or abandoned, not used or lingering.
+func TestSSOCallback_CancellingRetiresTheStateAndReturnsWhereItStarted(t *testing.T) {
+	opts := testOptions(newFakeAccounts(), &fakeIdentities{})
+	svc := newTestSSO(t)
+	opts.SSO = svc
+	s := NewServer(opts)
+
+	state, binding := startGitHubFlow(t, svc, "/profile")
+
+	// Cancelling lands back where the flow began, which is how somebody who
+	// cancelled a link from their profile finds the button again.
+	w := cancelAt(t, s, "github", state, binding)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("cancel = %d; want a redirect", w.Code)
+	}
+	if got := w.Header().Get("Location"); got != "/profile?sso_error=provider" {
+		t.Errorf("Location = %q; want the page the flow started from", got)
+	}
+
+	// And the state is spent. A second cancel finds nothing to retire, so it
+	// cannot say where the flow began and falls back to the sign-in page --
+	// which is exactly the difference between a live row and a retired one.
+	again := cancelAt(t, s, "github", state, binding)
+	if got := again.Header().Get("Location"); got != "/?sso_error=provider" {
+		t.Errorf("Location = %q; the cancelled state was still there", got)
+	}
+}
+
+// Cancelling one flow must not consume somebody else's row, and must not
+// become a bare error page either -- the person pressed cancel, and answering
+// with a 500 on this host's own domain is the outcome the redirect exists to
+// avoid.
+func TestSSOCallback_CancellingCannotSpendAnotherFlowsState(t *testing.T) {
+	opts := testOptions(newFakeAccounts(), &fakeIdentities{})
+	svc := newTestSSO(t)
+	opts.SSO = svc
+	s := NewServer(opts)
+
+	for _, tc := range []struct {
+		name     string
+		provider string
+		binding  func(string) string
+	}{
+		{
+			name:     "at another provider's callback",
+			provider: "google",
+			binding:  func(b string) string { return b },
+		},
+		{
+			name:     "without the browser it was issued to",
+			provider: "github",
+			binding:  func(string) string { return "" },
+		},
+		{
+			name:     "with somebody else's binding",
+			provider: "github",
+			binding:  func(string) string { return "a-binding-nobody-issued" },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, binding := startGitHubFlow(t, svc, "/profile")
+
+			w := cancelAt(t, s, tc.provider, state, tc.binding(binding))
+			if w.Code != http.StatusSeeOther {
+				t.Fatalf("cancel = %d; want a redirect, never an error page", w.Code)
+			}
+			// Nothing was retired, so there is nothing to say where the flow
+			// began: the sign-in page, not the state's return_to.
+			if got := w.Header().Get("Location"); got != "/?sso_error=provider" {
+				t.Errorf("Location = %q; a state it could not claim decided the return", got)
+			}
+
+			// The row survived. The real browser can still retire it, and
+			// getting its own return_to back is the proof.
+			real := cancelAt(t, s, "github", state, binding)
+			if got := real.Header().Get("Location"); got != "/profile?sso_error=provider" {
+				t.Errorf("Location = %q; the flow's own state had been consumed", got)
+			}
+		})
+	}
+}
+
 // Approving is administrative, and the store is told which administrator did
 // it -- the audit entry is written from that name, inside the transaction that
 // performs the grant.
@@ -301,11 +390,47 @@ func newTestSSO(t *testing.T) *sso.Service {
 		States:       sso.NewStateStore(db, time.Now),
 		RedirectBase: func() string { return "https://mcpd.example.com" },
 		Providers: func(context.Context) []sso.Config {
-			return []sso.Config{{
-				Provider: users.ProviderGoogle, ClientID: "id", ClientSecret: "secret",
-			}}
+			return []sso.Config{
+				{Provider: users.ProviderGoogle, ClientID: "id", ClientSecret: "secret"},
+				{Provider: users.ProviderGitHub, ClientID: "id", ClientSecret: "secret"},
+			}
 		},
 	})
+}
+
+// startGitHubFlow issues a real state and returns what a browser would carry
+// back. GitHub rather than Google because its authorization endpoint is a
+// constant: starting a Google flow fetches a discovery document, and a test
+// about what a callback does should not depend on reaching accounts.google.com.
+func startGitHubFlow(t *testing.T, svc *sso.Service, returnTo string) (state, binding string) {
+	t.Helper()
+	started, err := svc.Start(context.Background(), sso.StartRequest{
+		Provider: users.ProviderGitHub,
+		Purpose:  sso.PurposeSignIn,
+		ReturnTo: returnTo,
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	u, err := url.Parse(started.AuthorizationURL)
+	if err != nil {
+		t.Fatalf("parse authorization url: %v", err)
+	}
+	return u.Query().Get("state"), started.Binding
+}
+
+// cancelAt replays what a provider sends when somebody presses cancel.
+func cancelAt(t *testing.T, s *Server, provider, state, binding string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/auth/sso/"+provider+"/callback?error=access_denied&state="+
+			url.QueryEscape(state), nil)
+	if binding != "" {
+		req.AddCookie(&http.Cookie{Name: ssoCookie, Value: binding})
+	}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	return w
 }
 
 func post(t *testing.T, s *Server, path, body string) *httptest.ResponseRecorder {

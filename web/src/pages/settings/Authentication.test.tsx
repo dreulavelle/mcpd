@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { api, type User } from "@/lib/api";
+import { api, type PendingRegistration } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
 import { Authentication } from "./Authentication";
 
-function pendingUser(overrides: Partial<User> = {}): User {
+function pendingUser(overrides: Partial<PendingRegistration> = {}): PendingRegistration {
   return {
     id: "usr_9",
     email: "newcomer@example.com",
@@ -18,11 +18,12 @@ function pendingUser(overrides: Partial<User> = {}): User {
     has_password: false,
     created_at: "2026-08-23T09:00:00Z",
     self: false,
+    providers: [],
     ...overrides,
   };
 }
 
-function stub({ waiting = [] as User[], base = "https://mcpd.example.com" } = {}) {
+function stub({ waiting = [] as PendingRegistration[], base = "https://mcpd.example.com" } = {}) {
   vi.spyOn(api, "settings").mockResolvedValue({
     groups: [], values: {}, secrets_set: {}, encryption_available: true,
     bootstrap: [],
@@ -79,15 +80,27 @@ describe("the authentication page", () => {
     expect(screen.queryByText("Waiting for you")).toBeNull();
   });
 
-  it("lists who is waiting, and how they would sign in", async () => {
+  it("lists who is waiting, and says what proved the address", async () => {
     stub({ waiting: [pendingUser()] });
     mount();
 
     expect(await screen.findByText("Waiting for you")).toBeInTheDocument();
     expect(screen.getByText("newcomer@example.com")).toBeInTheDocument();
-    // An account with no password of its own signs in through a provider, and
-    // the row says which of the two it is.
-    expect(screen.getByText("A provider")).toBeInTheDocument();
+    // What proved the address is what an approval turns on, so the row says it
+    // rather than leaving an administrator to guess.
+    expect(screen.getByText("A password — unchecked")).toBeInTheDocument();
+  });
+
+  // "alice@corp.com, proved by your directory" and "alice@corp.com, typed into
+  // a form" are the same string and completely different facts. Approving is a
+  // privilege grant, so the row says which one it is.
+  it("names the provider a registration arrived through", async () => {
+    stub({ waiting: [pendingUser({ has_password: false, providers: ["Google"] })] });
+    mount();
+
+    await screen.findByText("Waiting for you");
+    expect(screen.getByText("Google")).toBeInTheDocument();
+    expect(screen.queryByText("A password — unchecked")).toBeNull();
   });
 
   it("approves a registration through the endpoint that records the grant", async () => {
