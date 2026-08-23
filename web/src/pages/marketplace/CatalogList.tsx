@@ -9,10 +9,11 @@ import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
-  loadCatalog, loadCatalogEntry,
+  loadCatalog, loadCatalogEntry, orderEntries,
   type Catalog, type CatalogChoice, type CatalogEntry, type CatalogLoader,
-  type CatalogSource, type DocumentLoader,
+  type CatalogSort, type CatalogSource, type DocumentLoader,
 } from "./catalog";
 import { monogram } from "./monogram";
 
@@ -35,6 +36,21 @@ const DEBOUNCE_MS = 250;
 const PAGE_SIZE = { cards: 10, rows: 40 } as const;
 
 type Density = keyof typeof PAGE_SIZE;
+
+/**
+ * The orders offered, in the order they are offered.
+ *
+ * "Most used" is not always among them. It is shown only where a catalogue in
+ * view counts how often its servers are called -- see `counted` below --
+ * because an order over a figure nobody publishes would be a control that
+ * rearranges nothing and says nothing about why.
+ */
+const ORDERS: { key: CatalogSort; label: string }[] = [
+  { key: "", label: "A bit of each" },
+  { key: "most-used", label: "Most used" },
+  { key: "recently-updated", label: "Recently updated" },
+  { key: "name", label: "Name" },
+];
 
 /**
  * The public catalogues, searchable and sampled.
@@ -60,7 +76,17 @@ export function CatalogList({
   // What was actually asked, which trails the box by a debounce. `nonce`
   // separates "ask again" from "ask something else": pressing refresh with an
   // unchanged query still has to reach the server.
-  const [asked, setAsked] = useState({ search: "", refresh: false, nonce: 0 });
+  //
+  // The order and the scope are in here rather than beside it because all four
+  // decide which entries a page holds, and a change to any of them starts the
+  // listing again -- a cursor is a position in one particular question.
+  const [asked, setAsked] = useState<{
+    search: string;
+    sort: CatalogSort;
+    source: string;
+    refresh: boolean;
+    nonce: number;
+  }>({ search: "", sort: "", source: "", refresh: false, nonce: 0 });
   const [page, setPage] = useState<Catalog | null>(null);
   const [entries, setEntries] = useState<CatalogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +98,13 @@ export function CatalogList({
   // Held from a browse and ignored during a search, where the server reports
   // the size of the match instead.
   const [catalogueSize, setCatalogueSize] = useState<number>();
+
+  // The catalogues this host browses, learned from the first unscoped answer.
+  //
+  // Held rather than read from the page in hand, because a scoped page reports
+  // only the catalogue it covers -- rightly, since the others were not asked --
+  // and the control that undoes the scope has to keep offering them.
+  const [catalogues, setCatalogues] = useState<CatalogSource[]>([]);
 
   // The next page, fetched at idle. The server over-fetches each source, so it
   // is usually a local cache read.
@@ -85,7 +118,7 @@ export function CatalogList({
   useEffect(() => {
     const t = setTimeout(() => {
       const next = search.trim();
-      setAsked((a) => (a.search === next ? a : { search: next, refresh: false, nonce: a.nonce + 1 }));
+      setAsked((a) => (a.search === next ? a : { ...a, search: next, refresh: false, nonce: a.nonce + 1 }));
     }, DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [search]);
@@ -95,14 +128,20 @@ export function CatalogList({
     let current = true;
     prefetched.current = null;
     setBusy("page");
-    load({ search: asked.search, refresh: asked.refresh, limit: size }).then(
+    load({
+      search: asked.search, refresh: asked.refresh, limit: size,
+      sort: asked.sort, source: asked.source,
+    }).then(
       (answer) => {
         if (!current) return;
         setPage(answer);
         setEntries(answer.entries);
-        if (!asked.search && answer.addable_estimate) {
-          setCatalogueSize(answer.addable_estimate);
-        }
+        // The figure belongs to what is in view, so a scoped browse replaces
+        // it rather than leaving the whole catalogue's number over one
+        // catalogue's list.
+        if (!asked.search) setCatalogueSize(answer.addable_estimate);
+        // Only an unscoped answer knows the whole set.
+        if (!asked.source && answer.sources.length > 0) setCatalogues(answer.sources);
         setError(null);
         setBusy(null);
       },
@@ -120,20 +159,25 @@ export function CatalogList({
   const cursor = page?.next_cursor;
   // JSON rather than a joined string: a search term can contain the separator,
   // and two questions sharing a key spend one's prefetch on the other.
-  const nextKey = cursor ? JSON.stringify([asked.search, cursor, size]) : "";
+  const nextKey = cursor
+    ? JSON.stringify([asked.search, asked.sort, asked.source, cursor, size])
+    : "";
 
   useEffect(() => {
     if (!cursor || busy || !nextKey) return;
     if (typeof window.requestIdleCallback !== "function") return;
     if (prefetched.current?.key === nextKey) return;
     const id = window.requestIdleCallback(() => {
-      const answer = load({ search: asked.search, cursor, limit: size });
+      const answer = load({
+        search: asked.search, cursor, limit: size,
+        sort: asked.sort, source: asked.source,
+      });
       // Attached now so a rejected prefetch is never an unhandled rejection.
       answer.catch(() => {});
       prefetched.current = { key: nextKey, answer };
     }, { timeout: 2_000 });
     return () => window.cancelIdleCallback?.(id);
-  }, [asked.search, busy, cursor, load, nextKey, size]);
+  }, [asked.search, asked.sort, asked.source, busy, cursor, load, nextKey, size]);
 
   const more = useCallback(async () => {
     if (!cursor || busy) return;
@@ -143,7 +187,10 @@ export function CatalogList({
       prefetched.current = null;
       const answer = held?.key === nextKey
         ? await held.answer
-        : await load({ search: asked.search, cursor, limit: size });
+        : await load({
+          search: asked.search, cursor, limit: size,
+          sort: asked.sort, source: asked.source,
+        });
       if (!live.current) return;
       setPage(answer);
       // Sources are merged per page, not across them, so the same server can
@@ -158,11 +205,11 @@ export function CatalogList({
     } finally {
       if (live.current) setBusy(null);
     }
-  }, [asked.search, busy, cursor, load, nextKey, size]);
+  }, [asked.search, asked.sort, asked.source, busy, cursor, load, nextKey, size]);
 
   const refresh = useCallback(() => {
     prefetched.current = null;
-    setAsked((a) => ({ search: a.search, refresh: true, nonce: a.nonce + 1 }));
+    setAsked((a) => ({ ...a, refresh: true, nonce: a.nonce + 1 }));
   }, []);
 
   /** The listing carries no document, so picking one fetches it. */
@@ -184,10 +231,44 @@ export function CatalogList({
     }
   }, [loadDocument, notify, onAdd]);
 
-  const rows = useMemo(() => entries.map((entry) => ({
+  const rows = useMemo(() => orderEntries(entries, asked.sort).map((entry) => ({
     entry,
     addedAs: entry.url ? installed.byAddress.get(entry.url) : undefined,
-  })), [entries, installed]);
+  })), [asked.sort, entries, installed]);
+
+  // Which catalogues in view count how often a server is called. Read from the
+  // response rather than named here, because which of them does is this
+  // deployment's configuration and not the dashboard's business.
+  const counted = useMemo(
+    () => catalogues
+      .filter((c) => c.uses && (!asked.source || c.source === asked.source))
+      .map((c) => c.source),
+    [asked.source, catalogues],
+  );
+  const orders = useMemo(
+    () => ORDERS.filter((o) => o.key !== "most-used" || counted.length > 0),
+    [counted],
+  );
+
+  const reorder = useCallback((sort: CatalogSort) => {
+    setAsked((a) => (a.sort === sort ? a : { ...a, sort, refresh: false, nonce: a.nonce + 1 }));
+  }, []);
+
+  /**
+   * Scoping to one catalogue, which can withdraw the order in force: only some
+   * of them count calls. The order changes with it rather than becoming a
+   * request the server would refuse, and the control shows the change.
+   */
+  const scope = useCallback((source: string) => {
+    setAsked((a) => {
+      if (a.source === source) return a;
+      const stillCounted = catalogues.some(
+        (c) => c.uses && (!source || c.source === source),
+      );
+      const sort = a.sort === "most-used" && !stillCounted ? "" : a.sort;
+      return { ...a, source, sort, refresh: false, nonce: a.nonce + 1 };
+    });
+  }, [catalogues]);
 
   if (page === null && error === null) return <LoadingCards count={4} />;
 
@@ -230,6 +311,29 @@ export function CatalogList({
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+          {catalogues.length > 1 && (
+            <NativeSelect
+              aria-label="Which catalogue"
+              className="h-9 w-auto"
+              value={asked.source}
+              onChange={(e) => scope(e.target.value)}
+            >
+              <option value="">All catalogues</option>
+              {catalogues.map((c) => (
+                <option key={c.source} value={c.source}>{c.source}</option>
+              ))}
+            </NativeSelect>
+          )}
+          <NativeSelect
+            aria-label="Order"
+            className="h-9 w-auto"
+            value={asked.sort}
+            onChange={(e) => reorder(e.target.value as CatalogSort)}
+          >
+            {orders.map((o) => (
+              <option key={o.key || "default"} value={o.key}>{o.label}</option>
+            ))}
+          </NativeSelect>
           <DensityToggle value={density} onChange={setDensity} />
           {/* The mark never spins: a turning mark reads as an answer arriving. */}
           <Button
@@ -241,6 +345,7 @@ export function CatalogList({
             {busy === "page" ? "Asking…" : "Refresh"}
           </Button>
         </div>
+        <Ordering sort={asked.sort} counted={counted} scoped={asked.source !== ""} />
         <Size
           count={catalogueSize}
           missing={failed.length}
@@ -318,6 +423,44 @@ export function CatalogList({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * What the order in force actually covers.
+ *
+ * The line exists because none of these orders covers the whole catalogue, and
+ * a list that looks sorted with nothing saying how far the sorting reaches is
+ * the thing this feature must not be. Two different truths, so two sentences.
+ *
+ * Most used is narrowed rather than approximated: only some catalogues count
+ * calls, and the ones that do not are left out rather than ranked at zero. So
+ * the line names the one being counted, which is also why the number on the row
+ * is a number and not a badge -- both are checkable.
+ *
+ * By name and by date reach as far as what has been loaded and no further.
+ * Ordering twenty-four thousand entries held behind four catalogues' own
+ * cursors is not something this host can do, and saying "sorted" flat would
+ * claim it had.
+ */
+function Ordering({ sort, counted, scoped }: {
+  sort: CatalogSort;
+  counted: string[];
+  scoped: boolean;
+}) {
+  if (!sort) return null;
+  if (sort === "most-used") {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Calls counted by {counted.join(" and ") || "the catalogue"}.
+        {!scoped && counted.length > 0 && " The other catalogues don't count them, so they aren't in this list."}
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-muted-foreground">
+      In order within what you have loaded, not across the whole catalogue.
+    </p>
   );
 }
 
@@ -441,6 +584,29 @@ function EntryIcon({ name, label, className }: {
   );
 }
 
+/**
+ * How many times the entry's catalogue has been asked to call the server.
+ *
+ * The number itself, because a number is checkable and a badge is not: "87,579
+ * calls" says what was counted and by whom, where a star or a flame asks to be
+ * believed. It is also what explains the most-used order without a legend.
+ *
+ * Nothing at all where the catalogue publishes no figure. Zero would say the
+ * server was measured and never called, which would be this host making a
+ * number up.
+ */
+function Uses({ entry }: { entry: CatalogEntry }) {
+  if (entry.uses === undefined) return null;
+  return (
+    <span
+      className="shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums"
+      title={`Calls to this server, counted by ${entry.source}`}
+    >
+      {entry.uses.toLocaleString()} calls
+    </span>
+  );
+}
+
 /** Add, or a link to where it is already managed. */
 function Action({ entry, addedAs, picking, disabled, onAdd }: {
   entry: CatalogEntry;
@@ -487,9 +653,12 @@ const EntryCard = memo(function EntryCard({ entry, addedAs, picking, disabled, o
       <CardContent className="flex h-full items-start gap-3">
         <EntryIcon name={entry.name} label={entry.title} className="size-9" />
         <div className="min-w-0 flex-1">
-          <h3 className="truncate font-medium" title={entry.title || entry.name}>
-            {entry.title || entry.name}
-          </h3>
+          <div className="flex items-baseline gap-2">
+            <h3 className="truncate font-medium" title={entry.title || entry.name}>
+              {entry.title || entry.name}
+            </h3>
+            <Uses entry={entry} />
+          </div>
           <p className="line-clamp-2 text-sm text-muted-foreground">
             {entry.description}
           </p>
@@ -523,6 +692,7 @@ const EntryRow = memo(function EntryRow({ entry, addedAs, picking, disabled, onA
       <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" title={entry.description}>
         {entry.description}
       </span>
+      <Uses entry={entry} />
       <Action
         entry={entry} addedAs={addedAs}
         picking={picking} disabled={disabled} onAdd={onAdd}

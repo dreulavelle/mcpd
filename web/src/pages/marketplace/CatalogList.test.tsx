@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "@/lib/api";
 import { renderWith } from "@/test/render";
@@ -629,5 +629,162 @@ describe("prefetching the next page", () => {
       expect(load).toHaveBeenCalledWith(expect.objectContaining({
         search: "tickets", cursor: "search-2",
       })));
+  });
+});
+
+/**
+ * Ordering and scoping.
+ *
+ * Everything here is one rule seen from different sides: a list may only claim
+ * the order it actually has. The number on a row is checkable, the catalogues
+ * that publish no number are named as absent rather than ranked at the bottom,
+ * and an order that reaches only as far as what has been loaded says so.
+ */
+
+/** A Smithery-shaped row: hosted, keyed, and carrying a call count. */
+function counted(name: string, uses: number, extra: Partial<CatalogEntry> = {}): CatalogEntry {
+  return {
+    name,
+    suggested_name: name,
+    title: name,
+    description: "Hosted by Smithery.",
+    version: "",
+    url: `https://server.smithery.ai/${name}/mcp`,
+    updated_at: "2026-08-01T10:00:00Z",
+    uses,
+    addable: true,
+    auth: "api_key",
+    source: "registry.smithery.ai",
+    ...extra,
+  };
+}
+
+/** Three catalogues, one of which counts calls. */
+const THREE_CATALOGUES: Catalog["sources"] = [
+  { source: "registry.modelcontextprotocol.io", ok: true, stale: false, entries: 1 },
+  { source: "docker/mcp-registry", ok: true, stale: false, entries: 1 },
+  { source: "registry.smithery.ai", ok: true, stale: false, entries: 1, uses: true },
+];
+
+describe("ordering the catalogue", () => {
+  it("shows the count itself, so the order is something an operator can check", async () => {
+    await render({ load: catalog([counted("brave", 87_579), WEATHER]) });
+
+    expect(await screen.findByText("87,579 calls")).toBeInTheDocument();
+    // And nothing invented for the catalogue that publishes no figure.
+    expect(screen.queryByText("0 calls")).not.toBeInTheDocument();
+  });
+
+  it("offers most used only where a catalogue counts calls", async () => {
+    const { unmount } = await render({
+      load: catalog([WEATHER], { sources: THREE_CATALOGUES }),
+    });
+    expect(await screen.findByRole("option", { name: "Most used" })).toBeInTheDocument();
+    unmount();
+
+    await render({ load: catalog([WEATHER]) });
+    await screen.findByText("Weather");
+    expect(screen.queryByRole("option", { name: "Most used" })).not.toBeInTheDocument();
+    // The orders that need nothing from a catalogue are always there.
+    expect(screen.getByRole("option", { name: "Name" })).toBeInTheDocument();
+  });
+
+  it("asks the server for the order rather than rearranging one page", async () => {
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>()
+      .mockResolvedValue(answer([WEATHER], { sources: THREE_CATALOGUES }));
+    await render({ load });
+    await screen.findByText("Weather");
+
+    fireEvent.change(screen.getByLabelText("Order"), { target: { value: "most-used" } });
+    await waitFor(() =>
+      expect(load).toHaveBeenCalledWith(expect.objectContaining({ sort: "most-used" })));
+  });
+
+  it("says what a most-used list covers, and what it leaves out", async () => {
+    await render({ load: catalog([counted("brave", 87_579)], { sources: THREE_CATALOGUES }) });
+    await screen.findByText("87,579 calls");
+
+    fireEvent.change(screen.getByLabelText("Order"), { target: { value: "most-used" } });
+    expect(await screen.findByText(/Calls counted by registry\.smithery\.ai/)).toBeInTheDocument();
+    expect(screen.getByText(/other catalogues don't count them/)).toBeInTheDocument();
+  });
+
+  it("does not claim an order it does not have", async () => {
+    await render({ load: catalog([WEATHER, TICKETS]) });
+    await screen.findByText("Weather");
+
+    fireEvent.change(screen.getByLabelText("Order"), { target: { value: "name" } });
+    expect(await screen.findByText(/not across the whole catalogue/)).toBeInTheDocument();
+  });
+
+  it("keeps a second page in order rather than starting the alphabet again", async () => {
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>()
+      .mockResolvedValueOnce(answer([TICKETS, WEATHER], { next_cursor: "page-2" }))
+      .mockResolvedValueOnce(answer([TICKETS, WEATHER], { next_cursor: "page-2" }))
+      .mockResolvedValue(answer([
+        counted("atlas", 4, { title: "Atlas", source: "docker/mcp-registry" }),
+      ]));
+    await render({ load });
+    await screen.findByText("Tickets");
+
+    fireEvent.change(screen.getByLabelText("Order"), { target: { value: "name" } });
+    await screen.findByText(/not across the whole catalogue/);
+    await userEvent.click(await screen.findByRole("button", { name: "Show more" }));
+
+    await screen.findByText("Atlas");
+    const shown = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(shown).toEqual(["Atlas", "Tickets", "Weather"]);
+  });
+});
+
+describe("scoping to one catalogue", () => {
+  it("asks for the one catalogue the operator picked", async () => {
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>()
+      .mockResolvedValue(answer([WEATHER], { sources: THREE_CATALOGUES }));
+    await render({ load });
+    await screen.findByText("Weather");
+
+    fireEvent.change(screen.getByLabelText("Which catalogue"),
+      { target: { value: "docker/mcp-registry" } });
+    await waitFor(() =>
+      expect(load).toHaveBeenCalledWith(expect.objectContaining({ source: "docker/mcp-registry" })));
+  });
+
+  it("keeps offering every catalogue once a scoped page reports only one", async () => {
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>()
+      .mockResolvedValueOnce(answer([WEATHER], { sources: THREE_CATALOGUES }))
+      .mockResolvedValue(answer([TICKETS], {
+        sources: [{ source: "docker/mcp-registry", ok: true, stale: false, entries: 1 }],
+      }));
+    await render({ load });
+    await screen.findByText("Weather");
+
+    fireEvent.change(screen.getByLabelText("Which catalogue"),
+      { target: { value: "docker/mcp-registry" } });
+    await screen.findByText("Tickets");
+    // The way back has to stay on the page, and so do the others.
+    expect(screen.getByRole("option", { name: "All catalogues" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "registry.smithery.ai" })).toBeInTheDocument();
+  });
+
+  it("withdraws most used when the catalogue in view does not count calls", async () => {
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>()
+      .mockResolvedValue(answer([counted("brave", 87_579)], { sources: THREE_CATALOGUES }));
+    await render({ load });
+    await screen.findByText("87,579 calls");
+
+    fireEvent.change(screen.getByLabelText("Order"), { target: { value: "most-used" } });
+    await waitFor(() =>
+      expect(load).toHaveBeenCalledWith(expect.objectContaining({ sort: "most-used" })));
+
+    fireEvent.change(screen.getByLabelText("Which catalogue"),
+      { target: { value: "docker/mcp-registry" } });
+    // The order goes with it rather than becoming a request the server would
+    // refuse, and the control shows that it has.
+    await waitFor(() =>
+      expect(load).toHaveBeenCalledWith(expect.objectContaining({
+        source: "docker/mcp-registry", sort: "",
+      })));
+    expect(screen.queryByRole("option", { name: "Most used" })).not.toBeInTheDocument();
   });
 });

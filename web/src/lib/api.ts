@@ -492,6 +492,13 @@ export interface CatalogEntry {
   transport?: string;
   url?: string;
   updated_at: string;
+  /**
+   * How many times this entry's own catalogue has been asked to call the
+   * server. Absent where the catalogue publishes no such figure, which is
+   * three of the four -- and absent is not zero, so render nothing rather
+   * than a count.
+   */
+  uses?: number;
   /** Whether this host would accept the document. False for about half of them. */
   addable: boolean;
   /**
@@ -522,6 +529,12 @@ export interface CatalogSource {
   addable?: number;
   /** How many servers this source says it holds. Absent where it does not say. */
   total?: number;
+  /**
+   * Whether this catalogue publishes how often each of its servers is called,
+   * which is what "most used" can be ordered over. Read from the response
+   * rather than hard-coded: which catalogue does this is configuration.
+   */
+  uses?: boolean;
   error?: string;
   /** What the source has to say about an answer it did give. */
   note?: string;
@@ -780,12 +793,23 @@ export const api = {
       `/api/instances/${encodeURIComponent(name)}/restore`, { method: "POST" }),
 
   /** Browses the public catalogues. `refresh` bypasses the cache for one request. */
-  catalog: (q: { search?: string; cursor?: string; limit?: number; refresh?: boolean } = {}) => {
+  catalog: (q: {
+    search?: string;
+    cursor?: string;
+    limit?: number;
+    refresh?: boolean;
+    /** "most-used", "recently-updated" or "name". Omitted takes the default. */
+    sort?: string;
+    /** One catalogue by name. Omitted covers them all. */
+    source?: string;
+  } = {}) => {
     const params = new URLSearchParams();
     if (q.search) params.set("q", q.search);
     if (q.cursor) params.set("cursor", q.cursor);
     if (q.limit) params.set("limit", String(q.limit));
     if (q.refresh) params.set("refresh", "1");
+    if (q.sort) params.set("sort", q.sort);
+    if (q.source) params.set("source", q.source);
     const query = params.toString();
     return request<CatalogPage>(query ? `/api/catalog?${query}` : "/api/catalog");
   },

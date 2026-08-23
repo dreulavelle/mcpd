@@ -616,6 +616,53 @@ invent and then present as a fact. So each source is ordered by the best signal
 it actually has, `Multi` interleaves them round-robin, and the page says it is
 a sample rather than a top ten.
 
+**"Most used" is therefore a narrowing rather than a ranking.** The count is
+real and worth having, so `Entry.Uses` carries it — absent, not zero, where the
+catalogue publishes none, because "nobody told us" and "nobody has called it"
+sort together the moment they share a value. `sort=most-used` covers the
+catalogues that publish the figure and leaves the rest out, naming them in
+`Sources` with the reason; a source declares the capability through
+`UsesReporter` rather than having it inferred, since the decision has to be
+made before any row is in hand. With one such source configured that is a
+genuinely total order over what is shown, which is the only order here that is
+global. The number itself is on the row — "87,579 calls" — because a figure an
+operator can check is worth more than a badge that asks to be believed, and
+because it explains the ordering without a legend.
+
+**The other two orders reach as far as the page and say so.** `name` and
+`recently-updated` sort what `Multi` assembled, after it is assembled. A true
+global ordering would mean holding twenty-four thousand entries from behind
+four opaque cursors that no source will sort for us, so it is not offered and
+not claimed: the dashboard sorts everything loaded so far and the line under
+the control says that is what it is. Ordering cannot disturb paging, because
+every source's position is recorded as rows are taken and rearranging taken
+rows changes nothing about where each source resumes.
+
+**A cursor belongs to one question.** It says where each catalogue resumes and,
+by omission, which of them are finished — both true only of the question that
+produced it. Carrying a most-used cursor into an unscoped listing would read
+three catalogues as exhausted and drop them from every page after it. So the
+cursor carries a fingerprint of the search, the order, the scope and
+`include_unaddable`, and a mismatch restarts the listing.
+
+**Scoping to one catalogue is the grouping that is actually there.** The four
+differ in kind — Smithery hosts and keys what it lists, the official registry
+is where a publisher registers their own, Docker's is curated — and `source=`
+scopes to one. A name this host does not have is refused rather than ignored,
+for the same reason a misspelled selector in an approval rule is: a filter
+silently dropped answers a question nobody asked.
+
+**Categories are not, and are deliberately not built.** Docker's `metadata.
+category` is real and complete within Docker, and it is the only taxonomy any
+of the four publishes. It was measured before being designed for: Docker's
+catalogue is around three hundred entries of which roughly twenty-nine are
+remote servers this host can add, and those spread across a dozen or more
+categories. A filter that cuts twenty-nine rows — one or two pages, scoped by
+the source filter above, scannable whole — into buckets of two is a control
+that looks broken rather than one that helps. Sorting and filtering earn their
+place against a list too long to read, and that list is Smithery's ten
+thousand, which publishes no categories at all.
+
 **One Smithery key opens every Smithery server, and it still lives in the
 per-server settings.** Every hosted server is at
 `server.smithery.ai/{qualifiedName}/mcp`, streamable-http, `401 invalid_token`
