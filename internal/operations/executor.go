@@ -162,12 +162,20 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 		return e.settleFailure(ctx, op, "", CodeUpstreamFailed,
 			"the target could not be read before execution")
 	}
-	if !PreconditionsEqual(op.Preconditions, plan.Preconditions) {
+	drift := CheckDrift(op.Preconditions, plan.Preconditions)
+	switch drift {
+	case DriftDetected:
 		e.log.Warn("target changed since the operation was proposed; refusing to execute",
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action)
 		return e.settleFailure(ctx, op, "", CodePreconditionChanged,
 			"the target changed after this operation was approved, so applying it "+
 				"would overwrite a change nobody reviewed")
+	case DriftNotChecked:
+		// Said out loud rather than passed over. A mutation that declared no
+		// preconditions has not survived a drift check, it has skipped one,
+		// and the audit entry below records which of the two happened.
+		e.log.Warn("this mutation declares no preconditions, so drift could not be checked",
+			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action)
 	}
 
 	// 3. Claim. The guarded update is what guarantees at-most-once execution:
@@ -181,7 +189,15 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 		AttemptID:      attemptID,
 		Audit: auditFor(e.ids.EventID(), "operation.executing", op,
 			"system:executor", StateApproved, StateExecuting,
-			map[string]any{"instance": e.cfg.InstanceID, "attempt": attemptID}),
+			map[string]any{
+				"instance": e.cfg.InstanceID,
+				"attempt":  attemptID,
+				// What was actually checked, rather than the absence of a
+				// complaint. "not_checked" and "none" are different facts.
+				"drift":      drift.String(),
+				"verifiable": op.Verifiable,
+				"assurance":  op.Assurance().String(),
+			}),
 		Event: eventFor(e.ids.EventID(), subjectFor(StateExecuting), op),
 	})
 	if errors.Is(err, ErrClaimLost) {
@@ -219,13 +235,29 @@ func (e *Executor) apply(ctx context.Context, op *Operation, attemptID string, p
 			outcome.UpstreamRef, CodeUpstreamFailed, redact(err.Error()))
 	}
 
+	if !op.Verifiable {
+		// The mutation declared that re-reading the target proves nothing
+		// about the write, so nothing is read and nothing is claimed. The
+		// verified column stays null: false would say a check ran and
+		// disagreed, true would say one ran and agreed, and neither happened.
+		e.log.Info("mutation applied; this action cannot be confirmed by re-reading the target",
+			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
+			"upstream_ref", outcome.UpstreamRef)
+		return e.settle(ctx, op, attemptID, StateSucceeded, nil, nil,
+			outcome.UpstreamRef, "", "")
+	}
+
 	// HTTP success is not success. Verify by reading the target back.
 	observed, verified, vErr := e.verify(ctx, op, plan)
-	if vErr != nil && !verified {
+	if !verified {
+		detail := "the target could not be re-read to confirm the change"
+		if vErr != nil {
+			detail = redact(vErr.Error())
+		}
 		e.log.Warn("mutation applied but could not be verified",
 			"operation_id", op.ID, "error", vErr)
 		return e.settle(ctx, op, attemptID, StateIndeterminate, observed, boolPtr(false),
-			outcome.UpstreamRef, CodeVerificationFailed, redact(vErr.Error()))
+			outcome.UpstreamRef, CodeVerificationFailed, detail)
 	}
 
 	e.log.Info("mutation applied and verified",
@@ -236,6 +268,12 @@ func (e *Executor) apply(ctx context.Context, op *Operation, attemptID string, p
 }
 
 // verify re-observes the target until it matches the desired state.
+//
+// It is only reached for a mutation that declared itself verifiable, and that
+// declaration is what makes the comparison meaningful. An absent desired state
+// is compared like any other: for a delete, observing nothing is exactly the
+// confirmation wanted. What used to happen instead was a short circuit that
+// returned "verified" without looking at the target at all.
 //
 // The retry is bounded and the backoff is capped. An upstream that never
 // converges has to be reported rather than retried forever, because an
@@ -267,12 +305,7 @@ func (e *Executor) verify(ctx context.Context, op *Operation, plan PlanResult) (
 		}
 		observed = obs
 
-		// No declared desired state means there is nothing to compare, so the
-		// write's own success is all the confirmation available.
-		if len(desired) == 0 {
-			return observed, true, nil
-		}
-		if PreconditionsEqual(desired, observed) {
+		if CanonicalEqual(desired, observed) {
 			return observed, true, nil
 		}
 		lastErr = fmt.Errorf("observed state does not yet match the requested state")

@@ -114,6 +114,23 @@ type MutationSpec struct {
 	// rollback is itself an approval-gated mutation, never an automatic undo.
 	Reversible bool
 
+	// Verifiable declares that Observe, run after Apply, confirms the outcome:
+	// what it returns can be compared against the plan's Desired state and the
+	// comparison means something.
+	//
+	// Declared rather than inferred, and false by default. The host used to
+	// infer it from an empty Desired field and got it wrong in both
+	// directions: a delete legitimately desires absence, which is a real thing
+	// to observe, while a write with nothing to read back would be reported as
+	// "confirmed by re-reading the target" having read nothing. Defaulting to
+	// false means a spec that forgets to say claims nothing, which is the
+	// direction to be wrong in.
+	//
+	// When false the executor performs no verification at all: it settles the
+	// operation succeeded with outcome_verified null, and the note the model
+	// reads says the change was applied but not confirmed.
+	Verifiable bool
+
 	// InputSchema overrides the schema derived from the handler's parameter
 	// type, for the same reason as ToolSpec.InputSchema.
 	InputSchema json.RawMessage
@@ -150,16 +167,25 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 		return
 	}
 
-	var in In
-	var out Out
-	for _, check := range []struct {
-		role string
-		typ  reflect.Type
-	}{{"input", reflect.TypeOf(in)}, {"output", reflect.TypeOf(out)}} {
-		if err := checkSchemaType(r.descriptor.Name, spec.Name, check.role, check.typ); err != nil {
+	// The input check guards against a *derived* schema that contradicts the
+	// value -- json.RawMessage reflects to an array of integers and marshals
+	// as an object. A spec that supplies its own schema derives nothing, and
+	// the SDK discards the reflected one entirely, so there is no contradiction
+	// to guard against; the parameter type only has to be able to hold what
+	// arrives. Checking anyway is what made every out-of-process tool
+	// registration fail, because raw JSON is the only honest parameter type
+	// for a schema known at run time.
+	if len(spec.InputSchema) == 0 {
+		var in In
+		if err := checkSchemaType(r.descriptor.Name, spec.Name, "input", reflect.TypeOf(in)); err != nil {
 			r.errs = append(r.errs, err)
 			return
 		}
+	}
+	var out Out
+	if err := checkSchemaType(r.descriptor.Name, spec.Name, "output", reflect.TypeOf(out)); err != nil {
+		r.errs = append(r.errs, err)
+		return
 	}
 
 	qualified := r.descriptor.Name + "_" + spec.Name
@@ -319,6 +345,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 			Rollback:      plan.Rollback,
 			Changes:       plan.Changes,
 			Impact:        plan.Impact,
+			Verifiable:    spec.Verifiable,
 			CorrelationID: observability.CorrelationID(ctx),
 		})
 		if err != nil {

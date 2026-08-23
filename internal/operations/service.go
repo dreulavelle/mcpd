@@ -83,6 +83,11 @@ type ProposeRequest struct {
 	Rollback      json.RawMessage
 	Changes       []Change
 	Impact        string
+	// Verifiable is the mutation's declaration that its outcome can be
+	// confirmed by re-reading the target. It travels with the proposal so the
+	// executor reads it from the stored row rather than from the plugin it is
+	// about to run.
+	Verifiable bool
 
 	// IdempotencyKey collapses repeated proposals of the same intent. When
 	// empty it is derived from the payload hash, so a client that retries a
@@ -133,6 +138,7 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 		Rollback:       req.Rollback,
 		Changes:        req.Changes,
 		Impact:         req.Impact,
+		Verifiable:     req.Verifiable,
 		RequestedBy:    p.ID,
 		RequestedAt:    now,
 		ExpiresAt:      now.Add(s.policyFn().ProposalTTL),
@@ -152,7 +158,15 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 		Operation:   op,
 		RequestHash: hash,
 		Audit: s.audit("operation.proposed", op, p.ID, "", StatePendingApproval,
-			map[string]any{"impact": op.Impact, "changes": op.Changes}),
+			map[string]any{
+				"impact":  op.Impact,
+				"changes": op.Changes,
+				// Recorded at proposal so the trail says what this operation
+				// could ever have proved, not only what it went on to prove.
+				"assurance":     op.Assurance().String(),
+				"verifiable":    op.Verifiable,
+				"drift_checked": op.DriftChecked(),
+			}),
 		Event:          s.event(subjectFor(StatePendingApproval), op),
 		IdempotencyTTL: s.policyFn().ProposalTTL * 2,
 	})

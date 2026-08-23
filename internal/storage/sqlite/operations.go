@@ -37,7 +37,7 @@ const opColumns = `
 	approved_by, approved_at, approval_expires_at,
 	attempt_count, lease_owner, lease_expires_at,
 	terminal_at, outcome_verified, observed_json, error_code, error_detail,
-	correlation_id, idempotency_key`
+	correlation_id, idempotency_key, verifiable`
 
 // idempotencyColumns is how the driver names ux_operations_idem when it fires.
 // See isUniqueViolation for why the column list stands in for the index name.
@@ -68,14 +68,14 @@ func (s *OperationStore) Propose(ctx context.Context, req operations.RepoPropose
 				target_json, params_json, payload_hash,
 				before_json, desired_json, precondition_json, rollback_json, changes_json,
 				impact, requested_by, requested_at, expires_at,
-				correlation_id, idempotency_key
-			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				correlation_id, idempotency_key, verifiable
+			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			op.ID, op.Plugin, op.Action, string(op.State), string(op.Risk),
 			string(op.Target), string(op.Params), op.PayloadHash,
 			nullJSON(op.Before), nullJSON(op.Desired), nullJSON(op.Preconditions),
 			nullJSON(op.Rollback), nullJSON(marshalChanges(op.Changes)),
 			op.Impact, op.RequestedBy, op.RequestedAt.UnixMilli(), op.ExpiresAt.UnixMilli(),
-			op.CorrelationID, op.IdempotencyKey)
+			op.CorrelationID, op.IdempotencyKey, op.Verifiable)
 		if err != nil {
 			// Only the idempotency index means a duplicate proposal. Every
 			// other constraint -- a CHECK, a foreign key, a NOT NULL -- is a
@@ -456,7 +456,7 @@ func scanOperation(row scannable) (*operations.Operation, error) {
 		&approvedBy, &approvedAt, &approvalExpiresAt,
 		&op.AttemptCount, &leaseOwner, &leaseExpiresAt,
 		&termAt, &verified, &observed, &errCode, &errDetail,
-		&op.CorrelationID, &op.IdempotencyKey)
+		&op.CorrelationID, &op.IdempotencyKey, &op.Verifiable)
 	if err != nil {
 		return nil, err
 	}

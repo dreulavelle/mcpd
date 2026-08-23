@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/spoked/mcpd/internal/operations"
 )
@@ -14,19 +13,20 @@ import (
 // It is the boundary where the domain's type-erased world meets the plugin's
 // typed one. Decoding happens inside the adapter, so a payload that does not
 // fit the plugin's parameter type is rejected before any plugin code runs.
+//
+// The plan travels from Plan to Apply in the argument and nowhere else. There
+// was a cache here keyed on plugin, action and parameters, which two live
+// proposals of the same change share: whichever applied first consumed the
+// entry and the other found nothing. It was unreachable, because the executor
+// always carries the plan it just built -- but it was written on every plan,
+// including every proposal, and deleted only on the path nobody took, so it
+// grew without bound. A plan belongs to one execution and is passed to it.
 type Runner struct {
-	mu      sync.RWMutex
 	manager *Manager
-	// plans caches the typed plan between Plan and Apply within one execution,
-	// keyed by plugin.action plus payload hash. Round-tripping the plan
-	// through JSON would lose any state that does not serialise.
-	plans map[string]any
 }
 
 // NewRunner builds the executor's bridge to the plugin registry.
-func NewRunner(m *Manager) *Runner {
-	return &Runner{manager: m, plans: make(map[string]any)}
-}
+func NewRunner(m *Manager) *Runner { return &Runner{manager: m} }
 
 // resolve finds a registered mutation.
 func (r *Runner) resolve(plugin, action string) (*handlerAdapter, error) {
@@ -52,12 +52,6 @@ func (r *Runner) Plan(ctx context.Context, plugin, action string, params json.Ra
 		return operations.PlanResult{}, err
 	}
 
-	// Retain the typed plan so Apply receives exactly what the handler built.
-	key := planKey(plugin, action, params)
-	r.mu.Lock()
-	r.plans[key] = pr.typed
-	r.mu.Unlock()
-
 	return operations.PlanResult{
 		Before:        pr.Before,
 		Desired:       pr.Desired,
@@ -78,15 +72,6 @@ func (r *Runner) Apply(ctx context.Context, plugin, action string, params json.R
 	}
 
 	typed := plan.Handle
-	if typed == nil {
-		// Fall back to the cache when the caller did not carry the handle,
-		// then drop it: a plan is valid for exactly one execution.
-		key := planKey(plugin, action, params)
-		r.mu.Lock()
-		typed = r.plans[key]
-		delete(r.plans, key)
-		r.mu.Unlock()
-	}
 	if typed == nil {
 		return operations.ApplyOutcome{}, fmt.Errorf(
 			"plugins: no plan is available for %s.%s; Plan must run immediately before Apply",
@@ -121,8 +106,4 @@ func (r *Runner) MutationSpecFor(plugin, action string) (MutationSpec, bool) {
 		return MutationSpec{}, false
 	}
 	return m.spec, true
-}
-
-func planKey(plugin, action string, params json.RawMessage) string {
-	return plugin + "." + action + "|" + string(params)
 }

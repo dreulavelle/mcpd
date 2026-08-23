@@ -1091,11 +1091,21 @@ type operationDTO struct {
 	ApprovedAt  *time.Time          `json:"approved_at,omitempty"`
 	ExecuteBy   *time.Time          `json:"execute_by,omitempty"`
 	TerminalAt  *time.Time          `json:"terminal_at,omitempty"`
-	Verified    *bool               `json:"verified,omitempty"`
-	Attempts    int                 `json:"attempts"`
-	ErrorCode   string              `json:"error_code,omitempty"`
-	ErrorDetail string              `json:"error_detail,omitempty"`
-	Terminal    bool                `json:"terminal"`
+	// Verified is three-valued on purpose. True means the target was re-read
+	// and matched, false means it was re-read and did not, and absent means no
+	// check was performed -- which is a different fact from a failed one, and
+	// the dashboard should not render them the same way.
+	Verified *bool `json:"verified,omitempty"`
+	// Assurance, DriftChecked and OutcomeVerifiable say what this record can
+	// prove. A reviewed change carries all of it; a gated call carries a
+	// human's yes and the fact that the call was made.
+	Assurance         string `json:"assurance"`
+	DriftChecked      bool   `json:"drift_checked"`
+	OutcomeVerifiable bool   `json:"outcome_verifiable"`
+	Attempts          int    `json:"attempts"`
+	ErrorCode         string `json:"error_code,omitempty"`
+	ErrorDetail       string `json:"error_detail,omitempty"`
+	Terminal          bool   `json:"terminal"`
 }
 
 func toDTO(op *operations.Operation) operationDTO {
@@ -1111,6 +1121,8 @@ func toDTO(op *operations.Operation) operationDTO {
 		ExpiresAt: op.ExpiresAt, ApprovedBy: op.ApprovedBy,
 		ApprovedAt: op.ApprovedAt, ExecuteBy: op.ApprovalExpiresAt,
 		TerminalAt: op.TerminalAt, Verified: op.OutcomeVerified,
+		Assurance:    op.Assurance().String(),
+		DriftChecked: op.DriftChecked(), OutcomeVerifiable: op.Verifiable,
 		Attempts: op.AttemptCount, ErrorCode: op.ErrorCode,
 		ErrorDetail: op.ErrorDetail, Terminal: op.State.IsTerminal(),
 	}

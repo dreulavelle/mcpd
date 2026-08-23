@@ -76,6 +76,17 @@ type Plan[S any] struct {
 	// RiskOverride raises the risk for these specific parameters. It cannot
 	// lower the spec's declared risk.
 	RiskOverride *operations.RiskLevel
+	// State is opaque data the handler needs in Apply and that is not part of
+	// what the approver reads: a session token, an upstream revision handle,
+	// anything the plugin would otherwise have to keep beside the operation.
+	//
+	// The host carries the typed plan straight through to Apply, so whatever
+	// is put here arrives unchanged and without a JSON round trip. It is not
+	// persisted, not shown to the approver, and not part of the payload hash;
+	// a plan is rebuilt immediately before every execution, so there is
+	// nothing here for a restart to lose. It mirrors sdk.Plan.State, which is
+	// how an out-of-process plugin says the same thing on the wire.
+	State any
 }
 
 // ApplyResult reports what an upstream write produced.

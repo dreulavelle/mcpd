@@ -160,6 +160,10 @@ type mutationDescriptor struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 	Risk        string          `json:"risk"`
 	Reversible  bool            `json:"reversible"`
+	// Verifiable is additive: a plugin built before it existed omits it, and
+	// the host reads the absence as "this outcome cannot be confirmed", which
+	// is the safe direction to be wrong in.
+	Verifiable bool `json:"verifiable,omitempty"`
 }
 
 type callToolParams struct {
@@ -445,6 +449,7 @@ func (p *Plugin) describe() describeResult {
 			Action: m.spec.Action, Title: m.spec.Title,
 			Description: m.spec.Description, InputSchema: m.inputSchema,
 			Risk: string(m.spec.Risk), Reversible: m.spec.Reversible,
+			Verifiable: m.spec.Verifiable,
 		})
 	}
 	for _, path := range p.resOrder {

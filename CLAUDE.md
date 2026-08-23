@@ -33,6 +33,18 @@ it should match zero rows and say so.
 `role == "admin"`. Roles are `user` and `admin`; the map from roles to
 capabilities is the only place that knows the difference.
 
+**A claim of verification is earned, never assumed.** A mutation declares
+`Verifiable`; when it is false the executor performs no check and settles
+`outcome_verified` null. Null is "not checked", `false` is "checked and did not
+match", and they must not be collapsed. Likewise, two absent precondition
+snapshots comparing equal is not a drift check that passed — it is one that
+never ran, and `CheckDrift` says which.
+
+**"Reviewed change" and "gated call" are different words on purpose.** The
+first carries exact fields, drift detection and a confirmed outcome. The second
+carries a human's yes and nothing else. Do not let the second wear the first's
+name.
+
 **Indeterminate is not terminal.** It means a write may have landed. Treating
 it as failed invites a retry that applies the change twice.
 

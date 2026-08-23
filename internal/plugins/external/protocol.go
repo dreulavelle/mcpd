@@ -184,6 +184,11 @@ type MutationDescriptor struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 	Risk        string          `json:"risk"`
 	Reversible  bool            `json:"reversible"`
+	// Verifiable declares that observe, run after apply, confirms the outcome.
+	// It is additive: a plugin built before the field existed omits it and the
+	// host records its mutations as applied-but-unconfirmed, which is what the
+	// host actually knows about them.
+	Verifiable bool `json:"verifiable,omitempty"`
 }
 
 // ReadResourceParams reads one resource.

@@ -215,6 +215,7 @@ func approvedOp(t *testing.T) *Operation {
 		Target: target, Params: params, PayloadHash: hash,
 		Preconditions:     json.RawMessage(`{"channel":"36"}`),
 		Desired:           json.RawMessage(`{"channel":"149"}`),
+		Verifiable:        true,
 		RequestedBy:       "user:alice",
 		ApprovedBy:        "user:bob",
 		RequestedAt:       base,
@@ -604,4 +605,141 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// An unverifiable mutation must not be recorded as verified.
+//
+// The bug: verify() short-circuited to true whenever there was no desired
+// state to compare, the operation settled with outcome_verified = 1, and the
+// note handed to the model said the change had been "confirmed by re-reading
+// the target". Nothing had been read. Null is the honest column value, because
+// "not checked" is a different fact from "checked and did not match".
+func TestExecutor_UnverifiableMutationSettlesUnchecked(t *testing.T) {
+	repo := newMemRepo()
+	op := approvedOp(t)
+	op.Verifiable = false
+	op.Desired = nil
+	repo.put(op)
+
+	runner := &fakeRunner{}
+	if err := newExecutor(repo, runner).Execute(context.Background(), op.ID); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	got, _ := repo.Get(context.Background(), op.ID)
+	if got.State != StateSucceeded {
+		t.Fatalf("state = %s, want succeeded", got.State)
+	}
+	if got.OutcomeVerified != nil {
+		t.Fatalf("outcome_verified = %v, want null: nothing was compared", *got.OutcomeVerified)
+	}
+	if runner.observeCalls.Load() != 0 {
+		t.Fatalf("Observe ran %d times; a mutation that cannot be verified is not observed",
+			runner.observeCalls.Load())
+	}
+	if got.Assurance() != AssuranceGatedCall {
+		t.Fatalf("assurance = %s, want gated_call", got.Assurance())
+	}
+}
+
+// The ordinary case still proves itself: a verifiable mutation whose target
+// reads back as requested settles verified.
+func TestExecutor_VerifiableMutationStillConfirms(t *testing.T) {
+	repo := newMemRepo()
+	op := approvedOp(t)
+	repo.put(op)
+
+	runner := &fakeRunner{}
+	if err := newExecutor(repo, runner).Execute(context.Background(), op.ID); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	got, _ := repo.Get(context.Background(), op.ID)
+	if got.State != StateSucceeded {
+		t.Fatalf("state = %s, want succeeded", got.State)
+	}
+	if got.OutcomeVerified == nil || !*got.OutcomeVerified {
+		t.Fatalf("outcome_verified = %v, want true", got.OutcomeVerified)
+	}
+	if runner.observeCalls.Load() == 0 {
+		t.Fatal("a verifiable mutation must re-read the target")
+	}
+	if got.Assurance() != AssuranceReviewedChange {
+		t.Fatalf("assurance = %s, want reviewed_change", got.Assurance())
+	}
+}
+
+// A verifiable delete desires absence, and observing absence confirms it. This
+// is why verifiability is declared rather than inferred from an empty Desired:
+// the same empty field means "nothing to check" for one mutation and "the
+// thing should be gone" for another.
+func TestExecutor_VerifiableAbsenceIsConfirmedByObservingNothing(t *testing.T) {
+	repo := newMemRepo()
+	op := approvedOp(t)
+	op.Desired = nil
+	repo.put(op)
+
+	runner := &fakeRunner{
+		planFn: func(json.RawMessage) (PlanResult, error) {
+			return PlanResult{Preconditions: json.RawMessage(`{"channel":"36"}`)}, nil
+		},
+		observeFn: func(json.RawMessage) (json.RawMessage, error) { return nil, nil },
+	}
+	if err := newExecutor(repo, runner).Execute(context.Background(), op.ID); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	got, _ := repo.Get(context.Background(), op.ID)
+	if got.State != StateSucceeded {
+		t.Fatalf("state = %s, want succeeded", got.State)
+	}
+	if got.OutcomeVerified == nil || !*got.OutcomeVerified {
+		t.Fatalf("outcome_verified = %v, want true", got.OutcomeVerified)
+	}
+}
+
+// A mutation declaring no preconditions has not passed a drift check, it has
+// skipped one. It still executes -- refusing every such mutation would be a
+// different decision -- but the audit entry says which of the two happened,
+// and the operation reports itself as a gated call rather than a reviewed
+// change.
+func TestExecutor_NoPreconditionsRecordsThatDriftWasNotChecked(t *testing.T) {
+	repo := newMemRepo()
+	op := approvedOp(t)
+	op.Preconditions = nil
+	repo.put(op)
+
+	runner := &fakeRunner{
+		planFn: func(json.RawMessage) (PlanResult, error) {
+			return PlanResult{Desired: json.RawMessage(`{"channel":"149"}`)}, nil
+		},
+	}
+	if err := newExecutor(repo, runner).Execute(context.Background(), op.ID); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	got, _ := repo.Get(context.Background(), op.ID)
+	if got.State != StateSucceeded {
+		t.Fatalf("state = %s, want succeeded", got.State)
+	}
+	if got.Assurance() != AssuranceGatedCall {
+		t.Fatalf("assurance = %s, want gated_call: nothing checked for drift", got.Assurance())
+	}
+
+	var claim *AuditEntry
+	for i, e := range repo.audit {
+		if e.Kind == "operation.executing" {
+			claim = &repo.audit[i]
+		}
+	}
+	if claim == nil {
+		t.Fatal("no operation.executing audit entry")
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(claim.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail["drift"] != "not_checked" {
+		t.Fatalf("audit drift = %v, want not_checked", detail["drift"])
+	}
 }

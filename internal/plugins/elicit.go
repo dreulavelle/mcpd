@@ -112,8 +112,36 @@ func approvalMessage(op *operations.Operation) string {
 	}
 
 	fmt.Fprintf(&b, "Risk: %s\n", op.Risk)
+	b.WriteString(assuranceWarning(op))
 	b.WriteString("\nNothing has happened yet. Approving applies it now; " +
 		"declining leaves everything as it is.")
+	return b.String()
+}
+
+// assuranceWarning tells the person in the dialog what approving does not buy
+// them.
+//
+// This is the low-friction path and the only one where somebody decides
+// without seeing the note the model reads, so it is the path where a gated
+// call would otherwise be indistinguishable from a fully proved change --
+// which is the whole reason the two are named separately. Phrased for a
+// person rather than a model: no vocabulary, just the two things mcpd cannot
+// promise.
+func assuranceWarning(op *operations.Operation) string {
+	if op.Assurance() == operations.AssuranceReviewedChange {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nBefore you decide:\n")
+	if !op.DriftChecked() {
+		b.WriteString("  - If something else changes this target between now and " +
+			"when it is applied, mcpd will not notice and will apply it anyway.\n")
+	}
+	if !op.Verifiable {
+		b.WriteString("  - mcpd cannot read the target back afterwards to confirm " +
+			"the change took effect. Success will mean the request was accepted, " +
+			"nothing more.\n")
+	}
 	return b.String()
 }
 
