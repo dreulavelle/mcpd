@@ -39,6 +39,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/settings` | Runtime configuration in the database |
 | `internal/mcpservers` | server.json, and the snapshot of a remote server's tools |
 | `internal/plugins/mcpremote` | Mounting a remote MCP server as a plugin |
+| `internal/registry` | Browsing a public catalogue of MCP servers |
 | `internal/messaging` | In-process bus and outbox publisher |
 | `internal/servertls` | Self-signed CA and certificate issuance |
 | `internal/config` | File and environment configuration, validation |
@@ -153,6 +154,35 @@ Roles are `user` and `admin`. A user reads, proposes, and approves; an admin
 additionally changes settings, makes tunnels, manages accounts, and clears
 history. Capabilities (`read`, `propose`, `approve`, `admin`) are what code
 checks — never the role directly.
+
+**A display name is a rendering, never an identity.** An account is identified
+by its address, and that is what every audit record, every guard and every
+grant is keyed on. The name is optional, falls back to the address when empty
+so nothing renders blank, and is resolved when a page is drawn rather than
+stored beside the thing it describes — a record keyed on a value its own
+subject can edit would be a record of nothing.
+
+The rule is enforced twice, and the second time is not belt-and-braces. It is
+checked on the way in, and checked again by the one function every render goes
+through, because the column is older than any rule about what may go in it and
+a database may hold a name written when nothing was checked. A value the rules
+now refuse renders as the address instead. The schema cannot cover this and it
+would be dishonest to pretend otherwise: a `CHECK` can express the length, and
+enumerating the format characters in SQL would catch a score of the hundred and
+seventy in the category and drift from the Go rule the first time either
+changed. Migration `0011` therefore normalises the length retroactively and
+nothing else, and re-checking on read is what makes that sufficient. The stored
+value is left alone rather than corrected, so its owner can see what is there
+and replace it.
+
+Because identity does not depend on it, an account may set its own name without
+`admin`. `PATCH /api/account` carries no identifier and can only ever edit the
+account the request authenticated as, so there is no check to get wrong;
+naming somebody else is still `PATCH /api/users/{id}` and still `admin`. What
+bounds the value is a length, a refusal of control and invisible-formatting
+characters — a newline breaks a log line in two, and a bidirectional override
+renders a name as something it is not — and a condition in the `WHERE` clause
+of the write refusing a name that is another account's address.
 
 mcpd is not an OAuth authorization server. It was, and the endpoints were
 unreachable in the deployment they existed for: signing in through a tunnel
@@ -283,6 +313,66 @@ LAN is an ordinary thing to configure and is not made safer by being refused.
 Rate limiting is per server as well as per tool, because thirty tools behind one
 address are one upstream.
 
+## The catalogue
+
+Hand-authoring a `server.json` to add a server somebody else already published
+is copying. `internal/registry` browses the official MCP registry so an
+operator can pick one instead.
+
+**It finds documents; it does not install them.** Selecting an entry hands its
+`server.json` to the same import endpoint a paste goes through, and everything
+downstream is unchanged: the same validation, the same derived settings, the
+same discovery, the same per-tool approval. There is no second import path,
+which is the only way to be sure the catalogue cannot become a way around one
+of those steps.
+
+That is also what decides whether an entry is offered at all. Addability is not
+"does it have a `remotes` array" — it is the two calls the import endpoint
+makes, both of them: `mcpservers.Parse` on the document, then `mcpremote.Fields`
+on the result. The second is not redundant. `Parse` judges the document;
+`Fields` derives the form an operator would fill in, and refuses things `Parse`
+accepts — an input declaring choices whose default is not one of them, or a
+field the settings catalogue will not take. Checking only the first is how this
+offers an Add button that fails, which is the one thing it exists to prevent.
+
+This is the reason `internal/registry` imports `internal/plugins/mcpremote`,
+and so is not the leaf it otherwise would be. The alternative was to
+re-implement the acceptance rule beside the catalogue, which is the same bug
+with an extra copy of the code to keep in step.
+
+**Remote servers only.** Roughly a tenth of the registry is published solely as
+something to run locally, which this host does not do. Those are listed with
+the reason rather than filtered out, because "why is the thing I came for not
+here" is a worse question than a greyed-out row that answers it.
+
+**Nothing about the catalogue is on a request path or a startup path.** The
+client is constructed at boot and reaches nothing; the first fetch happens on
+the first request that asks for one. Answers are cached with a TTL, and a
+catalogue that cannot be reached serves what it last saw, marked stale with the
+time it was fetched. A third party being down is not this deployment's failure
+and is not worth a page that will not render — but neither is it worth
+pretending the data is current.
+
+**The registry's content is a third party's text, arriving in whatever quantity
+they choose to send.** The response is bounded before it is decoded, the entry
+count per page is capped, and every field is bounded and stripped of control
+and invisible-formatting characters before it is stored or returned.
+
+**Deduplicate by name.** The registry holds every version of every server and
+returns them all unless asked otherwise. The query asks for `version=latest`
+and the deduplication runs anyway: "the far end promises one row per name" is
+exactly the kind of promise whose failure shows up as a catalogue page listing
+the same server four times.
+
+Browsing takes `admin`. Everything it returns is public; the privilege is
+making this host reach a third party from inside the deployment. Nothing about
+it changes state, so nothing about it is audited — importing what it found is,
+like any other import.
+
+The client is behind an interface so a second catalogue can be added without
+touching a caller. There is one implementation, and adding another is a
+decision nobody has made.
+
 ## Tunnels
 
 One tunnel carries one address, so it is one connector in ChatGPT. A per-plugin
@@ -326,6 +416,17 @@ dropped except `CAP_NET_BIND_SERVICE`, and a syscall filter.
 
 The container image is distroless, non-root (uid 65532), read-only root
 filesystem, with `/tmp` on tmpfs.
+
+**Behind a reverse proxy, mcpd should not serve TLS itself.** The ordinary
+shape is an FQDN with Caddy, nginx or Cloudflare terminating TLS and forwarding
+plain HTTP, and the right setting for that is `tls.mode: off`; `self-signed` is
+for reaching mcpd directly, where the alternative is a browser warning on every
+visit. Set `server.public_url` to the address people actually type. It is not
+cosmetic: mcpd is reached over plain HTTP in that shape, so `r.TLS` is nil and
+the configured scheme is the only way it can know the session cookie needs
+`Secure`. `X-Forwarded-Proto` deliberately does not count — a header is set by
+whoever is talking to this process, and nothing here can tell a proxy's from a
+caller's.
 
 ## Plugins are not architecture
 

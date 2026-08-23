@@ -653,7 +653,16 @@ func TestMigrate_BackfillsVerifiabilityHonestly(t *testing.T) {
 		) STRICT`); err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range migrations[:len(migrations)-1] {
+	// Everything before 0010, named by version rather than by position. This
+	// was "all but the last", which quietly stopped testing anything the day
+	// 0011 was added: the legacy rows below were then inserted after 0010 had
+	// already run, so its backfill never saw them and the assertions passed
+	// against a column that had simply taken its default.
+	const backfillVersion = 10
+	for _, m := range migrations {
+		if m.version >= backfillVersion {
+			break
+		}
 		if err := applyOne(ctx, db.Writer(), m); err != nil {
 			t.Fatalf("apply %04d: %v", m.version, err)
 		}
