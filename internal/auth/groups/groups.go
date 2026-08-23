@@ -340,6 +340,12 @@ type UpdateRequest struct {
 // the administrator who made it and both the old and the new grant. An entry
 // carrying only the new one would leave "what did this widen" unanswerable.
 func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest) (*Group, error) {
+	// An edit that changes nothing writes nothing, and that includes the
+	// updated_at stamp: a group whose modification time moved without anything
+	// about it changing is a row that lies about when it was last decided on.
+	if req.Name == nil && req.Description == nil && req.Plugins == nil {
+		return s.ByID(ctx, id)
+	}
 	var name, description string
 	var plugins []string
 	var err error
@@ -411,9 +417,6 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			// The row was read at the top of this transaction, so the only
 			// condition that can have failed is the name guard.
 			return ErrDuplicateName
-		}
-		if req.Plugins == nil && req.Name == nil && req.Description == nil {
-			return nil
 		}
 		return tx.AppendAudit(sqlite.AdminAct{
 			Kind:    "group.updated",
