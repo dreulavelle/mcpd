@@ -33,11 +33,21 @@ import (
 // came from is the host's problem, and asking every plugin to understand
 // env:, file:, and credential: would be asking each of them to get it right.
 func (a *App) resolveInstanceSettings(ctx context.Context, instance string, t plugins.Type) (map[string]any, error) {
+	return a.resolveFields(ctx, instance, t.Settings)
+}
+
+// resolveFields is resolveInstanceSettings over an arbitrary field list.
+//
+// Split out because a remote MCP server's fields are not a compiled-in type's:
+// they are derived from an imported server.json and differ per instance. The
+// resolution rules are the host's either way, so there is one implementation
+// and two callers rather than two implementations to keep in step.
+func (a *App) resolveFields(ctx context.Context, instance string, fields []settings.Field) (map[string]any, error) {
 	fileSettings := a.cfg.Plugins[instance].Settings
 	resolver := config.NewSecretResolver()
-	out := make(map[string]any, len(t.Settings))
+	out := make(map[string]any, len(fields))
 
-	for _, f := range t.Settings {
+	for _, f := range fields {
 		key := settings.PluginSettingKey(instance, f.Key)
 
 		if f.Kind == settings.KindSecret {
@@ -156,8 +166,29 @@ func splitList(raw string) []string {
 // instance is added or removed and a stale catalog would refuse to validate a
 // field the dashboard had just drawn.
 func (a *App) settingsCatalog() *settings.Catalog {
+	ctx := context.Background()
 	var groups []settings.Group
-	for _, inst := range a.instances(context.Background()) {
+	for _, inst := range a.instances(ctx) {
+		if inst.Runtime == plugins.RuntimeMCP {
+			// A remote server's fields are not a compiled-in type's: they are
+			// derived from the server.json it was imported from, and differ
+			// per instance. Same group shape either way, so the settings page
+			// draws both without knowing the difference.
+			srv, ok := a.mcpServer(inst.Name)
+			if !ok {
+				continue
+			}
+			fields, err := a.mcpFields(srv)
+			if err != nil {
+				a.log.Warn("cannot render the settings for a remote MCP server",
+					"server", inst.Name, "error", err)
+				continue
+			}
+			g := settings.PluginGroup(inst.Name, srv.Parsed.DisplayTitle(), fields)
+			g.Help = srv.Parsed.Description
+			groups = append(groups, g)
+			continue
+		}
 		g, ok := a.types.SettingsFor(inst.Name, inst.Type)
 		if !ok {
 			continue

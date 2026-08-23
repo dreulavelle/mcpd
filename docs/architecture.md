@@ -37,6 +37,8 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/storage/sqlite` | Schema, migrations, every transaction |
 | `internal/tunnel` | The embedded OpenAI tunnel client, one per connector |
 | `internal/settings` | Runtime configuration in the database |
+| `internal/mcpservers` | server.json, and the snapshot of a remote server's tools |
+| `internal/plugins/mcpremote` | Mounting a remote MCP server as a plugin |
 | `internal/messaging` | In-process bus and outbox publisher |
 | `internal/servertls` | Self-signed CA and certificate issuance |
 | `internal/config` | File and environment configuration, validation |
@@ -148,7 +150,8 @@ automatically tunneled".
 
 Tables: `operations`, `operation_transitions`, `execution_attempts`,
 `idempotency_records`, `outbox_events`, `audit_events`, `audit_prune_gate`,
-`plugin_state`, `settings`, `settings_history`, `users`, `user_sessions`.
+`plugin_state`, `settings`, `settings_history`, `users`, `user_sessions`,
+`mcp_servers`, `mcp_server_tools`.
 
 Migrations are forward-only and checksummed; a changed file that has already
 run is an error rather than a silent divergence. There is no down path —
@@ -171,7 +174,8 @@ expired proposal un-retryable forever.
 
 In-process plugins register in `registerPlugins`; the switch is the complete
 list a binary can serve. Out-of-process plugins are ordinary programs speaking
-the `sdk` protocol over stdio, mounted from the plugins directory.
+the `sdk` protocol over stdio, mounted from the plugins directory. A third
+kind is a remote MCP server, described below.
 
 A mutation declares its target, its desired state, and how to observe the
 result. The host plans against live upstream state, freezes the payload,
@@ -180,6 +184,71 @@ executes at most once, then re-observes and compares.
 The rule that matters most: if `Apply` cannot establish whether its write
 landed, it must return `sdk.Indeterminate`. Anything else tells the host the
 write did not happen and permits a retry that applies the change twice.
+
+## Remote MCP servers
+
+A remote MCP server is somebody else's, reached over the network. It is mounted
+as an ordinary plugin — same endpoint shape, same per-plugin scoping, same
+authorization gate, same audit — and the difference is trust, carried by
+`Descriptor.Runtime`. Everything mcpd was built with is `builtin`; only this is
+`mcp`.
+
+Three of the host's rules change for that runtime, and each is applied where
+the rule lives rather than by the code that builds one:
+
+- **No mutations.** The registry refuses one. There is no propose/approve story
+  for a third party's tool: the host cannot plan against its state, cannot
+  freeze a payload it does not understand, and cannot re-observe the result.
+- **Tool names follow the specification, not the house style.** `getWeather`,
+  `search.docs` and `read-file` are all valid upstream, and the house rule
+  rejects every one. Names are passed through unchanged — a normalised name is
+  one the far end does not answer to — bounded only by the 128-character limit
+  on the prefixed name.
+- **Attachment is per tool.** One malformed descriptor out of three hundred
+  costs that tool. The far end's catalogue is not something an operator can fix.
+
+**Register reads SQLite, never the network.** This is the load-bearing decision.
+The tools a remote server offers are snapshotted at discovery and mounted from
+that snapshot, so a host restarting while the far end is down comes up serving
+exactly what it served before and reports itself unhealthy. Calling `tools/list`
+at boot would give a host with no tools and a model that reasonably concludes
+the integration was removed.
+
+**Nothing the server says is authority.** `tools/list` is a claim. A tool
+arrives `pending` and is not served until an administrator classifies it, and
+what they classify is a *descriptor* rather than a name — `descriptor_hash` is
+in the `WHERE` clause of every state change, so a tool whose schema changed
+underneath an approval cannot inherit it. Its annotations are hints the MCP
+specification itself says not to trust, so nothing branches on them. An input
+schema that is not an object disqualifies the tool: substituting a permissive
+one, which the out-of-process adapter does for a binary the operator dropped in
+themselves, would throw away the only argument validation there is.
+
+Lifecycle: import a `server.json` → discover → classify each tool → it mounts.
+The document is stored verbatim and validated against a **vendored** copy of the
+schema; nothing is fetched at runtime, and a document declaring a `$schema` this
+build does not read is refused rather than parsed optimistically. Its inputs
+become settings fields, so a credential is typed into the dashboard, encrypted
+at rest, and resolved store-then-file-then-default like every other — never read
+out of the document.
+
+**A credential goes to the address it was configured for, and nowhere else.**
+The configured headers are pinned to the configured origin — scheme, host and
+port — in two places independently: the client refuses a redirect off it, and
+the transport that injects them checks again before it does. Go's own defence
+does not reach this. The standard library strips `Authorization` and `Cookie` on
+a cross-domain redirect, but only for headers set on the original request; it
+cannot see one a RoundTripper adds per hop, which is what this one does. Without
+the pin, a server answering `302 Location: https://attacker.example/` — after a
+compromise, a DNS change, or an expired domain someone else registered — is
+handed the operator's API key. The same check refuses a hop that reaches further
+into the deployment's own network than the configured endpoint already did, so a
+public server cannot steer this host at a metadata service. It is judged against
+the endpoint rather than absolutely, because a server on loopback or on the
+LAN is an ordinary thing to configure and is not made safer by being refused.
+
+Rate limiting is per server as well as per tool, because thirty tools behind one
+address are one upstream.
 
 ## Tunnels
 

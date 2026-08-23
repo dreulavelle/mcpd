@@ -91,13 +91,40 @@ func builtinTypes() (*plugins.Catalog, error) {
 
 // registerPlugins mounts every enabled plugin.
 func (a *App) registerPlugins(ctx context.Context) error {
+	// Said once, here, rather than from the instance list -- which the
+	// dashboard reads on every request.
+	a.shadowedNames()
+
 	for _, inst := range a.enabledInstances(ctx) {
 		name := inst.Name
 		pc := a.pluginConfigFor(name)
 
-		if _, known := a.types.Lookup(inst.Type); !known {
-			return fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
-				"configuration but not compiled into this binary", name, inst.Type)
+		// A remote MCP server has no compiled-in type to look up. What it is,
+		// is the document it was imported from, and buildInstance reads that.
+		if inst.Runtime != plugins.RuntimeMCP {
+			if _, known := a.types.Lookup(inst.Type); !known {
+				if !inst.FromFile {
+					// A type the binary does not have is a mistake either way,
+					// but where the mistake lives decides what to do about it.
+					// In the configuration file it is an operator's typo, and
+					// failing loudly is how they find it. In the settings
+					// store it is a record only the dashboard can correct --
+					// and refusing to start removes the dashboard, so the host
+					// would be unrecoverable without a SQLite prompt. This is
+					// the shape a stale instance record takes after a plugin
+					// is removed from a build, or after an earlier version of
+					// this host wrote one it should not have.
+					err := fmt.Errorf("this instance is recorded as type %q, "+
+						"which this build does not have; remove it, or run a "+
+						"build that does", inst.Type)
+					a.log.Error("skipping a plugin instance of an unknown type",
+						"plugin", name, "type", inst.Type)
+					a.noteReconcile(name, err)
+					continue
+				}
+				return fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
+					"configuration but not compiled into this binary", name, inst.Type)
+			}
 		}
 
 		// An instance nobody has finished configuring is not mounted. It

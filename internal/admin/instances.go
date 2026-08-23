@@ -20,6 +20,11 @@ type PluginTypeInfo struct {
 type PluginInstanceInfo struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+	// Runtime is "builtin" for an integration this build carries and "mcp"
+	// for a remote MCP server. The page needs it because the two are managed
+	// in different places: one has a compiled-in type and a form, the other
+	// has an imported document and a tool list to classify.
+	Runtime string `json:"runtime,omitempty"`
 	// FromFile marks an instance the dashboard cannot remove, because it
 	// would return on the next start and look like the removal failed.
 	FromFile bool `json:"from_file"`

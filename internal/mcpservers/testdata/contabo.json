@@ -1,0 +1,75 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "documentation": "https://api.contabo.com/#section/Introduction",
+      "examples": [
+        {
+          "config": "Add 'https://contabo.run.mcp.com.ai/mcp' as a remote MCP server in your MCP client. Ensure ACCESS_TOKEN is set in Authorization argument.",
+          "description": "Connect to the Contabo MCP server to manage cloud resources (VPS, VDS, Object Storage, etc.)",
+          "name": "Basic Connection"
+        },
+        {
+          "description": "List all your Contabo compute instances using the MCP tools",
+          "name": "Get Instances",
+          "note": "Ask the MCP client (i.e.: https://chat.mcp.com.ai) to invoke the 'listInstances' tool to retrieve your VPS and VDS instances"
+        },
+        {
+          "config": "curl -d 'client_id=...' -d 'client_secret=...' --data-urlencode 'username=...' --data-urlencode 'password=...' -d 'grant_type=password' 'https://auth.contabo.com/auth/realms/contabo/protocol/openid-connect/token' | jq -r '.access_token'",
+          "description": "Obtain ACCESS_TOKEN using documented OAuth2 flow (see docs and example curl in contabo.md)",
+          "name": "Authentication"
+        }
+      ],
+      "keywords": [
+        "openapi",
+        "rest-api",
+        "contabo",
+        "cloud",
+        "vps",
+        "bare-metal",
+        "automation",
+        "infrastructure"
+      ],
+      "license": "MIT",
+      "notes": [
+        "This MCP server exposes the full Contabo API as MCP tools for cloud automation.",
+        "Authentication is required for all operations. Obtain credentials from the Contabo Customer Control Panel.",
+        "Download the full API specification from https://api.contabo.com, or from the HAPI MCP server documentation: https://docs.mcp.com.ai/servers-apis/openapi/",
+        "See https://api.contabo.com/#section/Introduction and https://contabo.com/en-us/contabo-api/ for full API documentation.",
+        "Run your own HAPI MCP server using Docker: docker run -p 3030:3030  -v ~/.hapi:/app/.hapi serve contabo --port 3030 --headless --url https://api.contabo.com",
+        "Or the HAPI MCP CLI: hapi serve contabo --port 3030 --headless --url https://api.contabo.com --openapi https://docs.mcp.com.ai/apis/openapi/contabo.json",
+        "Documentation: https://docs.mcp.com.ai/deployment/"
+      ],
+      "publisher": "La Rebelion Labs"
+    }
+  },
+  "description": "Contabo API (v1.0.0) as MCP tools for cloud provisioning, and management. Powered by HAPI MCP server",
+  "name": "ai.com.mcp/contabo",
+  "remotes": [
+    {
+      "headers": [
+        {
+          "description": "Bearer token for authenticating with the Contabo API. Obtain via the documented token endpoint.",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": true,
+          "name": "Authorization"
+        },
+        {
+          "description": "Optional request ID for tracing (recommended for support/debugging)",
+          "format": "string",
+          "name": "x-request-id"
+        }
+      ],
+      "type": "streamable-http",
+      "url": "https://contabo.run.mcp.com.ai/mcp"
+    }
+  ],
+  "repository": {
+    "source": "github",
+    "url": "https://github.com/la-rebelion/hapimcp"
+  },
+  "title": "Contabo (VPS) MCP Server",
+  "version": "0.6.0",
+  "websiteUrl": "https://run.mcp.com.ai"
+}
