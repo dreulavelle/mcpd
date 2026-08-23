@@ -381,8 +381,8 @@ invent series this host then has to carry.
 
 Tables: `operations`, `operation_transitions`, `execution_attempts`,
 `idempotency_records`, `outbox_events`, `audit_events`, `audit_prune_gate`,
-`plugin_state`, `settings`, `settings_history`, `users`, `user_sessions`,
-`mcp_servers`, `mcp_server_tools`.
+`plugin_state`, `plugin_overrides`, `settings`, `settings_history`, `users`,
+`user_sessions`, `mcp_servers`, `mcp_server_tools`.
 
 Migrations are forward-only and checksummed; a changed file that has already
 run is an error rather than a silent divergence. There is no down path —
@@ -903,12 +903,55 @@ an unconfigured instance mounts, shows its form, and reports what is missing.
 
 **Instances come from two places.** The configuration file, and the settings
 store where the dashboard writes them. The store layers over the file, and an
-instance knows which it came from — the dashboard will not delete a file-defined
-one, because it would return on the next start and read as the delete having
-failed.
+instance knows which it came from, because the two are removed differently.
+
+**The dashboard can remove a file-declared plugin, and mcpd never touches the
+file.** It cannot: `config.yaml` is mounted read-only, the image is distroless
+with a read-only root filesystem, and `deploy/mcpd.service` sets
+`ProtectSystem=strict`. Nor should it — rewriting hand-authored YAML destroys
+comments, ordering and anchors, and in any deployment provisioned by
+configuration management the next deploy would put the entry back. "Remove it
+from the file instead" was therefore an instruction that a great many operators
+could not carry out, which made it a dead end rather than an answer.
+
+So a removal is a row in `plugin_overrides` saying the file's declaration for
+that name is ignored, and every read of the instance list applies it. It
+survives a restart because it is in the database and the file is not consulted
+about it; it beats a redeploy for the same reason. The same row carries an
+override of `enabled`, which is the identical dead end one step smaller.
+
+**Keyed on the name, not on the declaration.** Pinning the override to a hash
+of the file entry — the way `descriptor_hash` pins a tool approval — would mean
+that editing the entry silently resurrects the plugin, which is the failure
+this exists to prevent. A tool approval is a statement about a descriptor; a
+removal is a statement about a name.
+
+**Reversible, and reversible to the file.** Restoring forgets the override
+entirely, so what comes back is whatever the file declares now rather than a
+copy of what it declared then. The settings are kept across a removal, because
+a restore that came back without the credentials somebody typed in would be a
+restore in name only — which is also the difference from removing a
+dashboard-defined instance, where the settings do go, so that a name reused
+later cannot silently inherit them.
+
+**Removing one is an administrative act and is audited.** It overrides the
+deployment's own configuration, so it appends to the hash-chained trail inside
+the transaction that performed it, like importing a server or classifying a
+tool, rather than landing in the settings history. `required: true` is the
+deployment saying the host should not run without an integration; removing one
+of those is allowed and takes an explicit acknowledgement, because it should
+not be a side effect of confirming something else. Every override is named in
+the log at startup for the same reason `shadowedNames` is: a plugin the file
+says is enabled and that this host is not serving is hard to diagnose from
+outside.
+
+**A removal outlives the declaration it overrode.** An operator who removes a
+plugin here and later deletes the entry from their YAML leaves a row matching
+nothing. Those are kept rather than discarded — one start against a truncated
+or missing file would otherwise forget every removal and resurrect all of them
+on the next good deploy — and are reported to the dashboard so they can be
+forgotten deliberately.
 
 Adding an instance records intent; it does not mount. A plugin is built once,
 at startup, from the settings it had then, so the dashboard says a restart is
-needed rather than showing an instance whose tools never appear. Removing one
-takes its settings with it, so a name reused later cannot silently inherit
-someone else's credentials.
+needed rather than showing an instance whose tools never appear.

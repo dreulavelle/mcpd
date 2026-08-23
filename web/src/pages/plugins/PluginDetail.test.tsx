@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { api, type MCPServer, type MCPTool } from "@/lib/api";
+import { api, type MCPServer, type MCPTool, type PluginInstance } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
 import { PluginDetail } from "./PluginDetail";
 
@@ -171,5 +171,115 @@ describe("a builtin plugin's page", () => {
     expect(await screen.findByText("Read")).toBeInTheDocument();
     expect(screen.queryByText("The document")).not.toBeInTheDocument();
     expect(api.mcpServerTools).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A plugin the configuration file declares can be removed here, and the page
+ * must not let anybody believe their file changed. mcpd cannot write it: it is
+ * mounted read-only in the container image, on a read-only root filesystem,
+ * under a systemd unit with ProtectSystem=strict.
+ */
+describe("a plugin the configuration file declares", () => {
+  function declared(overrides: Partial<PluginInstance> = {}) {
+    stub();
+    vi.spyOn(api, "instances").mockResolvedValue({
+      count: 1,
+      instances: [{
+        name: "weather", type: "weather", runtime: "builtin",
+        from_file: true, enabled: true, mounted: true,
+        declaration: {
+          type: "weather", enabled: true, required: false,
+          settings_keys: ["api_token", "base_url"],
+        },
+        ...overrides,
+      }],
+    });
+  }
+
+  it("says the file is unchanged rather than implying it was edited", async () => {
+    declared();
+    renderWith(<PluginDetail name="weather" />);
+
+    expect(await screen.findByText(/The file is unchanged/)).toBeInTheDocument();
+    expect(screen.getByText(/on every restart/)).toBeInTheDocument();
+    // The old dead end: "remove it there rather than here".
+    expect(screen.queryByText(/Remove it there/)).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Remove" })).toBeInTheDocument();
+  });
+
+  it("shows what the file declares, keys without values", async () => {
+    declared();
+    renderWith(<PluginDetail name="weather" />);
+
+    expect(await screen.findByText("In the configuration file")).toBeInTheDocument();
+    expect(screen.getByText("api_token")).toBeInTheDocument();
+    expect(screen.getByText("base_url")).toBeInTheDocument();
+  });
+
+  /**
+   * `required: true` is the deployment saying the host is meant not to run
+   * without the integration. Overriding it is allowed and is not a
+   * click-through: the API refuses without the acknowledgement.
+   */
+  it("acknowledges required before removing one", async () => {
+    declared({ required: true, declaration: {
+      type: "weather", enabled: true, required: true,
+    } });
+    const remove = vi.spyOn(api, "removeInstance").mockResolvedValue({ status: "removed" });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWith(<PluginDetail name="weather" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", true));
+    expect(confirm.mock.calls[0]?.[0]).toMatch(/required: true/);
+    expect(confirm.mock.calls[0]?.[0]).toMatch(/configuration file is not changed/);
+  });
+
+  it("does not claim the credentials go with a file-declared removal", async () => {
+    declared();
+    const remove = vi.spyOn(api, "removeInstance").mockResolvedValue({ status: "removed" });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWith(<PluginDetail name="weather" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", false));
+    expect(confirm.mock.calls[0]?.[0]).not.toMatch(/credentials/);
+  });
+
+  /**
+   * `enabled: false` in a file nobody on this host can edit was the same dead
+   * end one step smaller, and it was refused with "change `enabled` there".
+   */
+  it("switches one off without touching the file", async () => {
+    declared();
+    const setEnabled = vi.spyOn(api, "setInstanceEnabled")
+      .mockResolvedValue({ status: "saved" });
+
+    renderWith(<PluginDetail name="weather" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Switch off" }));
+
+    await waitFor(() => expect(setEnabled).toHaveBeenCalledWith("weather", false));
+  });
+
+  it("offers the way back, and says who took it away", async () => {
+    declared({
+      enabled: false, mounted: false, removed: true,
+      removed_by: "user:alice", removed_at: "2026-08-20T10:00:00Z",
+    });
+    const restore = vi.spyOn(api, "restoreInstance").mockResolvedValue({ status: "restored" });
+
+    renderWith(<PluginDetail name="weather" />);
+
+    expect(await screen.findByText(/Removed by user:alice/)).toBeInTheDocument();
+    expect(screen.getByText(/redeploy from it, the removal still holds/)).toBeInTheDocument();
+    // One control, not two: removing something already removed is a button
+    // with nothing to do.
+    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await waitFor(() => expect(restore).toHaveBeenCalledWith("weather"));
   });
 });

@@ -1,14 +1,16 @@
 import { useCallback, useMemo, useState } from "react";
 import { ClipboardCheck } from "lucide-react";
 import {
-  api, type AuditRecord, type HealthCheck, type HealthReport, type Operation,
-  type Plugin, type PluginInstance, type TunnelInfo,
+  api, type AuditRecord, type Endpoints, type HealthCheck, type HealthReport,
+  type Operation, type Plugin, type PluginInstance, type TunnelInfo,
 } from "@/lib/api";
 import { describeEvent, relative, when, who } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
 import { hasOwnName, signedInAs, useSession } from "@/lib/session";
-import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
+import {
+  CodeBlock, Copyable, EmptyState, Loading, Notice, PageHeader, Section,
+} from "@/components/chrome";
 import { Chip, healthTone, RiskBadge, StateBadge, StatusDot } from "@/components/status";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -22,6 +24,12 @@ interface Snapshot {
   tunnels: TunnelInfo | null;
   health: HealthReport | null;
   audit: AuditRecord[];
+  /**
+   * The host's own addresses. Undefined while the first call is in flight and
+   * null once it has failed, which are different things to say: one is "not
+   * yet" and the other is "we asked and could not get it".
+   */
+  endpoints: Endpoints | null | undefined;
 }
 
 /**
@@ -39,7 +47,8 @@ interface Snapshot {
 export function Overview() {
   const session = useSession();
   const [snap, setSnap] = useState<Snapshot>({
-    waiting: [], plugins: [], instances: [], tunnels: null, health: null, audit: [],
+    waiting: [], plugins: [], instances: [], tunnels: null, health: null,
+    audit: [], endpoints: undefined,
   });
   const [loaded, setLoaded] = useState(false);
 
@@ -53,6 +62,9 @@ export function Overview() {
       api.tunnel().then((t) => set({ tunnels: t })),
       api.health().then((h) => set({ health: h })),
       api.audit(8).then((r) => set({ audit: r.records ?? [] })),
+      api.endpoints()
+        .then((e) => set({ endpoints: e }))
+        .catch(() => set({ endpoints: null })),
     ]).finally(() => setLoaded(true));
   }, []);
   usePoll(load, 15_000);
@@ -196,6 +208,8 @@ export function Overview() {
 
         <HostHealth health={snap.health} />
 
+        <ConnectingDirectly endpoints={snap.endpoints} />
+
         <Section
           title="Lately"
           actions={
@@ -226,6 +240,50 @@ export function Overview() {
         </Section>
       </div>
     </>
+  );
+}
+
+/**
+ * How to reach this host directly.
+ *
+ * It lived on the Plugins page, under the list, where it read as something to
+ * do with the plugin above it. The address is the aggregate endpoint -- every
+ * plugin the caller is scoped to, on one URL -- so it belongs to the
+ * deployment rather than to any one integration, and this is the page about
+ * the deployment.
+ *
+ * It says nothing rather than nothing at all: a card that returns null when
+ * the endpoint fails looks exactly like a host with no address.
+ */
+function ConnectingDirectly({ endpoints }: { endpoints: Endpoints | null | undefined }) {
+  return (
+    <Section title="Connecting directly">
+      <Card>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            For clients that can reach this machine. ChatGPT uses a tunnel
+            instead.
+          </p>
+          {endpoints === undefined ? (
+            <Loading rows={1} />
+          ) : endpoints === null ? (
+            <Notice tone="attention">
+              Couldn't read this host's address from{" "}
+              <code className="font-mono">/api/endpoints</code>. The host may
+              still be serving it — this card is the only thing that failed.
+            </Notice>
+          ) : (
+            <Copyable value={endpoints.aggregate} label="address" />
+          )}
+          {/* TODO: link "YOUR_KEY" to the API keys page once there is one.
+              Today a machine credential is a static token in the
+              configuration file, so there is nowhere in the dashboard to send
+              somebody -- and a link that goes nowhere is worse than the
+              placeholder. */}
+          <CodeBlock>{"Authorization: Bearer YOUR_KEY"}</CodeBlock>
+        </CardContent>
+      </Card>
+    </Section>
   );
 }
 

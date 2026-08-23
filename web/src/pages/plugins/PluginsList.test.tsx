@@ -82,6 +82,24 @@ describe("instances that are configured but not serving", () => {
     expect(rows[0]?.healthMessage).toBe("Switched off.");
   });
 
+  /**
+   * "Switched off" of a removed plugin hides the one fact that explains it:
+   * somebody removed it here, and the configuration file still declares it.
+   */
+  it("says a removed plugin was removed, not that it is off", () => {
+    const rows = toRows(
+      [],
+      [instance("netbox", {
+        mounted: false, enabled: false, removed: true, removed_by: "user:alice",
+      })],
+      types,
+    );
+    expect(rows[0]?.removed).toBe(true);
+    expect(rows[0]?.removedBy).toBe("user:alice");
+    expect(rows[0]?.healthMessage)
+      .toBe("Removed here. The configuration file still declares it.");
+  });
+
   it("prefers a reported problem over the generic wording", () => {
     const rows = toRows(
       [],

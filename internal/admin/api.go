@@ -53,14 +53,30 @@ type Options struct {
 	// PluginTypes lists the integrations this build has, so the dashboard can
 	// offer them when someone adds an instance.
 	PluginTypes func() []PluginTypeInfo
-	// AddPlugin, RemovePlugin and SetPluginEnabled manage instances. They
-	// record intent; mounting happens at startup, which is what the response
-	// says rather than leaving someone to wonder why the tools never appear.
+	// AddPlugin, RemovePlugin, RestorePlugin and SetPluginEnabled manage
+	// instances. Adding one records intent -- it mounts once it has what it
+	// needs, which is what the response says rather than leaving someone to
+	// wonder why the tools never appear.
+	//
+	// RemovePlugin's last argument acknowledges that the instance is marked
+	// `required: true` in the configuration file. Without it a removal of one
+	// is refused, because that flag is the deployment saying the host should
+	// not run without the integration and clicking past it should be a
+	// deliberate act rather than a side effect of confirming something else.
+	//
+	// RestorePlugin undoes a removal that overrode the file. There is one
+	// because a one-way door an operator can only reopen over SSH is the
+	// problem this replaced, moved rather than solved.
 	AddPlugin        func(ctx context.Context, actor, name, typeName string) error
-	RemovePlugin     func(ctx context.Context, actor, name string) error
+	RemovePlugin     func(ctx context.Context, actor, name string, acknowledgeRequired bool) error
+	RestorePlugin    func(ctx context.Context, actor, name string) error
 	SetPluginEnabled func(ctx context.Context, actor, name string, enabled bool) error
 	// Instances lists what is configured, mounted or not.
 	Instances func(ctx context.Context) []PluginInstanceInfo
+	// StaleRemovals lists removals whose configuration-file declaration has
+	// since gone, which are otherwise invisible and would silently apply if
+	// the name were declared again.
+	StaleRemovals func(ctx context.Context) []StaleRemoval
 
 	// PluginType reports what integration an instance is of, which is not the
 	// instance's own name once someone configures two of something.
@@ -309,6 +325,10 @@ func (s *Server) routes() {
 	api("POST /api/instances", s.handleAddInstance, auth.CapAdmin)
 	api("PATCH /api/instances/{name}", s.handleSetInstanceEnabled, auth.CapAdmin)
 	api("DELETE /api/instances/{name}", s.handleRemoveInstance, auth.CapAdmin)
+	// Undoing a removal that overrode the configuration file. Same capability
+	// as the removal: putting an integration back in front of an assistant is
+	// the same kind of decision as taking it away.
+	api("POST /api/instances/{name}/restore", s.handleRestoreInstance, auth.CapAdmin)
 	// Remote MCP servers. Reading what is imported and what each offers is an
 	// operator's business; importing one, connecting to it, and deciding which
 	// of its tools an assistant may reach decides what leaves this deployment,

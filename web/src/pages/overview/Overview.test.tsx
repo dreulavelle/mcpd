@@ -12,6 +12,9 @@ function stub(health: HealthReport | null) {
     tunnels: [], can_manage: false, plugins: [], workspaces: [], assignments: {},
   });
   vi.spyOn(api, "audit").mockResolvedValue({ records: [], count: 0 });
+  vi.spyOn(api, "endpoints").mockResolvedValue({
+    aggregate: "http://127.0.0.1:18080/mcp", per_plugin_example: "/mcp/{plugin}",
+  });
   if (health === null) {
     vi.spyOn(api, "health").mockRejectedValue(new Error("down"));
   } else {
@@ -85,5 +88,40 @@ describe("the host's health on the overview", () => {
 
     expect(await screen.findByText(/says nothing either way/)).toBeInTheDocument();
     expect(screen.queryByText("Passing")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The host's own address belongs to the host.
+ *
+ * It used to sit under the plugin list, where it read as something to do with
+ * the plugin above it -- but it is the aggregate endpoint, one URL carrying
+ * every plugin the caller is scoped to, so it describes the deployment.
+ */
+describe("connecting directly", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("shows the aggregate address and the header a client sends", async () => {
+    stub({ status: "up", checks: [] });
+    renderWith(<Overview />);
+
+    expect(await screen.findByText("Connecting directly")).toBeInTheDocument();
+    expect(screen.getByText("http://127.0.0.1:18080/mcp")).toBeInTheDocument();
+    expect(screen.getByText(/Authorization: Bearer YOUR_KEY/)).toBeInTheDocument();
+  });
+
+  // The card used to render nothing at all when the call failed, which looks
+  // exactly like a host with no address.
+  it("says the address could not be read rather than disappearing", async () => {
+    stub({ status: "up", checks: [] });
+    vi.spyOn(api, "endpoints").mockRejectedValue(new Error("down"));
+    renderWith(<Overview />);
+
+    expect(await screen.findByText("Connecting directly")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Couldn't read this host's address/),
+    ).toBeInTheDocument();
   });
 });
