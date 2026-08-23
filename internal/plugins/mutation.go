@@ -10,9 +10,47 @@ import (
 )
 
 var (
+	// toolNamePattern is the house style for a tool this project ships: one
+	// word, lowercase, underscored. It is a convention, and worth keeping for
+	// code we write.
 	toolNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,47}$`)
-	actionPattern   = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+	// remoteToolNamePattern is the MCP specification's charset, which is what
+	// a remote server's tools are entitled to use.
+	//
+	// getWeather, search.docs and read-file are all valid names upstream, and
+	// this host's convention rejects every one of them. Normalising instead
+	// would be worse than rejecting: the model would be shown a name the far
+	// end does not answer to, and every call would fail at the last hop with
+	// nothing saying why.
+	remoteToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+	actionPattern         = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 )
+
+// maxQualifiedToolName bounds the name a model actually sees, which is the
+// plugin prefix, an underscore, and the tool's own name. The MCP
+// specification's limit; the house pattern stays well inside it, but an
+// upstream name plus an instance prefix does not necessarily.
+const maxQualifiedToolName = 128
+
+// checkToolName applies the naming rule for the plugin's runtime.
+func checkToolName(d Descriptor, name string) error {
+	if d.EffectiveRuntime() == RuntimeMCP {
+		if !remoteToolNamePattern.MatchString(name) {
+			return fmt.Errorf("plugins: %s tool name %q is outside the character set "+
+				"the MCP specification allows (%s)", d.Name, name, remoteToolNamePattern)
+		}
+		if n := len(d.Name) + 1 + len(name); n > maxQualifiedToolName {
+			return fmt.Errorf("plugins: %s_%s is %d characters, past the %d a tool "+
+				"name may be", d.Name, name, n, maxQualifiedToolName)
+		}
+		return nil
+	}
+	if !toolNamePattern.MatchString(name) {
+		return fmt.Errorf("plugins: %s tool name %q must match %s",
+			d.Name, name, toolNamePattern)
+	}
+	return nil
+}
 
 // Plan is what a mutation handler produces before anything is changed. It is
 // both what an approver reads and what the executor re-checks.

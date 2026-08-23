@@ -77,7 +77,8 @@ type ToolSpec struct {
 	InputSchema json.RawMessage
 }
 
-func (s ToolSpec) validate(plugin string) error {
+func (s ToolSpec) validate(d Descriptor) error {
+	plugin := d.Name
 	if s.Capability != "" && !s.Capability.Valid() {
 		return fmt.Errorf("plugins: %s tool %q has unknown capability %q",
 			plugin, s.Name, s.Capability)
@@ -85,9 +86,8 @@ func (s ToolSpec) validate(plugin string) error {
 	if s.RateLimit < 0 {
 		return fmt.Errorf("plugins: %s tool %q has a negative rate limit", plugin, s.Name)
 	}
-	if !toolNamePattern.MatchString(s.Name) {
-		return fmt.Errorf("plugins: %s tool name %q must match %s",
-			plugin, s.Name, toolNamePattern)
+	if err := checkToolName(d, s.Name); err != nil {
+		return err
 	}
 	if s.Description == "" {
 		return fmt.Errorf("plugins: %s tool %q requires a description; "+
@@ -140,7 +140,7 @@ func (s MutationSpec) validate(plugin string) error {
 // IDs, audit, and panic recovery before it reaches the transport, so plugin
 // handlers contain only their own logic.
 func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) (Out, error)) {
-	if err := spec.validate(r.descriptor.Name); err != nil {
+	if err := spec.validate(r.descriptor); err != nil {
 		r.errs = append(r.errs, err)
 		return
 	}
@@ -216,6 +216,20 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 // execution happens later, from the executor, only after the operations
 // service says so.
 func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S]) {
+	// A remote MCP server cannot register a write, and the refusal lives here
+	// rather than in the runtime that builds one. Enforced at the registry it
+	// holds for every path into it -- a future adapter, a test, a mistake --
+	// instead of holding only for as long as one constructor remembers to
+	// filter. There is no propose/approve story for a third party's tool: the
+	// host cannot plan against its state, cannot freeze a payload it does not
+	// understand, and cannot re-observe the result.
+	if r.descriptor.EffectiveRuntime() == RuntimeMCP {
+		r.errs = append(r.errs, fmt.Errorf(
+			"plugins: %s is a remote MCP server and may not register mutation %q; "+
+				"this host does not carry writes to a system it cannot plan against",
+			r.descriptor.Name, spec.Action))
+		return
+	}
 	if err := spec.validate(r.descriptor.Name); err != nil {
 		r.errs = append(r.errs, err)
 		return
