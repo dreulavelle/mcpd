@@ -42,10 +42,13 @@ function contrast(a: string, b: string): number {
 }
 
 /** Every surface a word is drawn on, in one theme. */
-const SURFACES = ["background", "card", "muted", "accent"] as const;
+const SURFACES = ["background", "card", "popover", "muted", "accent"] as const;
 
 /** Every token used as a text colour. */
-const TEXT = ["foreground", "muted-foreground", "good", "attention", "problem", "info"] as const;
+const TEXT = [
+  "foreground", "popover-foreground", "muted-foreground",
+  "good", "attention", "problem", "info",
+] as const;
 
 describe.each(["light", "dark"] as const)("the %s palette", (theme) => {
   it.each(TEXT)("draws %s legibly on every surface", (name) => {
@@ -93,4 +96,62 @@ it("is never used as a text colour", () => {
   };
   walk(SRC);
   expect(offenders).toEqual([]);
+});
+
+/**
+ * The dropdown a native `<select>` opens is drawn by the browser, and the only
+ * thing it takes from this stylesheet is what the elements themselves declare.
+ * Preflight declares `color: inherit` on every select and leaves the background
+ * transparent, which hands the engine the theme's near-white foreground and no
+ * surface to put it on; the engine supplies its own, and its own is a white
+ * panel. That is how the console shipped a dark theme whose dropdowns were
+ * white-on-white. Naming one half of the pair and not the other is the bug, so
+ * this asserts both halves.
+ */
+describe("the native select's dropdown", () => {
+  const optionRule = css.match(/option,\s*optgroup\s*\{([^}]*)\}/);
+
+  it("names both a surface and a colour for the options", () => {
+    expect(optionRule, "no `option, optgroup` rule in index.css").not.toBeNull();
+    expect(optionRule![1]).toMatch(/background-color:\s*var\(--popover\)/);
+    expect(optionRule![1]).toMatch(/color:\s*var\(--popover-foreground\)/);
+  });
+
+  it("gives the control the same surface, which is what the popup is built from", () => {
+    const component = readFileSync(join(SRC, "components/ui/native-select.tsx"), "utf8");
+    expect(component).toContain("bg-popover");
+    // The class the bug shipped with. A transparent control is a control with
+    // no colour to lend the list it opens.
+    expect(component).not.toContain("bg-transparent");
+  });
+
+  /**
+   * Every select goes through the styled component, because a bare one gets
+   * preflight's half-specified pair and nothing else.
+   */
+  it("is the only select in the console", () => {
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.name.endsWith(".tsx") &&
+          path !== join(SRC, "components/ui/native-select.tsx") &&
+          readFileSync(path, "utf8").includes("<select")) {
+          offenders.push(path.slice(SRC.length + 1));
+        }
+      }
+    };
+    walk(SRC);
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * Not the fix, but the half that was already right and must stay right: it is
+   * what makes the popup's scrollbar, borders and highlight follow the theme
+   * once the colours are named.
+   */
+  it("tells the browser which schemes the page supports", () => {
+    expect(css).toMatch(/color-scheme:\s*light dark/);
+  });
 });
