@@ -1,6 +1,6 @@
 import {
-  Boxes, ClipboardCheck, Cog, Gauge, ScrollText, Store, UserRound, Users,
-  Waypoints, type LucideIcon,
+  Boxes, ClipboardCheck, Cog, Gauge, ScrollText, ShieldCheck, Store, UserRound,
+  Users, Waypoints, type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
 
@@ -134,6 +134,17 @@ export const NAV: NavGroup[] = [
             label: "General",
             lede: "How this host is configured.",
             icon: Cog,
+            capability: "read",
+          },
+          {
+            // Read to see, admin to change, which is the same split as the
+            // General page beside it. What the host will do without asking
+            // anybody is part of understanding the deployment, so it is not
+            // hidden from the people the rules are written about.
+            path: "/settings/policy",
+            label: "Approval policy",
+            lede: "Standing rules that authorise a change in advance, and what they never cover.",
+            icon: ShieldCheck,
             capability: "read",
           },
           {

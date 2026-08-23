@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, ShieldCheck } from "lucide-react";
 import type { OperationState, RiskLevel } from "@/lib/api";
 import { OPERATION_STATES, RISK_LABELS, stateLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -185,7 +185,19 @@ export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
  * is worth stating precisely because it is easy to read the smaller guarantee
  * as the larger one.
  */
-export function AssuranceBadge({ assurance }: { assurance: string }) {
+export function AssuranceBadge({ assurance, authorizedByRule }: {
+  assurance: string;
+  /**
+   * The rule that authorised the change, when one did.
+   *
+   * Assurance says what can be proved, never who authorised it, so this does
+   * not touch the badge -- only the sentence beneath it, which used to state
+   * flatly that a person had said yes. A standing rule can now approve a
+   * change with nobody asked, and that sentence would be describing something
+   * that did not happen.
+   */
+  authorizedByRule?: string;
+}) {
   const reviewed = assurance === "reviewed_change";
   return (
     <Tooltip>
@@ -199,7 +211,49 @@ export function AssuranceBadge({ assurance }: { assurance: string }) {
       <TooltipContent className="max-w-xs">
         {reviewed
           ? "Exact fields, a drift check against a stored snapshot, and an outcome confirmed by re-reading the target."
-          : "A person authorised it and the call was made. That is all this record proves — it does not say the change is in place."}
+          : authorizedByRule
+            ? "A standing rule authorised it and the call was made. That is all this record proves — it does not say the change is in place."
+            : "A person authorised it and the call was made. That is all this record proves — it does not say the change is in place."}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/* -- authorisation --------------------------------------------------------- */
+
+/**
+ * A change a standing rule authorised, with nobody asked.
+ *
+ * `authorized_by_rule` is the discriminator and `approved_by` is not.
+ * `approved_by` on one of these is `system:policy` and `approved_by_name` is
+ * the same string -- it is not an account and there is no name behind it to
+ * resolve. Rendering the approver field the ordinary way therefore says
+ * "approved by system:policy", which reads as somebody having clicked, and
+ * nobody did.
+ *
+ * Stated rather than warned about. An auto-approval is a legitimate thing an
+ * administrator arranged in advance, so this is informational and not a fault
+ * -- what would be wrong is leaving it indistinguishable from a decision
+ * somebody took.
+ */
+export function AuthorisedByRule({ rule }: { rule: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="rounded-full">
+          <Chip tone="info">
+            <ShieldCheck className="size-3 shrink-0" aria-hidden="true" />
+            <span>
+              Authorised in advance by rule{" "}
+              <code className="font-mono">{rule}</code>
+            </span>
+          </Chip>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">
+        Nobody was asked. A standing rule covered this class of change, so it
+        was approved without going to a person. The approver on the record is
+        system:policy, which is not an account.
       </TooltipContent>
     </Tooltip>
   );

@@ -96,6 +96,10 @@ function stubApi(role: "user" | "admin" = "admin") {
     bootstrap: [],
   });
   vi.spyOn(api, "users").mockResolvedValue({ users: [], count: 0 });
+  vi.spyOn(api, "approvalPolicy").mockResolvedValue({
+    rules: [], wildcard: "*", ceilings: ["low", "medium", "high"],
+    default: "Every change is put to a person unless a rule authorises it.",
+  });
   vi.spyOn(api, "mcpServerTools").mockResolvedValue({ tools: [], count: 0 });
 }
 
@@ -255,6 +259,40 @@ describe("an old marketplace deep link", () => {
     render(<App />);
     await screen.findByText("weather", { selector: "h1" });
     expect(window.history.length).toBe(before);
+  });
+});
+
+/**
+ * A section in the map that the router does not build renders "Nothing here",
+ * and the sidebar happily links to it. The two are meant to be one table, so
+ * the wiring is worth a test that goes through the real router.
+ */
+describe("the approval policy page", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/settings/policy");
+  });
+
+  it("opens for a user, who may read the rules but not change them", async () => {
+    stubApi("user");
+    render(<App />);
+
+    // By role: the sidebar links to it by the same words, and the point of
+    // this test is that the page behind the link was built.
+    expect(await screen.findByRole("heading", { name: "Approval policy", level: 1 }))
+      .toBeInTheDocument();
+    expect(screen.queryByText("Nothing here")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not for this account")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save all rules" })).toBeNull();
+  });
+
+  it("offers an administrator the controls the API will accept", async () => {
+    stubApi("admin");
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Add a grant" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add an exclusion" }))
+      .toBeInTheDocument();
   });
 });
 
