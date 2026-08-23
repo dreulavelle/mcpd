@@ -116,10 +116,14 @@ func TestMulti_ACrossSourceDuplicateYieldsOnePreferredEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Round-robin, so the second catalogue is reached before the first has
+	// been exhausted -- but the duplicates are still the official registry's,
+	// because preference order decides which copy survives even when it does
+	// not decide the reading order.
 	want := []string{
 		officialSource + ":app.linear/linear",
-		officialSource + ":com.apify/apify-mcp-server",
 		dockerSource + ":astro-docs",
+		officialSource + ":com.apify/apify-mcp-server",
 	}
 	if strings.Join(names(page), ",") != strings.Join(want, ",") {
 		t.Errorf("entries = %v, want %v", names(page), want)
@@ -148,12 +152,25 @@ func TestMulti_EntriesWithNoAddressAreNotMergedOnAName(t *testing.T) {
 		"": {Entries: []Entry{at(dockerSource, "sqlite", "")}},
 	}}
 
-	page, err := NewMulti(official, docker).List(context.Background(), Query{})
+	// Both of these are unaddable -- at() gives an entry with no address no
+	// document to be addable from -- so a listing does not show them at all.
+	// The question this test is about is whether they are *merged*, which is
+	// only visible with the flag that keeps them.
+	multi := NewMulti(official, docker)
+	page, err := multi.List(context.Background(), Query{IncludeUnaddable: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Entries) != 2 {
 		t.Errorf("entries = %v, want both kept", names(page))
+	}
+
+	page, err = multi.List(context.Background(), Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) != 0 {
+		t.Errorf("entries = %v, want none: a listing drops what cannot be added", names(page))
 	}
 }
 
@@ -243,7 +260,11 @@ func TestMulti_PagesEachSourceWhereItLeftOff(t *testing.T) {
 	}}
 	multi := NewMulti(official, docker)
 
-	first, err := multi.List(context.Background(), Query{})
+	// Two, because the limit bounds the merged page and a page big enough to
+	// hold everything would simply hold everything: with four entries between
+	// them and a page of thirty, one request is the whole listing and there
+	// is nothing to resume.
+	first, err := multi.List(context.Background(), Query{Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +272,7 @@ func TestMulti_PagesEachSourceWhereItLeftOff(t *testing.T) {
 		t.Fatal("no cursor although both sources had more")
 	}
 
-	second, err := multi.List(context.Background(), Query{Cursor: first.NextCursor})
+	second, err := multi.List(context.Background(), Query{Cursor: first.NextCursor, Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,11 +299,11 @@ func TestMulti_AnExhaustedSourceIsNotAskedAgain(t *testing.T) {
 	}}
 	multi := NewMulti(official, docker)
 
-	first, err := multi.List(context.Background(), Query{})
+	first, err := multi.List(context.Background(), Query{Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := multi.List(context.Background(), Query{Cursor: first.NextCursor})
+	second, err := multi.List(context.Background(), Query{Cursor: first.NextCursor, Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

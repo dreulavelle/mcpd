@@ -168,6 +168,12 @@ func (d *Docker) ListIfChanged(ctx context.Context, q Query, v Validators) (Page
 		return Page{Freshness: freshness}, err
 	}
 	entries := catalog.entries()
+	// Measured over the whole catalogue rather than the page, and before the
+	// search narrows it. Docker's arrives as one document, so unlike the two
+	// that page a cursor this source knows exactly how many servers it holds
+	// and exactly how many of them this host would accept -- every one of
+	// them has already been through describe() to get here.
+	judged, addable := len(entries), countAddable(entries)
 
 	limit := q.Limit
 	if limit <= 0 {
@@ -213,6 +219,9 @@ func (d *Docker) ListIfChanged(ctx context.Context, q Query, v Validators) (Page
 	page.Sources = []SourceStatus{{
 		Source: d.Source(), OK: true,
 		RetrievedAt: page.RetrievedAt, Entries: len(page.Entries),
+		Judged:  judged,
+		Addable: addable,
+		Total:   judged,
 	}}
 	return page, nil
 }
@@ -336,11 +345,15 @@ type dockerCatalog struct {
 type dockerEntry struct {
 	// Type is "server", "remote" or "poci". Only "remote" describes something
 	// this host can reach; see translateDockerEntry.
-	Type        string       `yaml:"type"`
-	Title       string       `yaml:"title"`
-	Description string       `yaml:"description"`
-	DateAdded   string       `yaml:"dateAdded"`
-	Remote      dockerRemote `yaml:"remote"`
+	Type        string `yaml:"type"`
+	Title       string `yaml:"title"`
+	Description string `yaml:"description"`
+	DateAdded   string `yaml:"dateAdded"`
+	// Icon is an address Docker publishes for the entry -- usually the
+	// project's own avatar, sometimes a favicon service. A third party's URL
+	// bound for an <img src>, so it is validated rather than relayed.
+	Icon   string       `yaml:"icon"`
+	Remote dockerRemote `yaml:"remote"`
 	// OAuth is present when Docker's gateway obtains the credential through an
 	// OAuth flow of its own.
 	OAuth dockerOAuth `yaml:"oauth"`
@@ -407,6 +420,7 @@ func translateDockerEntry(name string, raw dockerEntry) (Entry, json.RawMessage,
 		// composed document below carries the placeholder server.json insists
 		// on, and says in its own field that it is one.
 		Version:   "",
+		Icon:      safeIconURL(raw.Icon),
 		UpdatedAt: dockerTimestamp(raw.DateAdded),
 		Source:    dockerSource,
 	}
