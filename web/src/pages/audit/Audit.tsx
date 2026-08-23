@@ -18,21 +18,9 @@ import { NativeSelect } from "@/components/ui/native-select";
 const LIMITS = [100, 250, 500];
 
 /**
- * The audit trail.
- *
- * Append-only and hash-chained in the database, enforced by triggers, so the
- * question this page answers is not only "what happened" but "is what happened
- * still what it says".
- *
- * Drawn as a chain rather than as a table, because the chain is the property
- * worth seeing. A grid of rows asserts that each entry follows the one before
- * it; a line drawn between them shows it, and — the part that matters — has
- * somewhere to visibly break. The break is rendered where it happened rather
- * than only announced at the top, so "which entries are still evidence" is a
- * thing an operator can read off the page.
- *
- * Silent when the chain is intact. A check that announced success on every
- * visit would train somebody to skip the one time it did not.
+ * The audit trail, drawn as a chain because the chain is the property worth
+ * seeing: it has somewhere to visibly break, and the break is rendered where it
+ * happened. Silent when intact, so the one failure is not skipped over.
  */
 export function Audit() {
   const mayVerify = useCan("admin");
@@ -45,22 +33,13 @@ export function Audit() {
   const { data, error, reload } = useLoader(load, "Couldn't load the history.");
   const records = data?.records ?? [];
 
-  /**
-   * Whether the chain still verifies.
-   *
-   * Only an administrator may run the check, so this asks only when one is
-   * signed in. Calling it regardless and swallowing the 403 would put a
-   * refusal in everyone else's network log for a question they were never
-   * allowed to ask.
-   */
+  /** Only an administrator may run the check, so only one asks for it. */
   useEffect(() => {
     if (!mayVerify) return;
     let live = true;
     api.verifyAudit()
       .then((c) => { if (live) setBrokenAt(c.intact ? null : c.broken_at); })
-      // A check that could not run is not a check that failed. Claiming a
-      // break because the request timed out would be the worst false alarm
-      // this console could raise.
+      // A check that could not run is not a check that failed.
       .catch(() => { if (live) setBrokenAt(null); });
     return () => { live = false; };
   }, [mayVerify, checks]);
@@ -116,14 +95,11 @@ export function Audit() {
                 record={r}
                 first={i === 0}
                 last={i === records.length - 1}
-                // The chain reads oldest to newest and the page reads newest
-                // first, so the severed link is below the entry the check
-                // named: it is that entry which stopped following its
-                // predecessor.
+                // The page reads newest first, so the severed link is below
+                // the entry the check named.
                 severed={r.seq === brokenAt}
-                // A hole between two entries on screen is entries that are no
-                // longer in the table. Pruning takes from the oldest end, so a
-                // gap in the middle is not that.
+                // Pruning takes from the oldest end, so a gap in the middle
+                // is missing entries rather than pruned ones.
                 missing={gapBelow(records, i)}
                 open={expanded === r.seq}
                 onToggle={() => setExpanded(expanded === r.seq ? null : r.seq)}

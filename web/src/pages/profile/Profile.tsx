@@ -20,20 +20,8 @@ const CAPABILITY_MEANING: Record<Capability, string> = {
 };
 
 /**
- * You.
- *
- * Reached by clicking your own name in the sidebar rather than from a nav
- * entry, and living at /profile rather than under /settings, because Settings
- * is how the *host* is configured and this is how *you* are. The two were one
- * section and the line between them kept getting crossed.
- *
- * It answers "what am I allowed to do here", which was previously answerable
- * only by hunting for a control that was missing, and it is where the things
- * about your own account are changed. Naming yourself is one of them and needs
- * no capability beyond being signed in: `PATCH /api/account` carries no
- * identifier, so it can only ever edit the account the request authenticated
- * as. Changing a password still has no self-service endpoint, so that form is
- * offered to an administrator and explained to everybody else.
+ * Your own account: what you may do here, and the things about it you can
+ * change. Settings is how the *host* is configured; this is how *you* are.
  */
 export function Profile() {
   const session = useSession();
@@ -42,9 +30,8 @@ export function Profile() {
   const loadMeta = useCallback(() => api.meta(), []);
   const { data: meta } = useLoader<Meta>(loadMeta, "Couldn't read the host's details.");
 
-  // The account list is the only way to learn your own id, and it takes admin.
-  // Asking for it without the capability would be one guaranteed 403 per page
-  // load and an error notice about something nobody tried to do.
+  // The only way to learn your own id, and it takes admin -- so it is not
+  // asked for without one.
   const loadSelf = useCallback(
     () => (mayEditAccounts ? api.users() : Promise.resolve({ users: [], count: 0 })),
     [mayEditAccounts],
@@ -123,22 +110,11 @@ export function Profile() {
 }
 
 /**
- * The name the console calls you by.
+ * The name the console calls you by. Self-service: `PATCH /api/account` carries
+ * no identifier, so it can only edit the calling account.
  *
- * Self-service, and no capability beyond being signed in. `PATCH /api/account`
- * carries no identifier, so it can only ever edit the account the request
- * authenticated as -- which is what lets it take `read` where naming somebody
- * else still takes `admin`. Before it existed this section could only tell a
- * non-administrator to go and ask one to type their name for them.
- *
- * The field holds `display_name`, the stored value, and the heading renders
- * `name`, the resolved one. That is not pedantry: `name` falls back to the
- * address, so seeding the box with it would offer to save the fallback as a
- * name, and the next reader could not tell a person called by their address
- * from one who typed their address in.
- *
- * Emptying it is a real edit and is allowed. It clears the name, and the
- * console goes back to the address.
+ * The field holds `display_name` and the heading renders `name`. Seeding the
+ * box with `name` would offer to save its fallback -- the address -- as a name.
  */
 function DisplayName({ session }: { session: Session }) {
   const notify = useNotify();
@@ -156,17 +132,14 @@ function DisplayName({ session }: { session: Session }) {
     setProblem("");
     try {
       const saved = await api.updateAccount(next);
-      // The sidebar names you from the session, so the session is the thing
-      // that has to change. Pushing the server's own answer back rather than
-      // what was typed keeps the console showing what is stored -- including
-      // the address, when the name was cleared.
+      // The server's answer, not what was typed, so a cleared name shows the
+      // address the way the next reader will see it.
       adopt({ ...session, name: saved.name, display_name: saved.display_name });
       setName(saved.display_name);
       notify("good", next ? "Saved." : "Cleared. The console will use your address.");
     } catch (err) {
-      // The server's sentence, not a paraphrase. It is the only thing that
-      // knows whether this was too long, carried a character that breaks a log
-      // line in two, or collided with somebody else's address.
+      // The server's sentence: it is the only thing that knows which rule
+      // the value broke.
       setProblem(err instanceof ApiError ? err.detail : "Couldn't change it.");
     } finally {
       setBusy(false);
@@ -212,13 +185,8 @@ function DisplayName({ session }: { session: Session }) {
 }
 
 /**
- * Changing your own password.
- *
- * The only endpoint that can do it is `PATCH /api/users/{id}`, which takes the
- * admin capability -- so this is offered to an administrator and not to anyone
- * else. A user who needs their password changed asks one; there is no
- * self-service endpoint to build a form against, and inventing one here would
- * mean a form that always fails.
+ * Changing your own password. Only `PATCH /api/users/{id}` can, and it takes
+ * admin, so anyone else is told to ask rather than shown a form that fails.
  */
 function ChangePassword({ email, self, mayEdit }: {
   email: string;

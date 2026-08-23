@@ -6,24 +6,12 @@ interface SessionValue {
   session: Session | null;
   /** Whether the signed-in principal carries a capability. */
   can: (capability: Capability) => boolean;
-  /**
-   * Replaces what the console holds about the signed-in person.
-   *
-   * One thing about a session can now change without a new one being issued:
-   * its holder can rename themselves. The sidebar reads the name from here, so
-   * without a way to push the new value the page would have to tell somebody
-   * to reload in order to see their own edit.
-   */
+  /** Pushes a renamed session out, so the sidebar follows without a reload. */
   adopt: (session: Session) => void;
 }
 
-/**
- * Who is signed in, and what they may do.
- *
- * The default answers "nobody, and nothing". A component rendered outside the
- * provider therefore hides its controls rather than offering ones the API will
- * refuse -- which is the safe direction for a default to fail in.
- */
+// Defaults to "nobody, and nothing", so a component outside the provider hides
+// its controls rather than offering ones the API will refuse.
 const SessionContext = createContext<SessionValue>({
   session: null,
   can: () => false,
@@ -57,40 +45,20 @@ export function useAdoptSession(): (session: Session) => void {
   return useContext(SessionContext).adopt;
 }
 
-/**
- * Asks whether the signed-in principal may do something.
- *
- * Deliberately the only question a component can ask. There is no `useRole`,
- * because every place that wanted one was really asking about a capability and
- * hard-coding the mapping on the way.
- */
+/** The only question a component may ask. There is deliberately no `useRole`. */
 export function useCan(capability: Capability): boolean {
   return useContext(SessionContext).can(capability);
 }
 
 /**
- * What to call the signed-in person, wherever the console names them.
- *
- * `name` and not `display_name`. The server resolves one from the other and
- * re-checks it on the way out, so `name` is never empty and never a value the
- * current rules would refuse; `display_name` is the raw column and belongs
- * only in the field somebody edits. Rendering the raw one is how a fallback
- * ends up in the box a person then saves, writing the address into the name.
- *
- * The old fallback stays as the last resort, for a session shape that predates
- * the field rather than for an empty one.
+ * What to call the signed-in person: always `name`, never `display_name`. The
+ * raw column may be empty, and rendering it saves the fallback as a name.
  */
 export function signedInAs(session: Session | null): string {
   return session?.name?.trim() || session?.email || "";
 }
 
-/**
- * Whether this account has a name of its own, as opposed to being called by
- * its address.
- *
- * The one question `name` alone cannot answer, and greeting somebody by their
- * email address is worse than not greeting them.
- */
+/** Whether the account has a name of its own rather than its address. */
 export function hasOwnName(session: Session | null): boolean {
   return Boolean(session?.display_name?.trim());
 }

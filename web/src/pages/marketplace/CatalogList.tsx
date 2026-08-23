@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Boxes, LayoutGrid, List, RefreshCw, Search, Store } from "lucide-react";
+import { LayoutGrid, List, RefreshCw, Search, Store } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { relative, when } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -14,17 +14,12 @@ import {
   type Catalog, type CatalogChoice, type CatalogEntry, type CatalogLoader,
   type CatalogSource, type DocumentLoader,
 } from "./catalog";
+import { monogram } from "./monogram";
 
 /**
- * What this host already has, in the two forms the catalogue can be compared
- * against.
- *
- * Two, because a name is not an identity and an address is. The catalogues
- * merge across each other by URL for exactly this reason -- the official
- * registry calls a server `app.linear/linear` and Docker calls it `linear` --
- * and the same rule is what tells this page whether the thing in front of the
- * operator is already here. The names are the weaker question and a different
- * one: whether the suggested name is free.
+ * What this host already has. Two forms because a name is not an identity and
+ * an address is: one catalogue calls a server `app.linear/linear` and another
+ * calls it `linear`.
  */
 export interface Installed {
   /** Local plugin names in use, so a name collision is caught before the import. */
@@ -36,18 +31,7 @@ export interface Installed {
 /** How long a keystroke waits before it becomes a request. */
 const DEBOUNCE_MS = 250;
 
-/**
- * How many entries a page asks for, per density.
- *
- * Ten as cards, because ten cards is a screenful and the point of the default
- * view is to show a handful worth looking at rather than the head of a list
- * nobody will reach the end of. Forty as rows, because a row is a line and
- * scanning is what the compact view is for.
- *
- * Neither is a page of the catalogue in any meaningful sense -- there are
- * thousands -- which is why the search box is the primary control and this is
- * a sample beneath it.
- */
+/** How many entries a page asks for, per density. A sample, not a page. */
 const PAGE_SIZE = { cards: 10, rows: 40 } as const;
 
 type Density = keyof typeof PAGE_SIZE;
@@ -55,28 +39,9 @@ type Density = keyof typeof PAGE_SIZE;
 /**
  * The public catalogues, searchable and sampled.
  *
- * The one component that knows a catalogue exists. Everything it assumes about
- * the API is in `catalog.ts` beside it; this file renders what that returns
- * and hands a chosen document back up. Adding is the caller's job precisely so
- * that it can be the same import the "Add Custom MCP" button runs -- one add
- * path, one set of validation, one classification flow.
- *
- * Four things here are not decoration:
- *
- *   - **Search is the primary affordance, and the size is said out loud.**
- *     There are thousands of servers. Page one of a thousand pages is a
- *     fiction, so the box is the control and the count beside it is what makes
- *     that legible: nobody scrolls to twelve thousand, and nobody has to.
- *   - **Search is the catalogue's, debounced.** Filtering what is on screen
- *     would search one page and call it the catalogue, and a request per
- *     keystroke would be a request per keystroke at somebody else's server.
- *   - **A card is an icon, a name and a description.** The rest -- version,
- *     transport, endpoint, credential, catalogue, date -- folds into the
- *     dialog that opens on Add, which is where somebody is deciding about one
- *     server and the detail earns its space.
- *   - **Stale is said out loud.** A catalogue that could not be reached is
- *     served from what was last seen, which is the right behaviour and a lie
- *     if the page does not mention it.
+ * Search and paging are the server's, debounced -- filtering what is on screen
+ * would search one page and call it the catalogue. Adding is the caller's job,
+ * so a catalogued server goes through the same import a pasted one does.
  */
 export function CatalogList({
   installed,
@@ -104,30 +69,12 @@ export function CatalogList({
   const live = useRef(true);
   const size = PAGE_SIZE[density];
 
-  /**
-   * The size of the catalogue, kept across a search.
-   *
-   * It is a fact about the catalogues rather than about the answer, and it is
-   * most useful while somebody is typing -- which is exactly when the server
-   * is reporting the size of the *match* instead. So the browse figure is
-   * held and the search's is ignored.
-   */
+  // Held from a browse and ignored during a search, where the server reports
+  // the size of the match instead.
   const [catalogueSize, setCatalogueSize] = useState<number>();
 
-  /**
-   * The next page, fetched while nothing else is happening.
-   *
-   * Cheap in a way that is worth knowing: the server asks each source for
-   * twice what a page needs, so the page after this one is almost always the
-   * same upstream answer read from a different offset -- a cache read, no
-   * third party involved. Prefetching it costs a local round trip and makes
-   * Show more feel like it was already there.
-   *
-   * Only where `requestIdleCallback` exists. This is an optimisation, and a
-   * browser without one gets the ordinary fetch on click rather than a
-   * `setTimeout` racing the page it is supposed to be staying out of the way
-   * of.
-   */
+  // The next page, fetched at idle. The server over-fetches each source, so it
+  // is usually a local cache read.
   const prefetched = useRef<{ key: string; answer: Promise<Catalog> } | null>(null);
 
   useEffect(() => {
@@ -143,8 +90,7 @@ export function CatalogList({
     return () => clearTimeout(t);
   }, [search]);
 
-  // A new question replaces the list. Appending would leave the previous
-  // search's results underneath the new one's.
+  // A new question replaces the list rather than appending to it.
   useEffect(() => {
     let current = true;
     prefetched.current = null;
@@ -167,17 +113,13 @@ export function CatalogList({
       },
     );
     return () => { current = false; };
-    // `size` is read but deliberately not a dependency. Changing density must
-    // not re-ask for the page already on screen -- that would throw away what
-    // somebody is reading in order to render the same servers differently. The
-    // new size applies from the next Show more.
+    // `size` is read but deliberately not a dependency: changing density must
+    // not re-ask for the page already on screen.
   }, [load, asked]);
 
   const cursor = page?.next_cursor;
-  // A key for the page after this one, and the separator matters: a search
-  // term can contain anything, so joining with a space would let two
-  // different questions produce one key and spend one's prefetch on the
-  // other. JSON escapes for us, and stays readable in the source.
+  // JSON rather than a joined string: a search term can contain the separator,
+  // and two questions sharing a key spend one's prefetch on the other.
   const nextKey = cursor ? JSON.stringify([asked.search, cursor, size]) : "";
 
   useEffect(() => {
@@ -187,7 +129,6 @@ export function CatalogList({
     const id = window.requestIdleCallback(() => {
       const answer = load({ search: asked.search, cursor, limit: size });
       // Attached now so a rejected prefetch is never an unhandled rejection.
-      // The rejection is handled again, properly, by whoever awaits it.
       answer.catch(() => {});
       prefetched.current = { key: nextKey, answer };
     }, { timeout: 2_000 });
@@ -205,9 +146,8 @@ export function CatalogList({
         : await load({ search: asked.search, cursor, limit: size });
       if (!live.current) return;
       setPage(answer);
-      // Deduplicated on the way in. The sources are merged per page rather
-      // than across pages, so the same server arriving twice is a duplicate
-      // React key -- which is a broken list rather than a repeated row.
+      // Sources are merged per page, not across them, so the same server can
+      // arrive twice -- a duplicate React key, not just a repeated row.
       setEntries((prev) => {
         const seen = new Set(prev.map((e) => e.name));
         return [...prev, ...answer.entries.filter((e) => !seen.has(e.name))];
@@ -225,14 +165,7 @@ export function CatalogList({
     setAsked((a) => ({ search: a.search, refresh: true, nonce: a.nonce + 1 }));
   }, []);
 
-  /**
-   * Picking one.
-   *
-   * The listing has no document -- browsing a hundred servers should not mean
-   * holding a hundred `server.json` files -- so the document is fetched here
-   * and handed straight to the caller's import dialog, along with the entry
-   * itself: everything the card does not show is shown there instead.
-   */
+  /** The listing carries no document, so picking one fetches it. */
   const pick = useCallback(async (entry: CatalogEntry) => {
     setPicking(entry.name);
     try {
@@ -256,8 +189,6 @@ export function CatalogList({
     addedAs: entry.url ? installed.byAddress.get(entry.url) : undefined,
   })), [entries, installed]);
 
-  // Nothing is known yet, not even whether there is a catalogue. A skeleton
-  // rather than a spinner, because the shape of what is coming is known.
   if (page === null && error === null) return <LoadingCards count={4} />;
 
   if (page === null) {
@@ -269,8 +200,7 @@ export function CatalogList({
     );
   }
 
-  // Unavailable and empty are different sentences. One says the catalogue has
-  // nothing to offer; the other says this build never got to ask.
+  // Unavailable and empty are different sentences.
   if (!page.available) {
     return (
       <EmptyState mark={<Store />} title="No catalogue here">
@@ -301,9 +231,7 @@ export function CatalogList({
             />
           </div>
           <DensityToggle value={density} onChange={setDensity} />
-          {/* The mark never spins. This control is about whether a third
-              party answered, and a mark that turns reads as an answer arriving
-              -- the label is what says the request is in flight. */}
+          {/* The mark never spins: a turning mark reads as an answer arriving. */}
           <Button
             variant="outline" size="sm"
             disabled={busy !== null}
@@ -344,10 +272,7 @@ export function CatalogList({
         </EmptyState>
       ) : (
         <>
-          {/* What is on screen stays there while the next answer is fetched.
-              Clearing to a skeleton on every keystroke's worth of debounce
-              would flash the page at somebody who is reading it; dimming says
-              the same thing without taking the words away. */}
+          {/* Dimmed rather than cleared, so a debounce does not flash the page. */}
           <div
             className={cn("transition-opacity", busy === "page" && "opacity-60")}
             aria-busy={busy === "page" || undefined}
@@ -397,19 +322,9 @@ export function CatalogList({
 }
 
 /**
- * How big the catalogue is, and how sure that is.
- *
- * The owner's question -- "how big are we" -- and also the thing that makes
- * the search box explain itself: a box beside "12,000+ servers" is obviously
- * how you get anywhere, where a box beside a grid of ten looks like a filter.
- *
- * It is an estimate and says so in one sentence rather than in a tooltip
- * nobody opens. Two of the four catalogues do not report a size and none of
- * them reports how many of its servers this host would accept, so the figure
- * is built from the ratio actually measured while the page was assembled,
- * rounded down, and carries a "+". A catalogue that did not answer is not
- * counted, and that is said too -- a total that does not move when a source
- * goes down is worse than a smaller one.
+ * How big the catalogue is. An estimate that says so on the page: a source that
+ * did not answer is not counted, and none of them report how many of their
+ * servers this host would accept.
  */
 function Size({ count, missing, retrievedAt }: {
   count?: number;
@@ -437,17 +352,7 @@ function Size({ count, missing, retrievedAt }: {
   );
 }
 
-/**
- * Cards or rows, over the same data.
- *
- * Two densities rather than a second page. "Show me lots" and "show me what is
- * good" are different questions from the same operator a minute apart, and
- * answering the second with a separate surface would be a duplicate listing
- * with its own paging, its own search and its own bugs.
- *
- * Not `animate-` anything, and not a spinner: this reports a preference, not a
- * state the server is in.
- */
+/** Cards or rows, over the same data. No `animate-`: it reports a preference. */
 function DensityToggle({ value, onChange }: {
   value: Density;
   onChange: (next: Density) => void;
@@ -480,13 +385,7 @@ function DensityToggle({ value, onChange }: {
   );
 }
 
-/**
- * A catalogue that did not answer.
- *
- * Named rather than left out. A shorter list that does not say a source is
- * missing reads as "there is nothing else" rather than as "we could not ask",
- * and the operator deciding whether to wait needs to know which.
- */
+/** A catalogue that did not answer, named so a short list is not read as all of it. */
 function SourcesDown({ sources }: { sources: CatalogSource[] }) {
   return (
     <Notice tone="attention">
@@ -499,26 +398,28 @@ function SourcesDown({ sources }: { sources: CatalogSource[] }) {
 }
 
 /**
- * The picture, or a placeholder where there is none.
+ * The picture, or a generated monogram where there is none -- absent, refused
+ * or dead all land on the same box, so nothing shifts.
  *
- * Three ways an icon can fail and one appearance for all of them: the entry
- * has none, the address is one the server refused to pass on, or the host is
- * dead and the browser gives up. A broken-image glyph in a list is worse than
- * a neutral mark, and a row that waits for a third party's image server is
- * worse than either -- so the box has its size from the stylesheet, the image
- * is lazy, and nothing about the row's layout depends on the picture arriving.
- *
- * `referrerPolicy` because the icon hosts are third parties and the address of
- * an internal dashboard is not theirs to have.
+ * `referrerPolicy` because the icon hosts are third parties; `loading="lazy"`
+ * so a row never waits on somebody else's image server.
  */
-function EntryIcon({ src, className }: { src?: string; className?: string }) {
+function EntryIcon({ src, name, label, className }: {
+  src?: string;
+  name: string;
+  label: string;
+  className?: string;
+}) {
   const [failed, setFailed] = useState(false);
   useEffect(() => { setFailed(false); }, [src]);
+  const mark = monogram(name, label);
+
   return (
     <span
       aria-hidden="true"
       className={cn(
-        "flex shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted",
+        "flex shrink-0 items-center justify-center overflow-hidden rounded-md border",
+        src && !failed ? "bg-muted" : "",
         className,
       )}
     >
@@ -533,20 +434,26 @@ function EntryIcon({ src, className }: { src?: string; className?: string }) {
           onError={() => setFailed(true)}
         />
       ) : (
-        <Boxes className="size-1/2 text-muted-foreground" />
+        // SVG so the letters scale with the box, which is 24px in the compact
+        // list and 36px on a card.
+        <svg
+          viewBox="0 0 24 24" className="size-full"
+          style={{ backgroundColor: mark.background }}
+        >
+          <text
+            x="12" y="12" textAnchor="middle" dominantBaseline="central"
+            fontSize={mark.text.length > 1 ? 11 : 14} fontWeight="600"
+            fill={mark.ink}
+          >
+            {mark.text}
+          </text>
+        </svg>
       )}
     </span>
   );
 }
 
-/**
- * What can be done with one entry.
- *
- * Add, or a link to where it is already managed. The unaddable case is not
- * reachable from this page -- a listing does not return those -- and is kept
- * because the field exists and an Add button that cannot work is the one thing
- * the server works hardest not to offer.
- */
+/** Add, or a link to where it is already managed. */
 function Action({ entry, addedAs, picking, disabled, onAdd }: {
   entry: CatalogEntry;
   addedAs?: string;
@@ -555,8 +462,7 @@ function Action({ entry, addedAs, picking, disabled, onAdd }: {
   onAdd: (entry: CatalogEntry) => void;
 }) {
   if (addedAs) {
-    // Matched by the address it dials, not by the name: two entries that reach
-    // one endpoint are one server however they are named.
+    // Matched by the address it dials: two names, one endpoint, one server.
     return (
       <Link
         to={`/plugins/${encodeURIComponent(addedAs)}`}
@@ -580,19 +486,7 @@ function Action({ entry, addedAs, picking, disabled, onAdd }: {
   );
 }
 
-/**
- * One card: a picture, a name, and what it does.
- *
- * Nothing else. Version, transport, endpoint, credential, catalogue and date
- * used to be here, and between them they were most of the card -- six facts an
- * operator is not weighing while scanning, taking the space of the two they
- * are. They are all in the dialog Add opens, which is where one server is
- * being decided about.
- *
- * The catalogue's name is gone rather than moved down: an operator picking a
- * server does not care which of four public lists this host read it from, and
- * it occupied a whole row saying so.
- */
+/** One card: a picture, a name, and what it does. Everything else is in the dialog. */
 const EntryCard = memo(function EntryCard({ entry, addedAs, picking, disabled, onAdd }: {
   entry: CatalogEntry;
   addedAs?: string;
@@ -603,7 +497,10 @@ const EntryCard = memo(function EntryCard({ entry, addedAs, picking, disabled, o
   return (
     <Card className={addedAs ? "h-full bg-muted/30" : "h-full"}>
       <CardContent className="flex h-full items-start gap-3">
-        <EntryIcon src={entry.icon} className="size-9" />
+        <EntryIcon
+          src={entry.icon} name={entry.name} label={entry.title}
+          className="size-9"
+        />
         <div className="min-w-0 flex-1">
           <h3 className="truncate font-medium" title={entry.title || entry.name}>
             {entry.title || entry.name}
@@ -622,20 +519,8 @@ const EntryCard = memo(function EntryCard({ entry, addedAs, picking, disabled, o
 });
 
 /**
- * The same entry as one line, for scanning rather than reading.
- *
- * Memoised, and so is the card, which is the whole of what the compact view
- * needed for performance. A held list is re-rendered by every keystroke in the
- * search box during the debounce, and re-rendering a hundred and sixty rows to
- * change one input's value is the cost that would have been visible.
- *
- * Virtualising was tried on paper and left out. Reaching five hundred rows
- * means pressing Show more a dozen times; the realistic ceiling is one or two
- * screenfuls, where the measured render is a few milliseconds. Against that,
- * windowing costs a fixed-height scroll container fighting the page's own
- * scroll, rows that are not in the DOM for browser find or for a screen
- * reader, and either a dependency or a hand-rolled implementation with its own
- * bugs. Memoisation buys the part that mattered for none of that.
+ * The same entry as one line. Memoised, like the card: every keystroke in the
+ * search box re-renders the held list during the debounce.
  */
 const EntryRow = memo(function EntryRow({ entry, addedAs, picking, disabled, onAdd }: {
   entry: CatalogEntry;
@@ -646,7 +531,10 @@ const EntryRow = memo(function EntryRow({ entry, addedAs, picking, disabled, onA
 }) {
   return (
     <li className={cn("flex items-center gap-3 px-3 py-2", addedAs && "bg-muted/30")}>
-      <EntryIcon src={entry.icon} className="size-6" />
+      <EntryIcon
+        src={entry.icon} name={entry.name} label={entry.title}
+        className="size-6"
+      />
       <span className="w-44 shrink-0 truncate text-sm font-medium" title={entry.title || entry.name}>
         {entry.title || entry.name}
       </span>

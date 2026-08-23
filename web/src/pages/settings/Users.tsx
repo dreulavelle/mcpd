@@ -18,13 +18,7 @@ const ROLES: [Role, string][] = [
   ["admin", "Admin"],
 ];
 
-/**
- * Users.
- *
- * An account is an email address, a role, and the systems it may reach. The
- * page is a list of them because that is all an account is, and because the
- * question an operator arrives with is almost always "who can do what here".
- */
+/** An account is an email address, a role, and the systems it may reach. */
 export function Users() {
   const [users, setUsers] = useState<User[] | null>(null);
   const [error, setError] = useState("");
@@ -97,9 +91,8 @@ function UserRow({ user, onChanged, notify }: {
       onChanged();
       notify("good", what);
     } catch (e) {
-      // The API's refusals here are all things a person can act on -- the last
-      // administrator, a duplicate address -- so the text is shown rather than
-      // replaced with something generic.
+      // The refusals here are all actionable -- the last administrator, a
+      // duplicate address -- so the server's text is shown.
       setError(e instanceof ApiError ? e.detail : "That didn't work.");
     } finally {
       setBusy(false);

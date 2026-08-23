@@ -23,14 +23,7 @@ import {
 const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
 const CHATGPT_CONNECTORS = "https://chatgpt.com/#settings/Connectors";
 
-/**
- * Tunnels.
- *
- * A tunnel carries exactly one address, so it is one connector in ChatGPT:
- * one for everything, or one per system to keep them apart. The page is a list
- * of them because that is all a tunnel is -- a name, what it reaches, and
- * whether it is up.
- */
+/** A tunnel carries one address, so it is one connector in ChatGPT. */
 export function Tunnels() {
   const [info, setInfo] = useState<TunnelInfo | null>(null);
   const [error, setError] = useState("");
@@ -45,10 +38,7 @@ export function Tunnels() {
   usePoll(load, 8_000);
 
   const running = new Map((info?.tunnels ?? []).map((t) => [t.tunnel_id ?? "", t]));
-  // A list that is absent is treated as an empty one throughout. An older
-  // build sends null for a list with nothing in it, and mapping over that
-  // threw during render -- which, with no error boundary above, left the
-  // whole page blank rather than showing "no tunnels yet".
+  // An older build sends null rather than [] for an empty list.
   const plugins = info?.plugins ?? [];
   const assignments = info?.assignments ?? {};
   const rows: Row[] = !info ? [] : info.can_manage
@@ -131,9 +121,8 @@ function TunnelRow({ row, info, plugins, assigned, onDone, notify }: {
 }) {
   const state = row.status?.state;
   const admin = useCan("admin");
-  // Assigned to a plugin that is not mounted. The tunnel is not started --
-  // it would answer ChatGPT with an endpoint that has nothing behind it --
-  // and until this said so, the assignment simply appeared not to have taken.
+  // Assigned to a plugin that is not mounted, so the tunnel is not started.
+  // Until this said so, the assignment looked like it had not taken.
   const waitingOn = assigned && !row.status && !plugins.includes(assigned)
     ? assigned : "";
 
@@ -163,15 +152,14 @@ function TunnelRow({ row, info, plugins, assigned, onDone, notify }: {
     <TableRow>
       <TableCell>
         <div className="font-medium">{row.name}</div>
-        {/* Whole, and copyable: ChatGPT will accept a tunnel ID typed in, and
+        {/* Copyable: ChatGPT accepts a tunnel ID typed in, and
             an ID shown with the middle missing cannot be typed anywhere. */}
         <Copyable value={row.id} label="tunnel ID" className="mt-1 max-w-[24rem]" />
       </TableCell>
       <TableCell>
         {info.can_manage && admin ? (
-          // The stored assignment rather than the running one: a tunnel
-          // waiting on a plugin is still pointed at it, and showing "Not
-          // used" made the choice look like it had reverted.
+          // The stored assignment, not the running one: a tunnel waiting on a
+          // plugin is still pointed at it.
           <div className="w-44">
             <NativeSelect aria-label="Reaches" value={selected(row, assigned)}
                           onChange={(e) => assign(e.target.value)}>
@@ -225,10 +213,8 @@ function Add({ plugins, workspaces, onDone, notify }: {
 }) {
   const [name, setName] = useState("");
   const [plugin, setPlugin] = useState("");
-  // Defaulted to the first known workspace. A tunnel scoped only to the
-  // Platform organisation does not appear in an Enterprise or Edu workspace,
-  // which is the failure this exists to prevent -- and it is silent, so the
-  // safe default is the one that has worked before.
+  // A tunnel scoped only to the Platform organisation silently does not appear
+  // in an Enterprise or Edu workspace, so the default is one that has worked.
   const [workspace, setWorkspace] = useState(workspaces[0] ?? "");
   const [busy, setBusy] = useState(false);
 
@@ -236,10 +222,8 @@ function Add({ plugins, workspaces, onDone, notify }: {
     setBusy(true);
     try {
       await api.createTunnel(name.trim(), plugin, workspace.trim());
-      // OpenAI's own CLI prints the same caution after creating one: a tunnel
-      // is not active for the first half minute. Saying "made" and stopping
-      // sends someone to ChatGPT to look for a connector that is not there
-      // yet, and conclude it failed.
+      // A tunnel is not active for the first half minute; OpenAI's own CLI
+      // says the same after creating one.
       notify("good", "Made. Give it about 30 seconds to become active in ChatGPT.");
       setName("");
     } catch (e) {

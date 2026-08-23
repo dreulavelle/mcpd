@@ -48,7 +48,7 @@ describe("a change a rule authorised", () => {
       authorized_by_rule: "routine-radio",
     })]);
 
-    expect(await screen.findByText(/Authorised in advance by rule/i))
+    expect(await screen.findByText(/No one was asked/i))
       .toBeInTheDocument();
     expect(screen.getByText("routine-radio")).toBeInTheDocument();
     // The approver field is never the thing rendered. "system:policy" on a row
@@ -63,7 +63,7 @@ describe("a change a rule authorised", () => {
     })]);
 
     await screen.findByText("radio channel set");
-    expect(screen.queryByText(/Authorised in advance/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No one was asked/i)).not.toBeInTheDocument();
   });
 
   // Assurance says what can be proved; the rule says who authorised it. An
@@ -78,13 +78,13 @@ describe("a change a rule authorised", () => {
     })]);
 
     expect(await screen.findByText("Gated call")).toBeInTheDocument();
-    expect(screen.getByText(/Authorised in advance by rule/i)).toBeInTheDocument();
+    expect(screen.getByText(/No one was asked/i)).toBeInTheDocument();
   });
 
   it("shows the rule on a reviewed change too, where no assurance chip appears", async () => {
     mount([operation({ authorized_by_rule: "routine-radio" })]);
 
-    expect(await screen.findByText(/Authorised in advance by rule/i))
+    expect(await screen.findByText(/No one was asked/i))
       .toBeInTheDocument();
     expect(screen.queryByText("Gated call")).not.toBeInTheDocument();
   });

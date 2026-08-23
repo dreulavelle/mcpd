@@ -7,14 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-/**
- * The frame both signed-out screens sit in.
- *
- * Signing in and claiming a new host are different questions, but they are
- * asked in the same place and looked at the same way. Two copies of this
- * drifted apart in the ways chrome always does -- the version footer said a
- * different thing on one of them -- so there is one.
- */
+/** The frame both signed-out screens sit in. */
 function SignedOutCard({ meta, error, title, children }: {
   meta: Meta | null;
   error?: string;
@@ -100,11 +93,8 @@ export function SignIn({ meta, onDone }: {
 }
 
 /**
- * Claiming a new instance.
- *
- * The first account is an administrator because there is nobody to grant it
- * the role afterwards. Registration stops being offered the moment an account
- * exists, so this is a door that closes behind the first person through it.
+ * Claiming a new instance. The first account is an administrator because there
+ * is nobody to grant it the role afterwards, and the door closes behind it.
  */
 export function FirstRun({ meta, onDone }: {
   meta: Meta | null;

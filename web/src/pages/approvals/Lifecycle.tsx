@@ -5,28 +5,13 @@ import { Chip } from "@/components/status";
 import { Card, CardContent } from "@/components/ui/card";
 
 /**
- * Where an operation sits in the machine, drawn.
- *
- * A state name in a badge answers "what is it now" and nothing else. The
- * questions an operator actually has are "what happens next", "what can no
- * longer happen", and "what will this record prove afterwards" -- and those
- * are questions about a shape.
- *
- * SVG and CSS, no library. The bundle is embedded in the binary, so a chart
- * dependency is binary size for one diagram that never changes.
- *
- * Nothing here moves. A transition on something that reports state is a
- * picture of a change that did not happen, and this is the one panel on the
- * page whose whole job is saying what has and has not happened.
+ * Where an operation sits in the machine, drawn. SVG and CSS, no library, and
+ * nothing that moves: a transition here pictures a change that did not happen.
  */
 
 /**
- * Which states can follow which, mirroring the transition table in
- * `internal/operations/state_machine.go`. Guards are the server's business;
- * this is only the shape.
- *
- * `indeterminate` has successors on purpose. It is not terminal: it means the
- * outcome is unknown, which is resolvable by observation rather than final.
+ * Mirrors the transition table in `internal/operations/state_machine.go`.
+ * `indeterminate` has successors on purpose: it is unknown, not terminal.
  */
 const NEXT: Partial<Record<OperationState, OperationState[]>> = {
   draft: ["pending_approval", "cancelled"],
@@ -37,13 +22,8 @@ const NEXT: Partial<Record<OperationState, OperationState[]>> = {
 };
 
 /**
- * What a state proves about the past, on its own.
- *
- * Only what is certain. An operation that is `expired` was certainly waiting
- * at some point -- approval comes from waiting -- but whether it was ever
- * approved is not something the state says, and neither is whether anything
- * started as a draft. The audit trail says the rest when it is there, and the
- * trail can be cleared, which is why this table exists as well.
+ * What a state proves about the past on its own -- only what is certain. The
+ * trail says the rest, when it has not been cleared.
  */
 const PAST: Record<OperationState, OperationState[]> = {
   draft: [],
@@ -70,11 +50,8 @@ export type NodeStatus =
   | "closed";
 
 /**
- * Reads the shape of one operation's life.
- *
- * Pure, and exported so the reachability rules are testable without a DOM.
- * `seen` is what the audit trail witnessed, which is more than the state can
- * prove on its own and is absent once history has been cleared.
+ * Reads the shape of one operation's life. Pure, so the reachability rules are
+ * testable without a DOM. `seen` is what the trail witnessed.
  */
 export function lifecycle(
   state: OperationState,
@@ -114,16 +91,9 @@ function witnessed(audit: AuditRecord[]): OperationState[] {
 }
 
 /**
- * The tone a node is allowed to carry.
- *
- * Only where it is now, and only the three outcomes that mean something
- * different from each other. A node that has not been reached is drawn
- * neutral: colouring a failure that has not happened red would be the page
- * reporting a state the operation is not in.
- *
- * `indeterminate` is "attention" and never "problem". It is not a failure --
- * the change may be in place -- and painting it as one is what leads somebody
- * to retry and apply it twice.
+ * Only the node it is on carries a tone: colouring a failure that has not
+ * happened would report a state the operation is not in. `indeterminate` is
+ * "attention" and never "problem" -- it may have landed.
  */
 const NODE_TONE: Partial<Record<OperationState, string>> = {
   succeeded: "fill-good-soft stroke-good",
@@ -231,22 +201,17 @@ export function Lifecycle({ operation: op, audit }: {
             decided in time or the approval itself ran out.
           </p>
 
-          {/* The picture cannot show this on its own. The change did pass
-              through waiting and did become approved, so every node is drawn
-              truthfully -- but a reader takes "approved" to mean somebody
-              approved it, and here nobody was asked. Said plainly rather than
-              flagged: an authorisation given in advance is a legitimate route
-              through the machine, not a step that went wrong. */}
+          {/* Every node is true, but "approved" reads as somebody having
+              approved it. Said plainly, not flagged: this is a legitimate
+              route through the machine. */}
           {op.authorized_by_rule && (
             <p className="text-xs text-muted-foreground">
               <strong className="font-medium text-foreground">
-                Nobody was asked.
+                No one was asked.
               </strong>{" "}
-              It went from waiting to approved because rule{" "}
-              <code className="font-mono">{op.authorized_by_rule}</code>{" "}
-              authorised this class of change in advance. Everything after that
-              is an ordinary operation — the payload was frozen and hashed, and
-              every transition is in the trail.
+              Rule <code className="font-mono">{op.authorized_by_rule}</code>{" "}
+              allowed this kind of change, so it was approved straight away.
+              Everything after that was recorded as usual.
             </p>
           )}
         </CardContent>
@@ -284,11 +249,7 @@ function Node({ box, status }: { box: Box; status: NodeStatus }) {
             : status === "past"
               ? "fill-foreground"
               : "fill-muted-foreground",
-          // The console's own mark for something that is not available: the
-          // capability list on the profile page strikes through what a role
-          // does not carry. A state that can no longer be reached is the same
-          // idea, and reaching for a fainter grey instead would be reaching
-          // for one that fails contrast.
+          // Struck through rather than greyed further, which would fail contrast.
           status === "closed" && "line-through",
         )}
       >
@@ -314,9 +275,7 @@ function Remaining({ state, remaining }: {
     <div className="flex flex-wrap items-center gap-2">
       <p className="text-sm text-muted-foreground">
         {state === "indeterminate"
-          // Not a retry. Reconciliation is somebody reading the target and
-          // recording what they found, which is the only honest way out of an
-          // outcome that was never recorded.
+          // Reconciliation, not a retry.
           ? "Still open. Reading the target upstream settles it as:"
           : "What can still happen:"}
       </p>
@@ -325,14 +284,7 @@ function Remaining({ state, remaining }: {
   );
 }
 
-/**
- * The two proofs, which are what separates a reviewed change from a gated
- * call.
- *
- * Stated here rather than only in the record below, because they bear on the
- * decision: approving something whose outcome cannot be confirmed is a
- * different act from approving something that will be re-read and compared.
- */
+/** The two proofs that separate a reviewed change from a gated call. */
 function Proofs({ operation: op }: { operation: Operation }) {
   const outcome = outcomeProof(op);
   return (
@@ -354,11 +306,8 @@ function Proofs({ operation: op }: { operation: Operation }) {
 }
 
 /**
- * What re-reading the target proved, in three values rather than two.
- *
- * `verified` absent is "nobody has checked", which is the ordinary state of
- * anything still in flight and must never render as a tick. `false` is a
- * re-read that did not match, which is a different and much louder fact.
+ * Three values, not two: absent is "nobody checked", the ordinary state of
+ * anything in flight, and must never render as a tick.
  */
 function outcomeProof(op: Operation): {
   tone: "good" | "problem" | "neutral";
@@ -421,11 +370,10 @@ function summary(
   authorizedByRule?: string,
 ): string {
   const now = `This change is ${stateLabel(state).toLowerCase()}.`;
-  // In the label rather than only in the caption beside it: the caption is
-  // read by everyone, and somebody reaching the diagram through its
-  // description would otherwise be the one person not told nobody was asked.
+  // In the label too, or somebody reading the diagram through its description
+  // is the one person not told.
   const how = authorizedByRule
-    ? ` Rule ${authorizedByRule} authorised it in advance, so nobody was asked.`
+    ? ` Rule ${authorizedByRule} allowed it, so no one was asked.`
     : "";
   if (remaining.length === 0) return `${now}${how} Nothing else can happen to it.`;
   return `${now}${how} It can still become ${remaining.map(stateLabel).join(", ")}.`;

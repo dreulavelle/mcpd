@@ -208,8 +208,9 @@ describe("a change a standing rule authorised", () => {
   it("names the rule instead of rendering the approver field", async () => {
     mount(autoApproved(), "admin", [POLICY_APPROVAL]);
 
-    expect(await screen.findByText(/Authorised in advance by rule/i))
+    expect(await screen.findByRole("heading", { name: "Approved by a rule" }))
       .toBeInTheDocument();
+    expect(screen.getByText("Approved by")).toBeInTheDocument();
     expect(screen.queryByText("Decided by")).not.toBeInTheDocument();
 
     // The audit trail still says `system:policy`, because that is literally
@@ -225,7 +226,7 @@ describe("a change a standing rule authorised", () => {
     mount(autoApproved(), "admin", [POLICY_APPROVAL]);
 
     expect(await screen.findByText("cnmaestro/* for *")).toBeInTheDocument();
-    expect(screen.getByText("Authorised up to")).toBeInTheDocument();
+    expect(screen.getByText("Up to")).toBeInTheDocument();
     expect(
       screen.getByText("a channel change is undone by another channel change"),
     ).toBeInTheDocument();
@@ -237,9 +238,9 @@ describe("a change a standing rule authorised", () => {
   it("admits it cannot show the scope once the trail is gone", async () => {
     mount(autoApproved(), "admin", []);
 
-    expect(await screen.findByText(/Authorised in advance by rule/i))
+    expect(await screen.findByRole("heading", { name: "Approved by a rule" }))
       .toBeInTheDocument();
-    expect(screen.getByText(/no longer holds the entry/i)).toBeInTheDocument();
+    expect(screen.getByText(/audit entry for this is gone/i)).toBeInTheDocument();
     expect(screen.queryByText("cnmaestro/* for *")).not.toBeInTheDocument();
   });
 
@@ -255,7 +256,7 @@ describe("a change a standing rule authorised", () => {
 
     expect(await screen.findByText("Decided by")).toBeInTheDocument();
     expect(screen.getByText("user:alice@example.com")).toBeInTheDocument();
-    expect(screen.queryByText(/Authorised in advance/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No one was asked/i)).not.toBeInTheDocument();
   });
 
   // Assurance is orthogonal: an auto-approved change can carry every proof,
@@ -273,7 +274,7 @@ describe("a change a standing rule authorised", () => {
     );
 
     expect(
-      await screen.findByText(/A standing rule authorised it and the call was made/i),
+      await screen.findByText(/A rule allowed it and the call was made/i),
     ).toBeInTheDocument();
     expect(
       screen.queryByText(/Approving it records that a person authorised it/i),

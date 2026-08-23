@@ -113,13 +113,7 @@ export function Loading({ rows = 4 }: { rows?: number }) {
   );
 }
 
-/**
- * The same, for a grid of cards.
- *
- * A card is a different shape from a row, and a skeleton whose shape does not
- * match what replaces it is a spinner with extra steps: the page still jumps
- * when the content lands.
- */
+/** The same, for a grid of cards. */
 export function LoadingCards({ count = 4, className }: {
   count?: number;
   className?: string;
@@ -161,10 +155,8 @@ export function Notice({ tone = "info", icon, children }: {
       className={cn(NOTICE_TONE[tone], "[&>svg]:text-current")}
     >
       {icon}
-      {/* `block` rather than the description's default grid: a notice's body
-          is a sentence with emphasis inside it, and grid would put every
-          child on a row of its own -- splitting "<strong>It may have
-          landed.</strong> Execution began…" across two lines. */}
+      {/* `block`, not the description's default grid, which would put a
+          notice's <strong> and the sentence after it on separate rows. */}
       <AlertDescription className="block text-current [&_p]:text-current">
         {children}
       </AlertDescription>
@@ -187,8 +179,7 @@ function useCopy(value: string) {
       clearTimeout(timer.current);
       timer.current = setTimeout(() => setCopied(false), 1600);
     } catch {
-      // Refused outside a secure context, which is normal on a plain-http LAN
-      // address. The text stays selectable, so there is still a way through.
+      // Refused outside a secure context, which a plain-http LAN address is.
       setCopied(false);
     }
   }, [value]);
@@ -252,20 +243,9 @@ export function Out({ href, children }: { href: string; children: ReactNode }) {
 /* -- failure --------------------------------------------------------------- */
 
 /**
- * A page that throws does not take the console with it.
- *
- * React unmounts the whole tree when a render throws and nothing catches it,
- * so one bad field in one panel left an empty window -- no navigation, no
- * error, nothing to act on. That happened twice for the same shape of bug: a
- * list the server sent as null where the page mapped over it.
- *
- * A class because there is no hook form of this; React offers the lifecycle
- * only to classes.
- *
- * Recovery is by remount rather than a retry button: the shell keys this on
- * the current path, so navigating away and back builds a new boundary and
- * tries again. A button that retried in place would re-run the same render
- * against the same state and fail identically.
+ * A page that throws does not take the console with it. A class, because React
+ * offers the lifecycle only to those. Recovery is by remount -- the shell keys
+ * this on the path -- since a retry in place would fail identically.
  */
 export class ErrorBoundary extends Component<
   { children: ReactNode },

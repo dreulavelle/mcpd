@@ -194,7 +194,7 @@ describe("a change a standing rule authorised", () => {
       approved_by: "system:policy", authorized_by_rule: "routine-radio",
     }));
 
-    expect(screen.getByText("Nobody was asked.")).toBeInTheDocument();
+    expect(screen.getByText("No one was asked.")).toBeInTheDocument();
     expect(screen.getByText("routine-radio")).toBeInTheDocument();
   });
 
@@ -207,7 +207,7 @@ describe("a change a standing rule authorised", () => {
     }));
 
     expect(screen.getByRole("img")).toHaveAccessibleName(
-      /Rule routine-radio authorised it in advance, so nobody was asked/i,
+      /Rule routine-radio allowed it, so no one was asked/i,
     );
   });
 
@@ -217,6 +217,6 @@ describe("a change a standing rule authorised", () => {
       approved_by: "user:alice@example.com",
     }));
 
-    expect(screen.queryByText("Nobody was asked.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No one was asked.")).not.toBeInTheDocument();
   });
 });

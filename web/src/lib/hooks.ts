@@ -18,15 +18,8 @@ export interface Loaded<T> {
 }
 
 /**
- * Loads something, keeps what it has while reloading, and never sets state
- * after unmount.
- *
- * Keeping the previous value through a reload is the point: these pages poll,
- * and a loader that cleared to null on every tick would flash a skeleton over
- * a table the operator was reading.
- *
- * `load` must be stable -- wrap it in useCallback -- because it is the effect's
- * dependency.
+ * Loads something, keeps what it has while reloading, never sets state after
+ * unmount. `load` must be stable: it is the effect's dependency.
  */
 export function useLoader<T>(
   load: () => Promise<T>,

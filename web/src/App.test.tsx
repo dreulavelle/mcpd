@@ -282,16 +282,16 @@ describe("the approval policy page", () => {
       .toBeInTheDocument();
     expect(screen.queryByText("Nothing here")).not.toBeInTheDocument();
     expect(screen.queryByText("Not for this account")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Save all rules" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save rules" })).toBeNull();
   });
 
   it("offers an administrator the controls the API will accept", async () => {
     stubApi("admin");
     render(<App />);
 
-    expect(await screen.findByRole("button", { name: "Add a grant" }))
+    expect(await screen.findByRole("button", { name: "Add an allow rule" }))
       .toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add an exclusion" }))
+    expect(screen.getByRole("button", { name: "Add an always-ask rule" }))
       .toBeInTheDocument();
   });
 });

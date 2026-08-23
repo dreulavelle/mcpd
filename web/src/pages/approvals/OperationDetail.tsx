@@ -23,14 +23,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 
-/**
- * One proposed change, in full.
- *
- * Everything a decision rests on is here, and the decision is taken here too.
- * The order is deliberate: what changes, then what it was planned against,
- * then who asked and by when — a reviewer reads down and then acts, rather
- * than acting from a summary at the top.
- */
+/** One proposed change, in full, and where the decision is taken. */
 export function OperationDetail({ id }: { id: string }) {
   const load = useCallback(() => api.operation(id), [id]);
   const { data, error, reload } = useLoader(load, "Couldn't load that change.", 10_000);
@@ -175,23 +168,20 @@ function Body({ operation: op, audit, onChanged }: {
                     {relative(op.expires_at)}
                   </span>
                 </Detail>
-                {/* Never the approver field on its own. On an auto-approval
-                    `approved_by` is `system:policy` and `approved_by_name` is
-                    the same string -- not an account, nothing to resolve -- so
-                    rendering it here would say "decided by system:policy",
-                    which reads as somebody having clicked. */}
+                {/* Never the approver field alone: on an auto-approval it is
+                    `system:policy`, which reads as somebody having clicked. */}
                 {op.authorized_by_rule ? (
-                  <Detail label="Authorised by">
+                  <Detail label="Approved by">
                     Rule <code className="font-mono text-xs">{op.authorized_by_rule}</code>
                     <span className="block text-xs text-muted-foreground">
-                      A standing rule, not a person. Nobody was asked.
+                      No one was asked.
                     </span>
                   </Detail>
                 ) : op.approved_by ? (
                   <Detail label="Decided by">{op.approved_by}</Detail>
                 ) : null}
                 {op.approved_at && (
-                  <Detail label={op.authorized_by_rule ? "Authorised at" : "Decided at"}>
+                  <Detail label={op.authorized_by_rule ? "Approved at" : "Decided at"}>
                     {whenExact(op.approved_at)}
                   </Detail>
                 )}
@@ -272,45 +262,35 @@ function Body({ operation: op, audit, onChanged }: {
 }
 
 /**
- * The standing rule that authorised this, and what it said at the time.
- *
- * The scope, ceiling and note are read from the `operation.approved` audit
- * entry rather than from the policy endpoint. The rule can be edited or
- * deleted afterwards; the entry was written with the rule in full precisely so
- * this page can describe the authorisation that happened rather than whatever
- * the identifier means today.
- *
- * Informational and not a warning. Nobody being asked is what the
- * administrator arranged, and colouring it as a problem would be the console
- * disagreeing with a decision it exists to record.
+ * The rule that approved this, as it stood -- from the audit entry, not the
+ * policy endpoint, because the rule may have changed since.
  */
 function AuthorisedInAdvance({ authorisation: a }: {
   authorisation: PolicyAuthorisation;
 }) {
   return (
-    <Section title="Authorised in advance">
+    <Section title="Approved by a rule">
       <Card>
         <CardContent className="space-y-3">
           <AuthorisedByRule rule={a.rule} />
           {a.reason && <p className="text-sm">{a.reason}</p>}
           {a.recorded ? (
             <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Detail label="Scope at the time">
+              <Detail label="What it covered">
                 <code className="font-mono text-xs">{a.scope ?? "not recorded"}</code>
               </Detail>
-              <Detail label="Authorised up to">
+              <Detail label="Up to">
                 {a.maxRisk ? riskLabel(a.maxRisk) : "not recorded"}
               </Detail>
-              <Detail label="The rule's note">
+              <Detail label="Note">
                 {a.note ?? <span className="text-muted-foreground">None was written.</span>}
               </Detail>
             </dl>
           ) : (
             <p className="text-sm text-muted-foreground">
-              The trail no longer holds the entry that recorded this, so what
-              the rule covered cannot be shown here. The name above is on the
-              operation itself and is what authorised the change; the rule of
-              that name today may say something else.
+              The audit entry for this is gone, so what the rule covered
+              can't be shown. A rule with that name today may say something
+              different.
             </p>
           )}
         </CardContent>
@@ -320,17 +300,8 @@ function AuthorisedInAdvance({ authorisation: a }: {
 }
 
 /**
- * What this record will be able to prove afterwards.
- *
- * Placed above the decision rather than in the record below it, because it is
- * a fact about the change that ought to inform the decision: approving
- * something whose outcome cannot be confirmed is a different act from
- * approving something that will be re-read and compared, and the operator
- * should know which one they are performing before they perform it.
- *
- * Silent on a reviewed change. Saying "all three proofs present" on every
- * ordinary operation is how a notice becomes furniture, and then goes unread
- * on the one that says something else.
+ * What this record will prove. Silent on a reviewed change: a notice on every
+ * operation goes unread on the one that says something else.
  */
 function WhatThisProves({ operation: op }: { operation: Operation }) {
   if (op.assurance === "reviewed_change") return null;
@@ -347,10 +318,8 @@ function WhatThisProves({ operation: op }: { operation: Operation }) {
     <Notice tone="info">
       <strong>This is a gated call, not a reviewed change.</strong>{" "}
       {op.authorized_by_rule
-        // Nobody is about to approve this one, and nobody did. Saying
-        // "approving it records that a person authorised it" would describe an
-        // act that never happened and is not going to.
-        ? <>A standing rule authorised it and the call was made — </>
+        // Nobody is about to approve this one, and nobody did.
+        ? <>A rule allowed it and the call was made — </>
         : <>Approving it records that a person authorised it and that the call
             was made — </>}
       {missing.join(", and ")}. The record will not say the change is in place.
@@ -377,12 +346,8 @@ function Payload({ label, value, empty }: {
 }
 
 /**
- * Deciding.
- *
- * Approve and reject need the approve capability; withdrawing needs only
- * propose, because taking back your own suggestion is not the same act as
- * authorising somebody else's. Both are checked again on the server; hiding
- * the buttons is so nobody types a reason into a form that will answer 403.
+ * Deciding. Approve and reject need `approve`, withdrawing only `propose`.
+ * Hiding them is so nobody types a reason into a form that answers 403.
  */
 function Decide({ operation: op, onChanged }: {
   operation: Operation;

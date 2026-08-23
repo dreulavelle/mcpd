@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
-import { Link, useRouter } from "@/lib/router";
+import { useRouter } from "@/lib/router";
 import { Notice, PageHeader, Section } from "@/components/chrome";
 import { Button } from "@/components/ui/button";
 import { CatalogList, type Installed } from "./CatalogList";
@@ -9,18 +9,11 @@ import type { CatalogChoice } from "./catalog";
 import { ImportDialog } from "./ImportDialog";
 
 /**
- * Where a remote MCP server is found and added. Not where one is managed.
+ * Where a remote MCP server is found and added. Managing one is the plugin
+ * page's job.
  *
- * The two used to be the same page, so an installed server appeared here and
- * again under Plugins, and looking after one meant bouncing between them. A
- * server that is installed is a plugin -- same endpoint shape, same scoping,
- * same audit -- so it is managed with the other plugins, and this page is only
- * the way in. /marketplace/{name} redirects to the plugin page for anyone who
- * bookmarked the old arrangement.
- *
- * What is already here is still read, for two reasons: so the catalogue can
- * say "already added" instead of offering something twice, and so a name
- * collision is caught in the form rather than by the import refusing it.
+ * What is already installed is read so the catalogue can say "already added"
+ * and so a name collision is caught in the form rather than by the import.
  */
 export function MarketplaceList() {
   const { navigate } = useRouter();
@@ -33,10 +26,8 @@ export function MarketplaceList() {
     const servers = data?.servers ?? [];
     return {
       names: new Set(servers.map((s) => s.name)),
-      // By the address it dials, which is the only thing about a catalogue
-      // entry and an installed server that is reliably the same. The local
-      // name was chosen here and the catalogue's name belongs to somebody
-      // else, so neither identifies the other.
+      // By the address it dials: the local name was chosen here and the
+      // catalogue's belongs to somebody else, so neither identifies the other.
       byAddress: new Map(
         servers.filter((s) => s.url).map((s) => [s.url, s.name] as const),
       ),
@@ -48,10 +39,7 @@ export function MarketplaceList() {
     setImporting(true);
   }
 
-  // The catalogue's Add is the same dialog with the document filled in. There
-  // is deliberately no second import path: whatever the catalogue hands over
-  // is validated, has its settings derived and has its tools classified
-  // exactly as a pasted document does.
+  // The same dialog with the document filled in. There is no second import path.
   function addFromCatalog(choice: CatalogChoice) {
     setSeed(choice);
     setImporting(true);
@@ -65,21 +53,16 @@ export function MarketplaceList() {
         actions={<Button onClick={addCustom}>Add Custom MCP</Button>}
       />
 
-      {/* Keyed on the seed so the dialog is built fresh for each one. Feeding
-          new values into the state it already holds would leave a half-edited
-          paste from the last attempt underneath. */}
+      {/* Keyed on the seed, or the last attempt's paste stays underneath. */}
       <ImportDialog
         key={seed?.name ?? "custom"}
         open={importing}
         onOpenChange={setImporting}
         seedName={seed?.suggested_name}
         seedDocument={seed?.document}
-        // Everything the card no longer shows. Read-only: the import is still
-        // the document in the box, by the same call a paste makes.
         seedEntry={seed?.entry}
         taken={installed.names}
-        // Straight to where it is managed. The next steps -- fill in what it
-        // asks for, discover, classify -- all live on that page.
+        // Straight to where it is managed, and where the next steps live.
         onImported={(name) => navigate(`/plugins/${encodeURIComponent(name)}`)}
       />
 
@@ -91,12 +74,6 @@ export function MarketplaceList() {
       >
         <CatalogList installed={installed} onAdd={addFromCatalog} />
       </Section>
-
-      <p className="mt-6 text-sm text-muted-foreground">
-        Anything already added is on the{" "}
-        <Link to="/plugins" className="text-primary hover:underline">Plugins</Link>{" "}
-        page, where its tools are classified and its credentials are typed in.
-      </p>
     </>
   );
 }
