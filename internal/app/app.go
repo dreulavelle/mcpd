@@ -68,9 +68,10 @@ type App struct {
 	mcpMu      sync.RWMutex
 	mcpServers map[string]mcpservers.Server
 
-	// catalog browses the public registry of MCP servers. It holds a cache
-	// with a TTL and reaches the network only when a request asks it to.
-	catalog *registry.Cached
+	// catalog browses the public catalogues of MCP servers. Each source holds
+	// its own TTL cache and reaches the network only when a request asks it
+	// to; nil when the deployment has switched every source off.
+	catalog *registry.Multi
 
 	// serving closes once the MCP listener is accepting, so anything that has
 	// to reach mcpd over HTTP -- the tunnel client probing itself, above all
@@ -131,11 +132,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		audit:      sqlite.NewAuditStore(db),
 		mcpStore:   sqlite.NewMCPServerStore(db, time.Now),
 		mcpServers: map[string]mcpservers.Server{},
-		catalog: registry.NewCached(registry.NewOfficial(registry.OfficialOptions{
-			UserAgent: "mcpd/" + Version,
-		}), registry.DefaultTTL, nil),
-		serving: make(chan struct{}),
-		health:  observability.NewHealthRegistry(2 * time.Second),
+		catalog:    buildCatalog(cfg.Catalog),
+		serving:    make(chan struct{}),
+		health:     observability.NewHealthRegistry(2 * time.Second),
 	}
 	// Loaded before anything asks what is configured: a remote server is an
 	// instance, and instances() must be complete the first time it is called.
@@ -338,15 +337,13 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 				}
 				return out
 			},
-			// The catalogue is built here and fetches nothing. Its first
-			// call to the registry happens on the first request that needs
-			// one, so a registry that is down, or a deployment with no route
-			// to it, costs a page rather than a boot.
-			ServerCatalog: admin.CatalogAPI{
-				List:   a.catalog.List,
-				Get:    a.catalog.Get,
-				Source: a.catalog.Source,
-			},
+			// The catalogues are built here and fetch nothing. The first
+			// call to one happens on the first request that needs it, so a
+			// catalogue that is down, or a deployment with no route to it,
+			// costs a page rather than a boot. Nil when every source is
+			// switched off, which the handler reports as no catalogue being
+			// configured.
+			ServerCatalog: catalogAPI(a.catalog),
 			MCPServers: admin.MCPServerAPI{
 				List: func(ctx context.Context) (any, error) {
 					return a.MCPServers(ctx)

@@ -405,11 +405,13 @@ func TestSuggestName(t *testing.T) {
 	}
 }
 
-// Roughly a fifth of the remote servers in the official registry were
-// published against an earlier server.json format. The pin is not negotiable,
-// so what these get is a reason a person can act on -- ask the publisher to
-// republish -- rather than two full URLs in a list.
-func TestList_AnOlderSchemaSaysSoReadably(t *testing.T) {
+// TestList_AnEarlierSchemaIsReadRatherThanRefused.
+//
+// Roughly a tenth of the remote servers in the official registry were
+// published against an earlier server.json format, and every dated format
+// published to date is now vendored and translated. This is the case that used
+// to be the commonest refusal in the list.
+func TestList_AnEarlierSchemaIsReadRatherThanRefused(t *testing.T) {
 	old := `{
 	  "server": {
 	    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
@@ -431,17 +433,55 @@ func TestList_AnOlderSchemaSaysSoReadably(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(page.Entries) != 1 || !page.Entries[0].Addable {
+		t.Fatalf("entries = %+v, want one that is addable", page.Entries)
+	}
+	if page.Entries[0].URL != "https://older.example/mcp" {
+		t.Errorf("url = %q, want the address the earlier document gives", page.Entries[0].URL)
+	}
+}
+
+// TestList_AFormatThisBuildDoesNotReadSaysSoReadably.
+//
+// What is left after five vendored formats is a $schema that is none of them,
+// and the default message for it reads worst in a list: two full URLs per row.
+// The pin itself is not negotiable -- the fields this host depends on are
+// exactly the ones a format change moves, and guessing wrong means dialling
+// somewhere with a credential the operator did not intend to send -- so what
+// these get is a short reason a person can act on.
+func TestList_AFormatThisBuildDoesNotReadSaysSoReadably(t *testing.T) {
+	unknown := `{
+	  "server": {
+	    "$schema": "https://static.modelcontextprotocol.io/schemas/2026-03-01/server.schema.json",
+	    "name": "io.example/newer",
+	    "description": "Published against something this build has not seen.",
+	    "version": "1.0.0",
+	    "remotes": [{"type": "streamable-http", "url": "https://newer.example/mcp"}]
+	  },
+	  "_meta": {"io.modelcontextprotocol.registry/official": {
+	    "status": "active", "isLatest": true,
+	    "publishedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
+	  }}
+	}`
+	r := newRegistry(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(listBody("", unknown)))
+	})
+
+	page, err := r.List(context.Background(), Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(page.Entries) != 1 || page.Entries[0].Addable {
 		t.Fatalf("entries = %+v, want one that is not addable", page.Entries)
 	}
 	reason := page.Entries[0].Reason
-	for _, want := range []string{"2025-09-29", "2025-12-11"} {
+	for _, want := range []string{"2026-03-01", "2025-12-11", "2025-07-09"} {
 		if !strings.Contains(reason, want) {
 			t.Errorf("reason = %q, want it to name %s", reason, want)
 		}
 	}
 	if strings.Contains(reason, "https://") {
-		t.Errorf("reason = %q, want the dates rather than two full URLs", reason)
+		t.Errorf("reason = %q, want the dates rather than full URLs", reason)
 	}
 }
 

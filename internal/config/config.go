@@ -30,8 +30,27 @@ type Config struct {
 	SecretKeyRef string `yaml:"secret_key_ref"`
 
 	Tunnel  Tunnel                  `yaml:"tunnel"`
+	Catalog Catalog                 `yaml:"catalog"`
 	Plugins map[string]PluginConfig `yaml:"plugins"`
 }
+
+// Catalog says which public catalogues of MCP servers the dashboard browses.
+//
+// Both are on by default, and both are reached only when an administrator asks
+// for a page -- nothing here is fetched at startup, so turning one off is
+// about what an operator sees and where this host is willing to make a
+// request, not about boot time. Turning both off leaves the catalogue
+// endpoints answering "no server catalogue is configured", which is the right
+// answer for a deployment that will not reach the internet at all.
+type Catalog struct {
+	// Official is the official MCP registry at registry.modelcontextprotocol.io.
+	Official bool `yaml:"official"`
+	// Docker is Docker's MCP catalogue, built from docker/mcp-registry.
+	Docker bool `yaml:"docker"`
+}
+
+// Enabled reports whether any catalogue is switched on.
+func (c Catalog) Enabled() bool { return c.Official || c.Docker }
 
 // Tunnel configures OpenAI's Secure MCP Tunnel, which runs inside mcpd.
 //
@@ -342,7 +361,11 @@ func Default() *Config {
 			ApprovalTTL:   15 * time.Minute,
 			LeaseTTL:      2 * time.Minute,
 		},
-		Tunnel:  Tunnel{CheckForUpdates: true},
+		Tunnel: Tunnel{CheckForUpdates: true},
+		// Both catalogues on. They cost nothing until a page asks for one,
+		// and an operator who wants only the official registry says so rather
+		// than discovering that the second one existed and was off.
+		Catalog: Catalog{Official: true, Docker: true},
 		Logging: Logging{Level: "info", Format: "json"},
 		Plugins: map[string]PluginConfig{},
 	}

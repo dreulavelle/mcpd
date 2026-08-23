@@ -170,6 +170,31 @@ tunnel:
   # the point: the code that runs is the code that was built and reviewed.
   check_for_updates: true
 
+# Where the dashboard's server catalogue reads from.
+#
+# The catalogue is how an operator picks a remote MCP server instead of
+# hand-authoring a server.json for one somebody else already published.
+# Selecting an entry hands its document to the same import endpoint a paste
+# goes through; there is no second way in.
+#
+# Both sources are on. Neither is contacted at startup, and neither is
+# contacted at all until an administrator opens the page -- so leaving them on
+# in a deployment that never browses costs nothing. Turn one off if this host
+# should not reach it; turn both off and the catalogue endpoints answer "no
+# server catalogue is configured", which is the right answer for a deployment
+# with no route to the internet.
+catalog:
+  # registry.modelcontextprotocol.io, where a publisher registers a server
+  # themselves. Free and unauthenticated.
+  official: true
+
+  # Docker's MCP catalogue, built from github.com/docker/mcp-registry (MIT).
+  # No daemon and no container is involved: reading it is an HTTPS fetch of a
+  # metadata document like any other. Most of what it lists runs locally and is
+  # shown with the reason rather than offered; the remote entries are the ones
+  # this host can actually connect to.
+  docker: true
+
 # Each key is an instance name, and `type` says what it is an instance of.
 # Leave `type` out and the two are the same, which is the ordinary case.
 #
