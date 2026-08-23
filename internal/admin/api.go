@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/sso"
+	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
@@ -92,6 +94,21 @@ type Options struct {
 	// Verifier because the two authenticate different callers: a person with a
 	// password and a session, or a script with a bearer token.
 	Accounts Accounts
+
+	// Identities backs registration, the pending queue, and the providers an
+	// account can sign in with. Separate from Accounts because the two answer
+	// different questions; see Registrations.
+	Identities Registrations
+
+	// SSO runs the provider flows, or is nil when this build was wired
+	// without them. Nil is a refusal rather than a panic: the sign-in page
+	// asks what is available and is told nothing.
+	SSO *sso.Service
+
+	// RegistrationPolicy is what this host will accept from a stranger, read
+	// per request rather than captured at startup so that turning
+	// registration off takes effect on the next attempt.
+	RegistrationPolicy func(ctx context.Context) users.RegistrationPolicy
 
 	// SessionTTL bounds a signed-in browser. Zero leaves the store's default.
 	SessionTTL time.Duration
@@ -253,6 +270,23 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/session", s.handleSignOut)
 	s.mux.HandleFunc("GET /api/session", s.handleCurrentSession)
 
+	// What the signed-out page may offer: which providers have buttons, and
+	// whether there is a sign-up form. Both are discoverable by trying, and
+	// withholding them would only mean a page that offers what does not work
+	// or hides what does.
+	s.mux.HandleFunc("GET /api/auth/options", s.handleAuthOptions)
+	// Asking for an account. It is not POST /api/setup: that claims an
+	// unclaimed instance and makes an administrator, while this asks for an
+	// ordinary account on a host somebody already owns -- and is refused
+	// outright when nobody does.
+	s.mux.HandleFunc("POST /api/register", s.handleRegister)
+	// Signing in through a provider cannot require being signed in. What
+	// bounds these is the state: single-use, expiring, and bound to a cookie
+	// this host set on the browser that started the flow. A callback that
+	// cannot present both is refused.
+	s.mux.HandleFunc("POST /api/auth/sso/{provider}/start", s.handleSSOStart)
+	s.mux.HandleFunc("GET /api/auth/sso/{provider}/callback", s.handleSSOCallback)
+
 	// Unauthenticated by necessity and harmless by nature: a CA certificate is
 	// a public document, and requiring a sign-in to fetch it would mean
 	// needing the browser to trust it before it can be trusted.
@@ -369,6 +403,23 @@ func (s *Server) routes() {
 	// that gets you through the door. Naming somebody else is above.
 	api("PATCH /api/account", s.handleUpdateAccount, auth.CapRead)
 	api("DELETE /api/users/{id}", s.handleDeleteUser, auth.CapAdmin)
+	// Attaching a provider to your own account, and detaching one. Read for
+	// the same reason PATCH /api/account is: neither route carries an
+	// identifier, so neither can address anybody else's account.
+	api("GET /api/account/identities", s.handleAccountIdentities, auth.CapRead)
+	api("POST /api/account/identities/{provider}/start", s.handleIdentityLinkStart, auth.CapRead)
+	api("DELETE /api/account/identities/{provider}", s.handleUnlinkIdentity, auth.CapRead)
+	// Deciding who gets an account. Approving one is a privilege grant -- it
+	// is the moment somebody gains the ability to do anything here -- so it
+	// takes an administrator and is written into the hash-chained trail
+	// inside the transaction that performs it.
+	// The exact addresses to paste into a provider's console. Administrator
+	// because it is part of setting one up, and because it names how this
+	// deployment is reached.
+	api("GET /api/auth/redirect-uris", s.handleAuthRedirectURIs, auth.CapAdmin)
+	api("GET /api/registrations", s.handleListRegistrations, auth.CapAdmin)
+	api("POST /api/registrations/{id}/approve", s.handleApproveRegistration, auth.CapAdmin)
+	api("POST /api/registrations/{id}/reject", s.handleRejectRegistration, auth.CapAdmin)
 
 	// Everything else is the single-page application.
 	s.mux.Handle("/", s.staticHandler())

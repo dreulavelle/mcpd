@@ -33,7 +33,8 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/operations` | The approval engine: state machine, policy, executor |
 | `internal/plugins` | Plugin registry, tool attachment, approval tools |
 | `internal/auth` | Principals, roles, capabilities, static tokens |
-| `internal/auth/users` | Accounts, passwords, browser sessions |
+| `internal/auth/users` | Accounts, passwords, browser sessions, registration |
+| `internal/auth/sso` | Signing in through Google, GitHub or Entra |
 | `internal/storage/sqlite` | Schema, migrations, every transaction |
 | `internal/tunnel` | The embedded OpenAI tunnel client, one per connector |
 | `internal/settings` | Runtime configuration in the database |
@@ -332,6 +333,183 @@ characters — a newline breaks a log line in two, and a bidirectional override
 renders a name as something it is not — and a condition in the `WHERE` clause
 of the write refusing a name that is another account's address.
 
+## Signing in with somebody else's identity provider
+
+Google, GitHub and Microsoft Entra can sign a person in. `internal/auth/sso`
+runs the flow; `internal/auth/users` decides what it means.
+
+**An unlinked provider identity is not an account, whatever address it
+carries.** This is the decision the whole feature is shaped around. A Google
+sign-in for `alice@corp.com` arriving at a host that already has a password
+account for `alice@corp.com` does **not** sign in as that account. It is
+refused, and the refusal says what to do instead: sign in with the password and
+link the provider from the profile page. Adopting the account on the strength of
+the address would hand it to whoever controls that address at the provider —
+and addresses get recycled, domains lapse and get re-registered, and a personal
+account can be created for a company someone no longer works at. What the
+provider proves is control of an address; what has to be proved is ownership of
+the mcpd account, and only signing in here proves that. So linking is an act by
+the already-signed-in account and it writes a row in `user_identities`, which is
+the only thing that ever turns a subject into an account.
+
+The key is the provider's subject, never the address. A `sub` is immutable and
+a login or an email is not — GitHub releases a login when it is changed, and
+the next person to take it would come to own the account.
+
+**SSO cannot claim an unclaimed instance.** `CreateFirst` is what makes somebody
+this host's administrator, and completing a flow at a third party is not a claim
+mcpd can honour: a fresh host anyone can reach would belong to whoever got there
+first with a Google account. `Register` refuses outright when no account exists,
+checked inside the write transaction like every other guard here. The setup form
+is password-only for the same reason.
+
+**Pending is not disabled.** `disabled` is a decision an administrator made
+about an account; a registration awaiting approval is an account nobody has
+decided about, and the two need different columns and different words. A pending
+account may **authenticate** — that is how it proves who it is, and it is what
+lets it be shown a screen saying it is waiting — and holds no capability at all.
+That is settled on the principal: `Principal.Pending` makes `Can` return false
+for everything, so the dashboard API, the MCP endpoint, every tool call and
+anything added later refuse it without having been told pending accounts exist.
+The console's waiting screen is a courtesy, not the enforcement.
+
+**`password_hash` stays `NOT NULL`.** A nullable credential column is one every
+comparison has to remember to check. An SSO-only account stores a sentinel that
+is not a bcrypt hash at all, so bcrypt refuses it structurally whatever is
+presented — and `Authenticate` refuses such an account *by name* before it
+compares anything, so the rule is a statement in the code rather than a property
+of a string constant. The decoy compare still runs, so the refusal costs the
+same time as any other.
+
+**State is a row, and it is bound to a browser.** A `state` is single-use,
+expiring, and stored as a digest; the claim is a guarded `UPDATE` whose `WHERE`
+clause carries all four conditions, so a forged, replayed, expired or
+wrong-provider callback matches zero rows. Single use is why it is a table and
+not a signed cookie: a self-contained token verifies just as well the tenth time
+it is replayed. Beside it, a short-lived cookie this host sets on the browser
+that started the flow — a state nobody can bind to a browser is one anybody can
+hand to anybody, which is how a person is signed in as an account they do not
+own without noticing. PKCE (S256) and a nonce where the provider is OIDC, and
+the nonce comparison is unconditional: an empty expectation would otherwise
+mean "do not check", and a check that switches itself off when its input is
+missing is not one.
+
+**Cancelling retires the state too.** Single use has to mean used *or
+abandoned*, never used or lingering. The provider-error branch used to redirect
+before the state was ever claimed, so pressing cancel left a live row for the
+rest of its ten minutes and the branch answered for a provider the state was
+not issued for. It now claims through the same guard a completion does — best
+effort, since whoever is being redirected has already been told the provider
+said no, and a state it could not claim simply costs them the return to where
+the flow began.
+
+**The state table is bounded where it is written, not by a ticker.** The
+endpoint that issues one needs no credential, so anybody who can reach the
+dashboard can cause an insert. Issuing purges the expired rows in the same
+transaction, which caps what is held at one TTL's worth whatever the rate; the
+background sweep runs on the TTL and is for a host nobody is signing in to. A
+cap on live states was considered and refused — it turns a flood into a
+lockout, refusing sign-ins to the people the host exists for while costing
+whoever caused it nothing.
+
+**The ID token's signature is verified even though it arrived over TLS from the
+token endpoint.** The specification permits skipping it there and the reasoning
+is sound; it is still not what this host does. The check costs one cached key
+set, it is the difference between trusting the transport and trusting the
+issuer, and a flow that has never verified a signature is one nobody can safely
+move to a front-channel response later. The algorithm is decided here and the
+header is only compared against it, which is what closes `alg: none` and
+HMAC-with-the-public-key.
+
+**GitHub is not OIDC, and is adapted rather than duplicated.** No ID token, no
+nonce, no PKCE on OAuth apps — so the flow is the same and only the last step
+differs, asking GitHub's API who the access token belongs to. The address comes
+from `GET /user/emails` and only from the entry that is both primary *and*
+verified: `GET /user`'s `email` is the public profile address, frequently null
+and never asserted to be verified, and taking the first entry in the list would
+accept one somebody added minutes ago.
+
+**Entra needs a directory, and `common` is refused.** Its multi-tenant endpoints
+publish a templated issuer — literally containing `{tenantid}` — which no
+token's `iss` can equal, so accepting one would mean dropping the issuer check
+and letting any directory mint an identity for this host. Entra also issues no
+`email_verified` and often no `email`; the address falls back to
+`preferred_username` when that parses as one. What stands in place of the
+missing claim is the tenant: every accepted token was minted by one directory
+for one of its own members, and the address was assigned by that directory's
+administrator rather than asserted by its holder. That is a different guarantee
+from Google's, not a weaker one, and it is written down rather than left to be
+inferred from an absent check. Mapping roles from group claims is a follow-up
+and is deliberately not started.
+
+**Registration is off by default and an upgrade does not open it.** The zero
+value of the policy accepts nothing, for the same reason the approval policy's
+zero value asks about everything: a setting that loosens on upgrade is the wrong
+direction to be wrong in. An optional email-domain allow-list bounds who may
+ask. Every rule is applied in one function, so a password registration and a
+provider registration cannot diverge — one door that checks the policy and one
+that does not is how a host ends up refusing sign-ups on a form while accepting
+them through Google.
+
+**The password door proves nothing, so it always waits.** Each provider
+establishes the address before this host sees it. A form establishes that
+somebody can type. That difference is what `RegistrationPolicy.StatusFor`
+encodes, and it is the whole of the rule: approval-off lets a *proved* address
+in without an administrator, and a password registration lands pending
+regardless.
+
+The combination it removes is the one worth naming. With registration on,
+approval off, and an allow-list of `corp.com` — three switches a settings form
+presents as independent — any anonymous caller could otherwise create an
+*active* account for `boss@corp.com` and walk in holding read, propose and
+approve. The allow-list means "who may have an account" through a provider and
+only "what may be typed" through a form. Refusing in the code that acts on the
+values rather than by cross-checking fields in the form: a form-level check is
+one more thing to keep in step with the code that reads them. The setting says
+so at the control, so it is a rule an operator reads rather than discovers.
+
+**A self-registered account reaches nothing until somebody grants it
+something.** The wildcard was the obvious default and the wrong one: it made
+approving a stranger decide two things at once while presenting itself as one
+— whether this person may have an account, and what they may reach. An empty
+grant denies everything, which is the reading a principal has always taken of
+one, and the Users page shows "Nothing" until an administrator lists some.
+
+**A provider's display name is dropped rather than refused.** Every rule
+`ValidateDisplayName` enforces is met by real names — an emoji joined with
+U+200D, an Arabic name carrying a bidirectional mark, a long one — and nobody
+here typed it. Refusing the registration over it would make an account
+impossible for that person while the browser said the provider did not finish
+and the log showed a validation error about a field they never filled in. The
+name is cosmetic and never an identity, so an unusable one is discarded and the
+account renders as its address. A name somebody types is still refused with a
+reason: they can see the field and fix it.
+
+**"Administrator" in the last-administrator guard means one who can
+administer.** The role, not disabled, *and* not pending. A pending account holds
+no capability whatever its row says, so counting one there would let the last
+real administrator demote, disable or delete themselves — leaving a host with
+nobody holding `admin` and nobody able to approve the pending account the guard
+counted, which is not recoverable from inside the dashboard.
+
+**Approving a registration is a privilege grant.** It is the moment somebody
+gains the ability to do anything here, so it appends to the hash-chained trail
+inside the transaction that performs it, naming the administrator who decided —
+beside importing a server and classifying a tool, not in the settings history.
+The status change is guarded on `pending`, so two administrators approving the
+same registration produce one grant and one refusal rather than two entries
+claiming something that happened once. A rejection deletes the row and keeps the
+entry: the address and the provider account are free again, and what happened is
+still answerable.
+
+**Redirect URIs derive from `server.frontend_public_url`.** Not from the
+request: a URI assembled from a `Host` header works when an operator tests it
+from the same machine and fails for everybody else, and the header is set by
+whoever is talking to this process. With no public URL configured there are no
+buttons and the Authentication page says why, rather than generating an address
+that will not work. Client secrets go through the settings machinery like every
+other credential — encrypted at rest, withheld on read-back, never logged.
+
 mcpd is not an OAuth authorization server. It was, and the endpoints were
 unreachable in the deployment they existed for: signing in through a tunnel
 needs mcpd reachable from the public internet, which is the one thing a tunnel
@@ -382,7 +560,8 @@ invent series this host then has to carry.
 Tables: `operations`, `operation_transitions`, `execution_attempts`,
 `idempotency_records`, `outbox_events`, `audit_events`, `audit_prune_gate`,
 `plugin_state`, `plugin_overrides`, `settings`, `settings_history`, `users`,
-`user_sessions`, `mcp_servers`, `mcp_server_tools`.
+`user_sessions`, `user_identities`, `sso_states`, `mcp_servers`,
+`mcp_server_tools`.
 
 Migrations are forward-only and checksummed; a changed file that has already
 run is an error rather than a silent divergence. There is no down path —

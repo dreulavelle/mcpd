@@ -102,6 +102,10 @@ const (
 	SectionPlugins = "plugins"
 	// SectionTunnels is the page listing ChatGPT connectors.
 	SectionTunnels = "tunnels"
+	// SectionAuthentication is the page deciding who can sign in and how.
+	// Separate from the general settings page because the pending queue lives
+	// beside these fields and answers the question they raise.
+	SectionAuthentication = "authentication"
 )
 
 // Setting keys. They are namespaced by group so a key cannot collide and so
@@ -156,6 +160,33 @@ const (
 	// validate a whole rule set at once -- the only unit at which "no two rules
 	// cover the same thing" can be checked.
 	KeyApprovalAutoRules = "approval.auto_approve_rules"
+
+	// Who may make an account here, and on what terms.
+	//
+	// Off is the default and the default is load-bearing. A host that had no
+	// sign-ups before this existed must not have them afterwards because a
+	// zero value said so, and the same reasoning that keeps the approval
+	// policy empty until somebody writes a rule keeps this shut until
+	// somebody opens it.
+	KeyRegistrationEnabled  = "auth.registration.enabled"
+	KeyRegistrationApproval = "auth.registration.require_approval"
+	KeyRegistrationDomains  = "auth.registration.allowed_domains"
+
+	// The identity providers. Each is a switch, a client id and a secret; only
+	// Entra needs a fourth thing, and it needs it badly enough that the flow
+	// refuses to run without it.
+	KeyGoogleEnabled  = "auth.google.enabled"
+	KeyGoogleClientID = "auth.google.client_id"
+	KeyGoogleSecret   = "auth.google.client_secret"
+
+	KeyGitHubEnabled  = "auth.github.enabled"
+	KeyGitHubClientID = "auth.github.client_id"
+	KeyGitHubSecret   = "auth.github.client_secret"
+
+	KeyEntraEnabled  = "auth.entra.enabled"
+	KeyEntraClientID = "auth.entra.client_id"
+	KeyEntraSecret   = "auth.entra.client_secret"
+	KeyEntraTenant   = "auth.entra.tenant_id"
 )
 
 func intPtr(i int) *int { return &i }
@@ -285,6 +316,120 @@ func schema() []Group {
 					Kind: KindDuration, Group: "approval", Apply: ApplyLive,
 					Default: 2, Min: intPtr(1), Max: intPtr(60),
 					Help: "How long before a half-applied change is flagged for checking.",
+				},
+			},
+		},
+		{
+			Name:      "registration",
+			Title:     "Registration",
+			Section:   SectionAuthentication,
+			EnabledBy: KeyRegistrationEnabled,
+			Help:      "Whether people can make their own account here.",
+			Fields: []Field{
+				{
+					Key: KeyRegistrationEnabled, Label: "Let people sign themselves up",
+					Kind: KindBool, Group: "registration", Apply: ApplyLive,
+					Default: false,
+					Help:    "Off unless you turn it on. Upgrading never turns it on.",
+				},
+				{
+					Key: KeyRegistrationApproval, Label: "Approve each one first",
+					Kind: KindBool, Group: "registration", Apply: ApplyLive,
+					Default: true,
+					// The second sentence is the load-bearing one and belongs
+					// here rather than in a paragraph somewhere: turning this
+					// off is safe for a provider, which checked the address,
+					// and would not be safe for the form, which did not.
+					Help: "New accounts wait here until you say yes. They can sign in " +
+						"and see they are waiting, and can do nothing else. " +
+						"Turning this off applies to Google, GitHub and Microsoft only " +
+						"— sign-ups with a password always wait, because nothing has " +
+						"checked the address.",
+				},
+				{
+					Key: KeyRegistrationDomains, Label: "Only these email domains",
+					Kind: KindList, Group: "registration", Apply: ApplyLive,
+					Placeholder: "corp.com, corp.co.uk",
+					Help: "Comma separated. Empty means any address. Through a " +
+						"provider this says who may have an account; through the " +
+						"password form it only says what may be typed, which is why " +
+						"those wait for you.",
+				},
+			},
+		},
+		{
+			Name:      "google",
+			Title:     "Google",
+			Section:   SectionAuthentication,
+			EnabledBy: KeyGoogleEnabled,
+			Help:      "Sign in with a Google account.",
+			Fields: []Field{
+				{
+					Key: KeyGoogleEnabled, Label: "Offer Google", Kind: KindBool,
+					Group: "google", Apply: ApplyLive, Default: false,
+				},
+				{
+					Key: KeyGoogleClientID, Label: "Client ID", Kind: KindString,
+					Group: "google", Apply: ApplyLive, Required: true,
+					Placeholder: "...apps.googleusercontent.com",
+				},
+				{
+					Key: KeyGoogleSecret, Label: "Client secret", Kind: KindSecret,
+					Group: "google", Apply: ApplyLive, Required: true,
+					Help: "Stored encrypted, and never shown again.",
+				},
+			},
+		},
+		{
+			Name:      "github",
+			Title:     "GitHub",
+			Section:   SectionAuthentication,
+			EnabledBy: KeyGitHubEnabled,
+			Help:      "Sign in with a GitHub account.",
+			Fields: []Field{
+				{
+					Key: KeyGitHubEnabled, Label: "Offer GitHub", Kind: KindBool,
+					Group: "github", Apply: ApplyLive, Default: false,
+				},
+				{
+					Key: KeyGitHubClientID, Label: "Client ID", Kind: KindString,
+					Group: "github", Apply: ApplyLive, Required: true,
+					Placeholder: "Iv1....",
+				},
+				{
+					Key: KeyGitHubSecret, Label: "Client secret", Kind: KindSecret,
+					Group: "github", Apply: ApplyLive, Required: true,
+					Help: "Stored encrypted, and never shown again.",
+				},
+			},
+		},
+		{
+			Name:      "entra",
+			Title:     "Microsoft Entra",
+			Section:   SectionAuthentication,
+			EnabledBy: KeyEntraEnabled,
+			Help:      "Sign in with a work or school Microsoft account.",
+			Fields: []Field{
+				{
+					Key: KeyEntraEnabled, Label: "Offer Microsoft", Kind: KindBool,
+					Group: "entra", Apply: ApplyLive, Default: false,
+				},
+				{
+					Key: KeyEntraClientID, Label: "Application (client) ID", Kind: KindString,
+					Group: "entra", Apply: ApplyLive, Required: true,
+				},
+				{
+					Key: KeyEntraSecret, Label: "Client secret", Kind: KindSecret,
+					Group: "entra", Apply: ApplyLive, Required: true,
+					Help: "Stored encrypted, and never shown again.",
+				},
+				{
+					Key: KeyEntraTenant, Label: "Directory (tenant) ID", Kind: KindString,
+					Group: "entra", Apply: ApplyLive, Required: true,
+					// The refusal of common/organizations/consumers is enforced
+					// in the flow, and said here so it is read before it is met.
+					Help: "One directory. `common`, `organizations` and `consumers` " +
+						"name every directory, which mcpd will not accept.",
 				},
 			},
 		},

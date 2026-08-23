@@ -95,6 +95,63 @@ export interface Session {
   plugins: string[];
   csrf_token: string;
   expires_at: string;
+  /**
+   * "pending" is an account waiting for an administrator. It is signed in and
+   * holds no capability at all; the console draws a screen saying so.
+   *
+   * This is not what enforces it — the server refuses every call a pending
+   * principal makes. It only decides which screen to draw instead of a console
+   * whose every fetch comes back 403.
+   */
+  status: AccountStatus;
+  /** False for an account that only signs in through a provider. */
+  has_password: boolean;
+}
+
+/** What has been decided about an account. Not the same axis as `disabled`. */
+export type AccountStatus = "active" | "pending";
+
+/** An identity provider mcpd will sign somebody in through. */
+export type ProviderName = "google" | "github" | "entra";
+
+export interface ProviderDescriptor {
+  provider: ProviderName;
+  label: string;
+}
+
+/**
+ * What the signed-out page may offer, before anybody has signed in.
+ *
+ * There is deliberately no "will it wait for approval" here. A password
+ * registration always waits: the setting that switches approval off applies to
+ * the providers, which check the address, and nothing checks one typed into a
+ * form. A field saying otherwise would have the form promise something false.
+ */
+export interface AuthOptions {
+  providers: ProviderDescriptor[];
+  /** Whether somebody without an account may ask for one. */
+  registration: boolean;
+}
+
+/**
+ * An account waiting for an administrator, and how it got here.
+ *
+ * The providers are on the row because approving is a privilege grant and the
+ * provider is what decides how much the address is worth: "alice@corp.com,
+ * proved by your directory" and "alice@corp.com, typed into a form" are the
+ * same string and completely different facts.
+ */
+export interface PendingRegistration extends User {
+  /** Provider labels. Empty means somebody typed the address into the form. */
+  providers: string[];
+}
+
+/** A provider linked to the signed-in account. */
+export interface LinkedIdentity {
+  provider: ProviderName;
+  label: string;
+  email: string;
+  linked_at: string;
 }
 
 export interface User {
@@ -107,6 +164,10 @@ export interface User {
   role: Role;
   plugins: string[];
   disabled: boolean;
+  /** "pending" is waiting for an administrator; `disabled` is switched off. */
+  status: AccountStatus;
+  /** False for an account that only signs in through a provider. */
+  has_password: boolean;
   created_at: string;
   last_login_at?: string;
   /** True for the account making the request. */
@@ -305,7 +366,7 @@ export type SettingKind =
 
 export type SettingApply = "live" | "reconnect" | "restart";
 
-export type SettingSection = "settings" | "plugins" | "tunnels";
+export type SettingSection = "settings" | "plugins" | "tunnels" | "authentication";
 
 export interface SettingField {
   key: string;
@@ -655,6 +716,59 @@ export const api = {
     }),
 
   signOut: () => request<void>("/api/session", { method: "DELETE" }),
+
+  /** What the signed-out page may offer: providers, and whether to show a form. */
+  authOptions: () => request<AuthOptions>("/api/auth/options"),
+
+  /** Asks for an account. Not `registerFirst`, which claims an unclaimed host. */
+  register: (email: string, password: string, displayName?: string) =>
+    request<Session>("/api/register", {
+      method: "POST",
+      body: JSON.stringify({ email, password, display_name: displayName ?? "" }),
+    }),
+
+  /**
+   * Begins a provider sign-in. The reply is a URL to send the browser to; the
+   * cookie that makes its state usable was set on this response.
+   */
+  ssoStart: (provider: ProviderName) =>
+    request<{ authorization_url: string }>(
+      `/api/auth/sso/${encodeURIComponent(provider)}/start`, { method: "POST" }),
+
+  /** The providers this account can sign in with, and the ones it could add. */
+  identities: () =>
+    request<{ identities: LinkedIdentity[]; available: ProviderDescriptor[] }>(
+      "/api/account/identities"),
+
+  /**
+   * Begins attaching a provider to the signed-in account. The only way an
+   * account that already exists gains one — mcpd never adopts an account on
+   * the strength of a matching email address.
+   */
+  linkIdentity: (provider: ProviderName, returnTo = "/profile") =>
+    request<{ authorization_url: string }>(
+      `/api/account/identities/${encodeURIComponent(provider)}/start`,
+      { method: "POST", body: JSON.stringify({ return_to: returnTo }) }),
+
+  unlinkIdentity: (provider: ProviderName) =>
+    request<void>(`/api/account/identities/${encodeURIComponent(provider)}`,
+      { method: "DELETE" }),
+
+  /** The exact addresses to paste into each provider's console. */
+  redirectURIs: () =>
+    request<{ base: string; redirect_uris: Partial<Record<ProviderName, string>> }>(
+      "/api/auth/redirect-uris"),
+
+  registrations: () =>
+    request<{ registrations: PendingRegistration[]; count: number }>("/api/registrations"),
+
+  approveRegistration: (id: string) =>
+    request<User>(`/api/registrations/${encodeURIComponent(id)}/approve`,
+      { method: "POST" }),
+
+  rejectRegistration: (id: string) =>
+    request<void>(`/api/registrations/${encodeURIComponent(id)}/reject`,
+      { method: "POST" }),
 
   users: () => request<{ users: User[]; count: number }>("/api/users"),
 

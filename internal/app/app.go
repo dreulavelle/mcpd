@@ -17,6 +17,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/admin"
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/config"
 	mcphost "github.com/spoked/mcpd/internal/mcp"
@@ -50,6 +51,8 @@ type App struct {
 	metrics *observability.Metrics
 
 	accounts      *users.Store
+	sso           *sso.Service
+	ssoStates     *sso.StateStore
 	types         *plugins.Catalog
 	approval      *operations.ApprovalPolicy
 	opsService    *operations.Service
@@ -236,6 +239,11 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	}
 	a.settings = settings.NewStore(db, cipher, time.Now)
 
+	// After the settings store, because the providers are settings: a client
+	// secret pasted into the dashboard has to work without a restart, which
+	// is why the service reads them per flow rather than holding a copy.
+	a.buildSSO()
+
 	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService,
 		inlinePolicyFunc(policyFn), a.metrics)
 
@@ -339,12 +347,15 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 				}
 				return a.metrics.Handler()
 			}(),
-			MetricsPublic:     cfg.Metrics.Public,
-			Pruner:            a.audit,
-			PublicURL:         cfg.Server.PublicURL,
-			FrontendPublicURL: cfg.Server.FrontendPublicURL,
-			Accounts:          a.accounts,
-			Catalog:           a.settingsCatalog,
+			MetricsPublic:      cfg.Metrics.Public,
+			Pruner:             a.audit,
+			PublicURL:          cfg.Server.PublicURL,
+			FrontendPublicURL:  cfg.Server.FrontendPublicURL,
+			Accounts:           a.accounts,
+			Identities:         a.accounts,
+			SSO:                a.sso,
+			RegistrationPolicy: a.registrationPolicy,
+			Catalog:            a.settingsCatalog,
 			PluginType: func(instance string) string {
 				for _, inst := range a.instances(context.Background()) {
 					if inst.Name == instance {

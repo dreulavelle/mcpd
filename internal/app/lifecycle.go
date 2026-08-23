@@ -97,6 +97,7 @@ func (a *App) Run(ctx context.Context) error {
 		hk := users.NewHousekeeper(a.accounts, time.Hour)
 		a.startWorker("session-housekeeper", workerCtx, hk.Run)
 	}
+	a.startWorker("sso-state-housekeeper", workerCtx, a.purgeSSOStates)
 
 	a.startWorker("history-retention", workerCtx, a.pruneHistory)
 
