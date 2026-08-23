@@ -409,8 +409,12 @@ type StateCount struct {
 // copy of the same number correct.
 func (s *OperationStore) StateCounts(ctx context.Context) ([]StateCount, error) {
 	rows, err := s.db.Reader().QueryContext(ctx,
+		// The column is nullable and null is the ordinary case, so the test is
+		// written out rather than left to a comparison that would quietly
+		// evaluate to null and fall through to the ELSE.
 		`SELECT plugin, action, state, COUNT(*),
-		        SUM(CASE WHEN authorized_by_rule <> '' THEN 1 ELSE 0 END)
+		        SUM(CASE WHEN authorized_by_rule IS NOT NULL
+		                  AND authorized_by_rule <> '' THEN 1 ELSE 0 END)
 		 FROM operations
 		 GROUP BY plugin, action, state`)
 	if err != nil {
