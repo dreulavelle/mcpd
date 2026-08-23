@@ -238,12 +238,12 @@ function PluginTable({ rows }: { rows: PluginRow[] }) {
                   )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {row.running ? row.reads : <span className="text-faint">—</span>}
+                  {row.running ? row.reads : <span className="text-muted-foreground">—</span>}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {row.running
-                    ? (row.writes || <span className="text-faint">0</span>)
-                    : <span className="text-faint">—</span>}
+                    ? (row.writes || <span className="text-muted-foreground">0</span>)
+                    : <span className="text-muted-foreground">—</span>}
                 </TableCell>
               </TableRow>
             ))}

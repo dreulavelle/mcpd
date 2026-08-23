@@ -103,7 +103,7 @@ function Row({ server: s }: { server: MCPServer }) {
       <TableCell className="text-right tabular-nums">
         {s.pending > 0
           ? <span className="font-medium text-attention">{s.pending}</span>
-          : <span className="text-faint">0</span>}
+          : <span className="text-muted-foreground">0</span>}
       </TableCell>
       <TableCell className="text-right tabular-nums text-muted-foreground">
         {s.disabled}

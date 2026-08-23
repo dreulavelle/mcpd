@@ -26,13 +26,13 @@ export function ImportDialog({ open, onOpenChange, onImported }: {
 }) {
   const notify = useNotify();
   const [name, setName] = useState("");
-  const [document, setDocument] = useState("");
+  const [documentText, setDocumentText] = useState("");
   const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
 
   function reset() {
     setName("");
-    setDocument("");
+    setDocumentText("");
     setProblem("");
   }
 
@@ -40,7 +40,7 @@ export function ImportDialog({ open, onOpenChange, onImported }: {
     setProblem("");
     let parsed: unknown;
     try {
-      parsed = JSON.parse(document);
+      parsed = JSON.parse(documentText);
     } catch {
       // Caught here rather than sent: a JSON error the browser can name
       // precisely reads better than "the document could not be read".
@@ -98,10 +98,10 @@ export function ImportDialog({ open, onOpenChange, onImported }: {
           <div className="space-y-1.5">
             <Label htmlFor="mcp-doc">server.json</Label>
             <Textarea
-              id="mcp-doc" value={document} rows={12}
+              id="mcp-doc" value={documentText} rows={12}
               className="font-mono text-xs"
               placeholder={'{\n  "$schema": "…",\n  "name": "com.example/weather",\n  "version": "1.0.0",\n  "remotes": [{ "type": "streamable-http", "url": "https://…" }]\n}'}
-              onChange={(e) => setDocument(e.target.value)}
+              onChange={(e) => setDocumentText(e.target.value)}
             />
           </div>
 
@@ -112,7 +112,7 @@ export function ImportDialog({ open, onOpenChange, onImported }: {
         </div>
 
         <DialogFooter className="sm:justify-start">
-          <Button disabled={busy || !name.trim() || !document.trim()} onClick={submit}>
+          <Button disabled={busy || !name.trim() || !documentText.trim()} onClick={submit}>
             {busy ? "Importing…" : "Import"}
           </Button>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>

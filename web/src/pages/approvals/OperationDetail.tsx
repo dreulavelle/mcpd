@@ -9,7 +9,9 @@ import { useNotify } from "@/components/toast";
 import {
   CodeBlock, Detail, Loading, Notice, PageHeader, Section,
 } from "@/components/chrome";
-import { RiskBadge, StateBadge, VerifiedBadge } from "@/components/status";
+import {
+  AssuranceBadge, RiskBadge, StateBadge, VerifiedBadge,
+} from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -63,7 +65,8 @@ function Body({ operation: op, audit, onChanged }: {
         back={{ to: "/approvals", label: "Approvals" }}
         lede={op.impact || undefined}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <AssuranceBadge assurance={op.assurance} />
             <RiskBadge risk={op.risk} />
             <StateBadge state={op.state} />
           </div>
@@ -89,6 +92,8 @@ function Body({ operation: op, audit, onChanged }: {
             )}
           </Notice>
         )}
+
+        <WhatThisProves operation={op} />
 
         <Decide operation={op} onChanged={onChanged} />
 
@@ -173,6 +178,16 @@ function Body({ operation: op, audit, onChanged }: {
                 <Detail label="Outcome confirmed">
                   <VerifiedBadge verified={op.verified} />
                 </Detail>
+                <Detail label="Drift checked">
+                  {op.drift_checked
+                    ? "Yes — planned against a stored snapshot."
+                    : "No snapshot was declared, so nothing was compared."}
+                </Detail>
+                <Detail label="Outcome verifiable">
+                  {op.outcome_verifiable
+                    ? "Re-reading the target proves this write."
+                    : "This kind of change cannot be confirmed by re-reading."}
+                </Detail>
                 <Detail label="Reference" className="sm:col-span-2 lg:col-span-3">
                   <code className="font-mono text-xs break-all">{op.id}</code>
                 </Detail>
@@ -221,6 +236,39 @@ function Body({ operation: op, audit, onChanged }: {
         </Section>
       </div>
     </>
+  );
+}
+
+/**
+ * What this record will be able to prove afterwards.
+ *
+ * Placed above the decision rather than in the record below it, because it is
+ * a fact about the change that ought to inform the decision: approving
+ * something whose outcome cannot be confirmed is a different act from
+ * approving something that will be re-read and compared, and the operator
+ * should know which one they are performing before they perform it.
+ *
+ * Silent on a reviewed change. Saying "all three proofs present" on every
+ * ordinary operation is how a notice becomes furniture, and then goes unread
+ * on the one that says something else.
+ */
+function WhatThisProves({ operation: op }: { operation: Operation }) {
+  if (op.assurance === "reviewed_change") return null;
+
+  const missing: string[] = [];
+  if (!op.drift_checked) {
+    missing.push("it declares no precondition snapshot, so nothing will be compared for drift");
+  }
+  if (!op.outcome_verifiable) {
+    missing.push("its outcome cannot be confirmed by re-reading the target");
+  }
+
+  return (
+    <Notice tone="info">
+      <strong>This is a gated call, not a reviewed change.</strong> Approving it
+      records that a person authorised it and that the call was made —{" "}
+      {missing.join(", and ")}. The record will not say the change is in place.
+    </Notice>
   );
 }
 

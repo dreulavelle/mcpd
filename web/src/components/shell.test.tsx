@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import { api } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
-import { isCurrent, Shell } from "./shell";
+import { Shell } from "./shell";
 
 function mount(role: "user" | "admin", path = "/") {
   vi.spyOn(api, "health").mockResolvedValue({ status: "up", checks: [] });
@@ -58,23 +58,5 @@ describe("the sidebar", () => {
     mount("admin", "/plugins");
     expect(screen.getByRole("link", { name: /Plugins/ }))
       .toHaveAttribute("aria-current", "page");
-  });
-});
-
-describe("which nav entry is current", () => {
-  it("keeps a section lit on its detail pages", () => {
-    expect(isCurrent("/approvals", "/approvals/op-7")).toBe(true);
-    expect(isCurrent("/plugins", "/plugins/cnmaestro")).toBe(true);
-  });
-
-  // "/plugins" must not light for "/pluginsomething", which a bare
-  // startsWith would.
-  it("does not match a section that merely shares a prefix", () => {
-    expect(isCurrent("/plugins", "/pluginsomething")).toBe(false);
-  });
-
-  it("matches the root exactly, since every path begins with a slash", () => {
-    expect(isCurrent("/", "/")).toBe(true);
-    expect(isCurrent("/", "/audit")).toBe(false);
   });
 });

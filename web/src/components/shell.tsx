@@ -3,7 +3,7 @@ import { LogOut, Menu, X } from "lucide-react";
 import { api, type HealthReport } from "@/lib/api";
 import type { Capability } from "@/lib/capabilities";
 import { usePoll } from "@/lib/hooks";
-import { visibleNav, type NavItem } from "@/lib/nav";
+import { covers, visibleNav, type NavItem } from "@/lib/nav";
 import { Link, useRouter } from "@/lib/router";
 import { useCan, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -12,25 +12,13 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { healthTone, StatusDot } from "./status";
 
-/**
- * Whether a nav entry is the one being looked at.
- *
- * A prefix match, so /approvals/op-7 keeps Approvals lit -- a detail page that
- * highlights nothing leaves the sidebar saying the operator is nowhere. The
- * root is matched exactly, because every path is prefixed by "/".
- */
-export function isCurrent(itemPath: string, path: string): boolean {
-  if (itemPath === "/") return path === "/";
-  return path === itemPath || path.startsWith(itemPath + "/");
-}
-
 function NavLink({ item, badge, onNavigate }: {
   item: NavItem;
   badge?: number;
   onNavigate?: () => void;
 }) {
   const { path } = useRouter();
-  const current = isCurrent(item.path, path);
+  const current = covers(item.path, path);
   const Icon = item.icon;
 
   return (
@@ -100,8 +88,12 @@ function Sidebar({ badges, onNavigate }: {
     <nav className="flex h-full flex-col gap-5 overflow-y-auto p-3">
       {groups.map((group, i) => (
         <div key={group.title ?? `group-${i}`} className="space-y-1">
+          {/* Not the faintest grey available. These headings were decoration
+              over a tab row and are now the sidebar's spine -- the thing that
+              says where Approvals sits relative to Plugins -- so they are read
+              rather than glanced past, and have to be legible. */}
           {group.title && (
-            <h2 className="px-2.5 pb-1 text-[11px] font-semibold tracking-wider text-faint uppercase">
+            <h2 className="px-2.5 pb-1 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
               {group.title}
             </h2>
           )}
@@ -111,7 +103,7 @@ function Sidebar({ badges, onNavigate }: {
               {/* Children appear only while their parent is open. A permanently
                   expanded tree makes the sidebar longer than the sections it
                   exists to make findable. */}
-              {item.children && isCurrent(item.path, path) && (
+              {item.children && covers(item.path, path) && (
                 <div className="mt-1 ml-4 space-y-1 border-l pl-2">
                   {item.children.map((child) => (
                     <ChildLink key={child.path} item={child} onNavigate={onNavigate} />

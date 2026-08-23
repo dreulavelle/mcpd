@@ -193,3 +193,106 @@ describe("when the descriptor changed underneath", () => {
     ).toBeInTheDocument();
   });
 });
+
+/**
+ * A refusal is a fact about one descriptor, not about the dialog.
+ *
+ * ServerDetail mounts this dialog once and swaps its `tool`, so a conflict
+ * recorded while looking at one tool was still on screen when the next was
+ * opened: the warning, a hash pair mixing the two, a diff comparing one tool's
+ * descriptor against another's, and both decisions dead with no way out but
+ * ESC. On the one screen whose whole purpose is that the thing classified is
+ * exactly the thing read, that is a false claim about provenance -- the same
+ * class of dishonesty as rendering an unchecked outcome as a tick.
+ */
+describe("a conflict on one tool", () => {
+  const alpha = toolFixture({ name: "alpha", descriptor_hash: "aaaa1111" });
+  const bravo = toolFixture({ name: "bravo", descriptor_hash: "bbbb2222" });
+
+  beforeEach(() => {
+    vi.spyOn(api, "classifyMCPTool").mockRejectedValue(
+      new ApiError(409, "conflict", "the descriptor changed"),
+    );
+    vi.spyOn(api, "mcpServerTools").mockResolvedValue({
+      tools: [toolFixture({ name: "alpha", descriptor_hash: "cccc3333" })],
+      count: 1,
+    });
+  });
+
+  it("does not follow the operator to the next tool", async () => {
+    const { rerender } = renderWith(
+      <ClassifyDialog
+        server="weather" tool={alpha} open
+        onOpenChange={() => {}} onDone={() => {}}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Serve this tool" }));
+    await screen.findByText(/This tool changed while you were reading it/i);
+
+    rerender(
+      <ClassifyDialog
+        server="weather" tool={bravo} open
+        onOpenChange={() => {}} onDone={() => {}}
+      />,
+    );
+
+    expect(
+      screen.queryByText(/This tool changed while you were reading it/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Serve this tool" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Do not serve it" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("never shows one tool's hash beside another's", async () => {
+    const { rerender } = renderWith(
+      <ClassifyDialog
+        server="weather" tool={alpha} open
+        onOpenChange={() => {}} onDone={() => {}}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Serve this tool" }));
+    await screen.findByText(/was aaaa1111/);
+
+    rerender(
+      <ClassifyDialog
+        server="weather" tool={bravo} open
+        onOpenChange={() => {}} onDone={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText(/was aaaa1111/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cccc3333/)).not.toBeInTheDocument();
+  });
+
+  // "Close and re-read" is the operator saying they have understood. It has to
+  // clear the refusal rather than leave it for whatever opens next.
+  it("is cleared by the button that acknowledges it", async () => {
+    let open = true;
+    const { rerender } = renderWith(
+      <ClassifyDialog
+        server="weather" tool={alpha} open
+        onOpenChange={(next) => { open = next; }} onDone={() => {}}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Serve this tool" }));
+    await screen.findByText(/This tool changed while you were reading it/i);
+
+    await userEvent.click(screen.getByRole("button", { name: "Close and re-read" }));
+    expect(open).toBe(false);
+
+    rerender(
+      <ClassifyDialog
+        server="weather" tool={alpha} open
+        onOpenChange={() => {}} onDone={() => {}}
+      />,
+    );
+
+    expect(
+      screen.queryByText(/This tool changed while you were reading it/i),
+    ).not.toBeInTheDocument();
+  });
+});

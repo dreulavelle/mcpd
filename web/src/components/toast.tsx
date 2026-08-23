@@ -1,6 +1,6 @@
 import {
-  createContext, useCallback, useContext, useEffect, useMemo, useRef,
-  useState, type ReactNode,
+  createContext, useCallback, useContext, useEffect, useRef, useState,
+  type ReactNode,
 } from "react";
 import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -69,8 +69,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     timers.current.add(timer);
   }, []);
 
-  const view = useMemo(() => toasts, [toasts]);
-
   return (
     <ToastContext.Provider value={notify}>
       {children}
@@ -78,7 +76,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2"
         aria-live="polite"
       >
-        {view.map((t) => {
+        {toasts.map((t) => {
           const Icon = ICON[t.tone];
           return (
             <div

@@ -80,14 +80,21 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
   const notify = useNotify();
   const [busy, setBusy] = useState<MCPToolState | null>(null);
   /**
-   * Set once the write has been refused for this descriptor.
+   * A refusal, and the descriptor it is a refusal of.
    *
-   * `current` is what is stored now, and it is legitimately null when the
-   * server withdrew the tool between the read and the decision. Deriving "was
-   * there a conflict" from that field alone made the withdrawn case look like
-   * no conflict at all -- no warning, and the buttons still live.
+   * `hash` is load-bearing rather than bookkeeping. ServerDetail mounts this
+   * dialog once and swaps its `tool`, so a refusal held as a bare flag
+   * followed the operator to whatever they opened next: the warning, a hash
+   * pair mixing two tools, a diff comparing one tool's descriptor against
+   * another's, and both decisions dead. Keyed to the descriptor, a refusal
+   * simply does not apply to a different one, whatever path led there.
+   *
+   * `current` is what is stored now, and is legitimately null when the server
+   * withdrew the tool between the read and the decision -- which is why the
+   * refusal cannot be derived from it either.
    */
-  const [conflict, setConflict] = useState<{ current: MCPTool | null } | null>(null);
+  const [conflict, setConflict] =
+    useState<{ hash: string; current: MCPTool | null } | null>(null);
 
   if (!tool) return null;
 
@@ -110,7 +117,7 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
         const current = await api.mcpServerTools(server)
           .then((r) => (r.tools ?? []).find((t) => t.name === tool.name) ?? null)
           .catch(() => null);
-        setConflict({ current });
+        setConflict({ hash: tool.descriptor_hash, current });
         onDone();
         return;
       }
@@ -120,17 +127,25 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
     }
   }
 
-  const changed = conflict !== null;
-  const current = conflict?.current ?? null;
+  // Only the descriptor that was actually refused is treated as stale.
+  const changed = conflict?.hash === tool.descriptor_hash;
+  const current = changed ? conflict.current : null;
+
+  /**
+   * The one way this dialog opens and shuts.
+   *
+   * Every dismissal -- ESC, the overlay, the X, the footer button -- goes
+   * through here, so none of them can be the one that forgets to drop the
+   * refusal.
+   */
+  function setOpen(next: boolean) {
+    if (!next) setConflict(null);
+    onOpenChange(next);
+  }
+  const close = () => setOpen(false);
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) setConflict(null);
-        onOpenChange(next);
-      }}
-    >
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="font-mono">{tool.name}</DialogTitle>
@@ -221,7 +236,10 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
           >
             {busy === "disabled" ? "Saving…" : "Do not serve it"}
           </Button>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          {/* Closes through the same path as ESC and the overlay. Calling the
+              prop directly skipped the reset the wrapper does, which is how a
+              refusal outlived the tool it belonged to. */}
+          <Button variant="ghost" onClick={() => close()}>
             {changed ? "Close and re-read" : "Cancel"}
           </Button>
         </DialogFooter>

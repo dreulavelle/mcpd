@@ -69,8 +69,12 @@ export function SettingsForm({ groups, settings, links, onSaved, readOnly = fals
       onSaved();
     } catch (e) {
       if (e instanceof ApiError) {
-        const list = (e as unknown as { problems?: string[] }).problems;
-        setProblems(list?.length ? list : [e.detail]);
+        // A bad value comes back as a list of field complaints with no detail
+        // at all, so falling through to `detail` would show the bare token
+        // "invalid_settings" and name no field. This used to read `problems`
+        // off a cast that could never find it, which is the same bug wearing a
+        // type assertion.
+        setProblems(e.problems?.length ? e.problems : [e.detail]);
       } else {
         setProblems(["Couldn't save. Is mcpd still running?"]);
       }

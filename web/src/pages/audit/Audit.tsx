@@ -106,7 +106,7 @@ function Row({ record: r, open, onToggle }: {
   return (
     <>
       <TableRow>
-        <TableCell className="font-mono text-xs text-faint tabular-nums">{r.seq}</TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground tabular-nums">{r.seq}</TableCell>
         <TableCell className="whitespace-nowrap text-muted-foreground">{when(r.at)}</TableCell>
         <TableCell>
           <div className="flex flex-wrap items-center gap-2">

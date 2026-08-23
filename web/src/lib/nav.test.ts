@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { capabilitiesOf, roleCan, type Capability } from "./capabilities";
-import { NAV, reachablePaths, visibleNav } from "./nav";
+import { capabilityFor, covers, NAV, visibleNav } from "./nav";
 
 /** A `can` predicate for a fixed set of capabilities. */
 function holding(...held: Capability[]) {
@@ -62,14 +62,6 @@ describe("navigation gating", () => {
     for (const group of groups) expect(group.items.length).toBeGreaterThan(0);
   });
 
-  it("does not offer a path the principal cannot reach", () => {
-    const user = reachablePaths(holding("read", "propose", "approve"));
-    expect(user.has("/marketplace")).toBe(false);
-    expect(user.has("/settings/users")).toBe(false);
-    expect(user.has("/approvals")).toBe(true);
-    expect(user.has("/settings/account")).toBe(true);
-  });
-
   // Nothing in the map may be reachable by default. A section added without a
   // capability would be visible to everyone, which is the failure the
   // declarative map exists to make impossible to introduce quietly.
@@ -79,6 +71,81 @@ describe("navigation gating", () => {
         expect(item.capability).toBeTruthy();
         for (const child of item.children ?? []) {
           expect(child.capability).toBeTruthy();
+        }
+      }
+    }
+  });
+});
+
+describe("which entry covers a path", () => {
+  it("keeps a section lit on its detail pages", () => {
+    expect(covers("/approvals", "/approvals/op-7")).toBe(true);
+    expect(covers("/plugins", "/plugins/cnmaestro")).toBe(true);
+  });
+
+  // "/plugins" must not match "/pluginsomething", which a bare startsWith
+  // would. This decides both the highlight and the capability now, so a loose
+  // match would gate a page on some other section's rule.
+  it("does not match a section that merely shares a prefix", () => {
+    expect(covers("/plugins", "/pluginsomething")).toBe(false);
+  });
+
+  it("matches the root exactly, since every path begins with a slash", () => {
+    expect(covers("/", "/")).toBe(true);
+    expect(covers("/", "/audit")).toBe(false);
+  });
+});
+
+/**
+ * One table of capabilities, not two.
+ *
+ * Routes used to spell out `required=` per case beside this map. They agreed,
+ * and nothing made them -- and Overview had already been missed, rendering
+ * with no gate at all.
+ */
+describe("the capability a path requires", () => {
+  const cases: [string, string | null][] = [
+    ["/", "read"],
+    ["/approvals", "read"],
+    ["/audit", "read"],
+    ["/plugins", "read"],
+    ["/tunnels", "read"],
+    ["/marketplace", "admin"],
+    ["/settings", "read"],
+    ["/settings/account", "read"],
+    ["/settings/users", "admin"],
+  ];
+
+  for (const [path, expected] of cases) {
+    it(`says ${path} needs ${expected}`, () => {
+      expect(capabilityFor(path)).toBe(expected);
+    });
+  }
+
+  it("judges a detail page by its section", () => {
+    expect(capabilityFor("/approvals/op-7")).toBe("read");
+    expect(capabilityFor("/marketplace/weather")).toBe("admin");
+    expect(capabilityFor("/plugins/cnmaestro")).toBe("read");
+  });
+
+  // The child is the more specific rule and has to win, or /settings/users
+  // inherits read from the section it sits in and stops being admin-only.
+  it("lets a child override the section it sits in", () => {
+    expect(capabilityFor("/settings")).toBe("read");
+    expect(capabilityFor("/settings/users")).toBe("admin");
+  });
+
+  // Null is "nothing to render", never "anyone may".
+  it("returns null for a path the map does not cover", () => {
+    expect(capabilityFor("/nonsense")).toBeNull();
+  });
+
+  it("has an answer for every entry in the map", () => {
+    for (const group of NAV) {
+      for (const item of group.items) {
+        expect(capabilityFor(item.path)).not.toBeNull();
+        for (const child of item.children ?? []) {
+          expect(capabilityFor(child.path)).not.toBeNull();
         }
       }
     }

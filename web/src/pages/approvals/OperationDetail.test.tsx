@@ -18,6 +18,11 @@ function operationFixture(overrides: Partial<Operation> = {}): Operation {
     expires_at: "2026-08-22T10:00:00Z",
     attempts: 0,
     terminal: false,
+    // The full-proof case is the default, so a test that cares about the
+    // weaker one has to say so rather than getting it by omission.
+    assurance: "reviewed_change",
+    drift_checked: true,
+    outcome_verifiable: true,
     ...overrides,
   };
 }
@@ -96,5 +101,69 @@ describe("an indeterminate outcome", () => {
 
     expect(await screen.findByText(/It did not run/i)).toBeInTheDocument();
     expect(screen.queryByText(/This may have landed/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * "Reviewed change" and "gated call" are different words on purpose.
+ *
+ * The first carries exact fields, drift detection and a confirmed outcome; the
+ * second carries a person's yes and nothing else. The console must not let the
+ * second wear the first's name, and the operator has to be told which one they
+ * are approving before they approve it.
+ */
+describe("what the record will prove", () => {
+  it("says nothing extra when all three proofs are present", async () => {
+    mount(operationFixture(), "admin");
+    await screen.findByText("device reboot");
+    expect(screen.getAllByText("Reviewed change").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/not a reviewed change/i)).not.toBeInTheDocument();
+  });
+
+  it("warns before the decision when the outcome cannot be confirmed", async () => {
+    mount(
+      operationFixture({
+        assurance: "gated_call", drift_checked: true, outcome_verifiable: false,
+      }),
+      "admin",
+    );
+
+    expect(
+      await screen.findByText(/This is a gated call, not a reviewed change/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/cannot be confirmed by re-reading the target/i),
+    ).toBeInTheDocument();
+  });
+
+  it("names both missing proofs when neither is held", async () => {
+    mount(
+      operationFixture({
+        assurance: "gated_call", drift_checked: false, outcome_verifiable: false,
+      }),
+      "admin",
+    );
+
+    // Matched on the notice's own phrasing. The Record section states the same
+    // two facts in its own words further down, which is the point -- one warns
+    // before the decision, the other documents afterwards.
+    await screen.findByText(
+      /no precondition snapshot, so nothing will be compared for drift, and its outcome cannot be confirmed by re-reading the target/i,
+    );
+  });
+
+  // A drift check that never ran is not one that passed. The record has to say
+  // which, exactly as `verified` distinguishes unchecked from mismatched.
+  it("distinguishes a drift check that did not run from one that found nothing", async () => {
+    const { unmount } = mount(operationFixture({ drift_checked: false, assurance: "gated_call" }), "admin");
+    expect(
+      await screen.findByText(/No snapshot was declared, so nothing was compared/i),
+    ).toBeInTheDocument();
+    unmount();
+
+    mount(operationFixture({ drift_checked: true }), "admin");
+    expect(
+      await screen.findByText(/planned against a stored snapshot/i),
+    ).toBeInTheDocument();
   });
 });

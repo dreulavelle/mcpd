@@ -53,6 +53,24 @@ export interface Operation {
    * tick.
    */
   verified?: boolean | null;
+  /**
+   * Which of the two things called an approval this record is.
+   *
+   * A `reviewed_change` carries all three proofs: exact fields, drift
+   * detection, and an outcome that was confirmed. A `gated_call` carries a
+   * person's yes and the fact the call was made. The distinction is the
+   * server's, computed from the two flags below, and the console must not let
+   * the second wear the first's name.
+   */
+  assurance: "reviewed_change" | "gated_call";
+  /**
+   * Whether this operation carries a precondition snapshot a re-plan can be
+   * compared against. False means no drift check ran -- which is a different
+   * fact from one that ran and found nothing.
+   */
+  drift_checked: boolean;
+  /** The mutation's own declaration that re-reading the target proves the write. */
+  outcome_verifiable: boolean;
   attempts: number;
   error_code?: string;
   error_detail?: string;
@@ -421,6 +439,15 @@ export class ApiError extends Error {
     readonly code: string,
     readonly detail: string,
     readonly correlationId?: string,
+    /**
+     * Field-level complaints, when the endpoint sends them.
+     *
+     * Saving settings is the one refusal that is a list rather than a
+     * sentence: `handlePutSettings` answers a bad value with `problems` and no
+     * `detail` at all. Without carrying them the form could only show the bare
+     * code `invalid_settings`, which does not say which field.
+     */
+    readonly problems?: string[],
   ) {
     super(detail || code);
     this.name = "ApiError";
@@ -467,11 +494,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
+    const problems = Array.isArray(body.problems)
+      ? body.problems.map(String)
+      : undefined;
     throw new ApiError(
       response.status,
       String(body.error ?? `http_${response.status}`),
       String(body.detail ?? body.error ?? response.statusText),
       body.correlation_id as string | undefined,
+      problems,
     );
   }
   return body as T;

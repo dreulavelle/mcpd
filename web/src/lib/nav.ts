@@ -159,16 +159,49 @@ export function visibleNav(
     .filter((group) => group.items.length > 0);
 }
 
-/** Every reachable path, flattened. Used to decide what a route may render. */
-export function reachablePaths(
-  can: (capability: Capability) => boolean,
-): Set<string> {
-  const out = new Set<string>();
-  for (const group of visibleNav(can)) {
-    for (const item of group.items) {
-      out.add(item.path);
-      for (const child of item.children ?? []) out.add(child.path);
+/**
+ * Whether a nav entry's path covers the path being looked at.
+ *
+ * A prefix match on segment boundaries, so /approvals covers /approvals/op-7
+ * but not /approvalsomething. The root is matched exactly, because every path
+ * begins with it.
+ *
+ * Lives here rather than in the sidebar because it is a routing fact rather
+ * than a highlighting one: the same rule decides which entry lights up and
+ * which capability a URL is judged against, and two copies of it would
+ * eventually disagree about a detail page.
+ */
+export function covers(entryPath: string, path: string): boolean {
+  if (entryPath === "/") return path === "/";
+  return path === entryPath || path.startsWith(entryPath + "/");
+}
+
+/**
+ * The capability a path requires.
+ *
+ * The single answer to "may this be rendered", derived from the same map the
+ * sidebar is built from. `Routes` used to carry its own table of the same
+ * facts, spelled out per case. They agreed, and nothing made them: a section
+ * added to one and not the other is either invisible or ungated, and only one
+ * of those failures announces itself.
+ *
+ * Longest match wins, so a child overrides the section it sits in --
+ * /settings/users needs admin though /settings needs only read. An unknown
+ * path returns null, which does not mean "allowed": it means there is nothing
+ * here to render.
+ */
+export function capabilityFor(path: string): Capability | null {
+  let matched: Capability | null = null;
+  let matchedLength = -1;
+
+  const consider = (item: NavItem) => {
+    if (covers(item.path, path) && item.path.length > matchedLength) {
+      matched = item.capability;
+      matchedLength = item.path.length;
     }
-  }
-  return out;
+    for (const child of item.children ?? []) consider(child);
+  };
+
+  for (const group of NAV) for (const item of group.items) consider(item);
+  return matched;
 }

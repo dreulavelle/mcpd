@@ -15,14 +15,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
  */
 export type Tone = "good" | "attention" | "problem" | "info" | "neutral";
 
-const TONE_TEXT: Record<Tone, string> = {
-  good: "text-good",
-  attention: "text-attention",
-  problem: "text-problem",
-  info: "text-info",
-  neutral: "text-muted-foreground",
-};
-
 const TONE_CHIP: Record<Tone, string> = {
   good: "bg-good-soft text-good border-good/25",
   attention: "bg-attention-soft text-attention border-attention/25",
@@ -64,10 +56,6 @@ export function Chip({ tone = "neutral", className, children }: {
       {children}
     </span>
   );
-}
-
-export function toneText(tone: Tone): string {
-  return TONE_TEXT[tone];
 }
 
 /* -- operations ------------------------------------------------------------ */
@@ -180,6 +168,38 @@ export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
       <TooltipContent className="max-w-xs">
         Nobody has re-read the target, so this says nothing either way about
         whether the change is in place.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/* -- assurance ------------------------------------------------------------- */
+
+/**
+ * What the record proves, in one chip.
+ *
+ * "Reviewed change" and "gated call" are different words on purpose: the first
+ * carries exact fields, drift detection and a confirmed outcome, the second a
+ * person's yes and nothing else. Neither is a fault -- a gated call is a
+ * legitimate, ordinary thing -- so neither is coloured as one. The distinction
+ * is worth stating precisely because it is easy to read the smaller guarantee
+ * as the larger one.
+ */
+export function AssuranceBadge({ assurance }: { assurance: string }) {
+  const reviewed = assurance === "reviewed_change";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="rounded-full">
+          <Chip tone={reviewed ? "good" : "neutral"}>
+            {reviewed ? "Reviewed change" : "Gated call"}
+          </Chip>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">
+        {reviewed
+          ? "Exact fields, a drift check against a stored snapshot, and an outcome confirmed by re-reading the target."
+          : "A person authorised it and the call was made. That is all this record proves — it does not say the change is in place."}
       </TooltipContent>
     </Tooltip>
   );

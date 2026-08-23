@@ -5,7 +5,9 @@ import { relative, when } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { Link } from "@/lib/router";
 import { EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
-import { RiskBadge, StateBadge, VerifiedBadge } from "@/components/status";
+import {
+  AssuranceBadge, RiskBadge, StateBadge, VerifiedBadge,
+} from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -142,6 +144,16 @@ function Row({ op }: { op: Operation }) {
           {op.plugin}
           {op.impact ? ` — ${op.impact}` : ""}
         </div>
+        {/* Only the weaker of the two, and in a neutral tone. A gated call is
+            an ordinary, legitimate thing rather than a fault; what it is not
+            is a reviewed change, and that is worth seeing before opening the
+            row. Flagging the stronger case as well would put a chip on every
+            line and say nothing. */}
+        {op.assurance === "gated_call" && (
+          <div className="mt-1">
+            <AssuranceBadge assurance={op.assurance} />
+          </div>
+        )}
       </TableCell>
       <TableCell><RiskBadge risk={op.risk} /></TableCell>
       <TableCell className="text-muted-foreground">{op.requested_by}</TableCell>
@@ -160,7 +172,7 @@ function Row({ op }: { op: Operation }) {
             "not checked" is true of every row and says nothing. */}
         {op.state === "succeeded" || op.state === "failed" || op.state === "indeterminate"
           ? <VerifiedBadge verified={op.verified} />
-          : <span className="text-xs text-faint">—</span>}
+          : <span className="text-xs text-muted-foreground">—</span>}
       </TableCell>
     </TableRow>
   );

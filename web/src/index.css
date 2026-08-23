@@ -38,7 +38,12 @@
   --secondary-foreground: #131a19;
 
   --muted: #f0f2f1;
-  --muted-foreground: #6b7773;
+  --muted-foreground: #606b68;
+  /* Non-text only -- a status dot, never a word. There is no tint of this grey
+     that is both legible at 4.5:1 and visibly fainter than the token above:
+     solving for AA lands it darker than --muted-foreground, which is not a
+     third step in a hierarchy, it is the same step twice. So secondary text
+     has one colour, and this stays for marks that carry no reading. */
   --faint: #9aa5a1;
 
   --accent: #e6eae8;
