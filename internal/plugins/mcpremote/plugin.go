@@ -75,7 +75,10 @@ type Plugin struct {
 	conn     *conn
 	budget   budget
 	redact   *mcpservers.Redactor
-	deps     plugins.Deps
+	// credentials is the narrow set, used only to decide whether the server
+	// echoed something we sent it back into its catalogue.
+	credentials *mcpservers.Redactor
+	deps        plugins.Deps
 
 	mu     sync.RWMutex
 	health plugins.Health
@@ -99,6 +102,10 @@ func New(opts Options) (*Plugin, error) {
 	// That error is the one the host records as the reason a plugin will not
 	// mount, which reaches the Plugins page and the /discover response.
 	redact := mcpservers.NewRedactor(opts.Document.SensitiveValues(opts.Values))
+	// A second, narrower set, for a different question. See CredentialValues:
+	// this one decides whether the server echoed a credential back, which must
+	// not fire on an operator's region slug turning up in a description.
+	credentials := mcpservers.NewRedactor(opts.Document.CredentialValues(opts.Values))
 
 	endpoint, headers, err := opts.Document.Resolve(opts.Values)
 	if err != nil {
@@ -122,11 +129,12 @@ func New(opts Options) (*Plugin, error) {
 		tools: opts.Tools,
 		// Held for diagnostics only, and never put in a health message: the
 		// URL may carry a token that a variable substituted into it.
-		endpoint: endpoint,
-		conn:     conn,
-		budget:   newBudget(opts.RequestsPerSecond),
-		redact:   redact,
-		deps:     opts.Deps,
+		endpoint:    endpoint,
+		conn:        conn,
+		budget:      newBudget(opts.RequestsPerSecond),
+		redact:      redact,
+		credentials: credentials,
+		deps:        opts.Deps,
 		health: plugins.Health{State: plugins.DegradedState,
 			Message: "not connected yet", CheckedAt: opts.Deps.Now()},
 	}
@@ -418,7 +426,7 @@ func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 				"than this host will take from one server", p.name, maxTools)
 		}
 
-		snapshot, size, err := snapshotOf(p.name, tool, p.redact)
+		snapshot, size, err := snapshotOf(p.name, tool, p.credentials)
 		if err != nil {
 			return nil, err
 		}
@@ -438,23 +446,40 @@ func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 // snapshotOf turns what the wire gave us into a row we can store, and reports
 // how many bytes of it we agreed to keep.
 //
+// The descriptor is stored exactly as the server published it, and that is
+// load-bearing rather than lazy. descriptor_hash is computed from what is
+// stored, and descriptor_hash is the guard on every classification -- so if
+// this rewrote the text using anything resolved from settings, the hash would
+// become a function of the operator's configuration as well as the server's
+// output. Editing an unrelated non-secret field would then change the hashes
+// on the next discovery, trip the demotion in Snapshot, and silently
+// un-approve every affected tool. The hash has to be a pure function of what
+// the far end said.
+//
+// What the credential set is used for instead is a judgement. If the server
+// echoed something credential-shaped back into its own catalogue, the tool is
+// recorded with the reason and cannot be enabled -- the same rule as an
+// oversized schema, and for the same reason: this is not a formatting problem
+// to paper over, it is something an operator has to see.
+//
 // Text is truncated, because a description that is too long is still a usable
 // tool with a shorter description. A schema that is too long is not: it cannot
 // be shortened without changing what it validates, so the tool is kept with
 // the reason recorded and can never be enabled. Either way the row is stored
 // rather than dropped, so an operator looking for a tool that never appeared
 // finds it with the reason beside it.
-func snapshotOf(prefix string, tool *mcp.Tool, redact *mcpservers.Redactor) (mcpservers.Tool, int, error) {
-	// Everything below this line is the server's text, and the server holds
-	// our credential -- it receives it on every request. Echoing it back in a
-	// name, a description or a schema would put it in SQLite and in front of
-	// a model, so it is blanked on the way in rather than at each of the
-	// places it would later come out.
+func snapshotOf(prefix string, tool *mcp.Tool, credentials *mcpservers.Redactor) (mcpservers.Tool, int, error) {
 	descriptor := mcpservers.Descriptor{
-		Name:        redact.String(tool.Name),
-		Title:       redact.String(truncate(tool.Title, maxTitle)),
-		Description: redact.String(truncate(tool.Description, maxDescription)),
+		Name:  tool.Name,
+		Title: truncate(tool.Title, maxTitle),
+		// Detection runs on the server's text before it is shortened. A
+		// credential straddling the truncation boundary would otherwise leave
+		// an unmatched prefix behind and go unnoticed.
+		Description: truncate(tool.Description, maxDescription),
 	}
+	echoed := credentials.Found(tool.Name) ||
+		credentials.Found(tool.Title) ||
+		credentials.Found(tool.Description)
 
 	var problem string
 	for _, part := range []struct {
@@ -473,7 +498,9 @@ func snapshotOf(prefix string, tool *mcp.Tool, redact *mcpservers.Redactor) (mcp
 		if err != nil {
 			return mcpservers.Tool{}, 0, fmt.Errorf("tool %q: %w", tool.Name, err)
 		}
-		encoded = []byte(redact.String(string(encoded)))
+		if credentials.Found(string(encoded)) {
+			echoed = true
+		}
 		if len(encoded) > part.limit {
 			// Left unset rather than stored truncated: half a schema is not a
 			// schema, and storing one would let Inspect judge the tool
@@ -485,12 +512,40 @@ func snapshotOf(prefix string, tool *mcp.Tool, redact *mcpservers.Redactor) (mcp
 		*part.into = encoded
 	}
 
+	switch {
+	case echoed:
+		// Said first, because it means something is wrong at the other end
+		// rather than merely unusable here.
+		problem = "this server echoed back a value configured for it -- a " +
+			"credential it was sent -- inside its own tool catalogue. Nothing " +
+			"legitimate needs to do that, and a tool that does is not one to " +
+			"put in front of a model"
+
+		// And the text is scrubbed before it is stored, because storing it
+		// verbatim would put the credential in a plaintext column.
+		//
+		// Scrubbing only here is what keeps the hash honest. A descriptor that
+		// did not echo anything is stored and hashed exactly as published, so
+		// descriptor_hash stays a pure function of the far end's output and an
+		// operator editing an unrelated setting cannot move it. This branch is
+		// exempt because a tool with a problem can never be enabled: the guard
+		// in Snapshot demotes only what was enabled, so a hash that shifts
+		// here has no approval to take with it.
+		descriptor.Name = credentials.String(descriptor.Name)
+		descriptor.Title = credentials.String(descriptor.Title)
+		descriptor.Description = credentials.String(descriptor.Description)
+		// Dropped rather than scrubbed, for the same reason an oversized one
+		// is: a schema with holes in it is not a schema, and this tool is not
+		// going to be called anyway.
+		descriptor.InputSchema, descriptor.Annotations = nil, nil
+
+	case problem == "":
+		problem = mcpservers.Inspect(prefix, descriptor)
+	}
+
 	hash, err := mcpservers.HashDescriptor(descriptor)
 	if err != nil {
 		return mcpservers.Tool{}, 0, err
-	}
-	if problem == "" {
-		problem = mcpservers.Inspect(prefix, descriptor)
 	}
 	size := len(descriptor.Name) + len(descriptor.Title) + len(descriptor.Description) +
 		len(descriptor.InputSchema) + len(descriptor.Annotations)
@@ -507,4 +562,10 @@ var (
 	_ plugins.Starter = (*Plugin)(nil)
 	_ plugins.Stopper = (*Plugin)(nil)
 	_ plugins.Checker = (*Plugin)(nil)
+	// Asserted, because losing it is silent and expensive: Manager.Start would
+	// fall back to recording Healthy, and a server whose upstream is down
+	// would show a green dot for as long as it took the first health check to
+	// come round. That is the thing Start returning its finding exists to
+	// prevent, and it would fail as a wrong value rather than a build error.
+	_ plugins.HealthReporter = (*Plugin)(nil)
 )

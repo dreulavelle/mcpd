@@ -499,6 +499,45 @@ func (d *Document) SensitiveValues(values map[string]string) []string {
 	return out
 }
 
+// CredentialValues returns the resolved values that are credential-shaped.
+//
+// A narrower set than SensitiveValues, and for a different job. That one
+// decides what to blank out of transient text -- an error, a log line, a
+// health message -- where over-blanking costs a little readability and
+// under-blanking leaks. This one decides whether a remote server has echoed
+// something we sent it back into its own tool catalogue, which is a judgement
+// about the server rather than a formatting choice, and which must not fire on
+// an operator's region or tenant slug appearing in a tool description by
+// coincidence.
+//
+// Two sources, both genuinely credential-shaped:
+//
+//   - every value injected as an HTTP header, whatever the document says about
+//     it, because a header is where authorization lives and because that claim
+//     is the third party's to make;
+//   - every value the document itself declared secret, since a server echoing
+//     back its own declared secret has done something worth stopping for.
+//
+// A plain URL variable is deliberately absent. `region=us-east` is not a
+// credential, and treating it as one would disable a legitimate tool for
+// mentioning a region.
+func (d *Document) CredentialValues(values map[string]string) []string {
+	inputs, err := d.Inputs()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, in := range inputs {
+		if in.Role != RoleHeader && !in.Input.IsSecret {
+			continue
+		}
+		if v := values[in.Key]; v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // DisplayTitle is what an operator sees. server.json makes `title` optional,
 // and the reverse-DNS name is a poor label on its own.
 func (d *Document) DisplayTitle() string {

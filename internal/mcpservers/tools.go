@@ -224,6 +224,25 @@ func (r *Redactor) String(msg string) string {
 	return msg
 }
 
+// Found reports whether any known value appears in s.
+//
+// The question the descriptor path asks, which is not the question String
+// answers. A server echoing a credential back into its tool catalogue is not
+// something to tidy up and store; it is something an operator has to see, so
+// the caller records it as a reason the tool cannot be mounted and leaves the
+// text alone.
+func (r *Redactor) Found(s string) bool {
+	if r == nil {
+		return false
+	}
+	for _, secret := range r.secrets {
+		if strings.Contains(s, secret) {
+			return true
+		}
+	}
+	return false
+}
+
 // Error returns err's message with every known secret replaced.
 func (r *Redactor) Error(err error) string {
 	if err == nil {

@@ -96,19 +96,14 @@ func (a *App) instances(ctx context.Context) []Instance {
 	// other side can move afterwards: someone can add [plugins.weather] to the
 	// configuration file after importing a remote server called weather. The
 	// remote wins, because the file's instance cannot be removed from here and
-	// the remote's can -- but the collision is said out loud, since a plugin
-	// silently answering as something other than what its configuration says
-	// is the hardest kind of thing to diagnose.
+	// the remote's can. The collision is reported by shadowedNames, called
+	// once at startup -- not from here, which is a read path the dashboard
+	// hits on every request and which would turn one static misconfiguration
+	// into a log line per page load.
 	for _, name := range a.mcpServerNames() {
 		srv, ok := a.mcpServer(name)
 		if !ok {
 			continue
-		}
-		if shadowed, taken := byName[name]; taken {
-			a.log.Warn("a remote MCP server and a configured plugin share a name; "+
-				"the remote server is what will be served",
-				"plugin", name, "shadowed_type", shadowed.Type,
-				"from_file", shadowed.FromFile)
 		}
 		byName[name] = Instance{
 			Name:    name,
@@ -236,6 +231,26 @@ func (a *App) SetInstanceEnabled(ctx context.Context, actor, name string, enable
 		})
 	}
 	return fmt.Errorf("no plugin named %q", name)
+}
+
+// shadowedNames reports configured plugins that a remote MCP server has taken
+// the name of.
+//
+// A plugin silently answering as something other than what its configuration
+// says is among the harder things to diagnose, so it is said out loud -- once,
+// at startup, rather than on every read of the instance list.
+func (a *App) shadowedNames() []string {
+	var out []string
+	for _, name := range a.mcpServerNames() {
+		pc, inFile := a.cfg.Plugins[name]
+		if inFile {
+			out = append(out, name)
+			a.log.Warn("a remote MCP server has the same name as a plugin in the "+
+				"configuration file; the remote server is what will be served",
+				"plugin", name, "shadowed_type", pc.ResolvedType(name))
+		}
+	}
+	return out
 }
 
 // pluginConfigFor returns the file configuration for an instance, which is

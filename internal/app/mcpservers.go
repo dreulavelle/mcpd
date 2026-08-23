@@ -215,28 +215,46 @@ func (a *App) RemoveMCPServer(ctx context.Context, actor, name string) error {
 		return err
 	}
 
-	// The instance key is deleted whether or not one was ever written. Nothing
-	// in this package writes one for a remote server, and the endpoints that
-	// could have are now refused -- but an orphan left by an earlier build is
-	// an enabled instance of a type no binary has, which is a host that will
-	// not start and a database somebody has to hand-edit. Deleting a key that
-	// is not there costs nothing; leaving one that is costs the deployment.
-	changes := []settings.Change{{Key: instanceKeyPrefix + name, Delete: true}}
+	// An orphaned instance key is cleared if there is one. Nothing in this
+	// package writes one for a remote server, and the endpoints that could
+	// have are now refused -- but one left by an earlier build is an enabled
+	// instance of a type no binary has, which is a host that will not start
+	// and a database somebody has to hand-edit.
+	//
+	// Read first rather than deleting unconditionally. Every change applied
+	// here writes a settings_history row whether or not it matched anything,
+	// and operators read that log: recording that an instances. key was
+	// removed, on every removal, when normally there was never one, is a note
+	// about something that did not happen.
+	var changes []settings.Change
+	if _, orphaned, err := a.settings.Get(ctx, instanceKeyPrefix+name); err == nil && orphaned {
+		a.log.Warn("clearing an orphaned plugin instance record for a remote MCP server",
+			"server", name)
+		changes = append(changes, settings.Change{Key: instanceKeyPrefix + name, Delete: true})
+	}
 
 	// The settings go too. Leaving them would mean a name reused later
 	// silently inheriting someone else's credentials.
+	//
+	// Only the ones that have a value, for the same reason as above: a field
+	// the operator never filled in has nothing to record the removal of, and
+	// the history is read by people trying to work out what changed.
 	if srv.Parsed != nil {
 		if fields, err := mcpremote.Fields(srv.Parsed); err == nil {
 			for _, f := range fields {
-				changes = append(changes, settings.Change{
-					Key: settings.PluginSettingKey(name, f.Key), Delete: true,
-				})
+				key := settings.PluginSettingKey(name, f.Key)
+				if _, set, err := a.settings.Get(ctx, key); err != nil || !set {
+					continue
+				}
+				changes = append(changes, settings.Change{Key: key, Delete: true})
 			}
 		}
 	}
-	if err := a.settings.Apply(ctx, actor, changes); err != nil {
-		a.log.Warn("removed a remote MCP server but could not clear its settings",
-			"server", name, "error", err)
+	if len(changes) > 0 {
+		if err := a.settings.Apply(ctx, actor, changes); err != nil {
+			a.log.Warn("removed a remote MCP server but could not clear its settings",
+				"server", name, "error", err)
+		}
 	}
 
 	// Unmount whatever the settings change did not already take down.
