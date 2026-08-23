@@ -43,7 +43,7 @@ export default function App() {
   if (!session) return <SignIn meta={meta} onDone={adopt} />;
 
   return (
-    <SessionProvider session={session}>
+    <SessionProvider session={session} onSession={setSession}>
       <TooltipProvider delayDuration={200}>
         <ToastProvider>
           <RouterProvider>

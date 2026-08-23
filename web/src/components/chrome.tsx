@@ -113,6 +113,34 @@ export function Loading({ rows = 4 }: { rows?: number }) {
   );
 }
 
+/**
+ * The same, for a grid of cards.
+ *
+ * A card is a different shape from a row, and a skeleton whose shape does not
+ * match what replaces it is a spinner with extra steps: the page still jumps
+ * when the content lands.
+ */
+export function LoadingCards({ count = 4, className }: {
+  count?: number;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn("grid gap-3 md:grid-cols-2", className)}
+      aria-busy="true" aria-label="Loading"
+    >
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="space-y-3 rounded-xl border p-6">
+          <Skeleton className="h-4 w-2/5" />
+          <Skeleton className="h-3 w-full" />
+          <Skeleton className="h-3 w-4/5" />
+          <Skeleton className="h-8 w-16" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const NOTICE_TONE: Record<Tone, string> = {
   good: "border-good/30 bg-good-soft text-good",
   attention: "border-attention/30 bg-attention-soft text-attention",

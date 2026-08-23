@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { Notice } from "@/components/chrome";
 import { useNotify } from "@/components/toast";
@@ -29,8 +29,19 @@ import { Textarea } from "@/components/ui/textarea";
  * The seeds are read once, at mount. The caller keys this component on which
  * entry it is for, so a fresh dialog is built rather than new values being
  * pushed underneath a half-edited paste.
+ *
+ * The name collides more often than it looks like it should. Many registry
+ * names end in `/mcp`, so the catalogue suggests `mcp` for a great many
+ * unrelated servers, and the second one an operator adds is refused. Being
+ * told before pressing Add beats being told afterwards, so the names already
+ * taken come in as `taken` and the refusal is pre-empted -- and when the
+ * server refuses anyway, for a name this page could not know about, the
+ * complaint is attached to the field rather than left at the top of the
+ * dialog.
  */
-export function ImportDialog({ open, onOpenChange, onImported, seedName, seedDocument }: {
+export function ImportDialog({
+  open, onOpenChange, onImported, seedName, seedDocument, taken,
+}: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onImported: (name: string) => void;
@@ -38,6 +49,8 @@ export function ImportDialog({ open, onOpenChange, onImported, seedName, seedDoc
   seedName?: string;
   /** The catalog's copy of the published document, shown for reading. */
   seedDocument?: unknown;
+  /** Plugin names already in use here. */
+  taken?: Set<string>;
 }) {
   const notify = useNotify();
   const [name, setName] = useState(seedName ?? "");
@@ -45,7 +58,15 @@ export function ImportDialog({ open, onOpenChange, onImported, seedName, seedDoc
     seedDocument === undefined ? "" : JSON.stringify(seedDocument, null, 2),
   );
   const [problem, setProblem] = useState("");
+  const [nameProblem, setNameProblem] = useState("");
   const [busy, setBusy] = useState(false);
+  const nameField = useRef<HTMLInputElement>(null);
+
+  const trimmed = name.trim();
+  // Known to be taken before anything is sent. The server would refuse it too,
+  // and its refusal costs a round trip and reads as a failure rather than as a
+  // field to change.
+  const collides = trimmed !== "" && (taken?.has(trimmed) ?? false);
 
   function reset() {
     setName(seedName ?? "");
@@ -57,6 +78,7 @@ export function ImportDialog({ open, onOpenChange, onImported, seedName, seedDoc
 
   async function submit() {
     setProblem("");
+    setNameProblem("");
     let parsed: unknown;
     try {
       parsed = JSON.parse(documentText);
@@ -74,7 +96,17 @@ export function ImportDialog({ open, onOpenChange, onImported, seedName, seedDoc
       onOpenChange(false);
       onImported(name.trim());
     } catch (e) {
-      setProblem(e instanceof ApiError ? e.detail : "Couldn't import that.");
+      const detail = e instanceof ApiError ? e.detail : "Couldn't import that.";
+      // A name already in use is a field to change, not a failure to read
+      // about. It is the one refusal an operator will hit repeatedly, so it
+      // goes next to the box and takes the cursor with it.
+      if (/already exists/i.test(detail)) {
+        setNameProblem(detail);
+        nameField.current?.focus();
+        nameField.current?.select();
+      } else {
+        setProblem(detail);
+      }
     } finally {
       setBusy(false);
     }
@@ -84,7 +116,10 @@ export function ImportDialog({ open, onOpenChange, onImported, seedName, seedDoc
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) setProblem("");
+        if (!next) {
+          setProblem("");
+          setNameProblem("");
+        }
         onOpenChange(next);
       }}
     >
@@ -105,9 +140,26 @@ export function ImportDialog({ open, onOpenChange, onImported, seedName, seedDoc
             <Label htmlFor="mcp-name">Name</Label>
             <Input
               id="mcp-name" value={name} placeholder="weather"
-              onChange={(e) => setName(e.target.value)}
+              ref={nameField}
+              aria-invalid={collides || nameProblem !== "" ? true : undefined}
+              aria-describedby="mcp-name-help"
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameProblem("");
+              }}
             />
-            <p className="text-xs text-muted-foreground">
+            {(collides || nameProblem) && (
+              <p className="text-xs text-problem">
+                {nameProblem || (
+                  <>
+                    A plugin called <code className="font-mono">{trimmed}</code>{" "}
+                    is already here. Pick another — this is only what to call it
+                    on this host, so anything legal will do.
+                  </>
+                )}
+              </p>
+            )}
+            <p id="mcp-name-help" className="text-xs text-muted-foreground">
               Its endpoint path, its tool prefix, and its entry in a credential's
               plugin list. Not the document's own reverse-DNS name — that is not
               a legal path segment.
@@ -132,7 +184,10 @@ export function ImportDialog({ open, onOpenChange, onImported, seedName, seedDoc
         </div>
 
         <DialogFooter className="sm:justify-start">
-          <Button disabled={busy || !name.trim() || !documentText.trim()} onClick={submit}>
+          <Button
+            disabled={busy || collides || !trimmed || !documentText.trim()}
+            onClick={submit}
+          >
             {busy ? "Adding…" : "Add"}
           </Button>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>

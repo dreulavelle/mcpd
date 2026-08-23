@@ -185,6 +185,27 @@
     @apply outline-none ring-2 ring-ring/60 ring-offset-2 ring-offset-background;
   }
 
+  /* Motion here is affordance rather than decoration -- a hover that
+     acknowledges the pointer, a skeleton that says the page is still working,
+     a dialog that shows where it came from -- so the honest answer to somebody
+     who has asked their system for less of it is to stop, not to go faster.
+
+     What this rule is *not* about is state. Nothing in this console animates
+     to report one: a health check, an operation's position in its lifecycle
+     and a chain that does or does not verify are all drawn still, because a
+     mark that moves reads as a state that just changed. That is a rule about
+     what gets written, and `index.test.ts` is where it is enforced. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
   /* A native select's open list is drawn by the browser, not from these rules,
      and the only declaration that reaches it is the inherited one. Preflight
      gives every select `color: inherit` and `background-color: transparent`,

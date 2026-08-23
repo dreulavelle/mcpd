@@ -99,6 +99,35 @@ it("is never used as a text colour", () => {
 });
 
 /**
+ * Motion, and the two different rules about it.
+ *
+ * The first is somebody else's preference: a system set to reduce motion is
+ * asking for the transitions and the pulses to stop, and every one of them
+ * here is an affordance whose absence costs nothing.
+ *
+ * The second is this console's own. Nothing that reports state may animate.
+ * A health pill that fades in, an operation node that slides into place, a
+ * chain link that pulses -- each of them reads as a state that just changed,
+ * and none of them is. The components that draw state are named here rather
+ * than the rule being left to memory.
+ */
+describe("motion", () => {
+  it("stops when the reader has asked for less of it", () => {
+    const rule = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n  \}/);
+    expect(rule, "no prefers-reduced-motion block in index.css").not.toBeNull();
+    expect(rule![1]).toMatch(/animation-duration:\s*0\.01ms\s*!important/);
+    expect(rule![1]).toMatch(/transition-duration:\s*0\.01ms\s*!important/);
+  });
+
+  it.each([
+    "components/status.tsx",
+    "pages/approvals/Lifecycle.tsx",
+  ])("does not animate %s, which reports state", (file) => {
+    expect(readFileSync(join(SRC, file), "utf8")).not.toMatch(/\banimate-/);
+  });
+});
+
+/**
  * The dropdown a native `<select>` opens is drawn by the browser, and the only
  * thing it takes from this stylesheet is what the elements themselves declare.
  * Preflight declares `color: inherit` on every select and leaves the background
