@@ -5,7 +5,18 @@ import {
 import type { Capability } from "./capabilities";
 
 /**
- * One destination in the sidebar.
+ * What it takes to reach a destination.
+ *
+ * Almost always a capability. `"signed-in"` is the deliberate absence of one:
+ * your own profile is not an administrative surface, and gating it on `read`
+ * would be reflex rather than a rule. It is a value you have to type rather
+ * than a field you can leave out, so an entry cannot become ungated by
+ * omission -- which is the failure the declarative map exists to prevent.
+ */
+export type Requirement = Capability | "signed-in";
+
+/**
+ * One destination in the console.
  *
  * `capability` is what it takes to see the entry at all. Actions inside a
  * section are gated separately and usually more tightly -- Approvals is
@@ -17,7 +28,15 @@ export interface NavItem {
   /** One line under the heading of the page it leads to. */
   lede: string;
   icon: LucideIcon;
-  capability: Capability;
+  capability: Requirement;
+  /**
+   * Whether the sidebar lists it. Defaults to true.
+   *
+   * False for a destination reached some other way -- the profile hangs off
+   * the identity in the sidebar footer. It is still a path the router has to
+   * judge, so it belongs in this map rather than in a second one beside it.
+   */
+  inSidebar?: boolean;
   children?: NavItem[];
 }
 
@@ -76,14 +95,16 @@ export const NAV: NavGroup[] = [
       {
         path: "/plugins",
         label: "Plugins",
-        lede: "What mcpd can work with, and what each one is set up to reach.",
+        lede: "Everything mcpd serves, built in or somebody else's, and how each one is doing.",
         icon: Boxes,
         capability: "read",
       },
       {
+        // Discovery, not management. What is already installed is a plugin and
+        // is managed on its plugin page; this is where a new one is found.
         path: "/marketplace",
         label: "Marketplace",
-        lede: "Remote MCP servers, and which of their tools are served here.",
+        lede: "Remote MCP servers you could add. Adding one makes it a plugin.",
         icon: Store,
         capability: "admin",
       },
@@ -100,6 +121,8 @@ export const NAV: NavGroup[] = [
     title: "Administer",
     items: [
       {
+        // How the *host* is configured. How *you* are configured is /profile,
+        // which is why Account is no longer a child here.
         path: "/settings",
         label: "Settings",
         lede: "How this host is configured.",
@@ -120,18 +143,51 @@ export const NAV: NavGroup[] = [
             icon: Users,
             capability: "admin",
           },
-          {
-            path: "/settings/account",
-            label: "Account",
-            lede: "The account you are signed in as.",
-            icon: UserRound,
-            capability: "read",
-          },
         ],
       },
     ],
   },
+  {
+    items: [
+      {
+        path: "/profile",
+        label: "Profile",
+        lede: "The account you are signed in as.",
+        icon: UserRound,
+        capability: "signed-in",
+        // Reached by clicking your own name in the sidebar footer, which is
+        // where people look for it. A nav entry as well would be the same
+        // destination listed twice.
+        inSidebar: false,
+      },
+    ],
+  },
 ];
+
+/**
+ * Paths that used to mean something else.
+ *
+ * Both of these moved for the same reason: a thing was being managed somewhere
+ * that was not where it lived. An installed remote server was managed under
+ * /marketplace though it is a plugin, and your own account was managed under
+ * /settings though settings are the host's rather than yours. Somebody has
+ * both addresses bookmarked, so they redirect rather than 404.
+ *
+ * A table rather than a branch inside the router: where a path goes is the
+ * same kind of fact as what capability it needs, and both are answered here.
+ */
+export function redirectFor(path: string): string | null {
+  if (path === "/settings/account") return "/profile";
+
+  // Segments are left encoded. A server named "a b" arrived as "a%20b" and has
+  // to leave the same way; decoding and re-encoding is a round trip with
+  // nothing to gain and an escaping bug to lose.
+  const segments = path.split("/").filter(Boolean);
+  if (segments.length === 2 && segments[0] === "marketplace") {
+    return `/plugins/${segments[1]}`;
+  }
+  return null;
+}
 
 /**
  * The navigation a principal may see.
@@ -144,7 +200,8 @@ export function visibleNav(
   can: (capability: Capability) => boolean,
 ): NavGroup[] {
   const keep = (item: NavItem): NavItem | null => {
-    if (!can(item.capability)) return null;
+    if (item.inSidebar === false) return null;
+    if (item.capability !== "signed-in" && !can(item.capability)) return null;
     if (!item.children) return item;
     const children = item.children.map(keep).filter((c): c is NavItem => c !== null);
     if (children.length === 0) return null;
@@ -177,7 +234,7 @@ export function covers(entryPath: string, path: string): boolean {
 }
 
 /**
- * The capability a path requires.
+ * What a path requires.
  *
  * The single answer to "may this be rendered", derived from the same map the
  * sidebar is built from. `Routes` used to carry its own table of the same
@@ -188,10 +245,11 @@ export function covers(entryPath: string, path: string): boolean {
  * Longest match wins, so a child overrides the section it sits in --
  * /settings/users needs admin though /settings needs only read. An unknown
  * path returns null, which does not mean "allowed": it means there is nothing
- * here to render.
+ * here to render. "signed-in" is the one answer that means allowed without a
+ * capability, and it has to be written into the map to be given.
  */
-export function capabilityFor(path: string): Capability | null {
-  let matched: Capability | null = null;
+export function capabilityFor(path: string): Requirement | null {
+  let matched: Requirement | null = null;
   let matchedLength = -1;
 
   const consider = (item: NavItem) => {

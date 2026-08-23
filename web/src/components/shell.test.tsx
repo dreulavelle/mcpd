@@ -5,7 +5,6 @@ import { renderWith, sessionFor } from "@/test/render";
 import { Shell } from "./shell";
 
 function mount(role: "user" | "admin", path = "/") {
-  vi.spyOn(api, "health").mockResolvedValue({ status: "up", checks: [] });
   return renderWith(<Shell badges={{}} onSignOut={() => {}}>page</Shell>, {
     session: sessionFor(role),
     path,
@@ -40,8 +39,14 @@ describe("the sidebar", () => {
   it("hides Users inside Settings from a user, and keeps the rest", () => {
     mount("user", "/settings");
     expect(screen.getByRole("link", { name: "General" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Account" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+  });
+
+  // Settings is how the host is configured. Your own account is not, and is
+  // reached by clicking your name rather than by a second entry here.
+  it("does not offer an Account page inside Settings", () => {
+    mount("admin", "/settings");
+    expect(screen.queryByRole("link", { name: "Account" })).not.toBeInTheDocument();
   });
 
   it("shows Users inside Settings to an administrator", () => {
@@ -62,14 +67,12 @@ describe("the sidebar", () => {
 });
 
 /**
- * The health of the host, who is signed in, and the way out.
+ * Who is signed in, and the way out.
  *
- * They used to sit in the top-right corner and now sit under the navigation.
- * Two things about that are worth defending: the footer is outside the part of
- * the sidebar that scrolls, so a long list of sections cannot push the state of
- * the host off the bottom; and the narrow layout -- which collapses the sidebar
- * behind a button -- keeps its own copy of the health and the sign-out rather
- * than putting both a drawer away.
+ * The footer is outside the part of the sidebar that scrolls, so a long list of
+ * sections cannot push the identity off the bottom, and the narrow layout --
+ * which collapses the sidebar behind a button -- keeps its own sign-out rather
+ * than putting it a drawer away.
  */
 describe("the sidebar footer", () => {
   it("names the signed-in person", () => {
@@ -78,11 +81,31 @@ describe("the sidebar footer", () => {
   });
 
   it("falls back to the email when no display name is set", () => {
-    vi.spyOn(api, "health").mockResolvedValue({ status: "up", checks: [] });
     renderWith(<Shell badges={{}} onSignOut={() => {}}>page</Shell>, {
       session: sessionFor("user", { display_name: "" }),
     });
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
+  });
+
+  // The name is the way to the profile, because that is where people look for
+  // it -- there is no nav entry.
+  it("makes the name the way to your own profile", () => {
+    mount("admin");
+    expect(screen.getByRole("link", { name: "An Admin" }))
+      .toHaveAttribute("href", "/profile");
+  });
+
+  /**
+   * Sign-out is beside the link, never inside it.
+   *
+   * Nesting the button in the anchor makes one target out of two intentions,
+   * and the misclick ends the session when the person meant to read their own
+   * capabilities.
+   */
+  it("keeps sign-out out of the profile link", () => {
+    mount("admin");
+    const profile = screen.getByRole("link", { name: "An Admin" });
+    expect(profile.querySelector("button")).toBeNull();
   });
 
   it("offers a way out whether or not the sidebar is showing", () => {
@@ -90,21 +113,19 @@ describe("the sidebar footer", () => {
     expect(screen.getAllByRole("button", { name: "Sign out" })).toHaveLength(2);
   });
 
-  it("says what /api/health said, in both layouts", async () => {
-    mount("user");
-    expect(await screen.findAllByText("All good")).toHaveLength(2);
-  });
-
-  it("does not call a degraded host well", async () => {
-    vi.spyOn(api, "health").mockResolvedValue({
-      status: "degraded",
-      checks: [{ name: "sqlite", status: "degraded", critical: true, message: "slow" }],
-    });
-    renderWith(<Shell badges={{}} onSignOut={() => {}}>page</Shell>, {
-      session: sessionFor("user"),
-    });
-    expect(await screen.findAllByText("Degraded")).toHaveLength(2);
+  /**
+   * The health pill is gone from the chrome.
+   *
+   * "All good" beside the navigation was a binary with no context: it could
+   * not say which check, or what the check complained about, and the detail
+   * was in a tooltip nobody on a phone can open. The checks are content on the
+   * Overview now, which is reachable in every layout.
+   */
+  it("says nothing about the host's health, and does not ask", () => {
+    const health = vi.spyOn(api, "health");
+    mount("admin");
     expect(screen.queryByText("All good")).not.toBeInTheDocument();
+    expect(health).not.toHaveBeenCalled();
   });
 
   it("lets the nav scroll rather than the footer move", () => {

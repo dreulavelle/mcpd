@@ -93,14 +93,13 @@ export function toRows(
 }
 
 /**
- * Plugins.
+ * Everything this host serves.
  *
  * Split on `runtime` rather than on a name or a type string, because the two
- * kinds are managed in different places and by different people: a builtin has
- * a compiled-in type and a settings form, a remote MCP server has an imported
- * document and a tool list somebody has to classify. Listing them together
- * with no line between them made "why can't I edit this one's tools" a
- * question worth asking.
+ * kinds carry different guarantees: a builtin proposes changes for approval
+ * and mcpd can plan against its state, a remote server can do neither and only
+ * serves the tools somebody classified. Both are managed from their own page
+ * here -- the split is a statement about trust, not about where to go next.
  */
 export function PluginsList() {
   const mayAdd = useCan("admin");
@@ -165,7 +164,12 @@ export function PluginsList() {
         <Loading rows={4} />
       ) : rows && rows.length === 0 ? (
         <EmptyState mark={<Boxes />} title="No plugins yet">
-          Add one above, or enable it in your startup file and restart.
+          Add an integration this build carries with the button above, find a
+          remote MCP server in the{" "}
+          <Link to="/marketplace" className="text-primary hover:underline">
+            Marketplace
+          </Link>
+          , or enable one in your startup file and restart.
         </EmptyState>
       ) : (
         <div className="mt-4 space-y-8">
@@ -181,7 +185,14 @@ export function PluginsList() {
           {remote.length > 0 && (
             <Section
               title="Remote MCP servers"
-              description="Somebody else's servers, mounted as plugins. They cannot propose changes, and only the tools an administrator classified are served."
+              description="Somebody else's servers, mounted as plugins and managed here like any other. They cannot propose changes, and only the tools an administrator classified are served."
+              actions={mayAdd
+                ? (
+                  <Link to="/marketplace" className="text-sm text-primary hover:underline">
+                    Add one
+                  </Link>
+                )
+                : undefined}
             >
               <PluginTable rows={remote} />
             </Section>
