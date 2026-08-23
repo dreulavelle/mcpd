@@ -296,6 +296,12 @@ func (s *Server) routes() {
 	api("GET /api/users", s.handleListUsers, auth.CapAdmin)
 	api("POST /api/users", s.handleCreateUser, auth.CapAdmin)
 	api("PATCH /api/users/{id}", s.handleUpdateUser, auth.CapAdmin)
+	// Naming yourself is not administering the host. Every principal that
+	// can reach the dashboard holds read, and this route can only ever edit
+	// the account the request authenticated as -- there is no identifier in
+	// it to point somewhere else -- so the capability it needs is the one
+	// that gets you through the door. Naming somebody else is above.
+	api("PATCH /api/account", s.handleUpdateAccount, auth.CapRead)
 	api("DELETE /api/users/{id}", s.handleDeleteUser, auth.CapAdmin)
 
 	// Everything else is the single-page application.
@@ -767,6 +773,9 @@ func (s *Server) handleListOperations(w http.ResponseWriter, r *http.Request) {
 	// caller has no access to.
 	visible := s.opts.Authorizer.VisiblePlugins(principal, s.opts.Manager.Names())
 
+	// One lookup for the whole page rather than one per row.
+	names := s.displayNames(r.Context())
+
 	var all []operationDTO
 	for _, plugin := range visible {
 		ops, err := s.opts.Service.List(r.Context(), principal, plugin, states, limit)
@@ -775,7 +784,7 @@ func (s *Server) handleListOperations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, op := range ops {
-			all = append(all, toDTO(op))
+			all = append(all, toDTO(op, names))
 		}
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
@@ -797,7 +806,7 @@ func (s *Server) handleGetOperation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
-		"operation": toDTO(op),
+		"operation": toDTO(op, s.displayNames(r.Context())),
 		"audit":     toAuditDTOs(history),
 	})
 }
@@ -843,7 +852,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, fn decisionFunc)
 		s.writeError(w, r, http.StatusBadRequest, "the operation could not be updated")
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, toDTO(op))
+	s.writeJSON(w, r, http.StatusOK, toDTO(op, s.displayNames(r.Context())))
 }
 
 type pluginDTO struct {
@@ -1087,24 +1096,31 @@ func parseLimit(raw string, fallback, max int) int {
 
 // operationDTO is the dashboard's view of an operation.
 type operationDTO struct {
-	ID          string              `json:"id"`
-	Plugin      string              `json:"plugin"`
-	Action      string              `json:"action"`
-	State       string              `json:"state"`
-	Risk        string              `json:"risk"`
-	Impact      string              `json:"impact"`
-	Changes     []operations.Change `json:"changes,omitempty"`
-	Target      any                 `json:"target,omitempty"`
-	Before      any                 `json:"before,omitempty"`
-	Desired     any                 `json:"desired,omitempty"`
-	Observed    any                 `json:"observed,omitempty"`
-	RequestedBy string              `json:"requested_by"`
-	RequestedAt time.Time           `json:"requested_at"`
-	ExpiresAt   time.Time           `json:"expires_at"`
-	ApprovedBy  string              `json:"approved_by,omitempty"`
-	ApprovedAt  *time.Time          `json:"approved_at,omitempty"`
-	ExecuteBy   *time.Time          `json:"execute_by,omitempty"`
-	TerminalAt  *time.Time          `json:"terminal_at,omitempty"`
+	ID       string              `json:"id"`
+	Plugin   string              `json:"plugin"`
+	Action   string              `json:"action"`
+	State    string              `json:"state"`
+	Risk     string              `json:"risk"`
+	Impact   string              `json:"impact"`
+	Changes  []operations.Change `json:"changes,omitempty"`
+	Target   any                 `json:"target,omitempty"`
+	Before   any                 `json:"before,omitempty"`
+	Desired  any                 `json:"desired,omitempty"`
+	Observed any                 `json:"observed,omitempty"`
+	// RequestedBy and ApprovedBy are the stored identifiers, and they are
+	// what the record actually says. The *Name fields beside them are a
+	// rendering: resolved from accounts at read time, never stored, and never
+	// compared against anything. A record that named people by a value its
+	// subject can change would be a record of nothing.
+	RequestedBy     string     `json:"requested_by"`
+	RequestedByName string     `json:"requested_by_name"`
+	RequestedAt     time.Time  `json:"requested_at"`
+	ExpiresAt       time.Time  `json:"expires_at"`
+	ApprovedBy      string     `json:"approved_by,omitempty"`
+	ApprovedByName  string     `json:"approved_by_name,omitempty"`
+	ApprovedAt      *time.Time `json:"approved_at,omitempty"`
+	ExecuteBy       *time.Time `json:"execute_by,omitempty"`
+	TerminalAt      *time.Time `json:"terminal_at,omitempty"`
 	// Verified is three-valued on purpose. True means the target was re-read
 	// and matched, false means it was re-read and did not, and absent means no
 	// check was performed -- which is a different fact from a failed one, and
@@ -1122,7 +1138,10 @@ type operationDTO struct {
 	Terminal          bool   `json:"terminal"`
 }
 
-func toDTO(op *operations.Operation) operationDTO {
+// toDTO renders an operation. names resolves a stored identifier to something
+// to read, and may be nil, in which case the identifier is what is rendered --
+// which is the correct fallback rather than a degraded one.
+func toDTO(op *operations.Operation, names map[string]string) operationDTO {
 	return operationDTO{
 		ID: op.ID, Plugin: op.Plugin, Action: op.Action,
 		State: op.State.String(), Risk: op.Risk.String(), Impact: op.Impact,
@@ -1131,8 +1150,10 @@ func toDTO(op *operations.Operation) operationDTO {
 		Before:      decodeJSON(op.Before),
 		Desired:     decodeJSON(op.Desired),
 		Observed:    decodeJSON(op.Observed),
-		RequestedBy: op.RequestedBy, RequestedAt: op.RequestedAt,
-		ExpiresAt: op.ExpiresAt, ApprovedBy: op.ApprovedBy,
+		RequestedBy: op.RequestedBy, RequestedByName: renderName(names, op.RequestedBy),
+		RequestedAt: op.RequestedAt,
+		ExpiresAt:   op.ExpiresAt,
+		ApprovedBy:  op.ApprovedBy, ApprovedByName: renderName(names, op.ApprovedBy),
 		ApprovedAt: op.ApprovedAt, ExecuteBy: op.ApprovalExpiresAt,
 		TerminalAt: op.TerminalAt, Verified: op.OutcomeVerified,
 		Assurance:    op.Assurance().String(),
@@ -1168,6 +1189,51 @@ func toAuditDTOs(records []operations.AuditRecord) []auditDTO {
 		})
 	}
 	return out
+}
+
+// displayNames maps principal identifiers to something a person can read.
+//
+// Only accounts are in it. A static token's principal has no row here and
+// renders as its own identifier, which is right: "service:chatgpt-connector"
+// is already the most informative thing anyone can say about it.
+//
+// One query, and it is deliberately not cached. Accounts are few, the page
+// that reads this is not on any hot path, and a cache here would mean a
+// renamed account keeping its old name on a screen until something evicted it.
+//
+// The map is built from every account and then read only for identifiers that
+// already appear on an operation the caller was allowed to see, so it does not
+// widen what a non-administrator learns about who else has an account. Nothing
+// from it reaches a response on its own.
+func (s *Server) displayNames(ctx context.Context) map[string]string {
+	if s.opts.Accounts == nil {
+		return nil
+	}
+	list, err := s.opts.Accounts.List(ctx)
+	if err != nil {
+		// A name is a convenience. Failing the whole page because one could
+		// not be looked up would trade the operation list for a nicety.
+		s.opts.Log.Warn("could not resolve display names", "error", err)
+		return nil
+	}
+	out := make(map[string]string, len(list))
+	for _, u := range list {
+		out["user:"+u.Email] = u.Name()
+	}
+	return out
+}
+
+// renderName resolves an identifier, falling back to the identifier itself. An
+// empty name is never returned for a non-empty identifier: a blank column
+// where a person should be is worse than a technical string.
+func renderName(names map[string]string, id string) string {
+	if id == "" {
+		return ""
+	}
+	if name, ok := names[id]; ok && name != "" {
+		return name
+	}
+	return id
 }
 
 func decodeJSON(raw json.RawMessage) any {

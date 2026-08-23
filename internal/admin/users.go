@@ -11,9 +11,16 @@ import (
 
 // userView is what the dashboard sees. The password hash is never in it: the
 // page has no use for it and every serialisation is a chance to leak it.
+//
+// Name and DisplayName are both here and they are not the same field.
+// DisplayName is what is stored, which may be empty, and is what an edit form
+// has to round-trip -- rendering the fallback into the input would make saving
+// the form persist the address as a name. Name is what to render, and is never
+// empty.
 type userView struct {
 	ID          string   `json:"id"`
 	Email       string   `json:"email"`
+	Name        string   `json:"name"`
 	DisplayName string   `json:"display_name"`
 	Role        string   `json:"role"`
 	Plugins     []string `json:"plugins"`
@@ -29,6 +36,7 @@ func viewOfUser(u *users.User, self bool) userView {
 	v := userView{
 		ID:          u.ID,
 		Email:       u.Email,
+		Name:        u.Name(),
 		DisplayName: u.DisplayName,
 		Role:        string(u.Role),
 		Plugins:     u.Plugins,
@@ -105,6 +113,10 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, users.ErrDuplicateEmail):
 		s.writeError(w, r, http.StatusConflict, "an account with that email already exists")
 		return
+	case errors.Is(err, users.ErrNameCollides):
+		s.writeError(w, r, http.StatusConflict,
+			"another account already uses that address as its display name")
+		return
 	case err != nil:
 		// Create's failures are all statements about the request -- a
 		// malformed address, an unknown role, a short password, an empty
@@ -171,6 +183,10 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusConflict,
 			"this is the last administrator; promote someone else first")
 		return
+	case errors.Is(err, users.ErrNameCollides):
+		s.writeError(w, r, http.StatusConflict,
+			"that display name is another account's address")
+		return
 	case err != nil:
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
@@ -213,4 +229,68 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	s.opts.Log.Info("account deleted", "account", id,
 		"by", auth.FromContext(r.Context()).ID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// accountRequest is what a person may change about their own account.
+//
+// One field, and that is the point. Everything else on an account -- its role,
+// its plugin grants, whether it is switched off -- is a grant somebody else
+// made, and an endpoint that let the holder edit those would be an endpoint
+// that hands out administration.
+type accountRequest struct {
+	DisplayName *string `json:"display_name"`
+}
+
+// handleUpdateAccount lets a person set their own display name.
+//
+// It is not administration, so it does not require CapAdmin. Naming yourself
+// is the one thing about an account its holder is the authority on, and the
+// alternative -- the state before this existed -- was a dashboard telling
+// every non-administrator to go and ask an administrator to type their name
+// for them.
+//
+// The account edited is the one the request authenticated as, and there is no
+// identifier in the request to say otherwise. That is what keeps this endpoint
+// from becoming a way around PATCH /api/users/{id}: it cannot address another
+// account, so there is no check to get wrong. Changing somebody else's name
+// still goes through the administrator's route.
+func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Accounts == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
+		return
+	}
+	id := s.currentAccountID(r)
+	if id == "" {
+		// A bearer token authenticates a script, which is a principal without
+		// an account. There is no row for it to name.
+		s.writeError(w, r, http.StatusForbidden,
+			"this credential is not an account, so there is nothing to name")
+		return
+	}
+	var req accountRequest
+	if !s.decode(w, r, &req) {
+		return
+	}
+	if req.DisplayName == nil {
+		s.writeError(w, r, http.StatusBadRequest, "display_name is required")
+		return
+	}
+
+	user, err := s.opts.Accounts.Update(r.Context(), id, users.UpdateRequest{
+		DisplayName: req.DisplayName,
+	})
+	switch {
+	case errors.Is(err, users.ErrNotFound):
+		s.writeError(w, r, http.StatusNotFound, "no such account")
+		return
+	case errors.Is(err, users.ErrNameCollides):
+		s.writeError(w, r, http.StatusConflict,
+			"that display name is another account's address")
+		return
+	case err != nil:
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.opts.Log.Info("account renamed itself", "account", id)
+	s.writeJSON(w, r, http.StatusOK, viewOfUser(user, true))
 }

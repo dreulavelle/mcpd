@@ -95,7 +95,11 @@ type signInRequest struct {
 // The CSRF token is returned in the body rather than a cookie: a page that can
 // read it is same-origin, which is exactly the property being tested.
 type sessionResponse struct {
-	Email       string   `json:"email"`
+	Email string `json:"email"`
+	// Name is what to render and is never empty; DisplayName is what is
+	// stored and may be. An Account page needs both -- one for the heading,
+	// one for the input the person edits.
+	Name        string   `json:"name"`
 	DisplayName string   `json:"display_name"`
 	Role        string   `json:"role"`
 	Plugins     []string `json:"plugins"`
@@ -221,6 +225,7 @@ func (s *Server) handleCurrentSession(w http.ResponseWriter, r *http.Request) {
 func sessionView(u *users.User, sess *users.Session) sessionResponse {
 	return sessionResponse{
 		Email:       u.Email,
+		Name:        u.Name(),
 		DisplayName: u.DisplayName,
 		Role:        string(u.Role),
 		Plugins:     u.Plugins,

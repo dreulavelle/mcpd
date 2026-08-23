@@ -155,6 +155,22 @@ additionally changes settings, makes tunnels, manages accounts, and clears
 history. Capabilities (`read`, `propose`, `approve`, `admin`) are what code
 checks — never the role directly.
 
+**A display name is a rendering, never an identity.** An account is identified
+by its address, and that is what every audit record, every guard and every
+grant is keyed on. The name is optional, falls back to the address when empty
+so nothing renders blank, and is resolved when a page is drawn rather than
+stored beside the thing it describes — a record keyed on a value its own
+subject can edit would be a record of nothing.
+
+Because identity does not depend on it, an account may set its own name without
+`admin`. `PATCH /api/account` carries no identifier and can only ever edit the
+account the request authenticated as, so there is no check to get wrong;
+naming somebody else is still `PATCH /api/users/{id}` and still `admin`. What
+bounds the value is a length, a refusal of control and invisible-formatting
+characters — a newline breaks a log line in two, and a bidirectional override
+renders a name as something it is not — and a condition in the `WHERE` clause
+of the write refusing a name that is another account's address.
+
 mcpd is not an OAuth authorization server. It was, and the endpoints were
 unreachable in the deployment they existed for: signing in through a tunnel
 needs mcpd reachable from the public internet, which is the one thing a tunnel

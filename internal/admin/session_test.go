@@ -28,6 +28,10 @@ type fakeAccounts struct {
 
 	deleted  []string
 	loggedIn []string
+	// updatedID and updatedReq record the last edit, so a test can check
+	// which account an endpoint aimed at as well as what it changed.
+	updatedID  string
+	updatedReq users.UpdateRequest
 	// count stands in for how many accounts exist, which is what decides
 	// whether the instance still offers registration.
 	count int
@@ -95,7 +99,11 @@ func (f *fakeAccounts) List(context.Context) ([]*users.User, error) {
 	return []*users.User{f.user}, nil
 }
 func (f *fakeAccounts) ByID(context.Context, string) (*users.User, error) { return f.user, nil }
-func (f *fakeAccounts) Update(context.Context, string, users.UpdateRequest) (*users.User, error) {
+func (f *fakeAccounts) Update(_ context.Context, id string, req users.UpdateRequest) (*users.User, error) {
+	f.updatedID, f.updatedReq = id, req
+	if req.DisplayName != nil {
+		f.user.DisplayName = *req.DisplayName
+	}
 	return f.user, nil
 }
 func (f *fakeAccounts) SetPassword(context.Context, string, string) error { return nil }
