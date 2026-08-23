@@ -580,6 +580,15 @@ export interface CatalogEntry {
   title: string;
   description: string;
   version: string;
+  /**
+   * A small image for the entry, when a catalogue offers one this host will
+   * pass on.
+   *
+   * Validated on the server -- https, absolute, bounded, no credentials -- and
+   * never fetched there. The browser fetches it, so a dead or slow icon host
+   * costs a placeholder in one row and nothing else; see `EntryIcon`.
+   */
+  icon?: string;
   /** From the document this host would dial, absent when there is nothing to dial. */
   transport?: string;
   url?: string;
@@ -591,8 +600,26 @@ export interface CatalogEntry {
    * does not run.
    */
   addable: boolean;
-  /** Why not. Present exactly when `addable` is false. */
+  /**
+   * Why not. Present exactly when `addable` is false.
+   *
+   * A listing does not return unaddable entries -- roughly half of what the
+   * catalogues publish only runs locally, and a page of ten that spends five
+   * rows saying so is a page of five. The fields stay because
+   * `GET /api/catalog/{name}` still explains a refusal, and because
+   * `?include_unaddable=1` still asks for them.
+   */
   reason?: string;
+  /**
+   * Whether importing will ask for a credential: "none" or "api_key". Empty
+   * where the entry cannot be imported at all and there is nothing to say.
+   *
+   * Worked out by this host from the document rather than taken from what a
+   * catalogue claims, so it means the same thing on every row -- and it means
+   * the thing an operator needs before clicking Add, which is whether they
+   * have to go and find a key first.
+   */
+  auth?: string;
   /** Which catalogue this entry came from, set on every entry. */
   source: string;
 }
@@ -606,7 +633,18 @@ export interface CatalogSource {
   retrieved_at?: string;
   /** How many entries it contributed, after deduplication. */
   entries: number;
+  /**
+   * How many of this source's documents the host parsed to build the answer,
+   * and how many of those it would accept. The measured ratio behind
+   * `addable_estimate`.
+   */
+  judged?: number;
+  addable?: number;
+  /** How many servers this source says it holds. Absent where it does not say. */
+  total?: number;
   error?: string;
+  /** What the source has to say about an answer it did give. */
+  note?: string;
 }
 
 /** One page of a browse or a search. */
@@ -616,6 +654,16 @@ export interface CatalogPage {
   entries: CatalogEntry[];
   /** Opaque, and absent at the end of the listing. */
   next_cursor?: string;
+  /**
+   * Roughly how many servers across these catalogues could be added here.
+   *
+   * A floor and an estimate. Two of the four sources report how much they
+   * hold and two do not, and addability is measured over the documents the
+   * host parsed rather than over every one that exists — so this is rendered
+   * with a "+" and never as a precise figure. Absent when nothing could be
+   * said, which is not the same as none.
+   */
+  addable_estimate?: number;
   /** True when a catalogue could not be reached and what it last said was served. */
   stale: boolean;
   retrieved_at: string;

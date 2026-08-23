@@ -197,6 +197,11 @@ func (p *PulseMCP) ListIfChanged(ctx context.Context, q Query, v Validators) (Pa
 	page.Sources = []SourceStatus{{
 		Source: p.Source(), OK: true,
 		RetrievedAt: page.RetrievedAt, Entries: len(entries),
+		// One page's worth, because one page is all this catalogue will show
+		// at a time -- it pages an opaque cursor and reports no total, so
+		// there is no larger sample to measure and no size to scale it
+		// against. See estimateAddable for what is done with that.
+		Judged: len(entries), Addable: countAddable(entries),
 	}}
 	return page, nil
 }

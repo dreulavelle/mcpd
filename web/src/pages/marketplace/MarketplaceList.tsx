@@ -74,6 +74,9 @@ export function MarketplaceList() {
         onOpenChange={setImporting}
         seedName={seed?.suggested_name}
         seedDocument={seed?.document}
+        // Everything the card no longer shows. Read-only: the import is still
+        // the document in the box, by the same call a paste makes.
+        seedEntry={seed?.entry}
         taken={installed.names}
         // Straight to where it is managed. The next steps -- fill in what it
         // asks for, discover, classify -- all live on that page.

@@ -38,6 +38,12 @@ export interface CatalogQuery {
   cursor?: string;
   /** Asks the catalogue again now, rather than reusing what is held. */
   refresh?: boolean;
+  /**
+   * How many entries to ask for. The server bounds the merged page to this
+   * across every catalogue, which it did not always do: the limit used to be
+   * applied by each source independently, so asking for ten returned thirty.
+   */
+  limit?: number;
 }
 
 /** What the catalogue answered. */
@@ -51,6 +57,12 @@ export interface Catalog {
   entries: CatalogEntry[];
   /** Absent at the end of the listing. */
   next_cursor?: string;
+  /**
+   * Roughly how many servers can be added from these catalogues, as a floor.
+   * Rendered with a "+" and never as a precise figure — see the field's note
+   * in `api.ts`. Absent when nothing could be said.
+   */
+  addable_estimate?: number;
   /** Every catalogue that answered, as one line. */
   source: string;
   /** How each of them fared, so a shorter page can say why it is shorter. */
@@ -74,6 +86,19 @@ export interface CatalogChoice {
   name: string;
   suggested_name: string;
   document: unknown;
+  /**
+   * Everything about the entry that is not on the card.
+   *
+   * Version, transport, endpoint, credential, catalogue and date used to sit
+   * on the listing, where they cost a row each on every card and answered a
+   * question nobody was asking while scrolling. They belong in the dialog: it
+   * opens when somebody has decided to look at one server, which is the moment
+   * the detail is worth the space.
+   *
+   * It is shown, not acted on. What is imported is `document`, by the same
+   * call a pasted one makes.
+   */
+  entry: CatalogEntry;
 }
 
 /** How the page browses. Injectable so a test can supply a catalogue. */
@@ -93,6 +118,7 @@ export const loadCatalog: CatalogLoader = async (query) => {
       search: query.search,
       cursor: query.cursor,
       refresh: query.refresh,
+      limit: query.limit,
     });
     // Entries and sources default to empty rather than being trusted: this
     // console has twice been blanked by a list the server sent as null, and

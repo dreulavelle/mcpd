@@ -632,3 +632,93 @@ func namesOf(page Page) []string {
 	}
 	return out
 }
+
+// TestSmitheryList_IsMostUsedFirst.
+//
+// The default view of a catalogue with ten thousand servers in it is a sample,
+// and an arbitrary sample is worth very little: "here are ten servers" is not
+// the same offer as "here are ten servers people use". Smithery counts calls
+// to every server it hosts and publishes the count on every listing row, which
+// is the only usage signal any of the four catalogues gives, so this source
+// orders by it.
+//
+// The fixture is the live API's own page one, and it is deliberately not in
+// use order -- Smithery's paging is by popularity but is not a total order,
+// which is the same reason its pages repeat rows. The ordering is rebuilt here
+// as a total one, which is also what lets the cursor resume from it.
+func TestSmitheryList_IsMostUsedFirst(t *testing.T) {
+	page, err := serveSmithery(t).List(context.Background(),
+		Query{Limit: MaxEntriesPerPage, IncludeUnaddable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"brave", "gmail", "googlesheets", "theagenttimes/news",
+		"onesignal/onesignal", "subwayinfo", "exa", "gautamgb/mcpindex",
+	}
+	got := make([]string, 0, len(page.Entries))
+	for _, e := range page.Entries {
+		got = append(got, e.Name)
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v,\nwant  = %v", got, want)
+	}
+}
+
+// TestSmitheryList_TheCursorResumesTheRanking.
+//
+// The cursor used to be the last name on the page, which works only while the
+// order is the name order. It is now the rank key, for the same reason: it has
+// to be a value the next page can search the ordering for, and the ordering is
+// no longer alphabetical.
+func TestSmitheryList_TheCursorResumesTheRanking(t *testing.T) {
+	smithery := serveSmithery(t)
+	seen := []string{}
+	cursor := ""
+	for range 10 {
+		page, err := smithery.List(context.Background(),
+			Query{Limit: 3, Cursor: cursor, IncludeUnaddable: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range page.Entries {
+			seen = append(seen, e.Name)
+		}
+		cursor = page.NextCursor
+		if cursor == "" {
+			break
+		}
+	}
+	want := []string{
+		"brave", "gmail", "googlesheets", "theagenttimes/news",
+		"onesignal/onesignal", "subwayinfo", "exa", "gautamgb/mcpindex",
+	}
+	if strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Errorf("paged through %v,\nwant        %v", seen, want)
+	}
+}
+
+// TestSmitheryList_ReportsWhatSmitheryHolds.
+//
+// The one source of the four that answers "how many are there". It is the
+// larger half of the figure beside the search box, and the reason the figure
+// exists at all: a page of ten out of ten thousand looks exactly like a
+// catalogue of ten.
+func TestSmitheryList_ReportsWhatSmitheryHolds(t *testing.T) {
+	page, err := serveSmithery(t).List(context.Background(), Query{Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := page.Sources[0]
+	if status.Total != 10498 {
+		t.Errorf("total = %d, want the 10498 the fixture reports", status.Total)
+	}
+	// Judged is the whole window rather than the page, which is what makes
+	// the ratio behind the estimate worth quoting.
+	if status.Judged != 8 {
+		t.Errorf("judged = %d, want the whole window of 8", status.Judged)
+	}
+	if status.Addable != 7 {
+		t.Errorf("addable = %d, want 7: one of the eight only runs locally", status.Addable)
+	}
+}

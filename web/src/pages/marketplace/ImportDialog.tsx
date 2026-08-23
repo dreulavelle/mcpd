@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
-import { api, ApiError } from "@/lib/api";
-import { Notice } from "@/components/chrome";
+import { api, ApiError, type CatalogEntry } from "@/lib/api";
+import { relative, when } from "@/lib/format";
+import { Detail, Notice } from "@/components/chrome";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +31,14 @@ import { Textarea } from "@/components/ui/textarea";
  * entry it is for, so a fresh dialog is built rather than new values being
  * pushed underneath a half-edited paste.
  *
+ * It is also where a catalogued entry's detail lives. Version, transport,
+ * endpoint, credential, catalogue and date used to be on every card in the
+ * listing, six facts to a card and most of a card, answering a question
+ * nobody asks while scrolling past a hundred of them. Here they are in front
+ * of one person deciding about one server, which is the moment they are worth
+ * the space -- and the credential line especially, because needing a key is
+ * better learned before pressing Add than after.
+ *
  * The name collides more often than it looks like it should. Many registry
  * names end in `/mcp`, so the catalogue suggests `mcp` for a great many
  * unrelated servers, and the second one an operator adds is refused. Being
@@ -40,7 +49,7 @@ import { Textarea } from "@/components/ui/textarea";
  * dialog.
  */
 export function ImportDialog({
-  open, onOpenChange, onImported, seedName, seedDocument, taken,
+  open, onOpenChange, onImported, seedName, seedDocument, seedEntry, taken,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -49,6 +58,14 @@ export function ImportDialog({
   seedName?: string;
   /** The catalog's copy of the published document, shown for reading. */
   seedDocument?: unknown;
+  /**
+   * The catalogue entry behind the document, for reading only.
+   *
+   * Absent for a pasted document, which has no catalogue entry to describe.
+   * Nothing here is imported: what is imported is the text in the box, by the
+   * same call a paste makes.
+   */
+  seedEntry?: CatalogEntry;
   /** Plugin names already in use here. */
   taken?: Set<string>;
 }) {
@@ -135,6 +152,8 @@ export function ImportDialog({
 
         {problem && <Notice tone="problem">{problem}</Notice>}
 
+        {seedEntry && <CatalogFacts entry={seedEntry} />}
+
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="mcp-name">Name</Label>
@@ -194,5 +213,49 @@ export function ImportDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * What the catalogue says about this server, other than what it does.
+ *
+ * The half of an entry that is not a name and a description. It reads rather
+ * than acts: the endpoint is shown because an operator about to let this host
+ * reach somebody else's address should be able to see the address.
+ *
+ * The credential line is the one people act on. "Needs an API key" means the
+ * settings form on the plugin page will ask for one, so the time to go and
+ * find it is now rather than after the import.
+ *
+ * A field the catalogue did not fill in is left out rather than rendered
+ * empty: Smithery versions a deployment rather than a release and Docker
+ * versions an image, so both leave the version blank, and a dash there would
+ * read as a value somebody chose.
+ */
+function CatalogFacts({ entry }: { entry: CatalogEntry }) {
+  const credential = entry.auth === "api_key"
+    ? "Needs an API key"
+    : entry.auth === "none" ? "No credential" : "";
+  return (
+    <dl className="grid gap-x-6 gap-y-3 rounded-md border bg-muted/30 p-3 sm:grid-cols-2">
+      {entry.version && (
+        <Detail label="Version"><span className="font-mono">{entry.version}</span></Detail>
+      )}
+      {entry.transport && <Detail label="Transport">{entry.transport}</Detail>}
+      {credential && <Detail label="Credential">{credential}</Detail>}
+      {entry.updated_at && (
+        <Detail label="Updated">
+          <span title={when(entry.updated_at)}>{relative(entry.updated_at)}</span>
+        </Detail>
+      )}
+      {entry.source && <Detail label="Catalogue">{entry.source}</Detail>}
+      {entry.url && (
+        <Detail label="Endpoint" className="sm:col-span-2">
+          <span className="block truncate font-mono text-xs" title={entry.url}>
+            {entry.url}
+          </span>
+        </Detail>
+      )}
+    </dl>
   );
 }

@@ -589,8 +589,32 @@ and sixty-nine distinct servers when measured, and pages one and two shared
 thirty-nine. Page one is stable when refetched, so it is not jitter a retry
 would fix — the ordering is by popularity and is not a total order. The window
 is fetched whole (page one, then the rest concurrently) and deduplicated by
-name before anything is paged out of it, which is also what makes the cursor a
-resume point rather than an offset into a list that reshuffles.
+name before anything is paged out of it.
+
+**Then it is ordered by use, which is the only real quality signal any of the
+four publishes.** Every Smithery listing row carries a `useCount` — how many
+times Smithery has been asked to call that server — and the numbers are not
+close: the head of the catalogue is in the tens of thousands and the tail is at
+zero. A default view of ten servers out of twelve thousand is a sample either
+way, and "ten servers people use" is a far better sample than "ten servers".
+`verified` breaks a tie, because Smithery vouching for a listing is worth
+something between two servers nobody has called and nothing at all against one
+with fifty thousand calls behind it; the name breaks the remaining ties, which
+is what makes the ordering *total* — and a total order is what lets the cursor
+be a resume point rather than an offset into a list that reshuffles. The cursor
+is the rank key rather than the last name, for exactly that reason.
+
+**There is no cross-source ranking, because there is no cross-source signal.**
+The obvious next step is a merged "most used" order, and it cannot be built
+honestly. The official registry and Docker publish no usage figure at all.
+PulseMCP publishes one, but it is `visitorsEstimateMostRecentWeek` — unique
+visitors to a listing page — which is not the same measurement as a count of
+tool calls and does not become one by being divided by something. Two of four
+sources silent and the other two counting different things is not a ranking
+waiting for a normalisation; it is a normalisation this host would have to
+invent and then present as a fact. So each source is ordered by the best signal
+it actually has, `Multi` interleaves them round-robin, and the page says it is
+a sample rather than a top ten.
 
 **One Smithery key opens every Smithery server, and it still lives in the
 per-server settings.** Every hosted server is at
@@ -631,16 +655,87 @@ and so is not the leaf it otherwise would be. The alternative was to
 re-implement the acceptance rule beside the catalogue, which is the same bug
 with an extra copy of the code to keep in step.
 
-**Remote servers only.** Roughly half of the official registry, three
-quarters of Docker's catalogue, and the servers Smithery does not host are
-published solely as something to run
-locally — an npm package, a container, a command. This host does not run those.
-They are listed with the reason rather than filtered out, because "why is the
-thing I came for not here" is a worse question than a greyed-out row that
-answers it. Docker's `type: server` and `type: poci` entries are exactly that
-case, and so is an entry reachable only through an OAuth flow Docker's own
-gateway performs: this host sends a credential an operator configured, and the
-entry does not say which header would carry the one that flow obtains.
+**Remote servers only, and a listing does not show the rest.** Roughly half of
+the official registry, three quarters of Docker's catalogue, and the servers
+Smithery does not host are published solely as something to run locally — an
+npm package, a container, a command. This host does not run those. Docker's
+`type: server` and `type: poci` entries are exactly that case, and so is an
+entry reachable only through an OAuth flow Docker's own gateway performs: this
+host sends a credential an operator configured, and the entry does not say
+which header would carry the one that flow obtains.
+
+They used to be listed, greyed, with the reason, on the argument that "why is
+the thing I came for not here" is a worse question than a row that answers it.
+That was right at thirty rows a page and wrong at ten. An operator who used it
+reported the noise as worse than the missing answer, and the arithmetic agrees:
+a page of ten that spends five rows explaining refusals is a page of five. So
+`Multi` drops them, server-side, *before* the paging — which is the only place
+it can be done and still have ten rows mean ten usable rows.
+
+Nothing about the machinery is weaker for it. Addability is still decided by
+`mcpservers.Parse` and `mcpremote.Fields`, both of them; `addable` and its
+reason are still on every entry; `GET /api/catalog/{name}` still explains a
+refusal in full, because somebody who came looking for one server in particular
+is owed the answer; and `?include_unaddable=1` still returns them for an
+operator who wants to see what is being withheld. What changed is what a
+*listing* is for.
+
+**A limit bounds the page, not each catalogue.** It did not, and the bug was
+worth more than it looks. Every source was handed the caller's limit and
+honoured it independently, so a request for ten returned thirty and a request
+for thirty returned ninety — three sources' worth, merged. The API said one
+thing and the endpoint did another, the dashboard rendered and shipped three
+times what it asked for, and an operator reading ninety rows concluded the
+catalogues held ninety servers between them. They hold something over twelve
+thousand.
+
+So `Multi` pages. Each source is asked for a window of twice the page, with a
+floor of twenty; the windows are merged in preference order, filtered,
+deduplicated, and handed out `limit` at a time. Sources are *read* round-robin
+even though duplicates are *resolved* in preference order, because reading in
+preference order would mean the second catalogue was never reached until the
+first's twenty-four thousand entries ran out.
+
+That forces the cursor to carry more than a cursor. A bounded page very often
+stops halfway through a source's window, and a source's own cursor can only say
+"the next window" — resuming there would silently drop the other half of every
+window in every catalogue, which nothing but a total would reveal. So each
+source's position is a pair: its own cursor, and how far into that window the
+last page reached. Re-asking for a half-read window is free, because the
+per-source cache is in front of it — which is also why the over-fetch pays for
+itself. Measured against three catalogues at a 120 ms round trip each, page one
+costs the same as it always did (both shapes fan out concurrently and both wait
+on the slowest catalogue) and page two went from a 251 ms fan-out to a cache
+read, while the default listing's payload fell from 47 KiB to 5.9 KiB.
+
+**How big is it.** A page of ten out of twelve thousand looks exactly like a
+catalogue of ten, so the page says roughly how many servers can be added and
+the search box sits next to that number rather than above a grid. It is an
+estimate and is rendered as one — rounded down to two significant figures and
+carrying a `+` — because it cannot honestly be anything else. Only two of the
+four sources report how much they hold: Smithery sends a `totalCount`, and
+Docker's catalogue arrives as one document whose length is the count. Neither
+reports how many of its servers *this host* would accept, and finding out for
+certain means parsing twenty-four thousand `server.json` files behind a page
+load. So the ratio is measured over the documents that were parsed anyway while
+the page was built, and applied to the size the source gave. Smithery's sample
+is its most popular five hundred and so runs optimistic; the two sources that
+report no size contribute only what was seen and so run far short; a source
+that did not answer contributes nothing and the page says so, because a total
+that does not move when a catalogue goes down is worse than a smaller one.
+
+**An icon is a URL, and a URL is not a picture.** Smithery, Docker and
+`server.json` all offer one, and it goes straight into an `<img src>` on an
+administrator's page — so it is allow-listed rather than sanitised: `https`
+only, absolute, a real host, no credentials, no control characters, length
+bounded, and omitted entirely if it is anything else. `http` is refused because
+a dashboard served over TLS should not be making plaintext subresource
+requests; `data:` is refused because an SVG carries script and this would put
+it in the page's own origin. Nothing here fetches it — no proxying, no
+prefetch, no reachability check — because a server-side fetch of an address a
+third party chose is a server-side request forgery whatever it is called. The
+browser fetches it, lazily, with no referrer, and a dead host costs one
+placeholder.
 
 **A composed document is still a document.** Docker's format is not
 `server.json`, so an entry is translated into one — the derived name says where

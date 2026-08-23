@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "@/lib/api";
 import { renderWith } from "@/test/render";
@@ -14,8 +14,10 @@ const WEATHER: CatalogEntry = {
   version: "1.0.0",
   transport: "streamable-http",
   url: "https://weather.example/mcp",
+  icon: "https://icons.example/weather.png",
   updated_at: "2026-08-01T10:00:00Z",
   addable: true,
+  auth: "api_key",
   source: "registry.modelcontextprotocol.io",
 };
 
@@ -222,18 +224,39 @@ describe("paging", () => {
 
 /**
  * Roughly half of what the catalogues publish only runs locally, and this host
- * does not run those. Hiding them makes "why isn't the thing I came for here"
- * unanswerable; offering an Add that fails is the thing the server works hard
- * to prevent.
+ * does not run those.
+ *
+ * They used to be listed, greyed, with the reason. That was the right answer
+ * at thirty rows a page and the wrong one at ten: a page of ten that spends
+ * five rows explaining refusals is a page of five, and the operator who
+ * complained had used it and found the noise worse than the missing answer.
+ *
+ * So the server leaves them out of a listing, ahead of the paging. Nothing
+ * about the machinery changed -- the entry still carries `addable` and its
+ * reason, and asking for one by name still explains the refusal in full.
  */
 describe("an entry this host cannot accept", () => {
-  it("is listed, with the reason, and without an Add", async () => {
+  it("is not something the page has to render, because a listing has none", async () => {
+    await render({ load: catalog([WEATHER, TICKETS]) });
+
+    await screen.findByText("Weather");
+    // Two entries, two Adds. No row spends itself on a refusal.
+    expect(screen.getAllByRole("button", { name: "Add" })).toHaveLength(2);
+    expect(screen.queryByText(/does not run packaged servers/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * Belt and braces. `?include_unaddable=1` is still an endpoint an operator
+   * can reach, and an Add button that cannot work is the one thing the server
+   * works hardest not to offer -- so if one ever arrives here, it does not get
+   * one.
+   */
+  it("is shown without an Add if one arrives anyway", async () => {
     await render({ load: catalog([WEATHER, LOCAL_ONLY]) });
 
     expect(await screen.findByText("Notes")).toBeInTheDocument();
-    expect(screen.getByText(/does not run packaged servers/)).toBeInTheDocument();
-    // One Add, for the one entry that can take one.
     expect(screen.getAllByRole("button", { name: "Add" })).toHaveLength(1);
+    expect(screen.getByText("Can't be added")).toBeInTheDocument();
   });
 });
 
@@ -298,7 +321,7 @@ describe("something already added", () => {
     });
 
     await screen.findByText("Weather");
-    expect(screen.getByRole("link", { name: /Already added as forecast/ }))
+    expect(screen.getByRole("link", { name: /Added as forecast/ }))
       .toHaveAttribute("href", "/plugins/forecast");
     expect(screen.getAllByRole("button", { name: "Add" })).toHaveLength(1);
   });
@@ -307,6 +330,10 @@ describe("something already added", () => {
    * A name is not an identity. Many registry names end in `/mcp`, so the same
    * suggestion arrives for unrelated servers -- greying those out would hide a
    * server nobody has added because somebody added a different one.
+   *
+   * The warning about the collision is not here any more. It was a sentence on
+   * a card, about a field on a form the operator had not opened yet; the
+   * dialog already says the same thing beside the box they would fix it in.
    */
   it("still offers a different server whose suggested name is taken", async () => {
     await render({
@@ -315,7 +342,7 @@ describe("something already added", () => {
 
     await screen.findByText("Weather");
     expect(screen.getAllByRole("button", { name: "Add" })).toHaveLength(2);
-    expect(screen.getByText(/is\s+taken here/)).toBeInTheDocument();
+    expect(screen.queryByText(/taken here/)).not.toBeInTheDocument();
   });
 });
 
@@ -333,12 +360,23 @@ describe("picking one", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
 
-    await waitFor(() => expect(onAdd).toHaveBeenCalledWith({
+    await waitFor(() => expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({
       name: "com.example/weather",
       suggested_name: "weather",
       document: { name: "com.example/weather", version: "1.0.0" },
-    }));
+    })));
     expect(loadDocument).toHaveBeenCalledWith("com.example/weather");
+
+    // And the entry itself, because everything the card stopped showing is
+    // shown in the dialog this opens.
+    const choice = onAdd.mock.calls[0]![0] as { entry: CatalogEntry };
+    expect(choice.entry).toMatchObject({
+      version: "1.0.0",
+      transport: "streamable-http",
+      url: "https://weather.example/mcp",
+      auth: "api_key",
+      source: "registry.modelcontextprotocol.io",
+    });
   });
 
   it("says so when the document cannot be read, and adds nothing", async () => {
@@ -354,5 +392,252 @@ describe("picking one", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
     expect(await screen.findByText(/no active server by that name/)).toBeInTheDocument();
     expect(onAdd).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The page asks for ten.
+ *
+ * It used to ask for the server's default of thirty and get ninety, because
+ * the limit was applied by each catalogue independently rather than to the
+ * merged page. Both halves of that are fixed, and this is the half that lives
+ * here: the page says how many it wants, every time it asks.
+ */
+describe("how much is asked for", () => {
+  it("asks for ten at a time", async () => {
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>(async () =>
+      answer([WEATHER], { next_cursor: "page-2" }));
+    await render({ load });
+
+    await screen.findByText("Weather");
+    expect(load).toHaveBeenCalledWith(expect.objectContaining({ limit: 10 }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    await waitFor(() =>
+      expect(load).toHaveBeenCalledWith(expect.objectContaining({ cursor: "page-2", limit: 10 })));
+  });
+
+  /**
+   * Rows are for scanning, so a page of them is a screenful of lines rather
+   * than a screenful of cards. Changing density does not re-ask for what is
+   * already on screen -- that would throw away a page somebody is reading to
+   * render the same servers differently.
+   */
+  it("asks for more per page in the compact view, without re-asking for this one", async () => {
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>(async () =>
+      answer([WEATHER], { next_cursor: "page-2" }));
+    await render({ load });
+
+    await screen.findByText("Weather");
+    expect(load).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Rows" }));
+    expect(load).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    await waitFor(() =>
+      expect(load).toHaveBeenCalledWith(expect.objectContaining({ limit: 40 })));
+  });
+
+  it("keeps Show more in both densities rather than scrolling forever", async () => {
+    await render({ load: catalog([WEATHER], { next_cursor: "page-2" }) });
+
+    await screen.findByText("Weather");
+    expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Rows" }));
+    expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+  });
+});
+
+/**
+ * A card is an icon, a name and a description.
+ *
+ * Everything else -- version, transport, endpoint, credential, catalogue, date
+ * -- was six facts to a card and most of a card, and it answered a question
+ * nobody asks while scrolling. It is all in the dialog Add opens.
+ *
+ * The catalogue's name is gone rather than moved: an operator picking a server
+ * does not care which of four public lists this host read it from.
+ */
+describe("what a card shows", () => {
+  it("shows the name and what it does, and nothing else", async () => {
+    await render({ load: catalog([WEATHER]) });
+
+    expect(await screen.findByText("Weather")).toBeInTheDocument();
+    expect(screen.getByText("Forecasts and observations.")).toBeInTheDocument();
+
+    expect(screen.queryByText("registry.modelcontextprotocol.io")).not.toBeInTheDocument();
+    expect(screen.queryByText("streamable-http")).not.toBeInTheDocument();
+    expect(screen.queryByText("https://weather.example/mcp")).not.toBeInTheDocument();
+    expect(screen.queryByText("1.0.0")).not.toBeInTheDocument();
+  });
+
+  it("shows the icon a catalogue offered, lazily and without a referrer", async () => {
+    await render({ load: catalog([WEATHER]) });
+
+    await screen.findByText("Weather");
+    const icon = document.querySelector("img[src='https://icons.example/weather.png']");
+    expect(icon).not.toBeNull();
+    // The row must not wait for somebody else's image host, and that host has
+    // no business knowing the address of an internal dashboard.
+    expect(icon).toHaveAttribute("loading", "lazy");
+    expect(icon).toHaveAttribute("referrerpolicy", "no-referrer");
+  });
+
+  /**
+   * Many entries have no icon, and some of the URLs that exist are dead. A
+   * broken-image glyph in a list is worse than a neutral mark, and either is
+   * better than a row whose layout waits on a third party.
+   */
+  it("falls back to a placeholder when there is no icon", async () => {
+    await render({ load: catalog([TICKETS]) });
+
+    await screen.findByText("Tickets");
+    expect(document.querySelector("img")).toBeNull();
+  });
+
+  it("falls back to a placeholder when the icon will not load", async () => {
+    await render({ load: catalog([WEATHER]) });
+
+    await screen.findByText("Weather");
+    const icon = document.querySelector("img")!;
+    fireEvent.error(icon);
+    await waitFor(() => expect(document.querySelector("img")).toBeNull());
+    // Still a row, still an Add.
+    expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
+  });
+});
+
+/**
+ * How big the catalogue is.
+ *
+ * The other half of the "only 90 here" bug. Ten rows out of twelve thousand
+ * look exactly like a catalogue of ten, and the operator who read thirty rows
+ * as ninety servers was reading the page correctly -- the page was wrong.
+ *
+ * The figure is an estimate and says so, because it has to be: two of the four
+ * catalogues report no size at all, and none of them says how many of its
+ * servers this host would accept. The "+" is doing real work.
+ */
+describe("the size of the catalogue", () => {
+  it("says roughly how many can be added, as a floor", async () => {
+    await render({ load: catalog([WEATHER], { addable_estimate: 7900 }) });
+
+    expect(await screen.findByText("7,900+")).toBeInTheDocument();
+    expect(screen.getByText(/an estimate, and a low one/)).toBeInTheDocument();
+  });
+
+  it("says nothing rather than guessing when nothing could be said", async () => {
+    await render({ load: catalog([WEATHER]) });
+
+    await screen.findByText("Weather");
+    expect(screen.queryByText(/servers you can add/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A total that does not move when a catalogue goes down is worse than a
+   * smaller one, so a source that did not answer is not counted -- and the
+   * line says as much, rather than quietly shrinking.
+   */
+  it("says when it is short a catalogue that did not answer", async () => {
+    await render({
+      load: catalog([WEATHER], {
+        addable_estimate: 140,
+        sources: [
+          { source: "docker/mcp-registry", ok: true, stale: false, entries: 1 },
+          { source: "registry.smithery.ai", ok: false, stale: false, entries: 0, error: "timeout" },
+        ],
+      }),
+    });
+
+    expect(await screen.findByText(/not counted here at all/)).toBeInTheDocument();
+  });
+
+  /**
+   * It is a fact about the catalogues rather than about the answer, and it is
+   * most useful while somebody is typing -- which is exactly when the server
+   * is reporting the size of the *match* instead.
+   */
+  it("keeps the browse figure while a search is running", async () => {
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>(async (q) =>
+      q.search
+        ? answer([TICKETS], { addable_estimate: 3 })
+        : answer([WEATHER], { addable_estimate: 7900 }));
+    await render({ load });
+
+    await screen.findByText("7,900+");
+    await userEvent.type(screen.getByLabelText("Search the catalogue"), "tickets");
+
+    await screen.findByText("Tickets");
+    expect(screen.getByText("7,900+")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The next page, fetched while nothing else is happening.
+ *
+ * Cheap in a way worth knowing: the server asks each source for twice what a
+ * page needs, so the page after this one is almost always the same upstream
+ * answer read from a different offset -- a cache read, no third party
+ * involved.
+ *
+ * Only where `requestIdleCallback` exists. A browser without one gets the
+ * ordinary fetch on click rather than a timer racing the page it is meant to
+ * be staying out of the way of, which is also what keeps this deterministic.
+ */
+describe("prefetching the next page", () => {
+  function withIdleCallback() {
+    const pending: (() => void)[] = [];
+    vi.stubGlobal("requestIdleCallback", (fn: () => void) => {
+      pending.push(fn);
+      return pending.length;
+    });
+    vi.stubGlobal("cancelIdleCallback", () => {});
+    return {
+      run: () => { pending.splice(0).forEach((fn) => fn()); },
+      get count() { return pending.length; },
+    };
+  }
+
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("has the next page in hand before Show more is pressed", async () => {
+    const idle = withIdleCallback();
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>(async (q) =>
+      q.cursor ? answer([TICKETS]) : answer([WEATHER], { next_cursor: "page-2" }));
+    await render({ load });
+
+    await screen.findByText("Weather");
+    idle.run();
+    await waitFor(() =>
+      expect(load).toHaveBeenCalledWith(expect.objectContaining({ cursor: "page-2" })));
+    expect(load).toHaveBeenCalledTimes(2);
+
+    // Pressing it spends what was already fetched rather than asking again.
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("Tickets")).toBeInTheDocument();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not spend a held page on a different question", async () => {
+    const idle = withIdleCallback();
+    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>(async (q) =>
+      q.search
+        ? answer([TICKETS], { next_cursor: "search-2" })
+        : answer([WEATHER], { next_cursor: "page-2" }));
+    await render({ load });
+
+    await screen.findByText("Weather");
+    idle.run();
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+
+    await userEvent.type(screen.getByLabelText("Search the catalogue"), "tickets");
+    await screen.findByText("Tickets");
+
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    await waitFor(() =>
+      expect(load).toHaveBeenCalledWith(expect.objectContaining({
+        search: "tickets", cursor: "search-2",
+      })));
   });
 });
