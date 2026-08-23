@@ -17,6 +17,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -52,6 +54,7 @@ const (
 	maxReasonRunes      = 512
 	maxQueryRunes       = 128
 	maxCursorRunes      = 512
+	maxSchemaLabelRunes = 96
 )
 
 // Entry is one server a catalogue offers, as the dashboard sees it.
@@ -83,6 +86,11 @@ type Entry struct {
 	// servers, and offering an Add button that cannot work is worse than
 	// saying so.
 	Reason string `json:"reason,omitempty"`
+	// Source names the catalogue this entry came from. On a page merged from
+	// more than one it is the only thing that distinguishes them, and it is
+	// set on every entry rather than only on merged pages so that a consumer
+	// never has to know which kind of page it is holding.
+	Source string `json:"source"`
 }
 
 // Detail is one entry together with the document that would be imported.
@@ -94,9 +102,13 @@ type Detail struct {
 	Entry `json:",inline"`
 	// Document is the server.json itself, as an object, so a dashboard can
 	// post it to the import endpoint without re-encoding it.
+	//
+	// The catalogue this came from is Entry.Source, promoted through the
+	// embedding. There is deliberately no second Source field here: two
+	// fields encoding to one JSON key would let them disagree, and the one
+	// that reached the wire would be decided by Go's shadowing rules rather
+	// than by anything a reader could see.
 	Document json.RawMessage `json:"document"`
-	// Source names the catalogue this came from.
-	Source string `json:"source"`
 	// Stale reports that the catalogue could not be reached and this is what
 	// was last seen. It is never an error: a browsable stale list beats a
 	// page that refuses to render because a third party is down.
@@ -104,6 +116,10 @@ type Detail struct {
 	// RetrievedAt is when the data was actually fetched, which is what makes
 	// Stale readable rather than merely alarming.
 	RetrievedAt time.Time `json:"retrieved_at"`
+	// Freshness is what the catalogue said about reusing this answer. Read by
+	// the cache and not by the dashboard, which is told about staleness by the
+	// two fields above.
+	Freshness Freshness `json:"-"`
 }
 
 // Page is one page of a browse or search.
@@ -114,6 +130,39 @@ type Page struct {
 	NextCursor  string    `json:"next_cursor,omitempty"`
 	Stale       bool      `json:"stale"`
 	RetrievedAt time.Time `json:"retrieved_at"`
+	// Freshness is what the catalogue said about reusing this answer. Not part
+	// of the wire shape; see Detail.Freshness.
+	Freshness Freshness `json:"-"`
+	// Sources says which catalogues this page was assembled from and how each
+	// of them fared.
+	//
+	// A page built from more than one catalogue is not honest without it. One
+	// source being down while another answers produces a shorter list, not an
+	// error, and a shorter list that does not say a source is missing reads as
+	// "there is nothing else" rather than as "we could not ask". A single
+	// source reports itself here too, so a consumer has one shape to read.
+	Sources []SourceStatus `json:"sources"`
+}
+
+// SourceStatus is how one catalogue fared on one request.
+type SourceStatus struct {
+	Source string `json:"source"`
+	// OK is false when the catalogue could not be reached and nothing was
+	// held for it. An OK false source contributed no entries.
+	OK bool `json:"ok"`
+	// Stale reports that the catalogue could not be reached and what it last
+	// said was served instead.
+	Stale bool `json:"stale"`
+	// RetrievedAt is when this source's data was actually fetched.
+	RetrievedAt time.Time `json:"retrieved_at,omitempty"`
+	// Entries is how many this source contributed after deduplication, which
+	// is what makes "this source answered" a checkable claim rather than a
+	// flag.
+	Entries int `json:"entries"`
+	// Error says what went wrong, when OK is false. It is a third party's
+	// failure, not this host's, and the operator deciding whether to wait
+	// needs to see which.
+	Error string `json:"error,omitempty"`
 }
 
 // Query is one browse or search request.
@@ -155,11 +204,12 @@ func (q Query) Normalised() Query {
 
 // Client is a catalogue of MCP servers.
 //
-// An interface so a second catalogue can be added without touching a caller.
-// There is one implementation today and adding another is a decision nobody
-// has made yet; what this buys now is that the cache in front of it and the
-// handler behind it are written against a contract rather than against the
-// official registry's quirks.
+// An interface so a catalogue can be added without touching a caller. There
+// are two real ones -- the official registry and Docker's -- plus the TTL
+// cache and the multiplexer, which are Clients over Clients: the cache goes in
+// front of each source so that one being down is one source's staleness rather
+// than the page's, and Multi goes in front of the caches so that the handler
+// still talks to a single catalogue.
 type Client interface {
 	// List returns one page of servers.
 	List(ctx context.Context, q Query) (Page, error)
@@ -167,6 +217,23 @@ type Client interface {
 	Get(ctx context.Context, name string) (Detail, error)
 	// Source names the catalogue, for the operator and for cache keys.
 	Source() string
+}
+
+// readBounded reads at most max bytes from a catalogue's response.
+//
+// Bounded before decoding, not after: a decoder reading an unbounded body from
+// a third party is a memory limit set by somebody else. A body that exceeds
+// the bound returns nil rather than what fitted, because half a catalogue is
+// not a catalogue and the caller has to be able to tell the difference.
+func readBounded(body io.Reader, max int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, nil
+	}
+	return data, nil
 }
 
 // --- bounding untrusted text -----------------------------------------------
@@ -289,18 +356,20 @@ func describe(document []byte) (transport, url string, addable bool, reason stri
 	}
 	doc, err := mcpservers.Parse(document)
 	if err != nil {
-		// The commonest refusal by far, and the one whose default message
-		// reads worst in a list: roughly a fifth of the remote servers in the
-		// official registry were published against an earlier server.json
-		// format. Two full schema URLs per row says the same thing at ten
-		// times the length, so the dates are what is shown. The pin itself is
-		// not negotiable -- the fields this host depends on are exactly the
-		// ones a format change moves, and guessing wrong means dialling
+		// Every dated server.json format published to date is read, so what
+		// reaches here is a $schema that is not one of them: a typo, a
+		// bundle URL, a registry's own endpoint standing in for the format,
+		// or a version newer than this build. Two full schema URLs per row
+		// says the same thing at ten times the length, so the declared value
+		// is shown short and the supported versions by date. The pin itself
+		// is not negotiable -- the fields this host depends on are exactly
+		// the ones a format change moves, and guessing wrong means dialling
 		// somewhere with a credential the operator did not intend to send.
 		if errors.Is(err, mcpservers.ErrUnsupportedSchema) {
 			return "", "", false, fmt.Sprintf(
-				"published against the %s server.json format; this host reads %s",
-				schemaLabel(schemaOf(document)), schemaLabel(mcpservers.SchemaURI))
+				"declares the server.json format %s, which this host does not read; "+
+					"it reads %s", declaredSchema(document),
+				strings.Join(mcpservers.SupportedSchemaLabels(), ", "))
 		}
 		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpservers: "), maxReasonRunes)
 	}
@@ -314,23 +383,19 @@ func describe(document []byte) (transport, url string, addable bool, reason stri
 	return remote.Type, clean(remote.URL, maxURLRunes), true, ""
 }
 
-// schemaOf reads a document's declared $schema without judging it.
-func schemaOf(document []byte) string {
+// declaredSchema renders a document's $schema for a one-line reason.
+//
+// It is a third party's string, so it is cleaned and kept short. The trailing
+// filename is dropped because every one of them ends in the same thing, and
+// what a reader needs is the part that differs.
+func declaredSchema(document []byte) string {
 	var probe struct {
 		Schema string `json:"$schema"`
 	}
-	if err := json.Unmarshal(document, &probe); err != nil {
-		return ""
+	if err := json.Unmarshal(document, &probe); err != nil || strings.TrimSpace(probe.Schema) == "" {
+		return "nothing"
 	}
-	return probe.Schema
-}
-
-// schemaLabel reduces a schema URL to the dated version in it, which is the
-// only part that differs between two of them.
-func schemaLabel(uri string) string {
-	parts := strings.Split(strings.TrimSuffix(uri, "/server.schema.json"), "/")
-	if label := parts[len(parts)-1]; label != "" && label != uri {
-		return clean(label, 32)
-	}
-	return "an unrecognised"
+	short := strings.TrimSuffix(probe.Schema, "/server.schema.json")
+	short = strings.TrimPrefix(short, "https://static.modelcontextprotocol.io/schemas/")
+	return strconv.Quote(clean(short, maxSchemaLabelRunes))
 }

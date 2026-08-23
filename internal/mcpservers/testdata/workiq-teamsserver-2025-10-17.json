@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "com.microsoft/workiq-teamsserver",
+  "description": "Manage Microsoft Teams chats, channels, users, and messages via Graph API.",
+  "title": "Work IQ Teams MCP Server",
+  "repository": {
+    "url": "https://github.com/bap-microsoft/MCP-Platform/",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_TeamsServer",
+      "variables": {
+        "tenant_id": {
+          "description": "Microsoft Entra tenant ID",
+          "isRequired": true
+        }
+      }
+    }
+  ]
+}

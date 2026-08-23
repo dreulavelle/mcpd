@@ -8,23 +8,47 @@ import (
 	"testing"
 )
 
-// TestSchemaURIMatchesTheVendoredCopy stops the two drifting.
+// TestSchemaURIsMatchTheVendoredCopies stops the table and the files drifting.
 //
-// The vendored schema is the pinned reference an import is judged by, and
-// SchemaURI is the version gate that decides which documents are read at all.
-// Dropping in a newer schema without moving the constant -- or the reverse --
-// would mean accepting documents in one format and reading them by the rules
-// of another.
-func TestSchemaURIMatchesTheVendoredCopy(t *testing.T) {
-	id, err := schemaID()
+// Each vendored schema is the pinned reference documents of that format are
+// judged by, and the URI it is filed under is the version gate that decides
+// which documents are read at all. Dropping in a schema without moving its
+// entry -- or the reverse -- would mean accepting documents in one format and
+// reading them by the rules of another, which is the whole failure the pin
+// exists to prevent.
+func TestSchemaURIsMatchTheVendoredCopies(t *testing.T) {
+	ids, err := schemaIDs()
 	if err != nil {
-		t.Fatalf("read vendored schema: %v", err)
+		t.Fatalf("read vendored schemas: %v", err)
 	}
-	if id != SchemaURI {
-		t.Errorf("the vendored schema declares $id %q but SchemaURI is %q", id, SchemaURI)
+	if len(ids) != len(schemaVersions) {
+		t.Fatalf("read %d vendored schemas, want %d", len(ids), len(schemaVersions))
+	}
+	for uri, id := range ids {
+		if id != uri {
+			t.Errorf("the schema filed under %q declares $id %q", uri, id)
+		}
+		if doc, ok := SchemaDocumentFor(uri); !ok || len(doc) == 0 {
+			t.Errorf("the vendored schema for %q is missing or empty", uri)
+		}
+	}
+	// SchemaURI is the current format and has to be one this build reads,
+	// because it is what a composed document declares and what the dashboard
+	// offers.
+	if _, ok := lookupSchema(SchemaURI); !ok {
+		t.Errorf("SchemaURI %q is not among the vendored formats", SchemaURI)
 	}
 	if len(SchemaDocument()) == 0 {
 		t.Error("the vendored schema is empty")
+	}
+	// Every label has to be distinct, because a reason names a version by its
+	// label and two formats sharing one would be unnameable.
+	seen := map[string]bool{}
+	for _, label := range SupportedSchemaLabels() {
+		if seen[label] {
+			t.Errorf("two vendored formats share the label %q", label)
+		}
+		seen[label] = true
 	}
 }
 

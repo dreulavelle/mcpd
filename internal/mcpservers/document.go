@@ -17,13 +17,19 @@ import (
 	"strings"
 )
 
-// SchemaURI is the one server.json format this build understands.
+// SchemaURI is the current server.json format: the one a document should be
+// published against today, and the one the dashboard offers.
 //
-// A document declaring anything else is refused rather than parsed
-// optimistically. The fields this runtime depends on -- how a remote is
-// addressed, which of its inputs are secret -- are exactly the fields a format
-// change is likely to move, and guessing wrong means dialling somewhere with a
-// credential the operator did not intend to send.
+// It is not the only one read. Four earlier formats are vendored beside it in
+// schema.go and are translated into this model explicitly, version by version,
+// because what a format changed is knowable from the published schemas and a
+// refusal costs an operator a server they could have had. What has not moved
+// is the pin itself: a document declaring a $schema this build has not
+// vendored is refused rather than parsed optimistically. The fields this
+// runtime depends on -- how a remote is addressed, which of its inputs are
+// secret -- are exactly the fields a format change is likely to move, and
+// guessing wrong means dialling somewhere with a credential the operator did
+// not intend to send.
 const SchemaURI = "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"
 
 // TransportStreamableHTTP is the only remote transport this increment serves.
@@ -141,13 +147,22 @@ func Parse(raw []byte) (*Document, error) {
 		return nil, fmt.Errorf("mcpservers: this is not a JSON document: %w", err)
 	}
 
+	version, known := lookupSchema(strings.TrimSpace(doc.Schema))
 	switch {
 	case strings.TrimSpace(doc.Schema) == "":
 		return nil, fmt.Errorf("%w: the document declares no $schema; this host reads %s",
-			ErrUnsupportedSchema, SchemaURI)
-	case doc.Schema != SchemaURI:
+			ErrUnsupportedSchema, supportedSchemaList())
+	case !known:
 		return nil, fmt.Errorf("%w: the document declares %s, and this host reads %s",
-			ErrUnsupportedSchema, doc.Schema, SchemaURI)
+			ErrUnsupportedSchema, doc.Schema, supportedSchemaList())
+	}
+
+	// Everything the declared format spells differently is moved into this
+	// model here, once, so that nothing downstream has to know which format a
+	// document came from. What the format does not define is removed for the
+	// same reason: a field left in place is a field something later will read.
+	if err := doc.translate(version, raw); err != nil {
+		return nil, err
 	}
 
 	for _, required := range []struct{ field, value string }{
@@ -167,6 +182,109 @@ func Parse(raw []byte) (*Document, error) {
 	return &doc, nil
 }
 
+// translate moves an earlier format's spelling of the fields this host reads
+// into the model above, and removes what the format does not define.
+//
+// Everything the five vendored formats agree on -- name, description, version,
+// packages, repository, _meta, a remote's type and url and headers, and the
+// whole of Input and KeyValueInput and InputWithVariables from 2025-09-16
+// onward -- is decoded by the struct tags and needs nothing here. What is left
+// is small, and is listed rather than inferred.
+//
+// Two things move, and one is deliberately not carried across:
+//
+//   - 2025-07-09 spelled an input's flags is_required and is_secret. Both
+//     spellings are read for such a document and OR-ed together; see
+//     legacyInputFlags for why that direction and not the other.
+//
+//   - remotes[].variables arrived with 2025-12-11's RemoteTransport. An
+//     earlier document's remote has no such field, so one present anyway is
+//     dropped: it is not part of the format the publisher declared, and its
+//     meaning is this host's to invent. Remote() then refuses a url template
+//     in an earlier document rather than resolving one out of nothing.
+//
+// Anything else an earlier format carries that this build does not model --
+// 2025-07-09's website_url and its snake-cased package fields, 2025-09-16's
+// server-level status -- is not read on any path and so is not translated.
+// The stored bytes stay exactly as published; this shapes only the decoded
+// value, and re-parsing the stored document reproduces it.
+func (d *Document) translate(version schemaVersion, raw []byte) error {
+	if version.legacyInputFlags {
+		if err := d.applyLegacyInputFlags(raw); err != nil {
+			return err
+		}
+	}
+	if !version.remoteVariables {
+		for i := range d.Remotes {
+			d.Remotes[i].Variables = nil
+		}
+	}
+	return nil
+}
+
+// legacyDocument is the 2025-07-09 spelling of the two flags, at every depth
+// they can appear: a remote's headers, a header's own variables, and those
+// variables' variables. `variables` on a remote is absent from that format and
+// so is absent here.
+type legacyDocument struct {
+	Remotes []struct {
+		Headers []struct {
+			Name string `json:"name"`
+			legacyInput
+		} `json:"headers"`
+	} `json:"remotes"`
+}
+
+type legacyInput struct {
+	IsRequired bool                   `json:"is_required"`
+	IsSecret   bool                   `json:"is_secret"`
+	Variables  map[string]legacyInput `json:"variables"`
+}
+
+// applyLegacyInputFlags ORs the underscored flags onto an already-decoded
+// document.
+//
+// A second targeted decode rather than an UnmarshalJSON on Input, because this
+// belongs to one format and putting it on the type would apply it to all five
+// -- reading a field a document's own format does not define is the thing this
+// package refuses to do elsewhere, and it should not do it here by accident.
+func (d *Document) applyLegacyInputFlags(raw []byte) error {
+	var legacy legacyDocument
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		// The document decoded once already, so a failure here is a shape
+		// mismatch -- headers as an object, say -- rather than bad JSON. It
+		// is a refusal because the alternative is importing a document whose
+		// secrets this host could not read.
+		return fmt.Errorf("mcpservers: this document declares the 2025-07-09 format "+
+			"but does not have its shape: %w", err)
+	}
+	for i := range legacy.Remotes {
+		if i >= len(d.Remotes) {
+			break
+		}
+		for j := range legacy.Remotes[i].Headers {
+			if j >= len(d.Remotes[i].Headers) {
+				break
+			}
+			mergeLegacyInput(&d.Remotes[i].Headers[j].Input, legacy.Remotes[i].Headers[j].legacyInput)
+		}
+	}
+	return nil
+}
+
+func mergeLegacyInput(in *Input, legacy legacyInput) {
+	in.IsRequired = in.IsRequired || legacy.IsRequired
+	in.IsSecret = in.IsSecret || legacy.IsSecret
+	for name, nested := range legacy.Variables {
+		v, ok := in.Variables[name]
+		if !ok {
+			continue
+		}
+		mergeLegacyInput(&v, nested)
+		in.Variables[name] = v
+	}
+}
+
 // Remote returns the transport this host will dial.
 //
 // The first streamable-http remote wins. An sse-only document is refused
@@ -183,6 +301,9 @@ func (d *Document) Remote() (Remote, error) {
 			continue
 		}
 		if err := checkURL(r.URL); err != nil {
+			return Remote{}, err
+		}
+		if err := d.checkURLTemplate(r.URL); err != nil {
 			return Remote{}, err
 		}
 		for _, h := range r.Headers {
@@ -214,6 +335,42 @@ func (d *Document) Remote() (Remote, error) {
 	}
 	return Remote{}, fmt.Errorf("mcpservers: %s offers %s, and this host connects over %s",
 		d.Name, strings.Join(kinds, ", "), TransportStreamableHTTP)
+}
+
+// checkURLTemplate refuses a {placeholder} the declared format cannot explain.
+//
+// remotes[].variables -- the map that says what a placeholder in a remote's
+// url means, and whether the value behind it is a secret -- arrived with
+// 2025-12-11. An earlier document may still contain a placeholder, and eight
+// in the live registry do; what it may not contain is anything that defines
+// one. Substituting from a variables map the format never had would be this
+// host inventing a meaning and then dialling the address it produced, which is
+// the case the $schema pin exists for. Resolving it from nothing instead gives
+// an import that succeeds and a server that can never start.
+//
+// So it is refused here, at the moment of paste, with the version named. It is
+// the document that is refused and not the format: everything else published
+// against 2025-07-09 through 2025-10-17 translates faithfully, and a publisher
+// who wants the placeholder read has to say what it means, which means
+// republishing against 2025-12-11.
+func (d *Document) checkURLTemplate(raw string) error {
+	version, known := lookupSchema(strings.TrimSpace(d.Schema))
+	if !known || version.remoteVariables {
+		return nil
+	}
+	found := bracePattern.FindAllStringSubmatch(raw, -1)
+	if len(found) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(found))
+	for _, m := range found {
+		names = append(names, m[1])
+	}
+	sort.Strings(names)
+	return fmt.Errorf("mcpservers: the url carries %s, and the %s server.json format "+
+		"has no way to say what a url placeholder means; ask its publisher to "+
+		"republish against %s, which does",
+		strings.Join(names, ", "), version.label, SchemaLabel(SchemaURI))
 }
 
 // checkURL rejects an address this host will not dial.
