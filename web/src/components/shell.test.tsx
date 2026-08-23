@@ -60,3 +60,59 @@ describe("the sidebar", () => {
       .toHaveAttribute("aria-current", "page");
   });
 });
+
+/**
+ * The health of the host, who is signed in, and the way out.
+ *
+ * They used to sit in the top-right corner and now sit under the navigation.
+ * Two things about that are worth defending: the footer is outside the part of
+ * the sidebar that scrolls, so a long list of sections cannot push the state of
+ * the host off the bottom; and the narrow layout -- which collapses the sidebar
+ * behind a button -- keeps its own copy of the health and the sign-out rather
+ * than putting both a drawer away.
+ */
+describe("the sidebar footer", () => {
+  it("names the signed-in person", () => {
+    mount("admin");
+    expect(screen.getByText("An Admin")).toBeInTheDocument();
+  });
+
+  it("falls back to the email when no display name is set", () => {
+    vi.spyOn(api, "health").mockResolvedValue({ status: "up", checks: [] });
+    renderWith(<Shell badges={{}} onSignOut={() => {}}>page</Shell>, {
+      session: sessionFor("user", { display_name: "" }),
+    });
+    expect(screen.getByText("user@example.com")).toBeInTheDocument();
+  });
+
+  it("offers a way out whether or not the sidebar is showing", () => {
+    mount("user");
+    expect(screen.getAllByRole("button", { name: "Sign out" })).toHaveLength(2);
+  });
+
+  it("says what /api/health said, in both layouts", async () => {
+    mount("user");
+    expect(await screen.findAllByText("All good")).toHaveLength(2);
+  });
+
+  it("does not call a degraded host well", async () => {
+    vi.spyOn(api, "health").mockResolvedValue({
+      status: "degraded",
+      checks: [{ name: "sqlite", status: "degraded", critical: true, message: "slow" }],
+    });
+    renderWith(<Shell badges={{}} onSignOut={() => {}}>page</Shell>, {
+      session: sessionFor("user"),
+    });
+    expect(await screen.findAllByText("Degraded")).toHaveLength(2);
+    expect(screen.queryByText("All good")).not.toBeInTheDocument();
+  });
+
+  it("lets the nav scroll rather than the footer move", () => {
+    mount("admin");
+    // A layout behaviour, so the assertion is on the two declarations that
+    // produce it: a flex child only scrolls if it is allowed to shrink.
+    const nav = screen.getByRole("navigation");
+    expect(nav.className).toContain("min-h-0");
+    expect(nav.className).toContain("overflow-y-auto");
+  });
+});
