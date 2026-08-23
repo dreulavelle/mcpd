@@ -488,11 +488,6 @@ export interface CatalogEntry {
   title: string;
   description: string;
   version: string;
-  /**
-   * A small image, validated on the server and fetched by the browser, so a
-   * dead icon host costs one row's monogram and nothing else.
-   */
-  icon?: string;
   /** From the document this host would dial, absent when there is nothing to dial. */
   transport?: string;
   url?: string;

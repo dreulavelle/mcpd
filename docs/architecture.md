@@ -724,18 +724,28 @@ report no size contribute only what was seen and so run far short; a source
 that did not answer contributes nothing and the page says so, because a total
 that does not move when a catalogue goes down is worse than a smaller one.
 
-**An icon is a URL, and a URL is not a picture.** Smithery, Docker and
-`server.json` all offer one, and it goes straight into an `<img src>` on an
-administrator's page — so it is allow-listed rather than sanitised: `https`
-only, absolute, a real host, no credentials, no control characters, length
-bounded, and omitted entirely if it is anything else. `http` is refused because
-a dashboard served over TLS should not be making plaintext subresource
-requests; `data:` is refused because an SVG carries script and this would put
-it in the page's own origin. Nothing here fetches it — no proxying, no
-prefetch, no reachability check — because a server-side fetch of an address a
-third party chose is a server-side request forgery whatever it is called. The
-browser fetches it, lazily, with no referrer, and a dead host costs one
-placeholder.
+**The catalogue shows no remote imagery, and a monogram is not a fallback.**
+Smithery, Docker and `server.json` each offer an icon URL. This host read them,
+validated them and put them in an `<img src>`, and not one ever rendered: the
+dashboard sends `img-src 'self' data:`, so every remote image has always been
+blocked and every entry has always drawn its monogram. The bug report that
+found this named a Google favicon-service URL a publisher had put in
+`icons[].src`, which returns a redirect to `text/html` and would not have
+rendered even with the header open.
+
+So the fetch is gone rather than the header. Loosening `img-src` would let a
+catalogue entry make an operator's browser call an address a third party chose,
+which tells that party which servers are being looked at from inside this
+deployment — a decoration is not worth that, and it is the same reason nothing
+here fetches such an address server-side either. What remains is
+`web/src/pages/marketplace/monogram.ts`: two letters on a colour derived from
+the name, contrast-checked against both themes, and it covers every entry
+because it needs nothing from anybody.
+
+Worth recording because the first verification was wrong in an instructive way.
+The icon URLs were tested with `curl`, which does not enforce CSP, and 24 of 25
+"loaded" — which proved the addresses resolve, not that the page could display
+them.
 
 **A composed document is still a document.** Docker's format is not
 `server.json`, so an entry is translated into one — the derived name says where

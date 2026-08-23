@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "@/lib/api";
 import { renderWith } from "@/test/render";
@@ -14,7 +14,6 @@ const WEATHER: CatalogEntry = {
   version: "1.0.0",
   transport: "streamable-http",
   url: "https://weather.example/mcp",
-  icon: "https://icons.example/weather.png",
   updated_at: "2026-08-01T10:00:00Z",
   addable: true,
   auth: "api_key",
@@ -450,7 +449,7 @@ describe("how much is asked for", () => {
 });
 
 /**
- * A card is an icon, a name and a description.
+ * A card is a monogram, a name and a description.
  *
  * Everything else -- version, transport, endpoint, credential, catalogue, date
  * -- was six facts to a card and most of a card, and it answered a question
@@ -472,51 +471,30 @@ describe("what a card shows", () => {
     expect(screen.queryByText("1.0.0")).not.toBeInTheDocument();
   });
 
-  it("shows the icon a catalogue offered, lazily and without a referrer", async () => {
-    await render({ load: catalog([WEATHER]) });
-
-    await screen.findByText("Weather");
-    const icon = document.querySelector("img[src='https://icons.example/weather.png']");
-    expect(icon).not.toBeNull();
-    // The row must not wait for somebody else's image host, and that host has
-    // no business knowing the address of an internal dashboard.
-    expect(icon).toHaveAttribute("loading", "lazy");
-    expect(icon).toHaveAttribute("referrerpolicy", "no-referrer");
-  });
-
   /**
-   * Two entries in five publish an icon, and some of the URLs that exist are
-   * dead. A grid where the rest are blank reads worse than one with no
-   * pictures at all, so every entry gets a generated monogram in the same box.
+   * The picture is a generated monogram and nothing else.
+   *
+   * The catalogues offer an icon URL and this used to render one. It never
+   * reached the page: the dashboard sends `img-src 'self' data:`, so a
+   * third-party image has always been blocked and every row has always drawn
+   * the monogram. Relaxing the header for decoration would tell whichever
+   * host the entry named which servers an operator is looking at.
    */
-  it("draws a monogram when there is no icon", async () => {
-    await render({ load: catalog([TICKETS]) });
-
-    await screen.findByText("Tickets");
-    expect(document.querySelector("img")).toBeNull();
-    expect(document.querySelector("svg text")).toHaveTextContent("TI");
-  });
-
-  it("falls back to the monogram when the icon will not load", async () => {
-    await render({ load: catalog([WEATHER]) });
-
-    await screen.findByText("Weather");
-    const icon = document.querySelector("img")!;
-    fireEvent.error(icon);
-    await waitFor(() => expect(document.querySelector("img")).toBeNull());
-    expect(document.querySelector("svg text")).toHaveTextContent("WE");
-    // Still a row, still an Add.
-    expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
-  });
-
-  // The box is the same either way, so nothing on the row moves when an image
-  // arrives or gives up.
-  it("keeps the icon box the same size whichever it draws", async () => {
+  it("draws a monogram for every entry, and asks no third party for a picture", async () => {
     await render({ load: catalog([WEATHER, TICKETS]) });
 
     await screen.findByText("Tickets");
-    const boxes = [...document.querySelectorAll("span.size-9")];
-    expect(boxes).toHaveLength(2);
+    expect(document.querySelector("img")).toBeNull();
+    const marks = [...document.querySelectorAll("svg text")].map((t) => t.textContent);
+    expect(marks).toEqual(["WE", "TI"]);
+  });
+
+  // One box per entry, the same size, so nothing on the row moves.
+  it("gives every entry the same box", async () => {
+    await render({ load: catalog([WEATHER, TICKETS]) });
+
+    await screen.findByText("Tickets");
+    expect([...document.querySelectorAll("span.size-9")]).toHaveLength(2);
   });
 });
 

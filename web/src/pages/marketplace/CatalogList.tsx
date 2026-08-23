@@ -398,20 +398,21 @@ function SourcesDown({ sources }: { sources: CatalogSource[] }) {
 }
 
 /**
- * The picture, or a generated monogram where there is none -- absent, refused
- * or dead all land on the same box, so nothing shifts.
+ * A generated monogram, and only that.
  *
- * `referrerPolicy` because the icon hosts are third parties; `loading="lazy"`
- * so a row never waits on somebody else's image server.
+ * The catalogues offer an icon URL and this used to render it. It never
+ * reached the page: the dashboard's own `img-src 'self' data:` forbids a
+ * third-party image, so every row has always drawn the monogram. Relaxing the
+ * header so a catalogue entry could make an operator's browser call out to an
+ * address a third party chose -- telling that party which servers are being
+ * looked at -- buys a picture and costs more than one. See
+ * docs/architecture.md.
  */
-function EntryIcon({ src, name, label, className }: {
-  src?: string;
+function EntryIcon({ name, label, className }: {
   name: string;
   label: string;
   className?: string;
 }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => { setFailed(false); }, [src]);
   const mark = monogram(name, label);
 
   return (
@@ -419,36 +420,23 @@ function EntryIcon({ src, name, label, className }: {
       aria-hidden="true"
       className={cn(
         "flex shrink-0 items-center justify-center overflow-hidden rounded-md border",
-        src && !failed ? "bg-muted" : "",
         className,
       )}
     >
-      {src && !failed ? (
-        <img
-          src={src}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          className="size-full object-contain"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        // SVG so the letters scale with the box, which is 24px in the compact
-        // list and 36px on a card.
-        <svg
-          viewBox="0 0 24 24" className="size-full"
-          style={{ backgroundColor: mark.background }}
+      {/* SVG so the letters scale with the box, which is 24px in the compact
+          list and 36px on a card. */}
+      <svg
+        viewBox="0 0 24 24" className="size-full"
+        style={{ backgroundColor: mark.background }}
+      >
+        <text
+          x="12" y="12" textAnchor="middle" dominantBaseline="central"
+          fontSize={mark.text.length > 1 ? 11 : 14} fontWeight="600"
+          fill={mark.ink}
         >
-          <text
-            x="12" y="12" textAnchor="middle" dominantBaseline="central"
-            fontSize={mark.text.length > 1 ? 11 : 14} fontWeight="600"
-            fill={mark.ink}
-          >
-            {mark.text}
-          </text>
-        </svg>
-      )}
+          {mark.text}
+        </text>
+      </svg>
     </span>
   );
 }
@@ -497,10 +485,7 @@ const EntryCard = memo(function EntryCard({ entry, addedAs, picking, disabled, o
   return (
     <Card className={addedAs ? "h-full bg-muted/30" : "h-full"}>
       <CardContent className="flex h-full items-start gap-3">
-        <EntryIcon
-          src={entry.icon} name={entry.name} label={entry.title}
-          className="size-9"
-        />
+        <EntryIcon name={entry.name} label={entry.title} className="size-9" />
         <div className="min-w-0 flex-1">
           <h3 className="truncate font-medium" title={entry.title || entry.name}>
             {entry.title || entry.name}
@@ -531,10 +516,7 @@ const EntryRow = memo(function EntryRow({ entry, addedAs, picking, disabled, onA
 }) {
   return (
     <li className={cn("flex items-center gap-3 px-3 py-2", addedAs && "bg-muted/30")}>
-      <EntryIcon
-        src={entry.icon} name={entry.name} label={entry.title}
-        className="size-6"
-      />
+      <EntryIcon name={entry.name} label={entry.title} className="size-6" />
       <span className="w-44 shrink-0 truncate text-sm font-medium" title={entry.title || entry.name}>
         {entry.title || entry.name}
       </span>
