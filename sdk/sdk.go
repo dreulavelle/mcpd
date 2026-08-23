@@ -229,7 +229,14 @@ type MutationSpec struct {
 	// someone approves.
 	Description string
 	Risk        Risk
-	Reversible  bool
+	// Reversible reports whether a rollback mutation can be derived. A
+	// rollback is itself approval-gated, never an automatic undo.
+	//
+	// It is also the floor under automatic authorisation: the host never lets
+	// a standing rule approve a mutation that declares no way back, whatever
+	// the rule says. False by default, so a spec that forgets to say claims
+	// nothing.
+	Reversible bool
 	// Verifiable declares that Observe, run after Apply, confirms the outcome:
 	// what it returns can be compared against the plan's Desired state and the
 	// comparison means something.

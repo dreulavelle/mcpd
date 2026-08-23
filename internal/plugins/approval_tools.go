@@ -80,8 +80,12 @@ type operationView struct {
 	ErrorDetail      string     `json:"error_detail,omitempty"`
 	// Assurance says what this record can prove: "reviewed_change" when the
 	// exact fields were planned, drift is detectable and the outcome is
-	// confirmed by re-reading, "gated_call" when a human authorised it and
-	// that is the whole of the evidence.
+	// confirmed by re-reading, "gated_call" when it was authorised and made
+	// and that is the whole of the evidence.
+	//
+	// It says nothing about who authorised it. AuthorizedByRule below is that
+	// fact, and the two are independent: a change nobody was asked about can
+	// still carry every proof, and one a person approved can carry none.
 	Assurance string `json:"assurance"`
 	// Note tells the model, in the response itself, what has and has not
 	// happened. A model that reads only the state string can still misread

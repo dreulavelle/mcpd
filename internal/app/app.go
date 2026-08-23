@@ -796,27 +796,26 @@ func (a *App) approvalPolicy(ctx context.Context) operations.Policy {
 // person. It is the only direction to fail in: a policy that loosens when its
 // own configuration is corrupt is worse than no policy.
 func (a *App) autoApprovalRules(ctx context.Context) []operations.AutoApprovalRule {
-	var rules []operations.AutoApprovalRule
-	ok, err := a.settings.GetJSON(ctx, settings.KeyApprovalAutoRules, &rules)
+	raw, ok, err := a.settings.Get(ctx, settings.KeyApprovalAutoRules)
 	if err != nil {
 		a.log.Error("the stored approval rules could not be read; "+
 			"every change will be put to a person", "error", err)
 		return nil
 	}
-	if !ok || len(rules) == 0 {
+	if !ok {
 		return nil
 	}
-	// Re-validated on read as well as on write. The write path is not the only
-	// way a value reaches this table -- a restore, a hand edit -- and a rule
-	// set the current rules refuse must not be the one deciding who gets
-	// interrupted.
-	normalised, err := operations.NormaliseRules(rules)
+	// Decoded strictly and re-validated on read as well as on write. The write
+	// path is not the only way a value reaches this table -- a restore, a hand
+	// edit -- and a rule set the current rules refuse must not be the one
+	// deciding who gets interrupted.
+	rules, err := operations.DecodeRules([]byte(raw))
 	if err != nil {
 		a.log.Error("the stored approval rules are not valid; "+
 			"every change will be put to a person", "error", err)
 		return nil
 	}
-	return normalised
+	return rules
 }
 
 // inlinePolicyFunc adapts a live policy lookup to the plugins package's

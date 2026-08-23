@@ -183,7 +183,12 @@ type MutationDescriptor struct {
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
 	Risk        string          `json:"risk"`
-	Reversible  bool            `json:"reversible"`
+	// Reversible reports whether a rollback mutation can be derived. It is the
+	// floor under automatic authorisation: a mutation declaring no way back is
+	// never approved by a standing rule. Absent means false, which is the
+	// direction to be wrong in -- a plugin built before this mattered is
+	// treated as irreversible and keeps being put to a person.
+	Reversible bool `json:"reversible"`
 	// Verifiable declares that observe, run after apply, confirms the outcome.
 	// It is additive: a plugin built before the field existed omits it and the
 	// host records its mutations as applied-but-unconfirmed, which is what the

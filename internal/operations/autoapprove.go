@@ -1,6 +1,8 @@
 package operations
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -76,15 +78,111 @@ type AutoApprovalRule struct {
 	Principal string `json:"principal"`
 	// MaxRisk is the highest risk this rule authorises without asking.
 	//
-	// Empty authorises nothing, which is not a disabled rule -- it is a
-	// deliberate "always ask", and it is how a specific action is carved out
-	// of a broader rule. Because a more specific rule wins outright, a rule
-	// naming one action with no ceiling stops that action auto-approving
-	// however permissive the plugin-wide rule beside it is.
+	// Empty authorises nothing, which is not a disabled rule. It is an
+	// exclusion -- a deliberate "always ask" -- and an exclusion beats every
+	// grant that matches beside it, whatever their scopes are. That is what an
+	// operator writing "never" means, and it is the direction to be wrong in:
+	// an exclusion that wins too often asks a person unnecessarily, while one
+	// that loses reboots hardware with nobody looking.
 	MaxRisk RiskLevel `json:"max_risk"`
 	// Note is the operator's own reason, carried into the audit detail so the
 	// record says why as well as which.
 	Note string `json:"note,omitempty"`
+}
+
+// ruleWire is the decode target. It exists so AutoApprovalRule can carry a
+// strict UnmarshalJSON without that method recursing into itself.
+type ruleWire struct {
+	ID        string    `json:"id"`
+	Plugin    string    `json:"plugin"`
+	Action    string    `json:"action"`
+	Principal string    `json:"principal"`
+	MaxRisk   RiskLevel `json:"max_risk"`
+	Note      string    `json:"note"`
+}
+
+// UnmarshalJSON decodes a rule strictly, and it has to live on the type rather
+// than at each call site.
+//
+// An absent selector means "anything", which is a convenience worth having and
+// is also what makes strictness load-bearing. Written the obvious way,
+//
+//	{"id": "x", "principle": "svc:agent", "max_risk": "low"}
+//
+// is accepted: "principle" is not a field, encoding/json discards it silently,
+// and the real principal defaults to every principal. An operator writing a
+// deliberately narrow rule gets a global one, with nothing saying so. For a
+// feature whose entire job is bounding who may write without being asked,
+// silently widening on a typo is the worst failure available.
+//
+// A json.Decoder's DisallowUnknownFields does not reach inside a custom
+// UnmarshalJSON, so putting the check here rather than in the HTTP handler is
+// not belt-and-braces -- it is the only place that covers every way a rule
+// arrives: the API, the settings store on startup, a restore, a future
+// importer.
+func (r *AutoApprovalRule) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) == "null" {
+		return fmt.Errorf("operations: a rule cannot be null")
+	}
+
+	// Decoded twice, and the first pass earns its keep: decoding straight into
+	// the struct cannot tell an absent field from one explicitly set to null,
+	// and {"plugin": null} widens exactly the way the typo above does. Null is
+	// refused for every field rather than only the dangerous ones, because a
+	// rule that is uniformly "omit it or give it a value" is one an operator
+	// can hold in their head.
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(data, &present); err != nil {
+		return fmt.Errorf("operations: reading a rule: %w", err)
+	}
+	for field, value := range present {
+		if string(bytes.TrimSpace(value)) == "null" {
+			return fmt.Errorf("operations: a rule's %s is null; "+
+				"omit the field or give it a value", field)
+		}
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var w ruleWire
+	if err := dec.Decode(&w); err != nil {
+		return fmt.Errorf("operations: reading a rule: %w", err)
+	}
+
+	// A selector written as an empty string is not the wildcard. Refusing it
+	// keeps "" from becoming a third spelling of "anything" beside absence and
+	// "*", which is one spelling too many for a value that decides who may
+	// write unattended.
+	for _, sel := range []struct{ name, value string }{
+		{"plugin", w.Plugin}, {"action", w.Action}, {"principal", w.Principal},
+	} {
+		if _, ok := present[sel.name]; ok && strings.TrimSpace(sel.value) == "" {
+			return fmt.Errorf("operations: a rule's %s cannot be empty; "+
+				"omit it or use %q for any", sel.name, RuleAny)
+		}
+	}
+
+	*r = AutoApprovalRule(w)
+	return nil
+}
+
+// DecodeRules reads a stored rule set, strictly, and returns it canonicalised.
+//
+// One function so the settings store and anything else reading the stored
+// value get the same judgement the API applies on the way in. A set that does
+// not survive this is not a set this host will act on.
+func DecodeRules(raw []byte) ([]AutoApprovalRule, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+
+	var rules []AutoApprovalRule
+	if err := dec.Decode(&rules); err != nil {
+		return nil, fmt.Errorf("operations: reading the rule set: %w", err)
+	}
+	return NormaliseRules(rules)
 }
 
 // Scope renders the rule's selectors for a log line or an audit entry.
@@ -92,14 +190,24 @@ func (r AutoApprovalRule) Scope() string {
 	return fmt.Sprintf("%s/%s for %s", r.Plugin, r.Action, r.Principal)
 }
 
-// specificity ranks a rule against others that also match.
+// specificity orders one grant against another. It is never consulted
+// between a grant and an exclusion, because an exclusion always wins.
 //
-// The weights encode which selector wins an argument. Plugin outranks action
-// because an action name means nothing without the plugin it belongs to, and
-// both outrank principal because a rule that carves an action out is a
-// statement about the change itself -- "rebooting a device is never
-// automatic" -- and must not be defeated by a broad grant to whoever happens
-// to be asking.
+// The weights encode which selector wins an argument between two rules that
+// both authorise something. Plugin outranks action because an action name
+// means nothing without the plugin it belongs to, and both outrank principal
+// because what is being changed bounds the answer more tightly than who is
+// asking.
+//
+// This used to decide exclusions too, and it got the answer wrong in exactly
+// the case the feature exists to serve. An exclusion is naturally written
+// narrowly -- one action, or one service token -- and a grant naturally
+// broadly, so scoring handed almost every argument to the grant:
+// {plugin:*, action:device.reboot} scores 2 and lost to
+// {plugin:cnmaestro, action:*} at 4, which auto-approved a device reboot.
+// No weighting fixes that, because the exclusion's narrowness is the point of
+// it. Exclusions are not a more specific kind of grant, and ordering them
+// against each other was the mistake.
 func (r AutoApprovalRule) specificity() int {
 	score := 0
 	if r.Plugin != RuleAny {
@@ -178,11 +286,31 @@ type AutoApprovalPolicy struct {
 	Rules []AutoApprovalRule
 }
 
+// authorisesNothing reports a rule that cannot grant anything, and is
+// therefore an exclusion.
+//
+// Three spellings reach the same place. An empty ceiling is the deliberate
+// one, written to carve something out. A critical ceiling is refused when a
+// rule set is stored -- a level an operator can opt out of is not a level --
+// and a ceiling this build does not recognise is refused there too. Neither of
+// those should exist, but Evaluate must not depend on having been handed a
+// validated set: AutoApprovalPolicy and its Rules are exported, and the
+// function that decides whether a human is skipped is the wrong one to make
+// conditional on a caller remembering to call NormaliseRules first.
+//
+// Reaching Evaluate they are all the same fact -- this rule authorises
+// nothing -- and the safe reading of a malformed rule is the same as the safe
+// reading of a deliberate exclusion.
+func (r AutoApprovalRule) authorisesNothing() bool {
+	return !r.MaxRisk.Valid() || r.MaxRisk == RiskCritical
+}
+
 // Evaluate decides whether a proposal is asked about.
 //
-// Three refusals come before any rule is consulted, because they are
-// properties of the change rather than of the configuration and no rule may
-// override them.
+// Two refusals come before any rule is consulted, because they are properties
+// of the change rather than of the configuration and no rule may override
+// them. Then exclusions, then grants -- in that order, and the order is the
+// whole of the model.
 func (p AutoApprovalPolicy) Evaluate(req AutoApprovalRequest) AutoApprovalDecision {
 	if !req.Reversible {
 		return AutoApprovalDecision{
@@ -197,50 +325,90 @@ func (p AutoApprovalPolicy) Evaluate(req AutoApprovalRequest) AutoApprovalDecisi
 		}
 	}
 
-	rule := p.resolve(req)
-	if rule == nil {
+	excluded, grant := p.match(req)
+
+	// An exclusion wins outright, before specificity is consulted at all.
+	//
+	// This is what every access-control system does and what an operator
+	// writing "never" means, and it is the only ordering that fails in the
+	// right direction: an exclusion that wins too often costs somebody a
+	// question they did not need to answer, while one that loses costs a
+	// change nobody reviewed.
+	if excluded != nil {
+		return AutoApprovalDecision{
+			Rule:   excluded,
+			Reason: exclusionReason(*excluded),
+		}
+	}
+	if grant == nil {
 		return AutoApprovalDecision{
 			Reason: "no rule covers this change, so it is put to a person",
 		}
 	}
-	if !rule.MaxRisk.Valid() || !rule.MaxRisk.AtLeast(req.Risk) {
+	if !grant.MaxRisk.AtLeast(req.Risk) {
 		return AutoApprovalDecision{
-			Rule: rule,
+			Rule: grant,
 			Reason: fmt.Sprintf("rule %s authorises up to %s and this change is %s",
-				rule.ID, orNone(rule.MaxRisk), req.Risk),
+				grant.ID, grant.MaxRisk, req.Risk),
 		}
 	}
 	return AutoApprovalDecision{
 		AutoApprove: true,
-		Rule:        rule,
+		Rule:        grant,
 		Reason: fmt.Sprintf("rule %s (%s) authorises %s changes up to %s",
-			rule.ID, rule.Scope(), req.Risk, rule.MaxRisk),
+			grant.ID, grant.Scope(), req.Risk, grant.MaxRisk),
 	}
 }
 
-// resolve picks the one rule that decides, and it must be deterministic:
-// "which rule applied" is a question an operator has to be able to answer from
-// the configuration alone, without knowing what order it happened to be
-// stored in.
+// match returns the exclusion and the grant that decide, either of which may
+// be nil.
 //
-// Most specific wins. A tie can only survive validation as a bug -- duplicate
-// scopes are refused when the set is stored -- so it is broken towards the
-// stricter rule, and then by id, rather than left to map iteration.
-func (p AutoApprovalPolicy) resolve(req AutoApprovalRequest) *AutoApprovalRule {
-	var best *AutoApprovalRule
+// Both are resolved rather than short-circuiting on the first exclusion found,
+// because the decision has to be deterministic: "which rule applied" is a
+// question an operator answers from the configuration alone, without knowing
+// what order the set happened to be stored in.
+//
+// Within each kind, most specific wins. A tie can only survive validation as a
+// bug -- duplicate scopes are refused when the set is stored -- so it is
+// broken towards the stricter rule and then by id rather than left to
+// iteration order.
+func (p AutoApprovalPolicy) match(req AutoApprovalRequest) (excluded, grant *AutoApprovalRule) {
 	for i := range p.Rules {
 		candidate := &p.Rules[i]
 		if !candidate.matches(req) {
 			continue
 		}
-		if best == nil || moreSpecific(*candidate, *best) {
-			best = candidate
+		if candidate.authorisesNothing() {
+			if excluded == nil || moreSpecific(*candidate, *excluded) {
+				excluded = candidate
+			}
+			continue
+		}
+		if grant == nil || moreSpecific(*candidate, *grant) {
+			grant = candidate
 		}
 	}
-	return best
+	return excluded, grant
 }
 
-// moreSpecific reports whether a should beat b.
+// exclusionReason says which of the three spellings this was, because the
+// deliberate one and the malformed ones need different things done about them.
+func exclusionReason(r AutoApprovalRule) string {
+	switch {
+	case r.MaxRisk == "":
+		return fmt.Sprintf("rule %s (%s) excludes this from automatic authorisation",
+			r.ID, r.Scope())
+	case r.MaxRisk == RiskCritical:
+		return fmt.Sprintf("rule %s (%s) claims to authorise critical changes, "+
+			"which no rule may; it authorises nothing", r.ID, r.Scope())
+	default:
+		return fmt.Sprintf("rule %s (%s) has a ceiling of %q, which is not a risk "+
+			"level; it authorises nothing", r.ID, r.Scope(), r.MaxRisk)
+	}
+}
+
+// moreSpecific reports whether a should beat b. It is only ever asked about
+// two rules of the same kind.
 func moreSpecific(a, b AutoApprovalRule) bool {
 	if sa, sb := a.specificity(), b.specificity(); sa != sb {
 		return sa > sb
@@ -249,13 +417,6 @@ func moreSpecific(a, b AutoApprovalRule) bool {
 		return a.MaxRisk.rank() < b.MaxRisk.rank()
 	}
 	return a.ID < b.ID
-}
-
-func orNone(r RiskLevel) string {
-	if r == "" {
-		return "nothing"
-	}
-	return r.String()
 }
 
 // NormaliseRules validates a rule set and returns it in canonical form.

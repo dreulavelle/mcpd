@@ -127,6 +127,28 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 	// declare its way out of an operator's classification.
 	risk := MaxRisk(req.Risk, s.policyFn().RiskOverrides[req.Plugin+"."+req.Action])
 
+	// A classification this build does not define is refused here rather than
+	// carried further. MaxRisk ranks an unknown level above every known one,
+	// so it arrives having already outranked everything -- which is the right
+	// direction, and also means nothing downstream can make sense of it: the
+	// schema's CHECK would refuse the insert with a constraint error naming no
+	// cause, and coercing it to critical would be this host inventing a meaning
+	// for a word a plugin chose.
+	//
+	// Saying so plainly is the whole of the fix. It is reachable from any
+	// plugin that returns a risk override -- an out-of-process one that knows a
+	// level this host does not, or simply a typo -- and the failure has to be
+	// legible to whoever has to correct it.
+	if !risk.Valid() {
+		return nil, &GuardError{
+			ErrCode: CodeInvalidRisk,
+			Detail: fmt.Sprintf(
+				"%s classified %s as %q, which is not a risk level this host defines; "+
+					"nothing can be authorised against a classification it cannot read",
+				req.Plugin, req.Action, risk),
+		}
+	}
+
 	now := s.now()
 	idem := req.IdempotencyKey
 	if idem == "" {
@@ -286,9 +308,14 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 	if err != nil {
 		// Losing the race is ordinary: a person got there first, or the reaper
 		// expired the proposal. Either way the row is the authority and it
-		// says what happened.
+		// says what happened -- so re-read it rather than handing back the
+		// copy from before the race, which would report pending_approval for
+		// an operation that is by now approved, expired or running.
 		s.log.Warn("a rule covers this change but the approval did not land",
 			"operation_id", op.ID, "rule", rule.ID, "error", err)
+		if fresh, readErr := s.repo.Get(ctx, op.ID); readErr == nil {
+			return fresh
+		}
 		return op
 	}
 

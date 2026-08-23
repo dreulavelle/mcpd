@@ -112,6 +112,16 @@ type MutationSpec struct {
 	Risk operations.RiskLevel
 	// Reversible reports whether a rollback operation can be derived. A
 	// rollback is itself an approval-gated mutation, never an automatic undo.
+	//
+	// It is also the floor under automatic authorisation: a mutation that
+	// declares no way back is never approved by a standing rule, whatever a
+	// rule says, because the case for authorising a class of change in advance
+	// is that a mistake is cheap to correct and it does not survive the
+	// absence of a correction.
+	//
+	// False by default, so a spec that forgets to say claims nothing -- which
+	// is the direction to be wrong in, and the same default Verifiable takes
+	// for the same reason.
 	Reversible bool
 
 	// Verifiable declares that Observe, run after Apply, confirms the outcome:

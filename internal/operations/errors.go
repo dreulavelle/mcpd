@@ -41,6 +41,11 @@ const (
 	// to an operation a standing rule approved: where a person decided, they
 	// decided about this specific change and the re-plan does not unmake that.
 	CodeRiskRaised = "RISK_RAISED"
+	// CodeInvalidRisk reports a classification this build does not define,
+	// arriving from a plugin's declaration or from a plan's override. It is a
+	// refusal rather than a coercion: ranking it highest is right, and
+	// deciding which known level it meant would be inventing one.
+	CodeInvalidRisk = "INVALID_RISK"
 )
 
 // TransitionError reports a rejected state change. It carries both states so

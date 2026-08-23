@@ -56,6 +56,9 @@ func TestAutoApprovalPolicy_Evaluate(t *testing.T) {
 		want     bool
 		wantRule string
 		reason   string
+		// raw skips NormaliseRules, so a rule set that could only be built in
+		// process -- never stored -- is judged by Evaluate on its own.
+		raw bool
 	}{
 		{
 			name:     "a matching ceiling authorises",
@@ -103,7 +106,7 @@ func TestAutoApprovalPolicy_Evaluate(t *testing.T) {
 			},
 			want:     false,
 			wantRule: "never-reboot",
-			reason:   "authorises up to nothing",
+			reason:   "excludes this from automatic authorisation",
 		},
 		{
 			name: "an action carve-out beats a broad grant to the principal",
@@ -119,14 +122,116 @@ func TestAutoApprovalPolicy_Evaluate(t *testing.T) {
 			wantRule: "never-reboot",
 		},
 		{
-			name: "a principal-scoped rule beats an equally scoped one without a principal",
+			// The specificity score says the grant wins: the exclusion is
+			// {plugin:*, action:device.reboot} at 2, the grant is
+			// {plugin:cnmaestro, action:*} at 4. It auto-approved a device
+			// reboot, which is the failure the whole feature has to not have.
+			name: "an exclusion scoped more loosely than the grant still wins",
 			rules: []AutoApprovalRule{
-				rule("anyone", "cnmaestro", "device.set_radio_channel", RuleAny, ""),
+				rule("plugin-wide", "cnmaestro", RuleAny, RuleAny, RiskHigh),
+				rule("never-reboot", RuleAny, "device.reboot", RuleAny, ""),
+			},
+			req: AutoApprovalRequest{
+				Plugin: "cnmaestro", Action: "device.reboot",
+				Principal: "user:alice", Risk: RiskLow, Reversible: true,
+			},
+			want:     false,
+			wantRule: "never-reboot",
+			reason:   "excludes this from automatic authorisation",
+		},
+		{
+			// The same failure spelled the other way: an operator excluding
+			// one service token, scoring 1 against the same grant's 4.
+			name: "an excluded principal stays excluded under a broader grant",
+			rules: []AutoApprovalRule{
+				rule("plugin-wide", "cnmaestro", RuleAny, RuleAny, RiskHigh),
+				rule("never-bot", RuleAny, RuleAny, "svc:bot", ""),
+			},
+			req: AutoApprovalRequest{
+				Plugin: "cnmaestro", Action: "device.set_radio_channel",
+				Principal: "svc:bot", Risk: RiskLow, Reversible: true,
+			},
+			want:     false,
+			wantRule: "never-bot",
+		},
+		{
+			// Deny-wins must not become deny-everywhere. An exclusion is
+			// still scoped, and one written for a different plugin has
+			// nothing to say about this change.
+			name: "an exclusion scoped elsewhere does not leak into this grant",
+			rules: []AutoApprovalRule{
+				rule("plugin-wide", "cnmaestro", RuleAny, RuleAny, RiskHigh),
+				rule("never-reboot", "echo", "device.reboot", RuleAny, ""),
+			},
+			req: AutoApprovalRequest{
+				Plugin: "cnmaestro", Action: "device.reboot",
+				Principal: "user:alice", Risk: RiskLow, Reversible: true,
+			},
+			want:     true,
+			wantRule: "plugin-wide",
+		},
+		{
+			// The same, one dimension over: an exclusion naming another
+			// principal leaves this one's grant alone.
+			name: "an exclusion for another principal does not reach this one",
+			rules: []AutoApprovalRule{
+				rule("plugin-wide", "cnmaestro", RuleAny, RuleAny, RiskHigh),
+				rule("never-bot", RuleAny, RuleAny, "svc:bot", ""),
+			},
+			req:      request(RiskLow),
+			want:     true,
+			wantRule: "plugin-wide",
+		},
+		{
+			// Specificity still orders two grants against each other, which is
+			// the job it is good at and the only one it now has.
+			name: "the more specific of two grants decides",
+			rules: []AutoApprovalRule{
+				rule("anyone", "cnmaestro", "device.set_radio_channel", RuleAny, RiskLow),
 				rule("alice", "cnmaestro", "device.set_radio_channel", "user:alice", RiskMedium),
 			},
 			req:      request(RiskMedium),
 			want:     true,
 			wantRule: "alice",
+		},
+		{
+			// The cost of deny-wins, pinned so it is a decision rather than a
+			// surprise: an exclusion cannot be granted an exception. An
+			// operator wanting "only alice" writes the narrow grant and no
+			// exclusion, because the absence of a grant already means ask.
+			name: "a grant cannot carve an exception out of an exclusion",
+			rules: []AutoApprovalRule{
+				rule("nobody", "cnmaestro", "device.set_radio_channel", RuleAny, ""),
+				rule("alice", "cnmaestro", "device.set_radio_channel", "user:alice", RiskMedium),
+			},
+			req:      request(RiskMedium),
+			want:     false,
+			wantRule: "nobody",
+		},
+		{
+			// A ceiling no rule may carry cannot be smuggled past Evaluate by
+			// constructing the policy directly. NormaliseRules refuses it, and
+			// so does the function that decides whether a human is skipped.
+			name: "a critical ceiling authorises nothing even unvalidated",
+			rules: []AutoApprovalRule{
+				rule("bold", RuleAny, RuleAny, RuleAny, RiskCritical),
+			},
+			req:      request(RiskLow),
+			want:     false,
+			wantRule: "bold",
+			reason:   "which no rule may",
+			raw:      true,
+		},
+		{
+			name: "an unrecognised ceiling authorises nothing even unvalidated",
+			rules: []AutoApprovalRule{
+				rule("odd", RuleAny, RuleAny, RuleAny, "spicy"),
+			},
+			req:      request(RiskLow),
+			want:     false,
+			wantRule: "odd",
+			reason:   "is not a risk level",
+			raw:      true,
 		},
 		{
 			name:  "an irreversible change is never authorised, whatever the rule says",
@@ -161,11 +266,14 @@ func TestAutoApprovalPolicy_Evaluate(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			normalised, err := NormaliseRules(tc.rules)
-			if err != nil {
-				t.Fatalf("rules should be valid: %v", err)
+			rules := tc.rules
+			if !tc.raw {
+				var err error
+				if rules, err = NormaliseRules(tc.rules); err != nil {
+					t.Fatalf("rules should be valid: %v", err)
+				}
 			}
-			d := AutoApprovalPolicy{Rules: normalised}.Evaluate(tc.req)
+			d := AutoApprovalPolicy{Rules: rules}.Evaluate(tc.req)
 			if d.AutoApprove != tc.want {
 				t.Errorf("auto_approve = %v, want %v (%s)", d.AutoApprove, tc.want, d.Reason)
 			}
@@ -202,6 +310,37 @@ func TestAutoApprovalPolicy_ResolutionIsOrderIndependent(t *testing.T) {
 		d := AutoApprovalPolicy{Rules: normalised}.Evaluate(request(RiskLow))
 		if d.RuleID() != "this-action" {
 			t.Errorf("order %d chose %q, want the most specific rule", i, d.RuleID())
+		}
+	}
+}
+
+// An exclusion wins from anywhere in the set, including from the position a
+// specificity-ordered resolution would have visited last.
+func TestAutoApprovalPolicy_AnExclusionWinsFromAnyPosition(t *testing.T) {
+	grant := rule("plugin-wide", "cnmaestro", RuleAny, RuleAny, RiskHigh)
+	broad := rule("everything", RuleAny, RuleAny, RuleAny, RiskHigh)
+	deny := rule("never-reboot", RuleAny, "device.reboot", RuleAny, "")
+
+	orders := [][]AutoApprovalRule{
+		{deny, grant, broad},
+		{grant, broad, deny},
+		{broad, deny, grant},
+	}
+	req := AutoApprovalRequest{
+		Plugin: "cnmaestro", Action: "device.reboot",
+		Principal: "user:alice", Risk: RiskLow, Reversible: true,
+	}
+	for i, order := range orders {
+		normalised, err := NormaliseRules(order)
+		if err != nil {
+			t.Fatalf("order %d: %v", i, err)
+		}
+		d := AutoApprovalPolicy{Rules: normalised}.Evaluate(req)
+		if d.AutoApprove {
+			t.Errorf("order %d auto-approved a reboot under rule %q", i, d.RuleID())
+		}
+		if d.RuleID() != "never-reboot" {
+			t.Errorf("order %d blamed %q, want never-reboot", i, d.RuleID())
 		}
 	}
 }
@@ -570,4 +709,84 @@ func decodeDetail(t *testing.T, e AuditEntry) map[string]any {
 		t.Fatalf("audit detail is not readable: %v", err)
 	}
 	return out
+}
+
+// A misspelled selector must be an error, never a silently wider rule.
+//
+// {"principle": "svc:agent"} was accepted, discarded, and the real principal
+// defaulted to every principal -- so an operator writing a rule for one
+// service token got one covering everybody, with nothing saying so.
+func TestDecodeRules_RefusesAMisspelledSelector(t *testing.T) {
+	if _, err := DecodeRules([]byte(
+		`[{"id":"x","principle":"svc:agent","max_risk":"low"}]`)); err == nil {
+		t.Fatal("a misspelled selector must be refused, not widened to every principal")
+	} else if !strings.Contains(err.Error(), "principle") {
+		t.Errorf("the error must name the field: %v", err)
+	}
+
+	// The correct spelling still works, and still means what it says.
+	rules, err := DecodeRules([]byte(`[{"id":"x","principal":"svc:agent","max_risk":"low"}]`))
+	if err != nil {
+		t.Fatalf("the correct spelling must be accepted: %v", err)
+	}
+	if rules[0].Principal != "svc:agent" {
+		t.Errorf("principal = %q, want svc:agent", rules[0].Principal)
+	}
+	if rules[0].Plugin != RuleAny {
+		t.Errorf("an omitted plugin should be the wildcard, got %q", rules[0].Plugin)
+	}
+}
+
+// An explicit null widens exactly the way a typo does, and decoding into a
+// plain struct cannot tell it from an absent field.
+func TestDecodeRules_RefusesAnExplicitNull(t *testing.T) {
+	for _, body := range []string{
+		`[{"id":"x","plugin":null,"max_risk":"low"}]`,
+		`[{"id":"x","principal":null,"max_risk":"low"}]`,
+		`[{"id":"x","max_risk":null}]`,
+		`[null]`,
+	} {
+		if _, err := DecodeRules([]byte(body)); err == nil {
+			t.Errorf("%s was accepted; null is not a value", body)
+		}
+	}
+}
+
+// An empty selector is not a third spelling of the wildcard.
+func TestDecodeRules_RefusesAnEmptySelector(t *testing.T) {
+	if _, err := DecodeRules([]byte(`[{"id":"x","plugin":"","max_risk":"low"}]`)); err == nil {
+		t.Fatal(`an empty plugin must be refused; "*" is how a rule says any`)
+	}
+}
+
+// Strictness must not cost the ordinary spellings. An absent selector is the
+// wildcard, and that is the whole convenience the strictness protects.
+func TestDecodeRules_AcceptsTheOrdinarySpellings(t *testing.T) {
+	rules, err := DecodeRules([]byte(
+		`[{"id":"routine","plugin":"cnmaestro","max_risk":"low","note":"fine"},
+		  {"id":"never-reboot","plugin":"cnmaestro","action":"device.reboot","max_risk":""}]`))
+	if err != nil {
+		t.Fatalf("valid rules were refused: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("decoded %d rules, want 2", len(rules))
+	}
+	// Sorted most specific first, which is the order resolution considers.
+	if rules[0].ID != "never-reboot" {
+		t.Errorf("first rule = %q, want the more specific one", rules[0].ID)
+	}
+}
+
+// An empty or absent stored value is no rules, not an error. A host that has
+// never been configured must not log a failure every time it proposes.
+func TestDecodeRules_TreatsAnEmptyValueAsNoRules(t *testing.T) {
+	for _, body := range []string{"", "  ", "[]"} {
+		rules, err := DecodeRules([]byte(body))
+		if err != nil {
+			t.Errorf("%q: %v", body, err)
+		}
+		if len(rules) != 0 {
+			t.Errorf("%q gave %d rules, want none", body, len(rules))
+		}
+	}
 }

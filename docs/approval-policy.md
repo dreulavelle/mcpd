@@ -29,14 +29,47 @@ this is the reference for building against it.
 
 An omitted selector is stored as `*`. `critical` is refused as a ceiling.
 
-**Resolution.** Every matching rule is scored — plugin `+4`, action `+2`,
-principal `+1` — and the highest score decides. Exactly one rule decides; the
-rest are ignored rather than merged. Two rules with the same scope are refused
-when the set is stored.
+**Strictly decoded.** An unknown field, an explicit `null`, and an empty-string
+selector are all refused, naming the field. This matters because an *omitted*
+selector means "anything": without strictness, `{"principle": "svc:agent"}`
+would be discarded and the rule would silently cover every principal.
 
-**What no rule can do.** Authorise a mutation that declares itself
-irreversible; authorise a risk level the host does not recognise; authorise
-`critical`.
+## Resolution
+
+1. A mutation that declares itself irreversible is never authorised. Neither is
+   one whose risk level the host does not recognise.
+2. **Any matching exclusion wins.** An exclusion is a rule that authorises
+   nothing: an empty `max_risk`, or (defensively) a `critical` or unrecognised
+   one. If one matches, the answer is "ask a person" — specificity is not
+   consulted.
+3. Otherwise the matching **grants** are scored — plugin `+4`, action `+2`,
+   principal `+1` — and the highest wins. Exactly one rule decides; they are
+   never merged. Same-scope duplicates are refused at store time.
+4. The winning grant's ceiling is compared against the risk as it finally
+   stands.
+
+Exclusion-wins is deliberate and it is not the same as most-specific-wins. An
+exclusion is naturally narrow and a grant naturally broad, so scoring them
+together handed the argument to the grant:
+
+```
+{id: never-reboot, plugin: "*",         action: "device.reboot"}  → score 2
+{id: plugin-wide,  plugin: "cnmaestro", action: "*", max_risk: high} → score 4
+```
+
+Under scoring, a cnmaestro device reboot auto-approved. It does not now.
+
+**The cost.** An exclusion cannot be granted an exception. "Nobody but Alice
+may auto-approve this" is *not* an exclusion plus a narrow grant — the
+exclusion wins and Alice is asked too. Write the narrow grant alone: the
+absence of a grant already means ask.
+
+## Before you write a rule
+
+There is **no rate limit on mutations**. `ToolSpec.RateLimit` bounds read
+tools; a propose tool has no equivalent. The human in the loop was the only
+backpressure on how fast an agent could write, and a rule removes it for
+everything it covers. Scope rules as narrowly as the job allows.
 
 ## `GET /api/approval-policy`
 
@@ -48,14 +81,23 @@ Capability: `read`.
                "principal": "*", "max_risk": "low", "note": "..." } ],
   "wildcard": "*",
   "ceilings": ["low", "medium", "high"],
-  "default": "Every change is put to a person unless a rule authorises it."
+  "default": "Every change is put to a person unless a rule authorises it.",
+  "warnings": ["rule \"never-rebooot\" names action \"label.rebooot\", which no mounted plugin registers, so it matches nothing"]
 }
 ```
 
-`rules` is sorted most-specific first, which is the order resolution considers
-them in. `ceilings` is what the form may offer; the empty ceiling is
-deliberately not in it, because it is a distinct choice ("always ask") rather
-than a level.
+`warnings` is advisory and may be absent. It names rules whose plugin or action
+matches nothing this host currently serves — never a refusal, because a rule
+may legitimately name a plugin about to be added. It matters most for an
+*exclusion*: a misspelled one authorises nothing, so it looks safe, but it
+never fires for the action it was written for and a broader grant decides
+instead. Surface these prominently next to the rule.
+
+`rules` is sorted most-specific first. `ceilings` is what the form may offer for
+a grant; the empty ceiling is deliberately not in it, because it is a distinct
+choice — an exclusion — rather than a level, and the UI should present it that
+way. Note that an exclusion beats every grant it overlaps, so the list is not a
+priority order.
 
 `409 unreadable_rules` means the stored value does not validate. The host is
 asking about everything in that case, which is the same behaviour as having no
@@ -75,7 +117,8 @@ at which "no two rules cover the same thing" can be checked. Send the list you
 want to end up with; send `[]` to remove every rule.
 
 Everything is validated before anything is stored, so a bad rule changes
-nothing. On success the response is the same shape as `GET`, canonicalised.
+nothing. On success the response is the same shape as `GET`, canonicalised and
+carrying any `warnings` the new set produced.
 
 - `400 invalid_rules` — `detail` says which rule and why.
 - `409 rules_not_applied` — the write did not land.
@@ -97,19 +140,32 @@ Capability: `read`. Computes over configuration and changes nothing.
   "auto_approve": false,
   "rule": { "id": "never-reboot", "plugin": "cnmaestro",
             "action": "device.reboot", "principal": "*", "max_risk": "" },
-  "reason": "rule never-reboot authorises up to nothing and this change is low"
+  "reason": "rule never-reboot (cnmaestro/device.reboot for *) excludes this from automatic authorisation"
 }
 ```
 
-`rule` is present whenever one matched, including when the matching rule is the
-reason a person is being asked. It is absent when nothing matched.
+`rule` is present whenever one decided, including when it is the exclusion that
+is the reason a person is being asked. It is absent when nothing matched.
+`reason` is prose meant to be shown as-is; do not parse it.
 
 ## On an operation
 
 An operation authorised by a rule carries `authorized_by_rule` on
 `GET /api/operations` and `GET /api/operations/{id}`, and its `approved_by` is
-`system:policy`. Render the two differently: "approved by system:policy" reads
-as somebody having clicked, and nobody did.
+`system:policy` with `approved_by_name` the same string (it is not an account,
+so there is no name to resolve).
+
+**`authorized_by_rule` is the discriminator, not `approved_by`.** A page that
+renders the approver field alone will say "approved by system:policy", which
+reads as somebody having clicked. When `authorized_by_rule` is non-empty the
+row should say a standing rule authorised it and name the rule; when it is
+empty, an account approved it and `approved_by_name` is who.
+
+The list endpoint carries only the rule's id. The rule's scope, ceiling and
+note are in the `operation.approved` audit entry, which
+`GET /api/operations/{id}` already returns alongside the operation — read them
+from there rather than from `GET /api/approval-policy`, because the rule may
+have been edited or deleted since.
 
 The operation's audit trail carries an `operation.approved` entry whose actor is
 `system:policy` and whose detail is:

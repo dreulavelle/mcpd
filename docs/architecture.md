@@ -78,8 +78,10 @@ payload cannot execute even if it slipped past every check above it.
 and execution is detectable, and the outcome is confirmed by re-reading the
 target. A mutation declares whether it can offer the third (`Verifiable`) and
 supplies the second by declaring preconditions. Anything short of all three is
-a *gated call* — a human authorised it and it happened, and that is the whole
-of the evidence. The two words are kept apart in the note the model reads and
+a *gated call* — it was authorised and it happened, and that is the whole of
+the evidence. ("Authorised" rather than "a human said yes": a standing rule can
+authorise a change with nobody being asked. Who authorised it is a separate
+fact from what can be proved about it, and the two are kept apart.) The two words are kept apart in the note the model reads and
 in what the API returns, because the second borrowing the first's credibility
 is exactly how a system ends up claiming more integrity than it has.
 
@@ -229,6 +231,25 @@ administrator's rule, not the proposer's standing; what bounds the proposer is
 `CapPropose`, checked where every proposal is. Writing rules is `CapAdmin`;
 reading them is `CapRead`, because "why was I not asked" is a question an
 operator has to be able to answer.
+
+**A rule removes the only backpressure there is.** Nothing rate-limits a
+mutation — `ToolSpec.RateLimit` bounds read tools, and a propose tool has no
+equivalent. Before a rule existed, a runaway agent could only pile up proposals
+somebody would decline; under one it lands writes at whatever rate it can call.
+The human in the loop was doing that job as a side effect, and a rule is a
+decision to stop paying for it. Scope rules narrowly until there is a
+per-mutation rate limit.
+
+**A rule is decoded strictly, and a misspelled selector is an error.** An
+omitted selector means "anything", which is the convenience that makes
+strictness load-bearing: `{"principle": "svc:agent"}` would otherwise be
+discarded silently and the real principal default to every principal, turning a
+deliberately narrow rule into a global one with nothing saying so. An unknown
+field, an explicit `null`, and an empty selector are all refused, and the check
+lives on the rule type rather than in the handler — a `json.Decoder`'s
+`DisallowUnknownFields` does not reach inside a custom `UnmarshalJSON`, so the
+type is the only place that covers the API, the settings store at startup, and
+a restore alike.
 
 Rules are read and written at `GET`/`PUT /api/approval-policy`, and
 `POST /api/approval-policy/evaluate` answers "which rule would apply, and why"

@@ -50,8 +50,14 @@ never ran, and `CheckDrift` says which.
 
 **"Reviewed change" and "gated call" are different words on purpose.** The
 first carries exact fields, drift detection and a confirmed outcome. The second
-carries a human's yes and nothing else. Do not let the second wear the first's
-name.
+carries an authorisation and nothing else. Do not let the second wear the
+first's name.
+
+**Assurance says what can be proved, not who authorised it.** A standing rule
+can approve a change without anyone being asked, so a gated call no longer
+implies a human said yes. `AuthorizedByRule` is the separate fact. Do not fold
+the two together: an auto-approved change can carry every proof, and one a
+person approved can carry none.
 
 **Indeterminate is not terminal.** It means a write may have landed. Treating
 it as failed invites a retry that applies the change twice.

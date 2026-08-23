@@ -183,8 +183,9 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 	//     unmake their decision. Where a standing rule did, nobody ever looked:
 	//     the rule authorised a change of one severity and the target now says
 	//     it is another, so the authorisation does not cover what is about to
-	//     happen. Refusing sends it back through propose, where the raised risk
-	//     is what the policy sees and a person is asked.
+	//     happen. Refusing settles it failed, with the reason: nothing was
+	//     written, and re-proposing the same intent plans afresh, so the raised
+	//     risk is what the policy sees the second time and a person is asked.
 	if op.AutoApproved() && plan.RiskOverride != nil {
 		if raised := MaxRisk(op.Risk, *plan.RiskOverride); raised != op.Risk {
 			e.log.Warn("re-planning raised the risk of a change nobody was asked about; refusing to execute",

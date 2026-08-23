@@ -154,9 +154,16 @@ type Change struct {
 // Two different things get called an approval, and they are not the same
 // evidence. A reviewed change is one mcpd planned itself: the approver saw the
 // exact fields, drift between proposal and execution is detectable, and the
-// outcome is confirmed by re-reading the target. A gated call is one a human
-// authorised without mcpd being able to describe or confirm what it did -- all
-// the record proves is that somebody said yes and that the call was made.
+// outcome is confirmed by re-reading the target. A gated call is one mcpd
+// could not describe or confirm -- all the record proves is that it was
+// authorised and that the call was made.
+//
+// "Authorised" rather than "a human said yes", and the distinction is not
+// pedantry: a standing rule can authorise a change now, so an operation may be
+// a gated call with nobody ever having been asked. Whether anyone was asked is
+// a separate fact, carried by AuthorizedByRule, and it is deliberately not
+// folded in here. Nobody was asked and nothing can be proved are different
+// claims, and an operation can be either, both or neither.
 //
 // Calling both "approved" lets the second borrow the first's credibility,
 // which is the whole reason the word is worth splitting.
@@ -281,8 +288,14 @@ func (o *Operation) DriftChecked() bool { return Declared(o.Preconditions) }
 //
 // A mutation is a reviewed change only while it holds all three proofs. Drop
 // one -- no declared preconditions, no way to confirm the outcome -- and what
-// the record proves is what a gated call proves: it was authorised, and it
-// happened. That deserves the smaller word.
+// the record proves is what a gated call proves: it was authorised, by a
+// person or by a standing rule, and it happened. That deserves the smaller
+// word.
+//
+// It deliberately does not consult AuthorizedByRule. What can be proved about
+// a change does not depend on who authorised it: an auto-approved mutation
+// that declares preconditions and can be re-read has all three proofs and is a
+// reviewed change.
 func (o *Operation) Assurance() Assurance {
 	if o.Verifiable && o.DriftChecked() {
 		return AssuranceReviewedChange

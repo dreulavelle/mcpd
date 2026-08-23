@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"strings"
+
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/operations"
+	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
@@ -256,3 +260,221 @@ func TestApprovalPolicy_TheGenericSettingsFormCannotWriteRules(t *testing.T) {
 		t.Fatalf("the settings form wrote %d rules", len(after.Rules))
 	}
 }
+
+// A misspelled selector must reach the operator as an error naming the field,
+// not as a rule that silently covers everybody.
+func TestApprovalPolicy_RefusesAMisspelledSelector(t *testing.T) {
+	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+
+	for _, tc := range []struct {
+		name string
+		rule map[string]any
+	}{
+		{"a misspelled principal", map[string]any{
+			"id": "x", "principle": "svc:agent", "max_risk": "low"}},
+		{"an explicit null selector", map[string]any{
+			"id": "x", "plugin": nil, "max_risk": "low"}},
+		{"an empty selector", map[string]any{
+			"id": "x", "plugin": "", "max_risk": "low"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := request(t, s, http.MethodPut, "/api/approval-policy",
+				map[string]any{"rules": []map[string]any{tc.rule}})
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (%s)", w.Code, w.Body)
+			}
+			after := decodePolicy(t, request(t, s, http.MethodGet, "/api/approval-policy", nil).Body.Bytes())
+			if len(after.Rules) != 0 {
+				t.Fatalf("a refused write left %d rules behind", len(after.Rules))
+			}
+		})
+	}
+}
+
+// Misspelling the wrapper would otherwise read as an empty set and quietly
+// delete the whole policy.
+func TestApprovalPolicy_RefusesAMisspelledWrapper(t *testing.T) {
+	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	if w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
+		"rules": []map[string]any{{"id": "routine", "plugin": "cnmaestro", "max_risk": "low"}},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("seeding = %d (%s)", w.Code, w.Body)
+	}
+
+	if w := request(t, s, http.MethodPut, "/api/approval-policy",
+		map[string]any{"rulez": []map[string]any{}}); w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", w.Code, w.Body)
+	}
+	after := decodePolicy(t, request(t, s, http.MethodGet, "/api/approval-policy", nil).Body.Bytes())
+	if len(after.Rules) != 1 {
+		t.Fatalf("the policy now has %d rules; a typo must not clear it", len(after.Rules))
+	}
+}
+
+// The exclusion an operator writes has to hold at the endpoint too, not only
+// in the resolver. This is the reproduction that started as an auto-approved
+// device reboot.
+func TestApprovalPolicy_AnExclusionBeatsABroaderGrant(t *testing.T) {
+	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	if w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
+		"rules": []map[string]any{
+			{"id": "plugin-wide", "plugin": "cnmaestro", "max_risk": "high"},
+			{"id": "never-reboot", "action": "device.reboot", "max_risk": ""},
+		},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("seeding = %d (%s)", w.Code, w.Body)
+	}
+
+	w := request(t, s, http.MethodPost, "/api/approval-policy/evaluate", map[string]any{
+		"plugin": "cnmaestro", "action": "device.reboot",
+		"principal": "user:alice", "risk": "low", "reversible": true,
+	})
+	var got evaluateResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.AutoApprove {
+		t.Fatalf("a device reboot auto-approved under rule %q", got.Rule.ID)
+	}
+	if got.Rule == nil || got.Rule.ID != "never-reboot" {
+		t.Fatalf("blamed %+v, want never-reboot", got.Rule)
+	}
+}
+
+// A typo in an exclusion is the case worth warning about. Deny-wins makes it
+// harmless in itself -- an exclusion authorises nothing however it is spelled
+// -- but it silently stops protecting the action it was written for, and the
+// grant beside it decides instead.
+func TestApprovalPolicy_WarnsAboutARuleThatMatchesNothing(t *testing.T) {
+	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s.opts.Manager = mountedManager(t)
+
+	w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
+		"rules": []map[string]any{
+			{"id": "plugin-wide", "plugin": "echo", "max_risk": "high"},
+			{"id": "never-rebooot", "action": "label.rebooot", "max_risk": ""},
+			{"id": "other-host", "plugin": "cnmaestro", "max_risk": "low"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; an unmatched rule is a warning, not a refusal (%s)",
+			w.Code, w.Body)
+	}
+	got := decodePolicy(t, w.Body.Bytes())
+	if len(got.Rules) != 3 {
+		t.Fatalf("stored %d rules, want 3", len(got.Rules))
+	}
+
+	joined := strings.Join(got.Warnings, "\n")
+	for _, want := range []string{"never-rebooot", "other-host"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("warnings do not mention %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "plugin-wide") {
+		t.Errorf("a rule that does match was warned about:\n%s", joined)
+	}
+
+	// And the warning is on the read too, not only on the write that caused it.
+	reread := decodePolicy(t, request(t, s, http.MethodGet, "/api/approval-policy", nil).Body.Bytes())
+	if len(reread.Warnings) != len(got.Warnings) {
+		t.Errorf("GET reported %d warnings, PUT reported %d", len(reread.Warnings), len(got.Warnings))
+	}
+}
+
+// A host with nothing mounted must not warn that every rule matches nothing.
+func TestApprovalPolicy_DoesNotWarnWithNothingMounted(t *testing.T) {
+	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+
+	w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
+		"rules": []map[string]any{{"id": "routine", "plugin": "cnmaestro", "max_risk": "low"}},
+	})
+	if got := decodePolicy(t, w.Body.Bytes()); len(got.Warnings) != 0 {
+		t.Errorf("warned with no plugins mounted: %v", got.Warnings)
+	}
+}
+
+// mountedManager builds a manager with one plugin registering one mutation, so
+// the unmatched-rule check has something real to judge against.
+func mountedManager(t *testing.T) *plugins.Manager {
+	t.Helper()
+	m := plugins.NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)), "test",
+		func(context.Context, string, auth.Capability) error { return nil },
+		stubApprovals{}, nil)
+	if err := m.Register(context.Background(), labelPlugin{}, "echo", false); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	return m
+}
+
+type labelPlugin struct{}
+
+func (labelPlugin) Descriptor() plugins.Descriptor {
+	return plugins.Descriptor{Name: "echo", Version: "1.0.0", Title: "Echo"}
+}
+
+func (labelPlugin) Register(_ context.Context, r *plugins.Registry) error {
+	plugins.Mutation(r, plugins.MutationSpec{
+		Action: "label.set", Title: "Set label", Description: "Sets a label.",
+		Risk: operations.RiskLow, Reversible: true,
+	}, labelMutation{})
+	return nil
+}
+
+func (labelPlugin) Start(context.Context) error    { return nil }
+func (labelPlugin) Shutdown(context.Context) error { return nil }
+func (labelPlugin) Health(context.Context) plugins.Health {
+	return plugins.Healthy()
+}
+
+type labelMutation struct{}
+
+func (labelMutation) Plan(context.Context, struct{}) (plugins.Plan[struct{}], error) {
+	return plugins.Plan[struct{}]{}, nil
+}
+
+func (labelMutation) Apply(context.Context, struct{}, plugins.Plan[struct{}]) (plugins.ApplyResult, error) {
+	return plugins.ApplyResult{}, nil
+}
+
+func (labelMutation) Observe(context.Context, struct{}) (struct{}, error) {
+	return struct{}{}, nil
+}
+
+// stubApprovals lets a plugin declaring a mutation mount. Nothing here is
+// called: the test reads which actions are registered, it does not propose.
+type stubApprovals struct{}
+
+func (stubApprovals) Propose(context.Context, *auth.Principal, operations.ProposeRequest) (*operations.Operation, error) {
+	return nil, errNotUsed
+}
+
+func (stubApprovals) Approve(context.Context, *auth.Principal, string, string) (*operations.Operation, error) {
+	return nil, errNotUsed
+}
+
+func (stubApprovals) Reject(context.Context, *auth.Principal, string, string) (*operations.Operation, error) {
+	return nil, errNotUsed
+}
+
+func (stubApprovals) Cancel(context.Context, *auth.Principal, string, string) (*operations.Operation, error) {
+	return nil, errNotUsed
+}
+
+func (stubApprovals) Get(context.Context, *auth.Principal, string) (*operations.Operation, error) {
+	return nil, errNotUsed
+}
+
+func (stubApprovals) ApproveInline(context.Context, *auth.Principal, string) (*operations.Operation, error) {
+	return nil, errNotUsed
+}
+
+func (stubApprovals) AwaitOutcome(context.Context, string, time.Duration) (*operations.Operation, error) {
+	return nil, errNotUsed
+}
+
+func (stubApprovals) List(context.Context, *auth.Principal, string, []operations.OperationState, int) ([]*operations.Operation, error) {
+	return nil, errNotUsed
+}
+
+var errNotUsed = errors.New("not used in this test")

@@ -2,7 +2,9 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/operations"
@@ -35,6 +37,15 @@ type approvalPolicyResponse struct {
 	// Default states what happens where no rule matches, so the page can say
 	// it rather than leaving an empty list to imply it.
 	Default string `json:"default"`
+	// Warnings names rules that match nothing this host currently serves.
+	//
+	// Never a refusal. A rule may legitimately name a plugin an operator is
+	// about to add, and refusing it would make the order of two configuration
+	// steps matter. But a typo in an *exclusion* is worth saying out loud: it
+	// fails closed in the sense that the exclusion never authorises anything,
+	// and open in the sense that matters, because the exclusion it was
+	// supposed to be never fires and a broader grant decides instead.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func (s *Server) approvalPolicyView(rules []operations.AutoApprovalRule) approvalPolicyResponse {
@@ -51,7 +62,71 @@ func (s *Server) approvalPolicyView(rules []operations.AutoApprovalRule) approva
 		Wildcard: operations.RuleAny,
 		Ceilings: out,
 		Default:  "Every change is put to a person unless a rule authorises it.",
+		Warnings: s.unmatchedRules(rules),
 	}
+}
+
+// unmatchedRules reports rules naming a plugin or action this host does not
+// serve.
+//
+// The case worth catching is an exclusion with a typo in it. Under deny-wins a
+// misspelled exclusion is not dangerous in itself -- it authorises nothing, so
+// it can only ever refuse -- but it silently stops protecting the thing it was
+// written for, and a plugin-wide grant beside it then decides. The operator
+// believes reboots are excluded and they are not.
+//
+// A wildcard selector matches by definition and is never reported. Nor is
+// anything reported when the host has no plugins mounted, which is what a test
+// harness and a half-configured host both look like; warning that every rule
+// matches nothing would be noise in the one case and alarming in the other.
+func (s *Server) unmatchedRules(rules []operations.AutoApprovalRule) []string {
+	if s.opts.Manager == nil {
+		return nil
+	}
+	actions := map[string]map[string]bool{}
+	for _, m := range s.opts.Manager.All() {
+		if m.Registry == nil {
+			continue
+		}
+		known := map[string]bool{}
+		for _, action := range m.Registry.MutationActions() {
+			known[action] = true
+		}
+		actions[m.Descriptor.Name] = known
+	}
+	if len(actions) == 0 {
+		return nil
+	}
+
+	var out []string
+	for _, r := range rules {
+		switch {
+		case r.Plugin != operations.RuleAny && actions[r.Plugin] == nil:
+			out = append(out, fmt.Sprintf(
+				"rule %q names plugin %q, which is not mounted here, so it matches nothing",
+				r.ID, r.Plugin))
+		case r.Action != operations.RuleAny && !anyPluginHas(actions, r.Plugin, r.Action):
+			out = append(out, fmt.Sprintf(
+				"rule %q names action %q, which no mounted plugin registers, "+
+					"so it matches nothing", r.ID, r.Action))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// anyPluginHas reports whether the action is registered by the named plugin,
+// or by any of them when the rule's plugin selector is the wildcard.
+func anyPluginHas(actions map[string]map[string]bool, plugin, action string) bool {
+	if plugin != operations.RuleAny {
+		return actions[plugin][action]
+	}
+	for _, known := range actions {
+		if known[action] {
+			return true
+		}
+	}
+	return false
 }
 
 // storedRules reads the rule set as it stands.
@@ -62,15 +137,13 @@ func (s *Server) approvalPolicyView(rules []operations.AutoApprovalRule) approva
 // unreadable", because the host is asking about everything in both cases and
 // only one of them is what they configured.
 func (s *Server) storedRules(r *http.Request) ([]operations.AutoApprovalRule, error) {
-	var rules []operations.AutoApprovalRule
-	ok, err := s.opts.Settings.GetJSON(r.Context(), settings.KeyApprovalAutoRules, &rules)
-	if err != nil {
+	raw, ok, err := s.opts.Settings.Get(r.Context(), settings.KeyApprovalAutoRules)
+	if err != nil || !ok {
 		return nil, err
 	}
-	if !ok || len(rules) == 0 {
-		return nil, nil
-	}
-	return operations.NormaliseRules(rules)
+	// The same judgement the write path applies, so what this page shows is
+	// what the host will act on rather than a more forgiving reading of it.
+	return operations.DecodeRules([]byte(raw))
 }
 
 func (s *Server) handleGetApprovalPolicy(w http.ResponseWriter, r *http.Request) {
@@ -104,9 +177,23 @@ func (s *Server) handlePutApprovalPolicy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Strict at the wrapper as well as inside each rule. The rules themselves
+	// refuse an unknown field in AutoApprovalRule.UnmarshalJSON, which is
+	// where it has to live to cover every way a rule arrives; this catches a
+	// misspelling of "rules" itself, which would otherwise read as an empty
+	// set and quietly delete the policy.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec.DisallowUnknownFields()
+
 	var req putApprovalPolicyRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, "the request could not be read")
+	if err := dec.Decode(&req); err != nil {
+		// The decoder's own message names the offending field, which is the
+		// whole value of being strict -- swallowing it would leave an operator
+		// staring at a rule that looks right.
+		s.writeJSON(w, r, http.StatusBadRequest, map[string]string{
+			"error":  "invalid_rules",
+			"detail": err.Error(),
+		})
 		return
 	}
 
@@ -169,9 +256,14 @@ func (s *Server) handleEvaluateApprovalPolicy(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Strict here too. A typo in a what-if question gives a confident answer
+	// about a change nobody asked about, which is worse than an error.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
+	dec.DisallowUnknownFields()
+
 	var req evaluateRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, "the request could not be read")
+	if err := dec.Decode(&req); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 

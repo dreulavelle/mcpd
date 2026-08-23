@@ -300,6 +300,17 @@ func (b *mutationBridge) Plan(ctx context.Context, params json.RawMessage) (plug
 		return zero, err
 	}
 
+	return planFrom(b.plugin.manifest.Name, result)
+}
+
+// planFrom translates a plugin's wire response into a plan.
+//
+// Split out from the call so it can be tested without a subprocess: what this
+// does with a value it does not recognise is the interesting part, and it
+// should not take a compiled binary to check it.
+func planFrom(plugin string, result PlanResult) (plugins.Plan[json.RawMessage], error) {
+	var zero plugins.Plan[json.RawMessage]
+
 	changes := make([]operations.Change, len(result.Changes))
 	for i, c := range result.Changes {
 		changes[i] = operations.Change{Field: c.Field, From: c.From, To: c.To}
@@ -309,7 +320,7 @@ func (b *mutationBridge) Plan(ctx context.Context, params json.RawMessage) (plug
 	if len(result.Preconditions) > 0 {
 		if err := json.Unmarshal(result.Preconditions, &preconditions); err != nil {
 			return zero, fmt.Errorf("external: plugin %s returned unreadable preconditions: %w",
-				b.plugin.manifest.Name, err)
+				plugin, err)
 		}
 	}
 
@@ -325,7 +336,24 @@ func (b *mutationBridge) Plan(ctx context.Context, params json.RawMessage) (plug
 		// must remain exactly what was hashed.
 		State: result.State,
 	}
-	if risk := operations.RiskLevel(result.RiskOverride); risk.Valid() {
+
+	// Whatever the plugin said survives, including a level this build does not
+	// recognise.
+	//
+	// Dropping an unrecognised value was silently the most dangerous reading
+	// available. A plugin returning "catastrophic" -- a typo, or a level a
+	// newer plugin knows and this host does not -- lost the override
+	// altogether, so the mutation went on looking like whatever it declared
+	// statically. Under a low ceiling that auto-approves, and because the
+	// executor re-plans through this same code the override was dropped a
+	// second time, so the guard that refuses an auto-approved change whose
+	// risk was raised never saw a raise to refuse.
+	//
+	// An unknown classification has to travel as unknown. MaxRisk ranks it
+	// above every level this host defines, so it can only raise, and the
+	// refusals downstream are then the ones that decide what happens to it.
+	if result.RiskOverride != "" {
+		risk := operations.RiskLevel(result.RiskOverride)
 		plan.RiskOverride = &risk
 	}
 	return plan, nil
