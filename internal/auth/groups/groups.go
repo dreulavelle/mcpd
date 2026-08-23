@@ -602,43 +602,41 @@ func (s *Store) AddMember(ctx context.Context, actor, groupID string, subject Su
 // before it: an account deleted between the read and the write would otherwise
 // leave a membership naming nobody.
 func AddMemberTx(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject, now int64) (bool, error) {
-	var query string
+	var column, table string
 	switch subject.Kind {
 	case KindUser:
-		query = `
-			INSERT INTO group_members (group_id, user_id, key_id, added_by, added_at)
-			SELECT ?,?,NULL,?,?
-			 WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)
-			   AND NOT EXISTS (
-			       SELECT 1 FROM group_members
-			        WHERE group_id = ? AND user_id = ?)`
+		column, table = "user_id", "users"
 	case KindKey:
-		query = `
-			INSERT INTO group_members (group_id, user_id, key_id, added_by, added_at)
-			SELECT ?,NULL,?,?,?
-			 WHERE EXISTS (SELECT 1 FROM api_keys WHERE id = ?)
-			   AND NOT EXISTS (
-			       SELECT 1 FROM group_members
-			        WHERE group_id = ? AND key_id = ?)`
+		column, table = "key_id", "api_keys"
 	default:
 		return false, ErrNoSuchMember
 	}
-	affected, err := tx.ExecAffected(query,
-		groupID, subject.ID, actor, now, subject.ID, groupID, subject.ID)
+	// The group's existence is a condition too, so a group deleted between a
+	// page load and this write is a refusal with a sentence rather than a
+	// foreign-key violation nobody can read.
+	other := "key_id"
+	if subject.Kind == KindKey {
+		other = "user_id"
+	}
+	affected, err := tx.ExecAffected(`
+		INSERT INTO group_members (group_id, `+column+`, `+other+`, added_by, added_at)
+		SELECT ?,?,NULL,?,?
+		 WHERE EXISTS (SELECT 1 FROM groups WHERE id = ?)
+		   AND EXISTS (SELECT 1 FROM `+table+` WHERE id = ?)
+		   AND NOT EXISTS (
+		       SELECT 1 FROM group_members
+		        WHERE group_id = ? AND `+column+` = ?)`,
+		groupID, subject.ID, actor, now, groupID, subject.ID, groupID, subject.ID)
 	if err != nil {
 		return false, err
 	}
 	if affected > 0 {
 		return true, nil
 	}
-	// Nothing was written: either the subject is not there, or it was already
-	// a member. Only the first is a refusal, and telling them apart takes one
-	// read.
+	// Nothing was written, and three conditions could account for it. Which
+	// one is answered by reading afterwards rather than by the write, because
+	// the three need different words.
 	var already int
-	column := "user_id"
-	if subject.Kind == KindKey {
-		column = "key_id"
-	}
 	if err := tx.QueryRow(
 		`SELECT COUNT(*) FROM group_members WHERE group_id = ? AND `+column+` = ?`,
 		groupID, subject.ID).Scan(&already); err != nil {
@@ -646,6 +644,9 @@ func AddMemberTx(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject, 
 	}
 	if already > 0 {
 		return false, nil
+	}
+	if _, err := groupName(tx, groupID); err != nil {
+		return false, err
 	}
 	return false, ErrNoSuchMember
 }

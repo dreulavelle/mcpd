@@ -392,3 +392,51 @@ func TestAddMember_IsIdempotentAndRecordsNothingTwice(t *testing.T) {
 		t.Errorf("group.member_added appears %d times; adding a member twice is one grant", added)
 	}
 }
+
+// A group deleted between a page load and a write is a refusal with a sentence
+// somebody can read, rather than a foreign-key violation from the driver.
+func TestAddMember_RefusesAGroupThatIsNotThere(t *testing.T) {
+	s, db := newStore(t)
+	seedUser(t, db, "usr_1", "a@example.com", `[]`)
+	err := s.AddMember(context.Background(), "user:admin@example.com",
+		"grp_nobody", User("usr_1"))
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("adding to a missing group: %v, want ErrNotFound", err)
+	}
+}
+
+// A key joins a group the same way an account does, and the two memberships
+// are distinct rows even when the identifiers look alike.
+func TestAddMember_AccountsAndKeysAreSeparateMemberships(t *testing.T) {
+	s, db := newStore(t)
+	ctx := context.Background()
+	seedUser(t, db, "usr_1", "a@example.com", `[]`)
+	seedKey(t, db, "key_1", `[]`)
+	g := mustGroup(t, s, "Field", "cnmaestro")
+
+	for _, subject := range []Subject{User("usr_1"), Key("key_1")} {
+		if err := s.AddMember(ctx, "user:admin@example.com", g.ID, subject); err != nil {
+			t.Fatalf("add %s: %v", subject.ID, err)
+		}
+	}
+	members, err := s.Members(ctx, g.ID)
+	if err != nil {
+		t.Fatalf("members: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("members = %d, want 2", len(members))
+	}
+	for _, subject := range []Subject{User("usr_1"), Key("key_1")} {
+		if got := effective(t, s, subject); !slices.Equal(got, []string{"cnmaestro"}) {
+			t.Errorf("%s reaches %v, want [cnmaestro]", subject.ID, got)
+		}
+	}
+
+	// And taking one out leaves the other.
+	if err := s.RemoveMember(ctx, "user:admin@example.com", g.ID, User("usr_1")); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if got := effective(t, s, Key("key_1")); !slices.Equal(got, []string{"cnmaestro"}) {
+		t.Errorf("the key lost its reach when an account left: %v", got)
+	}
+}

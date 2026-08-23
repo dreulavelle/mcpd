@@ -1,5 +1,5 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { api, ApiError, type Role, type User } from "@/lib/api";
+import { api, ApiError, type Group, type Role, type User } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
 import { Chip } from "@/components/status";
@@ -12,6 +12,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { reachLabel } from "./Groups";
 
 const ROLES: [Role, string][] = [
   ["user", "User"],
@@ -21,6 +22,7 @@ const ROLES: [Role, string][] = [
 /** An account is an email address, a role, and the systems it may reach. */
 export function Users() {
   const [users, setUsers] = useState<User[] | null>(null);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const notify = useNotify();
@@ -29,6 +31,7 @@ export function Users() {
     api.users()
       .then((r) => { setUsers(r.users ?? []); setError(""); })
       .catch(() => setError("Couldn't load accounts."));
+    api.groups().then((r) => setGroups(r.groups ?? [])).catch(() => undefined);
   }, []);
   usePoll(load, 30_000);
 
@@ -36,7 +39,7 @@ export function Users() {
     <>
       <PageHeader
         title="Users"
-        lede="Everyone signs in with their own email and password. Roles decide what they may do; the systems list decides what they can see."
+        lede="Roles decide what somebody may do. Groups decide what they can reach."
         actions={users && <Button onClick={() => setAdding(true)}>Add user</Button>}
       />
 
@@ -44,6 +47,7 @@ export function Users() {
 
       {adding && (
         <AddUser
+          groups={groups}
           onClose={() => setAdding(false)}
           onAdded={(email) => { setAdding(false); load(); notify("good", `Added ${email}.`); }}
         />
@@ -58,13 +62,17 @@ export function Users() {
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Can reach</TableHead>
+                  <TableHead>Groups</TableHead>
                   <TableHead>Last signed in</TableHead>
                   <TableHead className="w-px" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {users.map((u) => (
-                  <UserRow key={u.id} user={u} onChanged={load} notify={notify} />
+                  <UserRow
+                    key={u.id} user={u} groups={groups}
+                    onChanged={load} notify={notify}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -75,8 +83,9 @@ export function Users() {
   );
 }
 
-function UserRow({ user, onChanged, notify }: {
+function UserRow({ user, groups, onChanged, notify }: {
   user: User;
+  groups: Group[];
   onChanged: () => void;
   notify: Notify;
 }) {
@@ -133,8 +142,14 @@ function UserRow({ user, onChanged, notify }: {
           </NativeSelect>
         </div>
       </TableCell>
+      {/* What the account actually reaches, which is its own list unioned
+          with every group's. Showing only its own would disagree with what
+          the server lets it do. */}
       <TableCell className="text-muted-foreground">
-        {user.plugins.includes("*") ? "Everything" : user.plugins.join(", ") || "Nothing"}
+        {reachLabel(user.reaches)}
+      </TableCell>
+      <TableCell>
+        <GroupPicker user={user} groups={groups} busy={busy} run={run} />
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">
         {user.last_login_at ? new Date(user.last_login_at).toLocaleString() : "Never"}
@@ -158,15 +173,74 @@ function UserRow({ user, onChanged, notify }: {
   );
 }
 
-function AddUser({ onClose, onAdded }: {
+/**
+ * Adding and removing one group at a time.
+ *
+ * A select rather than a set of checkboxes because most accounts are in none
+ * or one, and the chips beside it are the whole answer to "what is this
+ * account in" without opening anything.
+ */
+function GroupPicker({ user, groups, busy, run }: {
+  user: User;
+  groups: Group[];
+  busy: boolean;
+  /** The row's own runner, so a membership change reloads and toasts like any
+      other edit on the row rather than growing its own machinery. */
+  run: (what: string, fn: () => Promise<unknown>) => Promise<void>;
+}) {
+  const inIt = new Set(user.groups.map((g) => g.id));
+  const available = groups.filter((g) => !inIt.has(g.id));
+
+  return (
+    <div className="space-y-1">
+      {user.groups.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {user.groups.map((g) => (
+            <button
+              key={g.id} type="button" disabled={busy}
+              title={`Take ${user.email} out of ${g.name}`}
+              onClick={() => run(`Out of ${g.name}.`,
+                () => api.removeGroupMember(g.id, "user", user.id))}
+            >
+              <Chip tone="info">{g.name} ×</Chip>
+            </button>
+          ))}
+        </div>
+      )}
+      {available.length > 0 && (
+        <div className="w-40">
+          <NativeSelect
+            aria-label={`Add ${user.email} to a group`} value="" disabled={busy}
+            onChange={(e) => {
+              const id = e.target.value;
+              if (!id) return;
+              const name = groups.find((g) => g.id === id)?.name ?? "the group";
+              run(`Added to ${name}.`,
+                () => api.addGroupMember(id, "user", user.id));
+            }}
+          >
+            <option value="">Add to a group…</option>
+            {available.map((g) => (
+              <option key={g.id} value={g.id}>{g.name}</option>
+            ))}
+          </NativeSelect>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AddUser({ groups, onClose, onAdded }: {
+  groups: Group[];
   onClose: () => void;
   onAdded: (email: string) => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>("user");
-  const [everything, setEverything] = useState(true);
+  const [everything, setEverything] = useState(false);
   const [plugins, setPlugins] = useState("");
+  const [joined, setJoined] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -178,7 +252,9 @@ function AddUser({ onClose, onAdded }: {
       const granted = everything
         ? ["*"]
         : plugins.split(",").map((p) => p.trim()).filter(Boolean);
-      await api.createUser({ email: email.trim(), password, role, plugins: granted });
+      await api.createUser({
+        email: email.trim(), password, role, plugins: granted, groups: joined,
+      });
       onAdded(email.trim());
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : "Couldn't add that account.");
@@ -220,14 +296,35 @@ function AddUser({ onClose, onAdded }: {
             <Label htmlFor="new-scope">Can reach</Label>
             <NativeSelect id="new-scope" value={everything ? "all" : "some"}
                           onChange={(e) => setEverything(e.target.value === "all")}>
-              <option value="all">Every system on this host</option>
               <option value="some">Only the systems I list</option>
+              <option value="all">Every system on this host</option>
             </NativeSelect>
             {!everything && (
               <Input value={plugins} onChange={(e) => setPlugins(e.target.value)}
                      placeholder="cnmaestro, netbox" />
             )}
           </div>
+
+          {groups.length > 0 && (
+            <fieldset className="space-y-1.5">
+              <legend className="text-sm font-medium">Groups</legend>
+              <p className="text-xs text-muted-foreground">
+                They also reach whatever their groups reach.
+              </p>
+              {groups.map((g) => (
+                <label key={g.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox" checked={joined.includes(g.id)}
+                    onChange={() => setJoined((current) =>
+                      current.includes(g.id)
+                        ? current.filter((id) => id !== g.id)
+                        : [...current, g.id])}
+                  />
+                  <span>{g.name}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
 
           <div className="flex items-center gap-2">
             <Button type="submit" disabled={busy || !email.trim() || !password}>

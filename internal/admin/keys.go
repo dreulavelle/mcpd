@@ -71,11 +71,18 @@ func viewOfKey(k *apikeys.Key, now time.Time, reaches []string) keyView {
 	return v
 }
 
-// reachOf computes what a key reaches, through the one function that computes
-// it for anybody.
+// reachOf asks what a key reaches, through the one function that answers it
+// for anybody.
+//
+// It never computes an answer of its own. A server wired without the resolver,
+// or a read that fails, yields nothing rather than the key's own grant:
+// showing the direct grant and calling it the effective one would be the
+// console disagreeing with the server about what a credential can do, which is
+// the sort of disagreement nobody looks for.
 func (s *Server) reachOf(r *http.Request, k *apikeys.Key) []string {
 	if s.opts.KeyGrants == nil {
-		return nonNil(k.Plugins)
+		s.opts.Log.Error("no way to resolve what a key reaches", "key", k.ID)
+		return []string{}
 	}
 	reaches, err := s.opts.KeyGrants(r.Context(), k.ID)
 	if err != nil {

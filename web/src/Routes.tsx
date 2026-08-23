@@ -14,6 +14,8 @@ import { Profile } from "@/pages/profile/Profile";
 import { ApprovalPolicy } from "@/pages/settings/ApprovalPolicy";
 import { Authentication } from "@/pages/settings/Authentication";
 import { General } from "@/pages/settings/General";
+import { Groups } from "@/pages/settings/Groups";
+import { Keys } from "@/pages/settings/Keys";
 import { Users } from "@/pages/settings/Users";
 import { Tunnels } from "@/pages/tunnels/Tunnels";
 
@@ -64,6 +66,8 @@ export function Routes() {
           case "policy": return <ApprovalPolicy />;
           case "authentication": return <Authentication />;
           case "users": return <Users />;
+          case "groups": return <Groups />;
+          case "keys": return <Keys />;
           default: return null;
         }
 
