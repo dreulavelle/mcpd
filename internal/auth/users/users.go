@@ -197,12 +197,19 @@ func (u *User) Name() string {
 // the whole of why a display name is safe to let people change: every audit
 // record, every guard and every grant is keyed on the address, and the name is
 // carried alongside for a human to read.
-func (u *User) Principal(sessionID string) *auth.Principal {
+//
+// `granted` is passed in rather than read off the row, and that is the point
+// of the parameter. Since groups exist, what an account may reach is its own
+// grants unioned with every group it belongs to -- a question about other
+// rows, which a method on this struct cannot answer. Store.EffectiveGrants is
+// the one place that computes it, and requiring the value here is what stops a
+// second, staler answer being assembled somewhere else.
+func (u *User) Principal(sessionID string, granted []string) *auth.Principal {
 	return &auth.Principal{
 		ID:          "user:" + u.Email,
 		DisplayName: u.Name(),
 		Role:        u.Role,
-		Plugins:     append([]string(nil), u.Plugins...),
+		Plugins:     append([]string(nil), granted...),
 		TokenID:     sessionID,
 		// Carried onto the principal rather than checked by whoever holds the
 		// user, so that every capability check in the process refuses a

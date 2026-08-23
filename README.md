@@ -129,8 +129,18 @@ A user sees the settings and how each plugin is reached; they just cannot
 change either. Admins additionally make and assign tunnels, manage accounts,
 and clear history.
 
-Scripts that cannot fill in a sign-in form use a bearer token from
-`auth.static_tokens` instead.
+A role says what somebody may *do*. What they may *reach* is a separate
+question, answered by **Groups**: a group lists systems, and everyone in it can
+reach them. A new group lists none, and an account in no group reaches nothing
+until somebody grants it something.
+
+Scripts and agents that cannot fill in a sign-in form present a bearer token.
+Two kinds work, and they are the same thing in two places: one declared in
+`auth.static_tokens` in the configuration file, and one an administrator
+creates on the **Keys** page. A key made there can be revoked or re-scoped
+without restarting mcpd, can expire, and shows when it was last used — and it
+acts as itself, so the history says which agent did what. Its secret is shown
+once, when it is created.
 
 ## How a change gets made
 

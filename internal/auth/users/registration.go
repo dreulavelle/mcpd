@@ -10,8 +10,18 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
+
+// DefaultGroupActor is what a default-group membership is recorded against.
+//
+// A registration joining the configured group is nobody's decision at the
+// moment it happens: the registrant did not choose it and no administrator was
+// asked. Attributing it to either would put a decision in the trail that
+// person did not make, which is the same reason an auto-approved operation is
+// attributed to system:policy rather than to whoever proposed it.
+const DefaultGroupActor = "system:registration"
 
 // ErrLastCredential reports unlinking the only thing an account can sign in
 // with. An account nobody can sign in to is not a locked account, it is a
@@ -68,6 +78,21 @@ type RegistrationPolicy struct {
 	// AllowedDomains restricts which addresses may register. Empty allows any
 	// address, which is only reachable once Enabled is deliberately set.
 	AllowedDomains []string
+
+	// DefaultGroup names a group every new registration joins. Empty joins
+	// none, and that is the default.
+	//
+	// It resolves the question approval used to leave open: an approved
+	// account got Plugins: [] and an empty console, which made approving a
+	// stranger two decisions presented as one. A default group makes the
+	// second decision once, in advance, where it can be looked at.
+	//
+	// It is a name rather than an identifier because an operator types it into
+	// a settings field, and a name is a thing they can type. A name matching
+	// no group grants nothing -- which is the safe direction for a setting
+	// still pointing at a group somebody deleted -- rather than failing the
+	// registration.
+	DefaultGroup string
 }
 
 // StatusFor reports what a registration lands as, given whether anybody has
@@ -309,6 +334,16 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 			}
 		}
 
+		// The default group, joined in the same transaction as the account, so
+		// that nobody can read the account between the two writes and conclude
+		// it reaches nothing. A pending account holds no capability whatever
+		// its membership says, so joining now costs nothing and means approval
+		// is one decision rather than two.
+		joined, err := joinDefaultGroup(tx, u.ID, req.Policy.DefaultGroup, now)
+		if err != nil {
+			return err
+		}
+
 		// Registered, not approved. Approval is its own entry, written when
 		// somebody actually decides -- collapsing the two would put a
 		// privilege grant in the trail that nobody performed.
@@ -321,6 +356,7 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 				"status":   string(u.Status),
 				"role":     string(u.Role),
 				"provider": providerName(req.Identity),
+				"groups":   joined,
 			},
 		})
 	})
@@ -335,6 +371,39 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 	u.CreatedAt = time.UnixMilli(now).UTC()
 	u.UpdatedAt = u.CreatedAt
 	return u, nil
+}
+
+// joinDefaultGroup puts a new registration into the configured group, if there
+// is one and it exists.
+//
+// A name that matches nothing is not an error. The setting holds a name an
+// operator typed, and a group they later renamed or deleted must not start
+// refusing registrations -- it must stop granting, which is what happens when
+// no row matches. What it does do is say so in the audit entry, by listing no
+// groups where the operator expected one.
+func joinDefaultGroup(tx *sqlite.UnitOfWork, userID, name string, now int64) ([]string, error) {
+	if strings.TrimSpace(name) == "" {
+		return []string{}, nil
+	}
+	var groupID string
+	err := tx.QueryRow(`SELECT id FROM groups WHERE lower(name) = lower(?)`,
+		strings.TrimSpace(name)).Scan(&groupID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Not the registrant, and not the administrator either -- neither of them
+	// decided this. A setting did, and the actor says so, the way an
+	// auto-approved operation is attributed to system:policy rather than to
+	// whoever proposed it. Recording it as `self:<address>` would read as
+	// somebody putting themselves into a group.
+	if err := groups.AddMemberAudited(tx, DefaultGroupActor, groupID,
+		groups.User(userID), now); err != nil {
+		return nil, err
+	}
+	return []string{groupID}, nil
 }
 
 func providerName(i *Identity) string {
@@ -547,7 +616,15 @@ func (s *Store) PendingRegistrations(ctx context.Context) ([]*User, error) {
 // Guarded on the status it expects. Two administrators approving the same
 // registration produce one approval and one ErrNotPending, rather than two
 // entries claiming a grant that happened once.
-func (s *Store) ApproveRegistration(ctx context.Context, actor, id string) (*User, error) {
+//
+// `groupIDs` is what makes approval one decision instead of two. Before groups
+// existed, approving a stranger left them with an empty grant and an empty
+// console, and whoever approved them had to go to another page and decide what
+// they may reach. Assigning a group here settles both in the same transaction,
+// so there is no moment where an approved account exists and reaches nothing
+// because the second write has not landed. Passing none is still legitimate
+// and still means none.
+func (s *Store) ApproveRegistration(ctx context.Context, actor, id string, groupIDs []string) (*User, error) {
 	now := s.now().UnixMilli()
 	err := s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
 		var email, role string
@@ -568,6 +645,14 @@ func (s *Store) ApproveRegistration(ctx context.Context, actor, id string) (*Use
 		if affected == 0 {
 			return ErrNotPending
 		}
+		joined := []string{}
+		for _, groupID := range groupIDs {
+			if err := groups.AddMemberAudited(tx, actor, groupID,
+				groups.User(id), now); err != nil {
+				return err
+			}
+			joined = append(joined, groupID)
+		}
 		return tx.AppendAudit(sqlite.AdminAct{
 			Kind:    "account.approved",
 			Actor:   actor,
@@ -576,6 +661,7 @@ func (s *Store) ApproveRegistration(ctx context.Context, actor, id string) (*Use
 			Detail: map[string]any{
 				"account": id,
 				"role":    role,
+				"groups":  joined,
 			},
 		})
 	})
@@ -613,6 +699,13 @@ func (s *Store) RejectRegistration(ctx context.Context, actor, id string) error 
 		// deliberately.
 		if err := tx.Exec(`
 			DELETE FROM user_identities
+			 WHERE user_id IN (SELECT id FROM users WHERE id = ? AND status = ?)`,
+			id, string(StatusPending)); err != nil {
+			return err
+		}
+		// The default group's membership goes with it, for the same reason.
+		if err := tx.Exec(`
+			DELETE FROM group_members
 			 WHERE user_id IN (SELECT id FROM users WHERE id = ? AND status = ?)`,
 			id, string(StatusPending)); err != nil {
 			return err

@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,6 +36,9 @@ type fakeAccounts struct {
 	// count stands in for how many accounts exist, which is what decides
 	// whether the instance still offers registration.
 	count int
+	// grantsErr makes resolving what the account reaches fail, which has to
+	// refuse the request rather than fall back to the row's own grants.
+	grantsErr error
 }
 
 func newFakeAccounts() *fakeAccounts {
@@ -79,6 +83,19 @@ func (f *fakeAccounts) ResolveSession(_ context.Context, token string) (*users.U
 func (f *fakeAccounts) DeleteSession(_ context.Context, token string) error {
 	f.deleted = append(f.deleted, token)
 	return nil
+}
+
+// EffectiveGrants stands in for the union of an account's own grants and its
+// groups'. The fake has no groups, so it answers with the account's own --
+// which is what the union of one list is.
+func (f *fakeAccounts) EffectiveGrants(_ context.Context, id string) ([]string, error) {
+	if f.grantsErr != nil {
+		return nil, f.grantsErr
+	}
+	if id != f.user.ID {
+		return []string{}, nil
+	}
+	return f.user.Plugins, nil
 }
 
 func (f *fakeAccounts) Count(context.Context) (int, error) { return f.count, nil }
@@ -424,7 +441,27 @@ func TestUserRoleCannotAdminister(t *testing.T) {
 	if got := req(http.MethodGet, "/api/health"); got == http.StatusForbidden {
 		t.Error("GET /api/health was refused; a user may see the host's state")
 	}
-	if !accounts.user.Principal("ses").Can(auth.CapApprove) {
+	if !accounts.user.Principal("ses", accounts.user.Plugins).Can(auth.CapApprove) {
 		t.Error("a user must be able to approve; that is the point of the two roles")
+	}
+}
+
+// Resolving what an account reaches is a read of the database, and a read can
+// fail. Falling back to the row's own grants would answer a question about
+// groups with an answer that ignores them, and a database that cannot be read
+// is not a reason to hand somebody a different set of rights -- so the request
+// is refused.
+func TestPrincipalFor_RefusesWhenGrantsCannotBeResolved(t *testing.T) {
+	accounts := newFakeAccounts()
+	accounts.grantsErr = errors.New("the database is unhappy")
+	s := newTestServer(t, accounts)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: accounts.token})
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 when grants cannot be resolved", w.Code)
 	}
 }

@@ -63,6 +63,8 @@ describe("navigation gating", () => {
     // Who may sign in, and who is waiting to be let in, is the same kind of
     // decision as who has an account -- and is gated the same way.
     expect(settings?.children?.map((c) => c.label)).not.toContain("Authentication");
+    expect(settings?.children?.map((c) => c.label)).not.toContain("Groups");
+    expect(settings?.children?.map((c) => c.label)).not.toContain("Keys");
   });
 
   // It is in the map because the router judges every path against the map.
@@ -175,6 +177,11 @@ describe("the capability a path requires", () => {
     ["/settings/policy", "read"],
     ["/settings/authentication", "admin"],
     ["/settings/users", "admin"],
+    // Groups decide what an account or a key reaches, and keys are
+    // credentials that act on this host. Both are the same kind of decision
+    // as who has an account, and are gated the same way.
+    ["/settings/groups", "admin"],
+    ["/settings/keys", "admin"],
     // Your own profile is not an administrative surface, and gating it on
     // read would be reflex rather than a rule.
     ["/profile", "signed-in"],

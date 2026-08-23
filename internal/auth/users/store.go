@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
 
@@ -17,8 +18,9 @@ import (
 // and session tokens as SHA-256 digests, so a database leak yields neither a
 // usable password nor a usable session.
 type Store struct {
-	db  *sqlite.DB
-	now func() time.Time
+	db     *sqlite.DB
+	groups *groups.Store
+	now    func() time.Time
 }
 
 // NewStore returns a store backed by db.
@@ -26,7 +28,18 @@ func NewStore(db *sqlite.DB, now func() time.Time) *Store {
 	if now == nil {
 		now = time.Now
 	}
-	return &Store{db: db, now: now}
+	return &Store{db: db, groups: groups.NewStore(db, now), now: now}
+}
+
+// EffectiveGrants returns every plugin an account may reach.
+//
+// A thin pass-through, and deliberately not an implementation. The union lives
+// in one function in one package; this exists so that the dashboard's Accounts
+// interface can ask for it without depending on the groups package, and so
+// that there is a single obvious answer to "where do an account's grants come
+// from" beside the account store.
+func (s *Store) EffectiveGrants(ctx context.Context, userID string) ([]string, error) {
+	return s.groups.Effective(ctx, groups.User(userID))
 }
 
 const userColumns = `id, email, password_hash, display_name, role, plugins_json,
@@ -41,6 +54,12 @@ type CreateRequest struct {
 	DisplayName string
 	Role        auth.Role
 	Plugins     []string
+	// Groups the account joins, in the same transaction as it is created. An
+	// account created into a group and an account granted plugins directly are
+	// the same act from the administrator's side, so they are one write.
+	Groups []string
+	// Actor names who is creating the account, for the membership rows.
+	Actor string
 }
 
 // Create provisions an account.
@@ -52,13 +71,17 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	if !req.Role.Valid() {
 		return nil, fmt.Errorf("users: role %q is not one of viewer, operator, approver, admin", req.Role)
 	}
-	// An empty grant denies everything, which is the safe reading but almost
-	// never what someone meant to type. Saying so beats creating an account
-	// that silently reaches nothing.
-	if len(req.Plugins) == 0 {
-		return nil, fmt.Errorf(`users: account %s grants no plugin access; `+
-			`list plugins explicitly or use ["*"]`, email)
-	}
+	// An empty direct grant used to be refused, on the grounds that it was
+	// almost never what somebody meant to type. That was true while a direct
+	// grant was the only kind: an account with none reached nothing and there
+	// was no other way for it to reach anything.
+	//
+	// Groups changed the fact rather than the rule. An account whose reach
+	// comes from a group is created with nothing of its own and is the
+	// ordinary case, so refusing it here would refuse the arrangement this
+	// exists to make possible. Empty still denies everything -- the reading a
+	// principal has always taken of one -- and the Users page says "Nothing"
+	// until something grants it.
 	displayName, err := ValidateDisplayName(req.DisplayName)
 	if err != nil {
 		return nil, err
@@ -78,7 +101,7 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 		PasswordHash: hash,
 		DisplayName:  displayName,
 		Role:         req.Role,
-		Plugins:      req.Plugins,
+		Plugins:      groups.NormalizeGrants(req.Plugins),
 	}
 	plugins, err := json.Marshal(u.Plugins)
 	if err != nil {
@@ -115,6 +138,22 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 		if affected == 0 {
 			return ErrNameCollides
 		}
+		actor := req.Actor
+		if actor == "" {
+			actor = "system"
+		}
+		// Recorded, not merely inserted. An account created into a group
+		// reaches whatever that group reaches from the moment this commits,
+		// and a membership written without an entry would leave "how did this
+		// person come to reach that plugin" answerable only by inference. It
+		// is the same entry the Groups page produces, because one membership
+		// fact should read the same however it arose.
+		for _, groupID := range req.Groups {
+			if err := groups.AddMemberAudited(tx, actor, groupID,
+				groups.User(u.ID), now); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if isUniqueViolation(err) {
@@ -139,6 +178,15 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 // The first account is always an administrator. There is nobody to grant it
 // the role afterwards, and an instance whose first account cannot manage
 // accounts is one nobody can finish setting up.
+//
+// It is also granted the wildcard, and that is not the breach of default-none
+// it resembles. The claimant is this host's administrator with nobody above
+// them, and an administrator can grant themselves any plugin whenever they
+// like -- so the wildcard changes no security property, and withholding it
+// would only mean the first person to arrive sees an empty console until they
+// have granted themselves access to look at it. Default none is a rule about
+// principals somebody else decides for: a new group, an account an
+// administrator creates, a key, a self-registration. This is none of those.
 func (s *Store) CreateFirst(ctx context.Context, email, password, displayName string) (*User, error) {
 	normalized, err := NormalizeEmail(email)
 	if err != nil {
@@ -260,10 +308,8 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 	if req.Role != nil && !req.Role.Valid() {
 		return nil, fmt.Errorf("users: role %q is not one of viewer, operator, approver, admin", *req.Role)
 	}
-	if req.Plugins != nil && len(*req.Plugins) == 0 {
-		return nil, fmt.Errorf(`users: an account granting no plugin access reaches nothing; ` +
-			`list plugins explicitly or use ["*"]`)
-	}
+	// An empty direct grant is legitimate; see Create. It denies everything on
+	// its own, and a group is how such an account reaches anything.
 	var displayName string
 	if req.DisplayName != nil {
 		validated, err := ValidateDisplayName(*req.DisplayName)
@@ -430,6 +476,13 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 			return err
 		}
 		if err := tx.Exec(`DELETE FROM user_identities WHERE user_id = ?`, id); err != nil {
+			return err
+		}
+		// Memberships too, and for the same reason: a row left behind would
+		// put a deleted account back into a group if its identifier were ever
+		// reused, and would make a group's member count disagree with the
+		// people it names.
+		if err := tx.Exec(`DELETE FROM group_members WHERE user_id = ?`, id); err != nil {
 			return err
 		}
 		return tx.Exec(`DELETE FROM users WHERE id = ?`, id)

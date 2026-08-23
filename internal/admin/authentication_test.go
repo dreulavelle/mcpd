@@ -60,7 +60,7 @@ func (f *fakeIdentities) PendingRegistrations(context.Context) ([]*users.User, e
 	return f.pending, nil
 }
 
-func (f *fakeIdentities) ApproveRegistration(_ context.Context, actor, id string) (*users.User, error) {
+func (f *fakeIdentities) ApproveRegistration(_ context.Context, actor, id string, groupIDs []string) (*users.User, error) {
 	f.actor = actor
 	f.approved = append(f.approved, id)
 	return &users.User{ID: id, Email: "newcomer@example.com", Status: users.StatusActive}, nil

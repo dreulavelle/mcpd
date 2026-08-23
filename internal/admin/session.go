@@ -24,6 +24,12 @@ type Accounts interface {
 	ResolveSession(ctx context.Context, token string) (*users.User, *users.Session, error)
 	DeleteSession(ctx context.Context, token string) error
 
+	// EffectiveGrants is what an account may reach: its own grants unioned
+	// with every group it belongs to. It is asked per request rather than read
+	// off the account, which is what makes adding somebody to a group -- or
+	// taking them out of one -- take effect on their next call.
+	EffectiveGrants(ctx context.Context, userID string) ([]string, error)
+
 	Count(ctx context.Context) (int, error)
 	CreateFirst(ctx context.Context, email, password, displayName string) (*users.User, error)
 	Create(ctx context.Context, req users.CreateRequest) (*users.User, error)
@@ -194,7 +200,7 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 
 	s.opts.Log.Info("dashboard sign-in", "user", user.Email, "session", sess.ID)
 	s.setSessionCookie(w, r, token, sess.ExpiresAt)
-	s.writeJSON(w, r, http.StatusOK, sessionView(user, sess))
+	s.writeJSON(w, r, http.StatusOK, sessionView(user, sess, s.grantsFor(r, user)))
 }
 
 // handleRegisterFirst claims an unclaimed instance.
@@ -243,7 +249,7 @@ func (s *Server) handleRegisterFirst(w http.ResponseWriter, r *http.Request) {
 	s.opts.Log.Info("first account registered; this instance is now claimed",
 		"email", user.Email, "id", user.ID)
 	s.setSessionCookie(w, r, token, sess.ExpiresAt)
-	s.writeJSON(w, r, http.StatusCreated, sessionView(user, sess))
+	s.writeJSON(w, r, http.StatusCreated, sessionView(user, sess, s.grantsFor(r, user)))
 }
 
 // handleSignOut ends the current session.
@@ -273,21 +279,45 @@ func (s *Server) handleCurrentSession(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusUnauthorized, "not signed in")
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, sessionView(user, sess))
+	s.writeJSON(w, r, http.StatusOK, sessionView(user, sess, s.grantsFor(r, user)))
 }
 
-func sessionView(u *users.User, sess *users.Session) sessionResponse {
+func sessionView(u *users.User, sess *users.Session, granted []string) sessionResponse {
+	if granted == nil {
+		granted = []string{}
+	}
 	return sessionResponse{
 		Email:       u.Email,
 		Name:        u.Name(),
 		DisplayName: u.DisplayName,
 		Role:        string(u.Role),
-		Plugins:     u.Plugins,
+		Plugins:     granted,
 		CSRFToken:   sess.CSRFToken,
 		ExpiresAt:   sess.ExpiresAt.Format(time.RFC3339),
 		Status:      statusOf(u),
 		HasPassword: u.HasPassword(),
 	}
+}
+
+// grantsFor resolves what an account may reach, for a page that is about to
+// render it.
+//
+// A failure here yields nothing rather than the row's own grants. The console
+// showing an empty list is a page an operator can act on; showing the direct
+// grants and calling them the effective ones would be the console disagreeing
+// with the server about what this account can do, which is the sort of
+// disagreement nobody looks for.
+func (s *Server) grantsFor(r *http.Request, u *users.User) []string {
+	if s.opts.Accounts == nil {
+		return []string{}
+	}
+	granted, err := s.opts.Accounts.EffectiveGrants(r.Context(), u.ID)
+	if err != nil {
+		s.opts.Log.Error("could not resolve plugin grants",
+			"account", u.ID, "error", err)
+		return []string{}
+	}
+	return granted
 }
 
 // statusOf renders an account's status, defaulting to active.
@@ -324,7 +354,19 @@ func (s *Server) principalFor(w http.ResponseWriter, r *http.Request) (*auth.Pri
 				s.writeError(w, r, http.StatusForbidden, "missing or invalid CSRF token")
 				return nil, false
 			}
-			return user.Principal(sess.ID), true
+			granted, err := s.opts.Accounts.EffectiveGrants(r.Context(), user.ID)
+			if err != nil {
+				// Refusing beats guessing. Falling back to the row's own
+				// grants would answer a question about groups with an answer
+				// that ignores them, and a database that cannot be read is
+				// not a reason to hand somebody a different set of rights.
+				s.opts.Log.Error("could not resolve plugin grants",
+					"account", user.ID, "error", err)
+				s.writeError(w, r, http.StatusInternalServerError,
+					"could not resolve what this account may reach")
+				return nil, false
+			}
+			return user.Principal(sess.ID, granted), true
 		}
 		if !errors.Is(err, users.ErrNotFound) {
 			s.opts.Log.Error("could not resolve a dashboard session", "error", err)

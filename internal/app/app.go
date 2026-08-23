@@ -17,6 +17,8 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/admin"
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/apikeys"
+	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/config"
@@ -51,6 +53,8 @@ type App struct {
 	metrics *observability.Metrics
 
 	accounts      *users.Store
+	groups        *groups.Store
+	keys          *apikeys.Store
 	sso           *sso.Service
 	ssoStates     *sso.StateStore
 	types         *plugins.Catalog
@@ -184,11 +188,22 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	// the first from the dashboard, and whoever does becomes administrator.
 	a.accounts = users.NewStore(db, time.Now)
 
-	verifier, err := buildVerifier(cfg, log)
+	// Groups are the one place plugin access is decided, for an account and
+	// for a key alike. The key store is handed the group store rather than
+	// resolving grants itself, so there is exactly one union in the process.
+	a.groups = groups.NewStore(db, time.Now)
+	a.keys = apikeys.NewStore(db, a.groups, time.Now)
+
+	fileTokens, err := buildVerifier(cfg, log)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
+	// Static tokens first, then keys issued here. The order is the whole of
+	// the compatibility promise: a credential declared in the configuration
+	// file is matched in memory and answered exactly as it was before database
+	// keys existed, and only a token no file entry matches costs a query.
+	verifier := apikeys.NewVerifier(a.keys, fileTokens, log)
 
 	authorizer := auth.NewAuthorizer()
 	a.approval = operations.NewApprovalPolicy(authorizer)
@@ -347,12 +362,17 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 				}
 				return a.metrics.Handler()
 			}(),
-			MetricsPublic:      cfg.Metrics.Public,
-			Pruner:             a.audit,
-			PublicURL:          cfg.Server.PublicURL,
-			FrontendPublicURL:  cfg.Server.FrontendPublicURL,
-			Accounts:           a.accounts,
-			Identities:         a.accounts,
+			MetricsPublic:     cfg.Metrics.Public,
+			Pruner:            a.audit,
+			PublicURL:         cfg.Server.PublicURL,
+			FrontendPublicURL: cfg.Server.FrontendPublicURL,
+			Accounts:          a.accounts,
+			Identities:        a.accounts,
+			Groups:            a.groups,
+			Keys:              a.keys,
+			KeyGrants: func(ctx context.Context, keyID string) ([]string, error) {
+				return a.groups.Effective(ctx, groups.Key(keyID))
+			},
 			SSO:                a.sso,
 			RegistrationPolicy: a.registrationPolicy,
 			Catalog:            a.settingsCatalog,

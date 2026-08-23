@@ -1,6 +1,6 @@
 import {
   Boxes, ClipboardCheck, Cog, Gauge, KeyRound, ScrollText, ShieldCheck, Store,
-  UserRound, Users, Waypoints, type LucideIcon,
+  Ticket, UserRound, Users, UsersRound, Waypoints, type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
 
@@ -127,6 +127,20 @@ export const NAV: NavGroup[] = [
             label: "Users",
             lede: "Who can sign in, what they may do, and what they can reach.",
             icon: Users,
+            capability: "admin",
+          },
+          {
+            path: "/settings/groups",
+            label: "Groups",
+            lede: "A group hands its systems to everyone in it.",
+            icon: UsersRound,
+            capability: "admin",
+          },
+          {
+            path: "/settings/keys",
+            label: "Keys",
+            lede: "Credentials for scripts and agents. Each one acts as itself.",
+            icon: Ticket,
             capability: "admin",
           },
         ],
