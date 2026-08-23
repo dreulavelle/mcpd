@@ -457,11 +457,6 @@ type smitheryServer struct {
 	Remote     bool   `json:"remote"`
 	IsDeployed bool   `json:"isDeployed"`
 	CreatedAt  string `json:"createdAt"`
-	// IconURL is Smithery's own icon for the server, which it serves for most
-	// of them. Sometimes a favicon service's URL rather than the project's
-	// own image; either way it is a third party's address bound for an
-	// <img src>, so it is validated rather than relayed.
-	IconURL string `json:"iconUrl"`
 	// UseCount is how many times Smithery has been asked to call this server,
 	// and Verified is Smithery vouching for it. They are the only usage
 	// signal any of the four catalogues publishes, and they are what orders
@@ -477,7 +472,6 @@ type smitheryDetail struct {
 	DisplayName   string `json:"displayName"`
 	Description   string `json:"description"`
 	Remote        bool   `json:"remote"`
-	IconURL       string `json:"iconUrl"`
 	UseCount      int64  `json:"useCount"`
 	Verified      bool   `json:"verified"`
 	// DeploymentURL is non-empty exactly when the listing would have said
@@ -503,7 +497,6 @@ func (d smitheryDetail) listing() smitheryServer {
 		Description:   d.Description,
 		Remote:        d.Remote,
 		IsDeployed:    strings.TrimSpace(d.DeploymentURL) != "",
-		IconURL:       d.IconURL,
 		UseCount:      d.UseCount,
 		Verified:      d.Verified,
 	}
@@ -540,7 +533,6 @@ func (s *Smithery) translate(raw smitheryServer) (Entry, json.RawMessage, bool) 
 		// says in its own field that it is one. The same judgement docker.go
 		// makes for the same reason.
 		Version:   "",
-		Icon:      safeIconURL(raw.IconURL),
 		UpdatedAt: smitheryTimestamp(raw.CreatedAt),
 		Source:    smitherySource,
 	}

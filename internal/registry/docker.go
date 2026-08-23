@@ -345,15 +345,11 @@ type dockerCatalog struct {
 type dockerEntry struct {
 	// Type is "server", "remote" or "poci". Only "remote" describes something
 	// this host can reach; see translateDockerEntry.
-	Type        string `yaml:"type"`
-	Title       string `yaml:"title"`
-	Description string `yaml:"description"`
-	DateAdded   string `yaml:"dateAdded"`
-	// Icon is an address Docker publishes for the entry -- usually the
-	// project's own avatar, sometimes a favicon service. A third party's URL
-	// bound for an <img src>, so it is validated rather than relayed.
-	Icon   string       `yaml:"icon"`
-	Remote dockerRemote `yaml:"remote"`
+	Type        string       `yaml:"type"`
+	Title       string       `yaml:"title"`
+	Description string       `yaml:"description"`
+	DateAdded   string       `yaml:"dateAdded"`
+	Remote      dockerRemote `yaml:"remote"`
 	// OAuth is present when Docker's gateway obtains the credential through an
 	// OAuth flow of its own.
 	OAuth dockerOAuth `yaml:"oauth"`
@@ -420,7 +416,6 @@ func translateDockerEntry(name string, raw dockerEntry) (Entry, json.RawMessage,
 		// composed document below carries the placeholder server.json insists
 		// on, and says in its own field that it is one.
 		Version:   "",
-		Icon:      safeIconURL(raw.Icon),
 		UpdatedAt: dockerTimestamp(raw.DateAdded),
 		Source:    dockerSource,
 	}
