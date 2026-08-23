@@ -614,12 +614,12 @@ func (s *Server) handleApproveRegistration(w http.ResponseWriter, r *http.Reques
 	// page to decide what it may reach. Sending none is still legitimate and
 	// still means none.
 	//
-	// A body is optional: the pending queue's plain Approve button sends
-	// nothing, and an empty request is not a malformed one.
+	// A body is optional: a caller with nothing to add sends none, and an
+	// empty request is not a malformed one.
 	var req struct {
 		Groups []string `json:"groups"`
 	}
-	if r.ContentLength > 0 && !s.decode(w, r, &req) {
+	if !s.decodeOptional(w, r, &req) {
 		return
 	}
 	actor := auth.FromContext(r.Context()).ID

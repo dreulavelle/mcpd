@@ -10,7 +10,9 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -1634,6 +1636,22 @@ func (s *Server) decode(w http.ResponseWriter, r *http.Request, out any) bool {
 		return false
 	}
 	return true
+}
+
+// decodeOptional reads a body that is allowed to be absent, leaving out at its
+// zero value when there is none.
+//
+// For an endpoint whose body only ever adds to what it would do anyway --
+// approving a registration, with or without a group to put them in. Deciding
+// from Content-Length would get a chunked request wrong; an empty stream reads
+// as io.EOF and nothing else does.
+func (s *Server) decodeOptional(w http.ResponseWriter, r *http.Request, out any) bool {
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(out)
+	if err == nil || errors.Is(err, io.EOF) {
+		return true
+	}
+	s.writeError(w, r, http.StatusBadRequest, "the request could not be read")
+	return false
 }
 
 // handleClearAudit removes the whole history.
