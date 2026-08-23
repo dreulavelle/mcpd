@@ -42,8 +42,8 @@ race:
 check: fmt vet test verify-deps
 
 .PHONY: fmt
-# The packages go knows about, not the whole tree: ./.data holds the
-# container's TLS material, which is mode 700 and owned by another user.
+# The packages go knows about rather than the whole tree, so ./data -- which
+# holds a deployment's database and TLS material -- is never walked.
 fmt:
 	@gofmt -l $$(go list -f '{{.Dir}}' ./...) | grep -v '^$$' && { echo "gofmt needed on the files above"; exit 1; } || true
 

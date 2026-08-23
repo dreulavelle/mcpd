@@ -24,9 +24,17 @@ that decides what appears in the sidebar, and `web/src/lib/capabilities.ts`
 mirrors the role-to-capability map from `internal/auth/principal.go` — if that
 map changes, this one has to follow.
 
-The container's data lives in `./.data`. The leading dot keeps `go build ./...`
-working — `cmd/go` skips dot-prefixed directories, and the TLS material inside
-is mode 700 owned by the container user.
+The container's data lives in `./data` — one bind mount holding `config.yaml`,
+the database, TLS material and out-of-process plugins. It is generated on
+first start if it is empty, and the container runs as the host user's uid so
+what lands there is yours to read and edit.
+
+It used to be `./.data`, because a distroless image forced the volume to be
+owned by uid 65532 and a directory the host user could not read broke
+`go build ./...`. That was a workaround for the ownership problem rather than a
+requirement of its own; the ownership is fixed, so the dot is gone. Nothing
+inside `./data` is a Go package, and `make fmt` walks `go list` rather than the
+tree, so neither notices it.
 
 ## Rules that are load-bearing
 
