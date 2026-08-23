@@ -1,0 +1,374 @@
+import { useCallback, useMemo, useState } from "react";
+import { RefreshCw } from "lucide-react";
+import {
+  api, ApiError, type MCPDiff, type MCPServer, type MCPTool, type MCPToolState,
+} from "@/lib/api";
+import { when, whenExact } from "@/lib/format";
+import { useLoader } from "@/lib/hooks";
+import { useRouter } from "@/lib/router";
+import { useNotify } from "@/components/toast";
+import {
+  Copyable, Detail, EmptyState, Loading, Notice, PageHeader, Section,
+} from "@/components/chrome";
+import { Chip } from "@/components/status";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import { ClassifyDialog } from "./ClassifyDialog";
+import { ServerState } from "./MarketplaceList";
+
+const TOOL_STATES: Record<MCPToolState, { label: string; tone: "good" | "attention" | "neutral" }> = {
+  enabled: { label: "Served", tone: "good" },
+  pending: { label: "Waiting on you", tone: "attention" },
+  disabled: { label: "Not served", tone: "neutral" },
+};
+
+type ToolFilter = "all" | MCPToolState;
+
+/**
+ * One remote server, and every tool it has ever offered.
+ *
+ * The snapshot is shown in full, in every state, because "pending" and
+ * "disabled" mean different things and an operator deciding about a server
+ * needs to see both: one is work outstanding and the other is a decision
+ * already taken.
+ */
+export function ServerDetail({ name }: { name: string }) {
+  const loadServers = useCallback(() => api.mcpServers(), []);
+  const loadTools = useCallback(() => api.mcpServerTools(name), [name]);
+
+  const servers = useLoader(loadServers, "Couldn't load remote servers.");
+  const tools = useLoader(loadTools, "Couldn't load this server's tools.");
+
+  const server = (servers.data?.servers ?? []).find((s) => s.name === name) ?? null;
+
+  // Depends on the two reload functions rather than the loader objects: those
+  // are fresh on every render, and a callback that changed with them would
+  // re-fire anything downstream that watched it.
+  const { reload: reloadServers } = servers;
+  const { reload: reloadTools } = tools;
+  const reload = useCallback(() => {
+    reloadServers();
+    reloadTools();
+  }, [reloadServers, reloadTools]);
+
+  if (servers.error) {
+    return (
+      <>
+        <PageHeader title={name} back={{ to: "/marketplace", label: "Marketplace" }} />
+        <Notice tone="problem">{servers.error}</Notice>
+      </>
+    );
+  }
+  if (servers.data === null) {
+    return (
+      <>
+        <PageHeader title={name} back={{ to: "/marketplace", label: "Marketplace" }} />
+        <Loading rows={5} />
+      </>
+    );
+  }
+  if (!server) {
+    return (
+      <>
+        <PageHeader title={name} back={{ to: "/marketplace", label: "Marketplace" }} />
+        <Notice tone="problem">
+          No remote server named <code className="font-mono">{name}</code> is
+          imported here.
+        </Notice>
+      </>
+    );
+  }
+
+  return (
+    <Body
+      server={server}
+      tools={tools.data?.tools ?? null}
+      toolsError={tools.error}
+      onChanged={reload}
+    />
+  );
+}
+
+function Body({ server, tools, toolsError, onChanged }: {
+  server: MCPServer;
+  tools: MCPTool[] | null;
+  toolsError: string | null;
+  onChanged: () => void;
+}) {
+  const notify = useNotify();
+  const { navigate } = useRouter();
+  const [filter, setFilter] = useState<ToolFilter>("all");
+  const [classifying, setClassifying] = useState<MCPTool | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [diff, setDiff] = useState<MCPDiff | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const shown = useMemo(() => {
+    const list = tools ?? [];
+    const filtered = filter === "all" ? list : list.filter((t) => t.state === filter);
+    // Pending first: it is the only state that is asking for something.
+    const rank: Record<MCPToolState, number> = { pending: 0, enabled: 1, disabled: 2 };
+    return [...filtered].sort(
+      (a, b) => rank[a.state] - rank[b.state] || a.name.localeCompare(b.name),
+    );
+  }, [tools, filter]);
+
+  async function discover() {
+    setDiscovering(true);
+    setDiff(null);
+    try {
+      const result = await api.discoverMCPServer(server.name);
+      setDiff(result.diff ?? {});
+      notify("good", result.note ?? "Discovered.");
+    } catch (e) {
+      notify("problem", e instanceof ApiError
+        ? e.detail
+        : "Couldn't reach the server.");
+    } finally {
+      setDiscovering(false);
+      onChanged();
+    }
+  }
+
+  async function toggle(enabled: boolean) {
+    setBusy(true);
+    try {
+      await api.setMCPServerEnabled(server.name, enabled);
+      notify("good", enabled ? "Switched on." : "Switched off.");
+    } catch (e) {
+      notify("problem", e instanceof ApiError ? e.detail : "Couldn't change that.");
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  }
+
+  async function remove() {
+    if (!confirm(`Remove ${server.name}? Its document, its tool snapshot and its settings go with it.`)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.removeMCPServer(server.name);
+      notify("good", `Removed ${server.name}.`);
+      navigate("/marketplace");
+    } catch (e) {
+      notify("problem", e instanceof ApiError ? e.detail : "Couldn't remove it.");
+      setBusy(false);
+      onChanged();
+    }
+  }
+
+  return (
+    <>
+      <PageHeader
+        title={server.name}
+        back={{ to: "/marketplace", label: "Marketplace" }}
+        lede={server.description || undefined}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <ServerState server={server} />
+            <Button variant="outline" size="sm" disabled={discovering} onClick={discover}>
+              <RefreshCw
+                className={discovering ? "size-3.5 animate-spin" : "size-3.5"}
+                aria-hidden="true"
+              />
+              {discovering ? "Asking…" : "Discover"}
+            </Button>
+          </div>
+        }
+      />
+
+      <ClassifyDialog
+        server={server.name}
+        tool={classifying}
+        open={classifying !== null}
+        onOpenChange={(open) => { if (!open) setClassifying(null); }}
+        onDone={onChanged}
+      />
+
+      <div className="space-y-6">
+        {!server.readable && (
+          <Notice tone="problem">
+            <strong>This build cannot read the stored document.</strong> The row
+            can be listed and removed, and nothing else. It was imported by a
+            build that understood a schema this one does not.
+          </Notice>
+        )}
+
+        {diff && <DiscoveryResult diff={diff} />}
+
+        <Section title="Server">
+          <Card>
+            <CardContent>
+              <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {server.title && <Detail label="Title">{server.title}</Detail>}
+                {server.version && <Detail label="Version">{server.version}</Detail>}
+                <Detail label="Transport">
+                  <code className="font-mono text-xs">{server.transport || "—"}</code>
+                </Detail>
+                <Detail label="Schema">
+                  <code className="font-mono text-xs">{server.schema_version || "—"}</code>
+                </Detail>
+                <Detail label="Imported">{whenExact(server.created_at)}</Detail>
+                <Detail label="Last change">{whenExact(server.updated_at)}</Detail>
+                <Detail label="Address" className="sm:col-span-2 lg:col-span-3">
+                  <Copyable value={server.url} label="address" />
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    The template as imported. Anything in braces is filled in at
+                    dial time from this server's settings, which is why a
+                    credential never appears here.
+                  </span>
+                </Detail>
+              </dl>
+            </CardContent>
+          </Card>
+        </Section>
+
+        <Section
+          title="Tools"
+          description="A tool arrives pending and is not served. What you classify is a description and a schema, not a name — if the server changes either, the tool comes back here."
+          actions={
+            <NativeSelect
+              aria-label="Show"
+              className="w-44"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value as ToolFilter)}
+            >
+              <option value="all">Everything</option>
+              <option value="pending">Waiting on you</option>
+              <option value="enabled">Served</option>
+              <option value="disabled">Not served</option>
+            </NativeSelect>
+          }
+        >
+          {toolsError && <Notice tone="problem">{toolsError}</Notice>}
+
+          {tools === null && !toolsError ? (
+            <Loading rows={4} />
+          ) : shown.length === 0 ? (
+            <EmptyState title={tools?.length ? "Nothing in that state" : "No tools yet"}>
+              {tools?.length
+                ? "Try another filter."
+                : "Run discovery and mcpd will ask the server what it offers."}
+            </EmptyState>
+          ) : (
+            <Card className="overflow-hidden p-0">
+              <div className="scroll-x">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Tool</TableHead>
+                      <TableHead>State</TableHead>
+                      <TableHead>Last seen</TableHead>
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {shown.map((t) => (
+                      <TableRow key={t.name}>
+                        <TableCell>
+                          <div className="font-mono text-sm">{t.name}</div>
+                          <div className="max-w-[52ch] truncate text-xs text-muted-foreground">
+                            {t.descriptor.description || "No description."}
+                          </div>
+                          {t.problem && (
+                            <div className="text-xs text-problem">{t.problem}</div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Chip tone={TOOL_STATES[t.state].tone}>
+                            {TOOL_STATES[t.state].label}
+                          </Chip>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-muted-foreground">
+                          {when(t.last_seen_at)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant={t.state === "pending" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setClassifying(t)}
+                          >
+                            {t.state === "pending" ? "Review" : "Change"}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </Card>
+          )}
+        </Section>
+
+        <Section title="This server">
+          <Card>
+            <CardContent className="flex flex-wrap items-center justify-between gap-3">
+              <p className="max-w-[52ch] text-sm text-muted-foreground">
+                Switching it off stops serving its tools and keeps everything
+                that was decided about them. Removing it forgets the document,
+                the snapshot and the settings, including any credential.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline" size="sm" disabled={busy || !server.readable}
+                  onClick={() => toggle(!server.enabled)}
+                >
+                  {server.enabled ? "Switch off" : "Switch on"}
+                </Button>
+                <Button
+                  variant="outline" size="sm" disabled={busy}
+                  className="text-destructive hover:text-destructive"
+                  onClick={remove}
+                >
+                  Remove
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </Section>
+      </div>
+    </>
+  );
+}
+
+/** What the last discovery changed. */
+function DiscoveryResult({ diff }: { diff: MCPDiff }) {
+  const added = diff.added ?? [];
+  const changed = diff.changed ?? [];
+  const removed = diff.removed ?? [];
+  const unchanged = diff.unchanged ?? [];
+
+  if (added.length + changed.length + removed.length === 0) {
+    return (
+      <Notice tone="good">
+        Nothing changed. {unchanged.length}{" "}
+        {unchanged.length === 1 ? "tool is" : "tools are"} exactly as they were.
+      </Notice>
+    );
+  }
+
+  return (
+    <Notice tone="attention">
+      <div className="space-y-1">
+        {added.length > 0 && (
+          <p><strong>New:</strong> {added.join(", ")} — pending, and not served.</p>
+        )}
+        {changed.length > 0 && (
+          <p>
+            <strong>Changed:</strong> {changed.join(", ")} — the description or
+            schema differs, so any decision about the old one no longer applies.
+          </p>
+        )}
+        {removed.length > 0 && (
+          <p><strong>Withdrawn by the server:</strong> {removed.join(", ")}.</p>
+        )}
+      </div>
+    </Notice>
+  );
+}
