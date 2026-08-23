@@ -45,11 +45,32 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 	// it -- a log line, an error, the settings page -- cannot carry one.
 	cfg.ClientID, cfg.ClientSecret = "", ""
 
+	now := deps.Now
+	if now == nil {
+		now = time.Now
+	}
+
+	// One cache per instance, so two configured accounts cannot see each
+	// other's answers even by accident. Nil when both classes are switched
+	// off, which makes "no caching" cost nothing rather than cost a lookup.
+	var cache *readCache
+	if cfg.InventoryCacheTTL > 0 || cfg.DeviceCacheTTL > 0 {
+		cache = newReadCache(deps.Instance, cfg, now, deps.Cache)
+	}
+
+	instance := deps.Instance
+	observe := func(outcome string, d time.Duration) {}
+	if deps.Upstream != nil {
+		observe = func(outcome string, d time.Duration) {
+			deps.Upstream.UpstreamRequest(instance, outcome, d)
+		}
+	}
+
 	return &Plugin{
 		deps:       deps,
 		cfg:        cfg,
 		configured: configured,
-		client:     NewClient(http, cfg, clientID, secret, deps.Log, deps.Now),
+		client:     NewClient(http, cfg, clientID, secret, deps.Log, now, cache, observe),
 	}, nil
 }
 
