@@ -27,10 +27,10 @@ func clearEnv(t *testing.T, names ...string) {
 	}
 }
 
-var generatedSecrets = []string{"MCPD_SECRET_KEY", "MCPD_TOKEN_LOCAL"}
+var generatedSecrets = []string{"MCPD_SECRET_KEY"}
 
 func TestInitializeGeneratesAConfigAndSecrets(t *testing.T) {
-	clearEnv(t, append(generatedSecrets, "MCPD_LISTEN", "MCPD_FRONTEND_LISTEN", "MCPD_PUBLIC_URL")...)
+	clearEnv(t, append(append(generatedSecrets, "MCPD_TOKEN_LOCAL"), "MCPD_LISTEN", "MCPD_FRONTEND_LISTEN", "MCPD_PUBLIC_URL")...)
 	dir := t.TempDir()
 
 	if err := initialize(dir); err != nil {
@@ -43,8 +43,12 @@ func TestInitializeGeneratesAConfigAndSecrets(t *testing.T) {
 			t.Fatalf("%s = %q, want a generated secret", name, env[name])
 		}
 	}
-	if env["MCPD_SECRET_KEY"] == env["MCPD_TOKEN_LOCAL"] {
-		t.Fatal("the encryption key and the bearer token must not be the same value")
+	// No bearer token is generated any more: machine callers use a key issued
+	// from the dashboard, which can be revoked without a restart and says in
+	// the audit trail which one acted. A generated one would be a credential
+	// nobody asked for, sitting on disk with nothing recording its use.
+	if _, ok := env["MCPD_TOKEN_LOCAL"]; ok {
+		t.Fatal("a generated deployment must not ship a bearer token")
 	}
 
 	info, err := os.Stat(filepath.Join(dir, ".env"))
@@ -104,9 +108,8 @@ func TestInitializeDoesNotCompeteWithAnEnvironmentSecret(t *testing.T) {
 	if env := readEnvFile(t, filepath.Join(dir, ".env")); env["MCPD_SECRET_KEY"] != "" {
 		t.Fatalf("MCPD_SECRET_KEY = %q, want no assignment at all", env["MCPD_SECRET_KEY"])
 	}
-	// The token was not supplied, so it is still generated.
-	if env := readEnvFile(t, filepath.Join(dir, ".env")); len(env["MCPD_TOKEN_LOCAL"]) < 32 {
-		t.Fatal("MCPD_TOKEN_LOCAL should still be generated")
+	if env := readEnvFile(t, filepath.Join(dir, ".env")); env["MCPD_TOKEN_LOCAL"] != "" {
+		t.Fatal("no bearer token is generated, supplied or not")
 	}
 }
 
