@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import {
-  api, ApiError, setCSRFToken,
-  type AuditRecord, type HealthReport, type Meta, type Session,
-} from "./api";
-import {
-  CodeBlock, Dot, ErrorBoundary, History, Message, SessionContext, Skeleton,
-  useIsAdmin, usePoll, useToasts,
-} from "./components";
-import { Plugins } from "./Plugins";
-import { Settings } from "./Settings";
-import { Tunnels } from "./Tunnels";
-import { Users } from "./Users";
-
-type Tab = "plugins" | "tunnels" | "users" | "settings" | "history";
+import { useCallback, useEffect, useState } from "react";
+import { api, setCSRFToken, type Meta, type Session } from "@/lib/api";
+import { usePoll } from "@/lib/hooks";
+import { RouterProvider, useRouter } from "@/lib/router";
+import { SessionProvider, useCan } from "@/lib/session";
+import { ErrorBoundary } from "@/components/chrome";
+import { Shell } from "@/components/shell";
+import { ToastProvider } from "@/components/toast";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { FirstRun, SignIn } from "@/pages/signed-out/SignedOut";
+import { Routes } from "@/Routes";
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -45,331 +41,56 @@ export default function App() {
   // form instead would ask for credentials that cannot exist yet.
   if (!session && meta.needs_setup) return <FirstRun meta={meta} onDone={adopt} />;
   if (!session) return <SignIn meta={meta} onDone={adopt} />;
+
   return (
-    <SessionContext.Provider value={{ role: session.role }}>
-      <Console session={session} onSignOut={signOut} />
-    </SessionContext.Provider>
+    <SessionProvider session={session}>
+      <TooltipProvider delayDuration={200}>
+        <ToastProvider>
+          <RouterProvider>
+            <Console onSignOut={signOut} />
+          </RouterProvider>
+        </ToastProvider>
+      </TooltipProvider>
+    </SessionProvider>
   );
 }
 
-/* ── signed out ─────────────────────────────────────────────────────────── */
+function Console({ onSignOut }: { onSignOut: () => void }) {
+  const { path } = useRouter();
+  const badges = usePendingCount();
+
+  return (
+    <Shell badges={badges} onSignOut={onSignOut}>
+      {/* Keyed on the path, so a page that failed is rebuilt from scratch when
+          it is opened again rather than staying broken for the session. The
+          boundary is inside the chrome: whatever happens to a page, the
+          navigation out of it survives. */}
+      <ErrorBoundary key={path}>
+        <Routes />
+      </ErrorBoundary>
+    </Shell>
+  );
+}
 
 /**
- * The frame both signed-out screens sit in.
+ * The count beside Approvals in the sidebar.
  *
- * Signing in and claiming a new host are different questions, but they are
- * asked in the same place and looked at the same way. Two copies of this drifted
- * apart in the ways chrome always does -- the version footer said a different
- * thing on one of them -- so there is one.
+ * Lifted out of the page so it is right wherever the operator is standing. A
+ * change proposed while somebody is reading the audit trail is exactly the one
+ * they need to be told about, and a badge that only counted while the
+ * approvals page was open would never tell them.
  */
-function SignedOutCard({ meta, error, title, children }: {
-  meta: Meta | null;
-  error?: string;
-  title?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="signin">
-      <div className="signin-card">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">m</span>
-          mcpd
-        </div>
-
-        <div className="card">
-          <div className="card-body">
-            {title && <h3 className="signin-title">{title}</h3>}
-            {error && <Message tone="problem">{error}</Message>}
-            {children}
-          </div>
-        </div>
-
-        {meta && <p className="note signin-version">mcpd {meta.version}</p>}
-      </div>
-    </div>
-  );
-}
-
-/* ── sign in ────────────────────────────────────────────────────────────── */
-
-function SignIn({ meta, onDone }: { meta: Meta | null; onDone: (s: Session) => void }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      onDone(await api.signIn(email.trim(), password));
-    } catch (err) {
-      setError(
-        err instanceof ApiError && err.status === 401
-          ? "That email and password did not match."
-          : "Couldn't reach mcpd. Is it running?",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <SignedOutCard meta={meta} error={error}>
-      <form onSubmit={submit}>
-        <div className="field">
-          <label htmlFor="email">Email</label>
-          <input
-            id="email" type="email" autoComplete="username" autoFocus
-            value={email} onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-          />
-        </div>
-
-        <div className="field">
-          <label htmlFor="password">Password</label>
-          <input
-            id="password" type="password" autoComplete="current-password"
-            value={password} onChange={(e) => setPassword(e.target.value)}
-            placeholder="Your password"
-          />
-        </div>
-
-        <button className="btn primary wide" type="submit"
-                disabled={busy || !email.trim() || !password}>
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-      </form>
-    </SignedOutCard>
-  );
-}
-
-/* ── first run ──────────────────────────────────────────────────────────── */
-
-/**
- * Claiming a new instance.
- *
- * The first account is an administrator because there is nobody to grant it
- * the role afterwards. Registration stops being offered the moment an account
- * exists, so this is a door that closes behind the first person through it.
- */
-function FirstRun({ meta, onDone }: { meta: Meta | null; onDone: (s: Session) => void }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const mismatch = confirm !== "" && password !== confirm;
-  const ready = email.trim() !== "" && password.length >= 12 && !mismatch && confirm !== "";
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      onDone(await api.registerFirst(email.trim(), password));
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? (err.status === 409
-            ? "Someone already claimed this instance. Reload and sign in."
-            : err.detail)
-          : "Couldn't reach mcpd. Is it running?",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <SignedOutCard meta={meta} error={error} title="Create the first account">
-      <p className="note">
-        Nobody has claimed this host yet. This account will be an
-        administrator; you can add others once you are in.
-      </p>
-
-      <form onSubmit={submit}>
-        <div className="field">
-          <label htmlFor="su-email">Email</label>
-          <input
-            id="su-email" type="email" autoComplete="username" autoFocus
-            value={email} onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-          />
-        </div>
-
-        <div className="field">
-          <label htmlFor="su-password">Password</label>
-          <input
-            id="su-password" type="password" autoComplete="new-password"
-            value={password} onChange={(e) => setPassword(e.target.value)}
-            placeholder="At least 12 characters"
-          />
-        </div>
-
-        <div className="field">
-          <label htmlFor="su-confirm">Confirm password</label>
-          <input
-            id="su-confirm" type="password" autoComplete="new-password"
-            value={confirm} onChange={(e) => setConfirm(e.target.value)}
-            placeholder="Type it again"
-          />
-          {mismatch && <p className="note problem">These do not match.</p>}
-        </div>
-
-        <button className="btn primary wide" type="submit" disabled={busy || !ready}>
-          {busy ? "Creating…" : "Create account"}
-        </button>
-      </form>
-    </SignedOutCard>
-  );
-}
-
-/* ── console ────────────────────────────────────────────────────────────── */
-
-function Console({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
-  const [tab, setTab] = useState<Tab>("plugins");
-  const [health, setHealth] = useState<HealthReport | null>(null);
-
-  const pollHealth = useCallback(() => {
-    api.health().then(setHealth).catch(() => setHealth(null));
-  }, []);
-  usePoll(pollHealth, 20_000);
-
-  // Accounts are an administrator's business. The API refuses the calls
-  // regardless; hiding the tab keeps the console from offering a page that can
-  // only answer 403.
-  const admin = session.role === "admin";
-  const tabs: [Tab, string][] = [
-    ["plugins", "Plugins"],
-    ["tunnels", "Tunnels"],
-    ...(admin ? [["users", "Users"] as [Tab, string]] : []),
-    ["settings", "Settings"],
-    ["history", "History"],
-  ];
-
-  return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">m</span>
-          mcpd
-        </div>
-
-        <nav className="tabs">
-          {tabs.map(([id, label]) => (
-            <button key={id} aria-current={tab === id ? "page" : undefined}
-                    onClick={() => setTab(id)}>
-              {label}
-            </button>
-          ))}
-        </nav>
-
-        <span className="grow" />
-
-        {health && (
-          <span className="health" title={health.checks.map((c) => `${c.name}: ${c.status}`).join("\n")}>
-            <Dot tone={health.status === "up" ? "good" : health.status === "down" ? "problem" : "attention"} />
-            {health.status === "up" ? "All good" : health.status === "down" ? "Problem" : "Degraded"}
-          </span>
-        )}
-
-        <span className="note" style={{ marginRight: "var(--s3)" }}>
-          {session.display_name || session.email}
-        </span>
-        <button className="btn quiet" onClick={onSignOut}>Sign out</button>
-      </header>
-
-      <main>
-        {/* Keyed on the tab, so a page that failed is rebuilt from scratch when
-            it is opened again rather than staying broken for the session. The
-            boundary is inside the chrome: whatever happens to a page, the
-            navigation out of it survives. */}
-        <ErrorBoundary key={tab}>
-          {tab === "plugins" && <Plugins />}
-          {tab === "tunnels" && <Tunnels />}
-          {tab === "users" && <Users />}
-          {tab === "settings" && <Settings />}
-          {tab === "history" && <FullHistory />}
-        </ErrorBoundary>
-      </main>
-    </div>
-  );
-}
-
-/* ── changes ────────────────────────────────────────────────────────────── */
-
-function FullHistory() {
-  const [records, setRecords] = useState<AuditRecord[] | null>(null);
-  const [broken, setBroken] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const { show, view } = useToasts();
-  const admin = useIsAdmin();
+function usePendingCount(): Record<string, number> {
+  const mayRead = useCan("read");
+  const [pending, setPending] = useState(0);
 
   const load = useCallback(() => {
-    api.audit(200)
-      .then((r) => setRecords(r.records ?? []))
-      .catch((e) => {
-        setRecords([]);
-        setError(e instanceof Error ? e.message : "Couldn't load the history.");
-      });
-    // Silence when the chain is intact. A check that announces success on
-    // every visit trains people to skip the one time it does not.
-    api.verifyAudit()
-      .then((c) => setBroken(c.intact ? null : c.broken_at))
-      .catch(() => setBroken(null));
-  }, []);
+    if (!mayRead) return;
+    api.operations("pending_approval", 200)
+      .then((r) => setPending(r.count ?? (r.operations ?? []).length))
+      .catch(() => undefined);
+  }, [mayRead]);
+  usePoll(load, 20_000);
 
-  useEffect(() => { load(); }, [load]);
-
-  async function clear() {
-    if (!confirm("Clear the history? The record of everything so far is removed.")) return;
-    setBusy(true);
-    try {
-      const r = await api.clearAudit();
-      show("good", `Cleared ${r.removed} ${r.removed === 1 ? "entry" : "entries"}.`);
-    } catch (e) {
-      show("problem", e instanceof ApiError ? e.detail : "Couldn't clear it.");
-    } finally {
-      setBusy(false);
-      load();
-    }
-  }
-
-  return (
-    <>
-      {view}
-      <div className="row" style={{ alignItems: "flex-start" }}>
-        <div style={{ flex: 1 }}>
-          <h1>History</h1>
-          <p className="lede">Append-only. mcpd notices if anything is altered.</p>
-        </div>
-        {admin && (
-          <button className="btn sm" disabled={busy || !records?.length} onClick={clear}>
-            {busy ? "Clearing…" : "Clear"}
-          </button>
-        )}
-      </div>
-
-      {error && <Message tone="problem">{error}</Message>}
-
-      {broken !== null && (
-        <Message tone="problem">
-          <span>
-            <strong>The history has been altered.</strong> Something edited the
-            database directly, starting at entry {broken}.
-          </span>
-        </Message>
-      )}
-
-      {records === null ? <Skeleton rows={6} /> : (
-        <div className="card"><History records={records} /></div>
-      )}
-    </>
-  );
+  return { "/approvals": pending };
 }
-
-export { CodeBlock };

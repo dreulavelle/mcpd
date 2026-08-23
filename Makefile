@@ -26,6 +26,13 @@ web:
 test:
 	go test ./...
 
+# The dashboard's own tests. Separate from `test` because they need node
+# rather than go, and separate from `web` because building the bundle should
+# not depend on a toolchain a Go-only change never touches.
+.PHONY: web-test
+web-test:
+	cd web && npm ci --silent && npm test
+
 # The race detector needs cgo, so it overrides the package-level setting.
 .PHONY: race
 race:

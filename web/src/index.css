@@ -1,0 +1,194 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* mcpd console.
+ *
+ * This is a page people scan and operate, not one they read, so the design
+ * work is information design: what needs attention should be visible before
+ * anything is read, and state is carried by form as well as by words.
+ *
+ * The palette is carried over from the console this replaces. Semantic colour
+ * (good / attention / problem) is kept separate from the accent, because here
+ * it means something -- an accent used for "fine" leaves nothing to say
+ * "not fine" with.
+ *
+ * Light and dark follow the system, with no toggle, which is what the console
+ * has always done. Every colour is a token defined in both, so a component
+ * never spells one out and cannot be right in one theme and wrong in the
+ * other. */
+
+:root {
+  color-scheme: light dark;
+
+  /* Neutrals carry a slight green-blue bias, matching the accent rather than
+     sitting flat beside it. */
+  --background: #f7f8f7;
+  --foreground: #131a19;
+
+  --card: #ffffff;
+  --card-foreground: #131a19;
+  --popover: #ffffff;
+  --popover-foreground: #131a19;
+
+  --primary: #0e6d5b;
+  --primary-hover: #0b5849;
+  --primary-foreground: #ffffff;
+
+  --secondary: #f0f2f1;
+  --secondary-foreground: #131a19;
+
+  --muted: #f0f2f1;
+  --muted-foreground: #606b68;
+  /* Non-text only -- a status dot, never a word. There is no tint of this grey
+     that is both legible at 4.5:1 and visibly fainter than the token above:
+     solving for AA lands it darker than --muted-foreground, which is not a
+     third step in a hierarchy, it is the same step twice. So secondary text
+     has one colour, and this stays for marks that carry no reading. */
+  --faint: #9aa5a1;
+
+  --accent: #e6eae8;
+  --accent-foreground: #131a19;
+
+  --border: #dde2e0;
+  --border-soft: #e9edeb;
+  --input: #dde2e0;
+  --ring: #0e6d5b;
+
+  /* Semantic status. Each has a foreground for text and icons and a wash for
+     the surface behind them. */
+  --good: #1c6b4c;
+  --good-soft: #1c6b4c14;
+  --attention: #8a5a0c;
+  --attention-soft: #8a5a0c14;
+  --problem: #a5382a;
+  --problem-soft: #a5382a14;
+  --info: #2a5a86;
+  --info-soft: #2a5a8614;
+  --destructive: #a5382a;
+  --destructive-foreground: #ffffff;
+
+  --radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0d1211;
+    --foreground: #e8ecea;
+
+    --card: #151b1a;
+    --card-foreground: #e8ecea;
+    --popover: #151b1a;
+    --popover-foreground: #e8ecea;
+
+    --primary: #4dbca2;
+    --primary-hover: #62cab2;
+    --primary-foreground: #06120f;
+
+    --secondary: #1c2422;
+    --secondary-foreground: #e8ecea;
+
+    --muted: #1c2422;
+    --muted-foreground: #94a09c;
+    --faint: #6a7672;
+
+    --accent: #242e2b;
+    --accent-foreground: #e8ecea;
+
+    --border: #2a3532;
+    --border-soft: #222c2a;
+    --input: #2a3532;
+    --ring: #4dbca2;
+
+    --good: #55bd8c;
+    --good-soft: #55bd8c1f;
+    --attention: #d5a052;
+    --attention-soft: #d5a0521f;
+    --problem: #e08472;
+    --problem-soft: #e084721f;
+    --info: #74a8d4;
+    --info-soft: #74a8d41f;
+    --destructive: #e08472;
+    --destructive-foreground: #180a08;
+  }
+}
+
+/* Everything above becomes a Tailwind utility here -- bg-card, text-muted-
+   foreground, border-border. `inline` so the values resolve against whichever
+   :root block won, rather than being frozen at the light one. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-attention: var(--attention);
+  --color-attention-soft: var(--attention-soft);
+  --color-problem: var(--problem);
+  --color-problem-soft: var(--problem-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* Not `inline`, and not in :root: the type stack is the same in both themes,
+   so it is a plain theme token. Naming it --font-sans in :root as well would
+   make the mapping below refer to itself. */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.6;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* The focus ring is the only affordance a keyboard has for where it is, so
+     it is defined once and never removed per component. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring/60 ring-offset-2 ring-offset-background;
+  }
+}
+
+/* A wide table scrolls inside its own box rather than pushing the page
+   sideways. Approvals and audit are both wider than a narrow window. */
+@utility scroll-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}

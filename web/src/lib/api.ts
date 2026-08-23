@@ -43,7 +43,34 @@ export interface Operation {
   approved_at?: string;
   execute_by?: string;
   terminal_at?: string;
-  verified?: boolean;
+  /**
+   * Whether re-reading upstream confirmed the change landed.
+   *
+   * Three values, not two. `true` is confirmed, `false` is checked and did not
+   * match, and absent means nobody has checked -- which is the ordinary state
+   * of an operation still in flight. Typed to include null so a call site
+   * cannot narrow it to a boolean by accident and render "not checked" as a
+   * tick.
+   */
+  verified?: boolean | null;
+  /**
+   * Which of the two things called an approval this record is.
+   *
+   * A `reviewed_change` carries all three proofs: exact fields, drift
+   * detection, and an outcome that was confirmed. A `gated_call` carries a
+   * person's yes and the fact the call was made. The distinction is the
+   * server's, computed from the two flags below, and the console must not let
+   * the second wear the first's name.
+   */
+  assurance: "reviewed_change" | "gated_call";
+  /**
+   * Whether this operation carries a precondition snapshot a re-plan can be
+   * compared against. False means no drift check ran -- which is a different
+   * fact from one that ran and found nothing.
+   */
+  drift_checked: boolean;
+  /** The mutation's own declaration that re-reading the target proves the write. */
+  outcome_verifiable: boolean;
   attempts: number;
   error_code?: string;
   error_detail?: string;
@@ -156,6 +183,16 @@ export interface PluginType {
 export interface PluginInstance {
   name: string;
   type: string;
+  /**
+   * What kind of thing this is: "builtin" for an integration compiled into
+   * this binary, "mcp" for a remote MCP server.
+   *
+   * Read this field rather than inferring it from `type`. The two are managed
+   * in entirely different places -- one has a compiled-in type and a settings
+   * form, the other an imported document and a tool list to classify -- and a
+   * name has never been a reliable way to tell them apart.
+   */
+  runtime?: "builtin" | "mcp";
   /** Defined in the config file, so the dashboard cannot remove it. */
   from_file: boolean;
   enabled: boolean;
@@ -314,6 +351,87 @@ export interface Endpoints {
   per_plugin_example: string;
 }
 
+/* -- remote MCP servers ---------------------------------------------------- */
+
+/**
+ * Where a discovered tool stands.
+ *
+ * Three states rather than a boolean: "pending" is nobody has looked at it
+ * yet, "disabled" is somebody looked and said no. Only "enabled" is served.
+ */
+export type MCPToolState = "pending" | "enabled" | "disabled";
+
+/**
+ * A remote server's claims about one of its tools.
+ *
+ * The MCP specification says a client must not rely on annotations from an
+ * untrusted server, and a remote server is by definition untrusted. They are
+ * shown as the server's claim and may seed a default in the classify form;
+ * nothing here treats one as fact.
+ */
+export interface MCPToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
+/** A remote tool as it was last described to us. */
+export interface MCPToolDescriptor {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema?: unknown;
+  annotations?: MCPToolAnnotations;
+}
+
+export interface MCPTool {
+  name: string;
+  descriptor: MCPToolDescriptor;
+  /**
+   * Identifies the descriptor, and is the guard on every state change. A
+   * classification carries the hash of the descriptor the administrator was
+   * actually looking at; if discovery replaced it in between, the write
+   * matches no rows and comes back 409.
+   */
+  descriptor_hash: string;
+  state: MCPToolState;
+  /** Why this tool cannot be served even if enabled. */
+  problem?: string;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+/** One imported remote server. */
+export interface MCPServer {
+  name: string;
+  title: string;
+  description: string;
+  version: string;
+  schema_version: string;
+  transport: string;
+  /** The URL template as imported, braces intact. */
+  url: string;
+  enabled: boolean;
+  mounted: boolean;
+  created_at: string;
+  updated_at: string;
+  /** False when this build can no longer parse the stored document. */
+  readable: boolean;
+  pending: number;
+  enabled_tools: number;
+  disabled: number;
+}
+
+/** What one discovery changed. */
+export interface MCPDiff {
+  added?: string[];
+  changed?: string[];
+  removed?: string[];
+  unchanged?: string[];
+}
+
 /** ApiError carries the server's stable error code so callers can branch on it. */
 export class ApiError extends Error {
   constructor(
@@ -321,6 +439,15 @@ export class ApiError extends Error {
     readonly code: string,
     readonly detail: string,
     readonly correlationId?: string,
+    /**
+     * Field-level complaints, when the endpoint sends them.
+     *
+     * Saving settings is the one refusal that is a list rather than a
+     * sentence: `handlePutSettings` answers a bad value with `problems` and no
+     * `detail` at all. Without carrying them the form could only show the bare
+     * code `invalid_settings`, which does not say which field.
+     */
+    readonly problems?: string[],
   ) {
     super(detail || code);
     this.name = "ApiError";
@@ -367,11 +494,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
+    const problems = Array.isArray(body.problems)
+      ? body.problems.map(String)
+      : undefined;
     throw new ApiError(
       response.status,
       String(body.error ?? `http_${response.status}`),
       String(body.detail ?? body.error ?? response.statusText),
       body.correlation_id as string | undefined,
+      problems,
     );
   }
   return body as T;
@@ -411,10 +542,15 @@ export const api = {
   deleteUser: (id: string) =>
     request<void>(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
-  operations: (state?: OperationState) =>
-    request<{ operations: Operation[]; count: number }>(
-      state ? `/api/operations?state=${encodeURIComponent(state)}` : "/api/operations",
-    ),
+  operations: (state?: OperationState, limit?: number) => {
+    const q = new URLSearchParams();
+    if (state) q.set("state", state);
+    if (limit) q.set("limit", String(limit));
+    const query = q.toString();
+    return request<{ operations: Operation[]; count: number }>(
+      query ? `/api/operations?${query}` : "/api/operations",
+    );
+  },
 
   operation: (id: string) =>
     request<{ operation: Operation; audit: AuditRecord[] }>(
@@ -429,6 +565,13 @@ export const api = {
 
   reject: (id: string, reason: string) =>
     request<Operation>(`/api/operations/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+
+  /** Withdrawing a proposal, which the proposer may do without approve. */
+  cancel: (id: string, reason: string) =>
+    request<Operation>(`/api/operations/${encodeURIComponent(id)}/cancel`, {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),
@@ -498,4 +641,49 @@ export const api = {
     request<{ status: string }>(`/api/instances/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }),
+
+  mcpServers: () => request<{ servers: MCPServer[] }>("/api/mcp-servers"),
+
+  mcpServerTools: (name: string) =>
+    request<{ tools: MCPTool[]; count: number }>(
+      `/api/mcp-servers/${encodeURIComponent(name)}/tools`,
+    ),
+
+  importMCPServer: (name: string, document: unknown) =>
+    request<{ status: string; note?: string }>("/api/mcp-servers", {
+      method: "POST",
+      body: JSON.stringify({ name, document }),
+    }),
+
+  discoverMCPServer: (name: string) =>
+    request<{ status: string; diff: MCPDiff; note?: string }>(
+      `/api/mcp-servers/${encodeURIComponent(name)}/discover`, { method: "POST" },
+    ),
+
+  setMCPServerEnabled: (name: string, enabled: boolean) =>
+    request<{ status: string }>(`/api/mcp-servers/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+
+  removeMCPServer: (name: string) =>
+    request<{ status: string }>(`/api/mcp-servers/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+
+  /**
+   * Records a decision about one tool.
+   *
+   * `descriptorHash` is the descriptor the operator actually read. A 409 means
+   * it no longer matches what is stored -- the far end changed its tool under
+   * them -- and the answer is to show them what changed, never to resend with
+   * the new hash.
+   */
+  classifyMCPTool: (
+    server: string, tool: string, state: MCPToolState, descriptorHash: string,
+  ) =>
+    request<{ status: string }>(
+      `/api/mcp-servers/${encodeURIComponent(server)}/tools/${encodeURIComponent(tool)}`,
+      { method: "PATCH", body: JSON.stringify({ state, descriptor_hash: descriptorHash }) },
+    ),
 };

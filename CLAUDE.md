@@ -7,14 +7,22 @@ wrong.
 ## Build
 
 ```bash
-make check   # fmt, vet, test, dependency pinning — run before calling work done
-make race    # tests under the race detector
-make web     # rebuild the dashboard bundle after any change under web/
+make check     # fmt, vet, test, dependency pinning — run before calling work done
+make race      # tests under the race detector
+make web       # rebuild the dashboard bundle after any change under web/
+make web-test  # the dashboard's own tests (vitest)
 ```
 
 The dashboard is embedded with `go:embed` from `internal/admin/dist`. Editing
 `web/src` changes nothing the binary serves until the bundle is rebuilt and
 copied there.
+
+The dashboard is React with Tailwind and shadcn/ui. shadcn components are
+*copied in* under `web/src/components/ui`, so they are ordinary source: edit
+them rather than working around them. `web/src/lib/nav.ts` is the one place
+that decides what appears in the sidebar, and `web/src/lib/capabilities.ts`
+mirrors the role-to-capability map from `internal/auth/principal.go` — if that
+map changes, this one has to follow.
 
 The container's data lives in `./.data`. The leading dot keeps `go build ./...`
 working — `cmd/go` skips dot-prefixed directories, and the TLS material inside
