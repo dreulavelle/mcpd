@@ -213,6 +213,15 @@ describe("an old marketplace deep link", () => {
     expect(window.location.pathname).toBe("/plugins/weather");
   });
 
+  // Two segments were a server. Three never named anything, and the catalog
+  // is not a sensible answer to an address that meant nothing.
+  it("still says nothing here for an address that never existed", async () => {
+    window.history.replaceState(null, "", "/marketplace/weather/tools");
+
+    render(<App />);
+    expect(await screen.findByText("Nothing here")).toBeInTheDocument();
+  });
+
   // Replaced rather than pushed: back should go where the operator came from,
   // not to an address that immediately forwards again.
   it("does not leave the old address in the history", async () => {

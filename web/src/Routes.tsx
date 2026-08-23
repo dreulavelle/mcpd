@@ -60,10 +60,11 @@ export function Routes() {
       case "plugins":
         return param ? <PluginDetail name={param} /> : <PluginsList />;
 
-      // Discovery only. An installed server is a plugin, and /marketplace/{name}
-      // redirects to its plugin page.
+      // Discovery only, and nothing below it. /marketplace/{name} used to be an
+      // installed server and is redirected above; anything deeper never named
+      // a page here.
       case "marketplace":
-        return <MarketplaceList />;
+        return param ? null : <MarketplaceList />;
 
       case "tunnels":
         return <Tunnels />;
