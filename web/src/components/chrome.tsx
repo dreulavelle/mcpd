@@ -246,9 +246,14 @@ export function Out({ href, children }: { href: string; children: ReactNode }) {
  * A page that throws does not take the console with it. A class, because React
  * offers the lifecycle only to those. Recovery is by remount -- the shell keys
  * this on the path -- since a retry in place would fail identically.
+ *
+ * `quiet` is for something the console offers rather than something it was
+ * asked for: a secondary surface that fails should leave the page it was
+ * sitting on alone, and an explanation of a failure nobody caused is worth
+ * less than the space it takes.
  */
 export class ErrorBoundary extends Component<
-  { children: ReactNode },
+  { children: ReactNode; quiet?: boolean },
   { problem: string }
 > {
   state = { problem: "" };
@@ -265,6 +270,7 @@ export class ErrorBoundary extends Component<
 
   render() {
     if (!this.state.problem) return this.props.children;
+    if (this.props.quiet) return null;
     return (
       <Notice tone="problem">
         This page could not be drawn, so it is showing this instead of nothing.

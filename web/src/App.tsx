@@ -4,6 +4,7 @@ import { usePoll } from "@/lib/hooks";
 import { RouterProvider, useRouter } from "@/lib/router";
 import { SessionProvider, useCan } from "@/lib/session";
 import { ErrorBoundary } from "@/components/chrome";
+import { GettingStarted } from "@/components/getting-started";
 import { Shell } from "@/components/shell";
 import { ToastProvider } from "@/components/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -57,15 +58,24 @@ function Console({ onSignOut }: { onSignOut: () => void }) {
   const badges = usePendingCount();
 
   return (
-    <Shell badges={badges} onSignOut={onSignOut}>
-      {/* Keyed on the path, so a page that failed is rebuilt from scratch when
-          it is opened again rather than staying broken for the session. The
-          boundary is inside the chrome: whatever happens to a page, the
-          navigation out of it survives. */}
-      <ErrorBoundary key={path}>
-        <Routes />
+    <>
+      <Shell badges={badges} onSignOut={onSignOut}>
+        {/* Keyed on the path, so a page that failed is rebuilt from scratch when
+            it is opened again rather than staying broken for the session. The
+            boundary is inside the chrome: whatever happens to a page, the
+            navigation out of it survives. */}
+        <ErrorBoundary key={path}>
+          <Routes />
+        </ErrorBoundary>
+      </Shell>
+      {/* Outside the shell's children and outside the keyed boundary: it is
+          pinned to the viewport, it has to survive navigation rather than be
+          rebuilt by it, and a boundary of its own means a checklist that throws
+          costs the checklist rather than the console. */}
+      <ErrorBoundary quiet>
+        <GettingStarted />
       </ErrorBoundary>
-    </Shell>
+    </>
   );
 }
 
