@@ -139,6 +139,23 @@ const (
 	KeyApprovalProposalTTL = "approval.proposal_ttl_minutes"
 	KeyApprovalApprovalTTL = "approval.approval_ttl_minutes"
 	KeyApprovalLeaseTTL    = "approval.lease_ttl_minutes"
+
+	// KeyApprovalAutoRules holds the standing rules that decide which changes
+	// are authorised without asking anybody. It is a JSON array of rules.
+	//
+	// Deliberately not a settings field, for the same reason as the tunnel id
+	// above: a rule is three selectors, a ceiling and a note, and the form
+	// kinds here describe a text box. A JSON blob in one would be validated by
+	// nothing, which is the wrong shape for the setting that decides when a
+	// human is skipped.
+	//
+	// It lives in the settings store all the same, so a change to it is
+	// encrypted-at-rest by the same machinery, recorded in settings_history
+	// against the administrator who made it, and readable by the dashboard.
+	// What it does not have is a generic form: it has its own endpoints, which
+	// validate a whole rule set at once -- the only unit at which "no two rules
+	// cover the same thing" can be checked.
+	KeyApprovalAutoRules = "approval.auto_approve_rules"
 )
 
 func intPtr(i int) *int { return &i }

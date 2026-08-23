@@ -26,6 +26,10 @@ type Policy struct {
 	// RiskOverrides raises the risk of specific actions beyond what the plugin
 	// declared, keyed "plugin.action". It can only raise.
 	RiskOverrides map[string]RiskLevel
+	// AutoApprove is the standing-rule set that decides whether a person is
+	// asked at all. Its zero value asks about everything, which is what an
+	// unconfigured deployment must keep doing.
+	AutoApprove AutoApprovalPolicy
 }
 
 // Service owns the approval workflow. It is the only thing that moves an
@@ -88,6 +92,12 @@ type ProposeRequest struct {
 	// executor reads it from the stored row rather than from the plugin it is
 	// about to run.
 	Verifiable bool
+	// Reversible is the mutation's declaration that an inverse exists. It is
+	// read only by the auto-approval policy, which refuses to authorise a
+	// change nothing can undo: the case for a standing authorisation is that a
+	// mistake is cheap to correct, and it does not survive the absence of a
+	// correction.
+	Reversible bool
 
 	// IdempotencyKey collapses repeated proposals of the same intent. When
 	// empty it is derived from the payload hash, so a client that retries a
@@ -116,6 +126,28 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 	// Risk may be raised by policy but never lowered, so a plugin cannot
 	// declare its way out of an operator's classification.
 	risk := MaxRisk(req.Risk, s.policyFn().RiskOverrides[req.Plugin+"."+req.Action])
+
+	// A classification this build does not define is refused here rather than
+	// carried further. MaxRisk ranks an unknown level above every known one,
+	// so it arrives having already outranked everything -- which is the right
+	// direction, and also means nothing downstream can make sense of it: the
+	// schema's CHECK would refuse the insert with a constraint error naming no
+	// cause, and coercing it to critical would be this host inventing a meaning
+	// for a word a plugin chose.
+	//
+	// Saying so plainly is the whole of the fix. It is reachable from any
+	// plugin that returns a risk override -- an out-of-process one that knows a
+	// level this host does not, or simply a typo -- and the failure has to be
+	// legible to whoever has to correct it.
+	if !risk.Valid() {
+		return nil, &GuardError{
+			ErrCode: CodeInvalidRisk,
+			Detail: fmt.Sprintf(
+				"%s classified %s as %q, which is not a risk level this host defines; "+
+					"nothing can be authorised against a classification it cannot read",
+				req.Plugin, req.Action, risk),
+		}
+	}
 
 	now := s.now()
 	idem := req.IdempotencyKey
@@ -146,7 +178,7 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 		IdempotencyKey: idem,
 	}
 
-	gc := s.guardContext(p, now)
+	gc := s.guardContext(p.ID, now)
 	gc.RecomputedHash = hash
 	if err := Validate(&Operation{
 		State: StateDraft, PayloadHash: hash, ExpiresAt: op.ExpiresAt,
@@ -166,6 +198,10 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 				"assurance":     op.Assurance().String(),
 				"verifiable":    op.Verifiable,
 				"drift_checked": op.DriftChecked(),
+				// Recorded because it is what the auto-approval policy refuses
+				// on, and a reader asking why a change was put to a person
+				// should not have to go to the plugin's source to find out.
+				"reversible": req.Reversible,
 			}),
 		Event:          s.event(subjectFor(StatePendingApproval), op),
 		IdempotencyTTL: s.policyFn().ProposalTTL * 2,
@@ -178,7 +214,117 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 	s.log.Info("mutation proposed",
 		"operation_id", stored.ID, "plugin", stored.Plugin, "action", stored.Action,
 		"risk", stored.Risk, "principal", p.ID, "expires_at", stored.ExpiresAt)
-	return stored, nil
+
+	// Whether a person is asked is decided here, after the record exists.
+	// Proposing first is not an ordering detail: a change that is refused,
+	// declined, or interrupted still has to leave a durable account of what
+	// was proposed, and a decision taken before the row was written would
+	// sometimes have nothing to attach itself to.
+	return s.autoApprove(ctx, stored, req.Reversible), nil
+}
+
+// autoApprove authorises an operation from a standing rule when one covers it.
+//
+// It never returns an error. A rule that does not apply, a rule set that
+// cannot be read, a transition lost to a race -- all of them leave the
+// operation exactly where Propose put it, awaiting a person, which is the
+// direction to fail in. The caller gets the operation as it now stands.
+func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible bool) *Operation {
+	// A replayed proposal returns the original operation, which may already be
+	// approved, executing or settled. Only a proposal still awaiting a
+	// decision is one this can decide.
+	if op.State != StatePendingApproval {
+		return op
+	}
+
+	policy := s.policyFn()
+	decision := policy.AutoApprove.Evaluate(AutoApprovalRequest{
+		Plugin:     op.Plugin,
+		Action:     op.Action,
+		Principal:  op.RequestedBy,
+		Risk:       op.Risk,
+		Reversible: reversible,
+	})
+	if !decision.AutoApprove {
+		s.log.Debug("this change is being put to a person",
+			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
+			"risk", op.Risk, "reason", decision.Reason)
+		return op
+	}
+	rule := *decision.Rule
+
+	now := s.now()
+	// The same guard every approval passes. A standing rule decides who
+	// authorises, not what may be authorised: an expired proposal is still
+	// expired, and the transition table is still the transition table.
+	//
+	// AuthorizeApproval is deliberately not consulted. It asks whether this
+	// principal may approve, and no principal is approving -- the authority is
+	// an administrator's rule, and the proposer's own right to approve is
+	// beside the point. What bounds the proposer is CapPropose, checked above.
+	if err := Validate(op, StateApproved, TriggerApprove, s.guardContext(PolicyActor, now)); err != nil {
+		s.log.Warn("a rule covers this change but it cannot be approved",
+			"operation_id", op.ID, "rule", rule.ID, "error", err)
+		return op
+	}
+
+	// The same snapshot the decision was taken from. Reading the policy again
+	// here could pair a rule that has since been deleted with a TTL that has
+	// since changed.
+	approvalExpiry := now.Add(policy.ApprovalTTL)
+	stored, err := s.repo.Transition(ctx, TransitionRequest{
+		OperationID: op.ID,
+		From:        StatePendingApproval,
+		To:          StateApproved,
+		Actor:       PolicyActor,
+		Reason:      decision.Reason,
+		Approval: &ApprovalFields{
+			ApprovedBy:        PolicyActor,
+			ApprovedAt:        now,
+			ApprovalExpiresAt: approvalExpiry,
+			AuthorizedByRule:  rule.ID,
+		},
+		Audit: s.audit("operation.approved", op, PolicyActor, StatePendingApproval, StateApproved,
+			map[string]any{
+				"reason":     decision.Reason,
+				"execute_by": approvalExpiry,
+				// "policy" rather than "dashboard" or "inline": the trail has
+				// to distinguish a decision somebody made from one nobody was
+				// asked to make.
+				"channel": "policy",
+				"rule":    rule.ID,
+				// The rule is recorded in full, not only by id. A rule can be
+				// edited or deleted, and an entry naming an identifier whose
+				// meaning has since changed would describe an authorisation
+				// that never happened. This entry stays true on its own.
+				"rule_scope":     rule.Scope(),
+				"rule_max_risk":  rule.MaxRisk.String(),
+				"rule_note":      rule.Note,
+				"proposed_by":    op.RequestedBy,
+				"asked_a_person": false,
+			}),
+		Event: s.event(subjectFor(StateApproved), op),
+	})
+	if err != nil {
+		// Losing the race is ordinary: a person got there first, or the reaper
+		// expired the proposal. Either way the row is the authority and it
+		// says what happened -- so re-read it rather than handing back the
+		// copy from before the race, which would report pending_approval for
+		// an operation that is by now approved, expired or running.
+		s.log.Warn("a rule covers this change but the approval did not land",
+			"operation_id", op.ID, "rule", rule.ID, "error", err)
+		if fresh, readErr := s.repo.Get(ctx, op.ID); readErr == nil {
+			return fresh
+		}
+		return op
+	}
+
+	s.notify()
+	s.log.Info("mutation approved by standing rule",
+		"operation_id", stored.ID, "plugin", stored.Plugin, "action", stored.Action,
+		"risk", stored.Risk, "rule", rule.ID, "rule_scope", rule.Scope(),
+		"requester", stored.RequestedBy, "execute_by", approvalExpiry)
+	return stored
 }
 
 // Approve authorizes a pending operation.
@@ -229,7 +375,7 @@ func (s *Service) approve(ctx context.Context, p *auth.Principal, op *Operation,
 	}
 
 	now := s.now()
-	gc := s.guardContext(p, now)
+	gc := s.guardContext(p.ID, now)
 	if err := Validate(op, StateApproved, TriggerApprove, gc); err != nil {
 		return nil, err
 	}
@@ -315,7 +461,7 @@ func (s *Service) Reject(ctx context.Context, p *auth.Principal, operationID, re
 		// veto a change is making a decision about it.
 		return nil, &GuardError{ErrCode: d.Code, Detail: d.Reason}
 	}
-	if err := Validate(op, StateRejected, TriggerReject, s.guardContext(p, s.now())); err != nil {
+	if err := Validate(op, StateRejected, TriggerReject, s.guardContext(p.ID, s.now())); err != nil {
 		return nil, err
 	}
 
@@ -348,7 +494,7 @@ func (s *Service) Cancel(ctx context.Context, p *auth.Principal, operationID, re
 	if d := s.authz.AuthorizeTool(p, op.Plugin, auth.CapPropose); !d.Allowed {
 		return nil, d.Error()
 	}
-	if err := Validate(op, StateCancelled, TriggerCancel, s.guardContext(p, s.now())); err != nil {
+	if err := Validate(op, StateCancelled, TriggerCancel, s.guardContext(p.ID, s.now())); err != nil {
 		return nil, err
 	}
 
@@ -393,10 +539,14 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, plugin string, st
 }
 
 // guardContext assembles the inputs every transition guard inspects.
-func (s *Service) guardContext(p *auth.Principal, now time.Time) GuardContext {
+//
+// It takes an actor rather than a principal because not every transition has
+// one: a standing rule approves as "system:policy", and there is no principal
+// behind that to hand in.
+func (s *Service) guardContext(actor string, now time.Time) GuardContext {
 	return GuardContext{
 		Now:                now,
-		Actor:              p.ID,
+		Actor:              actor,
 		PreconditionsMatch: true,
 	}
 }

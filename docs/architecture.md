@@ -78,8 +78,10 @@ payload cannot execute even if it slipped past every check above it.
 and execution is detectable, and the outcome is confirmed by re-reading the
 target. A mutation declares whether it can offer the third (`Verifiable`) and
 supplies the second by declaring preconditions. Anything short of all three is
-a *gated call* — a human authorised it and it happened, and that is the whole
-of the evidence. The two words are kept apart in the note the model reads and
+a *gated call* — it was authorised and it happened, and that is the whole of
+the evidence. ("Authorised" rather than "a human said yes": a standing rule can
+authorise a change with nobody being asked. Who authorised it is a separate
+fact from what can be proved about it, and the two are kept apart.) The two words are kept apart in the note the model reads and
 in what the API returns, because the second borrowing the first's credibility
 is exactly how a system ends up claiming more integrity than it has.
 
@@ -141,6 +143,118 @@ two-step flow rather than an unguarded write; there is no path that skips it.
 Tool annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`) tell a
 client how to frame the call, which decides whether a person is *shown* a
 change — never whether it may happen.
+
+## Asking about everything is the same mistake
+
+Risk was computed on every proposal, stored, displayed, and consulted by
+nothing. Every mutation was equally consequential as far as the gate was
+concerned, which means a change of nothing much interrupts a person exactly as
+hard as rebooting a site does — and a gate that inconvenient is one people
+route around. Wanting an agent to be able to nudge a channel without a human
+in the loop is not wanting less safety; it is wanting the interruption to be
+worth something when it happens.
+
+So a **standing rule** can authorise a class of change in advance.
+`internal/operations/autoapprove.go` is the whole of it: three selectors, a
+ceiling, and a note.
+
+| | |
+|---|---|
+| `plugin` | which integration, or `*` |
+| `action` | which mutation, or `*` |
+| `principal` | whose proposals, or `*` |
+| `max_risk` | the highest risk it authorises; **empty authorises nothing** |
+
+**Most specific wins, and only one rule decides.** Plugin outranks action
+because an action name means nothing without the plugin it belongs to, and both
+outrank principal — a rule carving an action out is a statement about the
+change itself, "rebooting a device is never automatic", and must not be
+defeated by a broad grant to whoever happens to be asking. Two rules on one
+scope are refused when the set is stored, because picking between them would be
+right only by accident. An empty ceiling is not a disabled rule: it authorises
+nothing, and because a more specific rule wins outright it is how one action is
+carved out of a permissive plugin-wide rule.
+
+**The default is to ask about everything.** The zero value of the policy is no
+rules, and no rules means every mutation goes to a person exactly as it did
+before this existed. A policy that loosens on upgrade is the wrong direction to
+be wrong in, so nothing changes until an administrator writes a rule. Rules
+have no fallback in the configuration file for the same reason: the one setting
+whose effect is to skip a human belongs where the change is recorded against
+whoever made it, and where the dashboard can show the whole set.
+
+**Three things no rule may authorise.** A mutation that declares no way back
+(`MutationSpec.Reversible`), because the case for a standing authorisation is
+that a mistake is cheap to correct and it does not survive the absence of a
+correction. An unrecognised risk classification, because an unknown is exactly
+the thing to put in front of someone. And `critical` — a level an operator can
+quietly opt out of is not a level.
+
+**Risk is raised before the policy sees it.** The ceiling is compared against
+the risk as it finally stands: the mutation's declaration, raised by the plan
+for these specific parameters, raised again by any operator override. A plan
+that reclassifies a change upward puts it back in front of a person even though
+the proposal qualified without it. The same re-plan runs immediately before
+execution, and where a *rule* authorised the change and the re-plan raises the
+risk, the executor refuses (`RISK_RAISED`) — the rule authorised a change of
+one severity and the target now says it is another, and nobody ever looked.
+Where a *person* approved, the same raise changes nothing: they saw this change
+and said yes to it, and treating a reclassification as a withdrawal would make
+every approval provisional.
+
+**What you lose is the interruption, not the evidence.** An auto-approved
+operation is an ordinary operation. The row is written, the payload frozen and
+hashed, plan/apply/observe runs, drift is checked, the outcome verified where
+the mutation can prove one, and every transition is in the hash-chained trail.
+It skips the ask and nothing else. So the property this rests on survives with
+one word changed: nothing writes without a **recorded authorisation** it can
+prove.
+
+Which is why the record has to name the rule. `operations.authorized_by_rule`
+holds it, written in the same guarded `UPDATE` as the approval and immutable
+afterwards, and the audit entry carries the rule's scope, ceiling and note in
+full — a rule can be edited or deleted, and an entry naming an identifier whose
+meaning has since changed would describe an authorisation that never happened.
+The approver is `system:policy`, never the principal who proposed: attributing
+it to them would say a person approved their own write, which is the one thing
+that did not happen. "Auto-approved" with nothing naming the rule is exactly
+the unprovable approval this project exists to avoid.
+
+**Assurance is orthogonal and stays orthogonal.** *Nobody was asked* and
+*nothing can be proved* are different facts. An auto-approved change that
+declares preconditions and can be re-read is still a `reviewed_change`; one
+that cannot is still a `gated_call`. Collapsing the two would let the vocabulary
+that exists to stop a claim being overstated start overstating one.
+
+**Auto-approval does not consult `CapApprove`.** The authority is an
+administrator's rule, not the proposer's standing; what bounds the proposer is
+`CapPropose`, checked where every proposal is. Writing rules is `CapAdmin`;
+reading them is `CapRead`, because "why was I not asked" is a question an
+operator has to be able to answer.
+
+**A rule removes the only backpressure there is.** Nothing rate-limits a
+mutation — `ToolSpec.RateLimit` bounds read tools, and a propose tool has no
+equivalent. Before a rule existed, a runaway agent could only pile up proposals
+somebody would decline; under one it lands writes at whatever rate it can call.
+The human in the loop was doing that job as a side effect, and a rule is a
+decision to stop paying for it. Scope rules narrowly until there is a
+per-mutation rate limit.
+
+**A rule is decoded strictly, and a misspelled selector is an error.** An
+omitted selector means "anything", which is the convenience that makes
+strictness load-bearing: `{"principle": "svc:agent"}` would otherwise be
+discarded silently and the real principal default to every principal, turning a
+deliberately narrow rule into a global one with nothing saying so. An unknown
+field, an explicit `null`, and an empty selector are all refused, and the check
+lives on the rule type rather than in the handler — a `json.Decoder`'s
+`DisallowUnknownFields` does not reach inside a custom `UnmarshalJSON`, so the
+type is the only place that covers the API, the settings store at startup, and
+a restore alike.
+
+Rules are read and written at `GET`/`PUT /api/approval-policy`, and
+`POST /api/approval-policy/evaluate` answers "which rule would apply, and why"
+before a change is proposed rather than only afterwards from the record. The
+shapes are in [approval-policy.md](approval-policy.md).
 
 ## Identity
 
