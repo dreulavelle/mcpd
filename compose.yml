@@ -7,6 +7,18 @@ services:
     image: ghcr.io/dreulavelle/mcpd:local
     container_name: mcpd
     restart: unless-stopped
+
+    # Everything written to ./data lands owned by this uid, so the host user
+    # can read and edit it without sudo. 1000 is the first login account on
+    # every mainstream distribution; if yours differs, put UID and GID in
+    # .env -- the shell does not export them, so compose cannot read them.
+    #
+    # This rather than an entrypoint chown: chowning a bind mount needs the
+    # container to start as root and hold CAP_CHOWN, CAP_SETUID and
+    # CAP_SETGID, which means giving back three of the capabilities dropped
+    # below to solve a problem that has a solution needing none of them.
+    user: "${UID:-1000}:${GID:-1000}"
+
     env_file:
       - path: .env
         required: false
@@ -14,29 +26,46 @@ services:
       # Both listeners bind every interface *inside* the container. mcpd
       # defaults to loopback, which in a container means the published port
       # reaches a socket nothing is listening on. What the host exposes is
-      # decided by the port mappings below, not here.
+      # decided by the port mappings below, not here -- which is also why
+      # these override the generated config.yaml rather than being editable
+      # in it. server.public_url is deliberately not overridden: it is the
+      # one address an operator has to be able to change.
       MCPD_LISTEN: ":8080"
       MCPD_FRONTEND_LISTEN: ":8081"
     ports:
       - "${MCPD_BIND:-127.0.0.1}:${MCPD_PORT:-8080}:8080"
       - "${MCPD_FRONTEND_BIND:-127.0.0.1}:${MCPD_FRONTEND_PORT:-80}:8081"
-      # Loopback, not configurable: the tunnel's diagnostics listener is
-      # unauthenticated.
-      - "127.0.0.1:${MCPD_TUNNEL_DIAGNOSTICS_PORT:-9099}:9099"
+      # The tunnel's diagnostics listener is deliberately not published. It is
+      # off unless tunnel.diagnostics_addr is set, which nothing sets by
+      # default, so the mapping that used to be here reserved a host port for
+      # a listener that was not running -- and failed the whole `up` if
+      # anything else on the host already had 9099. It is unauthenticated, so
+      # publishing it is the wrong direction anyway: reach it from inside,
+      #   docker compose exec mcpd wget -qO- http://127.0.0.1:9099/readyz
     volumes:
-      # Must be owned by 65532 -- the image is distroless nonroot, and a
-      # directory owned by the host user is not writable by it:
-      #   mkdir -p .data && docker run --rm -v "$PWD/.data":/d alpine chown -R 65532:65532 /d
-      - ./.data:/var/lib/mcpd
-      - ./config.yaml:/etc/mcpd/config.yaml:ro
-      - ./plugins:/var/lib/mcpd/plugins:ro
+      # One mount, and nothing else. config.yaml, the database, TLS material
+      # and out-of-process plugins all live in it, and it is generated on
+      # first start if it is empty. No file bind-mounts: a single-file mount
+      # against a host path that is momentarily wrong fails with "not a
+      # directory" rather than with anything that explains itself.
+      - ./data:/var/lib/mcpd
+
+    # This proves the binary runs and the configuration still parses. It is
+    # deliberately not an HTTP probe: with tls.mode self-signed the listener
+    # speaks HTTPS with mcpd's own CA, and a probe that failed on that would
+    # report a healthy host as unhealthy.
     healthcheck:
-      test: ["CMD", "/usr/local/bin/mcpd", "-config", "/etc/mcpd/config.yaml", "-check"]
+      test: ["CMD", "/usr/local/bin/mcpd", "-config", "/var/lib/mcpd/config.yaml", "-check"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+    # Headroom over the 30s shutdown_timeout in the generated config, so a
+    # drain that runs to its own deadline is not killed a moment before it
+    # finishes.
     stop_grace_period: 60s
+
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -47,10 +76,17 @@ services:
     deploy:
       resources:
         limits:
+          # A backstop against a leak, not a sizing exercise -- an ordinary
+          # deployment sits in the tens of MiB. What can actually grow is the
+          # catalogue cache: 256 entries (registry.DefaultMaxCacheEntries)
+          # against a 2 MiB per-response cap, and 8 MiB for Docker's whole
+          # catalogue. Browsing hard enough to hold 256 large pages at once
+          # would approach this limit; nothing else here comes close, since
+          # SQLite's pages are reclaimable and the per-plugin read caches are
+          # 256 small entries each.
           memory: 1g
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-
