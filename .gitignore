@@ -3,11 +3,14 @@
 *.db
 *.db-wal
 *.db-shm
-/.data/
-/plugins/*/
-!/plugins/.gitkeep
 .env
 *.swp
+
+# A deployment's data: config.yaml, the database, TLS material and plugins.
+# The directory itself is tracked so a fresh clone has one the host user owns
+# and the container can write to.
+/data/*
+!/data/.gitkeep
 
 # The dashboard bundle is a build artifact, copied into the package at build
 # time so go:embed can reach it.
@@ -19,7 +22,9 @@
 /web/bun.lock
 /web/tsconfig.tsbuildinfo
 
-# A deployment's own config and secrets.
+# The pre-1.0 layout, left ignored so a deployment part-way through the move
+# to ./data does not commit its database.
+/.data/
 /config.yaml
-/.env
+/plugins/*/
 /.claude/worktrees/

@@ -889,10 +889,9 @@ rebuilding the bundle before the binary serves it.
 `modernc.org/libc` at the exact version in its own `go.mod`. A mismatch fails
 at runtime rather than at build time, so it is checked in CI.
 
-The container's data directory is bind-mounted at `./.data`. The leading dot is
-load-bearing: `cmd/go` skips dot-prefixed directories, and mcpd's TLS material
-is mode 700 owned by the container user, so a visible `./data` breaks
-`go build ./...` on any machine that has run the container.
+The container's data directory is bind-mounted at `./data`. It is an ordinary
+directory owned by whoever runs the container, so `go build ./...` reads it
+like any other and finds no packages in it.
 
 ## Deployment
 
@@ -900,8 +899,48 @@ Primary target is a Linux VM with systemd. [`deploy/mcpd.service`](../deploy/mcp
 is a hardened unit: dedicated user, `ProtectSystem=strict`, all capabilities
 dropped except `CAP_NET_BIND_SERVICE`, and a syscall filter.
 
-The container image is distroless, non-root (uid 65532), read-only root
-filesystem, with `/tmp` on tmpfs.
+### The container
+
+**One mount, and it is generated.** `./data` holds `config.yaml`, the database,
+TLS material and out-of-process plugins. `docker compose up` against an empty
+directory produces a working host: the entrypoint runs `mcpd -init` when there
+is no config, which writes the file and generates a bearer token and the key
+that encrypts stored credentials.
+
+**Generation happens exactly once, and that is the load-bearing part.**
+`secret_key_ref: env:MCPD_SECRET_KEY` is what encrypts every credential typed
+into the dashboard, so a restart that generated a second key would make every
+one of them undecryptable — and `Store.Get` drops what it cannot decrypt, so
+nothing would say so beyond a credential quietly no longer being there. Three
+things hold the line. `mcpd -init` refuses outright to overwrite an existing
+`config.yaml` or `.env`; it declines to write a key at all when the environment
+already supplies one, rather than writing a second that would take over the day
+the environment stopped; and the entrypoint calls it only when neither file
+exists, refusing rather than generating a config beside secrets it did not
+write.
+
+**Alpine, not distroless, and the trade is stated rather than waved away.**
+What is lost is real: a shell in the image gives a remote code execution more
+to work with, and there is a musl userland and a package manager to keep
+patched. What is not lost is what actually hardens the container — read-only
+root filesystem, `cap_drop: ALL`, `no-new-privileges`, a nonroot user, `/tmp`
+on tmpfs, and a static CGO-free binary. What is bought is the two things
+distroless made impossible, which were the whole of the complaint: nothing can
+run before the binary, so the config had to be hand-authored and bind-mounted,
+and the volume had to be pre-chowned to uid 65532 — which left an operator
+with a data directory their own account could not read.
+
+**The container runs as the host user's uid**, `${UID:-1000}:${GID:-1000}`,
+rather than chowning the mount from an entrypoint. Chowning a bind mount needs
+the container to start as root holding `CAP_CHOWN`, `CAP_SETUID` and
+`CAP_SETGID`, which means handing back three of the capabilities dropped above
+to solve a problem that has a solution needing none of them.
+
+**`config.yaml` is no longer mounted read-only**, because it lives in the one
+writable mount. That is a real change and worth naming: what kept mcpd from
+rewriting an operator's YAML was never only the mount flag — there is no code
+that writes it, and there is no reason to add one (see *plugin overrides*
+below). Under systemd it is still under `ProtectSystem=strict`.
 
 **Behind a reverse proxy, mcpd should not serve TLS itself.** The ordinary
 shape is an FQDN with Caddy, nginx or Cloudflare terminating TLS and forwarding
@@ -1001,9 +1040,11 @@ store where the dashboard writes them. The store layers over the file, and an
 instance knows which it came from, because the two are removed differently.
 
 **The dashboard can remove a file-declared plugin, and mcpd never touches the
-file.** It cannot: `config.yaml` is mounted read-only, the image is distroless
-with a read-only root filesystem, and `deploy/mcpd.service` sets
-`ProtectSystem=strict`. Nor should it — rewriting hand-authored YAML destroys
+file.** There is no code anywhere that writes `config.yaml`, and under systemd
+`ProtectSystem=strict` would refuse it anyway. The container used to enforce it
+too, by mounting the file read-only; it now lives in the writable data
+directory, so the guarantee there rests on the absence of the code rather than
+on the mount. Nor should it — rewriting hand-authored YAML destroys
 comments, ordering and anchors, and in any deployment provisioned by
 configuration management the next deploy would put the entry back. "Remove it
 from the file instead" was therefore an instruction that a great many operators

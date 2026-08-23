@@ -29,15 +29,66 @@ and no NAT rule.
 ### Docker
 
 ```bash
-cp .env.example .env
-$EDITOR .env
 docker compose up -d
 ```
 
-The dashboard is on **port 80**; the MCP endpoint is on loopback:8080.
+That is the whole of it. There is nothing to fill in first: `./data` starts
+empty, and the container generates a `config.yaml`, a bearer token and the key
+that encrypts stored credentials into it on first start. Everything a
+deployment owns is in that one directory — the configuration, the database, TLS
+material and out-of-process plugins — and it is owned by your own account, so
+you can read and edit it without `sudo`.
 
-Open the dashboard and it asks you to create the first account. That account is
-the administrator, and registration stops being offered once it exists.
+The dashboard is on **port 80**; the MCP endpoint is on loopback:8080. Open the
+dashboard and it asks you to create the first account. That account is the
+administrator, and registration stops being offered once it exists.
+
+Copy `.env.example` to `.env` to change the published ports. If your account is
+not uid 1000, put your own in it, or `./data` comes back owned by somebody
+else:
+
+```bash
+printf 'UID=%s\nGID=%s\n' "$(id -u)" "$(id -g)" >> .env
+```
+
+**Keep `data/.env`.** It holds `MCPD_SECRET_KEY`, and every credential saved
+from the dashboard is encrypted with it. Lose it and those credentials cannot
+be read back. mcpd will not replace it: `-init` refuses to overwrite an
+existing config or `.env`, and the container's entrypoint only generates when
+neither is there.
+
+#### Moving an existing deployment
+
+Before this, the container kept its data in `./.data`, its config in
+`./config.yaml`, and its secrets in `./.env`. All three move into `./data`, and
+nothing is regenerated — the point of doing it by hand is that the existing
+`MCPD_SECRET_KEY` comes with you.
+
+```bash
+docker compose down
+
+# .data was owned by uid 65532, which is the thing this release fixes. This is
+# the last time you need sudo for it.
+sudo chown -R "$(id -u):$(id -g)" .data
+
+mkdir -p data/plugins
+cp -a .data/.   data/               # database, TLS material, plugin binaries
+cp -a config.yaml data/config.yaml  # storage paths inside it are container
+                                    # paths and do not change
+cp -a .env      data/.env           # keeps the existing MCPD_SECRET_KEY
+
+# The root .env is now only the published ports, which is what compose reads.
+printf 'MCPD_PORT=8080\nMCPD_BIND=127.0.0.1\nMCPD_FRONTEND_PORT=80\nMCPD_FRONTEND_BIND=127.0.0.1\n' > .env
+printf 'UID=%s\nGID=%s\n' "$(id -u)" "$(id -g)" >> .env
+
+docker compose up -d --build
+```
+
+Nothing is deleted, so the old layout is still there if this goes wrong. Check
+`docker compose logs` for `database ready`, then open a plugin's settings: if a
+credential you saved is still there, the key came across. Once it has,
+`rm -rf .data config.yaml` — and note that `mv .data data` is not the move to
+make, because `./data` already exists and you would end up with `data/.data`.
 
 ### From source
 
@@ -166,7 +217,10 @@ host the write did not happen, and permits a retry that applies it twice.
 
 Primary target is a Linux VM with systemd;
 [`deploy/mcpd.service`](deploy/mcpd.service) is a hardened unit. The container
-image is 24 MB, distroless, non-root, with a read-only root filesystem.
+image is Alpine, non-root, with a read-only root filesystem, every capability
+dropped and `no-new-privileges` set. The shell is what lets it generate a
+config and run as your own uid; the hardening is what makes that a fair
+trade, and none of it is given up.
 
 Terminate TLS at a reverse proxy and bind mcpd to loopback, or let mcpd issue
 its own certificate with `server.tls.mode: self-signed`.

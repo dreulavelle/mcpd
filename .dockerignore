@@ -2,12 +2,16 @@
 .github
 docs
 deploy
+# The entrypoint is part of the image, and it lives with the other deployment
+# material rather than in the repository root.
+!deploy/docker-entrypoint.sh
 *.md
 *.db
 *.db-wal
 *.db-shm
 /bin
 /dist
+/data
 /.data
 web/node_modules
 web/dist
