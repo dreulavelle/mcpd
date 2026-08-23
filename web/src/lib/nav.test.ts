@@ -64,7 +64,7 @@ describe("navigation gating", () => {
     // decision as who has an account -- and is gated the same way.
     expect(settings?.children?.map((c) => c.label)).not.toContain("Authentication");
     expect(settings?.children?.map((c) => c.label)).not.toContain("Groups");
-    expect(settings?.children?.map((c) => c.label)).not.toContain("Keys");
+    expect(settings?.children?.map((c) => c.label)).not.toContain("API Keys");
   });
 
   // It is in the map because the router judges every path against the map.

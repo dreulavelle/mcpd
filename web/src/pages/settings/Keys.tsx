@@ -47,7 +47,7 @@ export function Keys() {
   return (
     <>
       <PageHeader
-        title="Keys"
+        title="API Keys"
         lede="A key lets a script call this host. Each one acts as itself, so the history says which."
         actions={keys && <Button onClick={() => setAdding(true)}>Add key</Button>}
       />
