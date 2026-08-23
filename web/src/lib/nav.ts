@@ -138,7 +138,7 @@ export const NAV: NavGroup[] = [
           },
           {
             path: "/settings/keys",
-            label: "Keys",
+            label: "API Keys",
             lede: "Credentials for scripts and agents. Each one acts as itself.",
             icon: Ticket,
             capability: "admin",
