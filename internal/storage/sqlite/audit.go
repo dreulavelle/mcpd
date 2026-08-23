@@ -58,6 +58,50 @@ func (u *UnitOfWork) appendAudit(e operations.AuditEntry) error {
 	return nil
 }
 
+// AdminAct is one administrative decision, for the audit trail.
+//
+// It exists so a package outside this one can append to the hash-chained trail
+// inside the transaction that performed the act, without being handed
+// appendAudit and the whole of operations.AuditEntry. Approving a registration
+// is a privilege grant -- it is the moment somebody gains the ability to do
+// anything here -- so it belongs beside importing a server and classifying a
+// tool rather than in the settings history.
+type AdminAct struct {
+	// Kind is the stable event name, e.g. "account.approved".
+	Kind string
+	// Actor is who performed it. Never the subject.
+	Actor string
+	// Subject names what was acted on, in the field the trail already has for
+	// "which thing": an account's address reads in the same column a plugin
+	// name does.
+	Subject string
+	// Action is the verb, e.g. "approve".
+	Action string
+	// Detail is anything else worth being able to read back.
+	Detail map[string]any
+}
+
+// AppendAudit writes one administrative act to the hash-chained trail.
+//
+// Exported and taking a UnitOfWork, so the only way to call it is from inside
+// the transaction that made the change it describes. There is deliberately no
+// variant that opens its own transaction: an audit entry committed separately
+// from the act it records is a trail that can disagree with the database.
+func (u *UnitOfWork) AppendAudit(a AdminAct) error {
+	body, err := json.Marshal(a.Detail)
+	if err != nil {
+		return fmt.Errorf("sqlite: encode audit detail for %s: %w", a.Kind, err)
+	}
+	return u.appendAudit(operations.AuditEntry{
+		EventID: newEventID(),
+		Kind:    a.Kind,
+		Plugin:  a.Subject,
+		Action:  a.Action,
+		Actor:   a.Actor,
+		Detail:  body,
+	})
+}
+
 // chainHash derives an entry hash from its predecessor and its own content.
 // Fields are length-prefixed so that boundaries cannot be shifted: without
 // them, actor "ab" with kind "c" would hash identically to actor "a" with

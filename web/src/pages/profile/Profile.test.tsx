@@ -14,6 +14,8 @@ function userView(overrides: Partial<User> = {}): User {
     role: "user",
     plugins: ["*"],
     disabled: false,
+    status: "active",
+    has_password: true,
     created_at: "2026-01-01T00:00:00Z",
     self: true,
     ...overrides,

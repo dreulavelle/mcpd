@@ -1,9 +1,12 @@
 import { useCallback, useState } from "react";
-import { api, ApiError, type Meta, type Session, type User } from "@/lib/api";
+import {
+  api, ApiError, type Meta, type ProviderName, type Session, type User,
+} from "@/lib/api";
 import { capabilitiesOf, type Capability } from "@/lib/capabilities";
 import { whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { signedInAs, useAdoptSession, useCan, useSession } from "@/lib/session";
+import { consumeSSOOutcome } from "@/lib/sso";
 import { Detail, Notice, PageHeader, Section } from "@/components/chrome";
 import { Chip } from "@/components/status";
 import { useNotify } from "@/components/toast";
@@ -78,6 +81,8 @@ export function Profile() {
 
         <DisplayName session={session} />
 
+        <LinkedProviders />
+
         <ChangePassword email={session.email} self={self} mayEdit={mayEditAccounts} />
 
         <Section
@@ -106,6 +111,110 @@ export function Profile() {
         </Section>
       </div>
     </>
+  );
+}
+
+/**
+ * The providers this account can sign in with, and the ones it could add.
+ *
+ * Linking is done from here, by the account itself, while signed in — and that
+ * is the only way an account that already exists gains a provider. mcpd will
+ * not adopt an account because a Google sign-in carries a matching email
+ * address: controlling that address at Google says nothing about who owns the
+ * account here, and treating it as proof is how somebody who registers a
+ * lapsed domain walks in. Signing in here first and then completing the flow
+ * says exactly the thing that needs saying.
+ */
+function LinkedProviders() {
+  const notify = useNotify();
+  const load = useCallback(() => api.identities(), []);
+  const { data, error, reload } = useLoader(load, "Couldn't read your linked providers.");
+  const [busy, setBusy] = useState("");
+  // Taken once, on mount: a link that came back refused landed on this page,
+  // and the message should not follow the person around the console.
+  const [problem, setProblem] = useState(consumeSSOOutcome);
+
+  // Nothing configured and nothing linked: no card, rather than one explaining
+  // a feature this host does not offer.
+  if (!data || (data.identities.length === 0 && data.available.length === 0)) {
+    return error ? <Notice tone="problem">{error}</Notice> : null;
+  }
+
+  const linked = new Set(data.identities.map((i) => i.provider));
+  const addable = data.available.filter((p) => !linked.has(p.provider));
+
+  async function link(provider: ProviderName) {
+    setBusy(provider);
+    setProblem("");
+    try {
+      const { authorization_url } = await api.linkIdentity(provider);
+      window.location.assign(authorization_url);
+    } catch (err) {
+      setBusy("");
+      setProblem(err instanceof ApiError ? err.detail : "Couldn't start that.");
+    }
+  }
+
+  async function unlink(provider: ProviderName, label: string) {
+    if (!confirm(`Stop signing in with ${label}?`)) return;
+    setBusy(provider);
+    setProblem("");
+    try {
+      await api.unlinkIdentity(provider);
+      notify("good", `${label} unlinked.`);
+      reload();
+    } catch (err) {
+      setProblem(err instanceof ApiError ? err.detail : "Couldn't unlink that.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <Section
+      title="Sign in with"
+      description="Linking a provider is something you do here, signed in. mcpd never attaches one to an account because the email address happens to match."
+    >
+      <Card>
+        <CardContent className="space-y-4">
+          {problem && <Notice tone="problem">{problem}</Notice>}
+
+          {data.identities.map((i) => (
+            <div key={i.provider} className="flex flex-wrap items-center gap-3">
+              <Chip tone="good" className="w-24 justify-center">{i.label}</Chip>
+              <span className="text-sm text-muted-foreground">
+                {i.email || "linked"} · {whenExact(i.linked_at)}
+              </span>
+              <Button
+                variant="ghost" size="sm" disabled={busy !== ""}
+                onClick={() => unlink(i.provider, i.label)}
+              >
+                Unlink
+              </Button>
+            </div>
+          ))}
+
+          {data.identities.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              You sign in with your password.
+            </p>
+          )}
+
+          {addable.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {addable.map((p) => (
+                <Button
+                  key={p.provider} variant="outline" size="sm"
+                  disabled={busy !== ""} onClick={() => link(p.provider)}
+                >
+                  {busy === p.provider ? "Taking you there…" : `Link ${p.label}`}
+                </Button>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </Section>
   );
 }
 

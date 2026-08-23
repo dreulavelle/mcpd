@@ -60,6 +60,9 @@ describe("navigation gating", () => {
     expect(settings?.children?.map((c) => c.label))
       .toEqual(["General", "Approval policy"]);
     expect(settings?.children?.map((c) => c.label)).not.toContain("Users");
+    // Who may sign in, and who is waiting to be let in, is the same kind of
+    // decision as who has an account -- and is gated the same way.
+    expect(settings?.children?.map((c) => c.label)).not.toContain("Authentication");
   });
 
   // It is in the map because the router judges every path against the map.
@@ -170,6 +173,7 @@ describe("the capability a path requires", () => {
     ["/marketplace", "admin"],
     ["/settings", "read"],
     ["/settings/policy", "read"],
+    ["/settings/authentication", "admin"],
     ["/settings/users", "admin"],
     // Your own profile is not an administrative surface, and gating it on
     // read would be reflex rather than a rule.

@@ -148,6 +148,17 @@ type sessionResponse struct {
 	Plugins     []string `json:"plugins"`
 	CSRFToken   string   `json:"csrf_token"`
 	ExpiresAt   string   `json:"expires_at"`
+	// Status is "active" or "pending". A pending account is signed in and
+	// holds no capability at all, so the page it gets says it is waiting.
+	//
+	// This is not what enforces it. Every capability check refuses a pending
+	// principal; this is only how the console knows which screen to draw
+	// instead of a console whose every fetch is refused.
+	Status string `json:"status"`
+	// HasPassword reports whether this account can sign in with one, so the
+	// profile page can offer to set one before unlinking the provider that is
+	// currently the only way in.
+	HasPassword bool `json:"has_password"`
 }
 
 // handleSignIn exchanges an email and password for a session cookie.
@@ -274,7 +285,22 @@ func sessionView(u *users.User, sess *users.Session) sessionResponse {
 		Plugins:     u.Plugins,
 		CSRFToken:   sess.CSRFToken,
 		ExpiresAt:   sess.ExpiresAt.Format(time.RFC3339),
+		Status:      statusOf(u),
+		HasPassword: u.HasPassword(),
 	}
+}
+
+// statusOf renders an account's status, defaulting to active.
+//
+// The default matters for the fakes in this package's own tests and for any
+// caller building a User by hand: a zero Status is an account nobody has
+// recorded a decision about, and every account that existed before there was
+// anything to decide is active.
+func statusOf(u *users.User) string {
+	if u.Status == "" {
+		return string(users.StatusActive)
+	}
+	return string(u.Status)
 }
 
 // --- request authentication ------------------------------------------------

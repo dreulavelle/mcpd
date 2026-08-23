@@ -1,0 +1,243 @@
+import { useCallback, useState } from "react";
+import {
+  api, ApiError, type PendingRegistration, type ProviderName,
+} from "@/lib/api";
+import { useLoader, usePoll } from "@/lib/hooks";
+import { Loading, Notice, Out, PageHeader } from "@/components/chrome";
+import { SettingsForm } from "@/components/SettingsForm";
+import { Chip } from "@/components/status";
+import { useNotify, type Notify } from "@/components/toast";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+
+const CONSOLES: Record<ProviderName, { href: string; label: string }> = {
+  google: {
+    href: "https://console.cloud.google.com/apis/credentials",
+    label: "Google Cloud credentials",
+  },
+  github: {
+    href: "https://github.com/settings/developers",
+    label: "GitHub OAuth apps",
+  },
+  entra: {
+    href: "https://entra.microsoft.com/",
+    label: "Microsoft Entra admin centre",
+  },
+};
+
+/**
+ * Who can sign in, and how. The providers, the sign-up rules, and the people
+ * waiting to be let in — the last is on this page because it is the question
+ * the second raises.
+ */
+export function Authentication() {
+  const load = useCallback(() => api.settings(), []);
+  const { data, error, reload } = useLoader(load, "Couldn't load settings.");
+  const groups = (data?.groups ?? []).filter((g) => g.section === "authentication");
+
+  return (
+    <>
+      <PageHeader
+        title="Authentication"
+        lede="How people sign in, and who is allowed to."
+      />
+
+      {error && <Notice tone="problem">{error}</Notice>}
+
+      <PendingQueue />
+      <RedirectURIs />
+
+      {!data ? <Loading rows={6} /> : (
+        <SettingsForm groups={groups} settings={data} onSaved={reload} />
+      )}
+    </>
+  );
+}
+
+/**
+ * The addresses to paste into each provider's console.
+ *
+ * Shown rather than described, because getting one wrong produces a failure at
+ * the provider that says nothing useful. They come from the server, which
+ * builds them from the same configured address the sign-in flow uses — one
+ * assembled here from the browser's location would be right on the machine an
+ * operator tested it from and wrong everywhere else.
+ */
+function RedirectURIs() {
+  const load = useCallback(() => api.redirectURIs(), []);
+  const { data } = useLoader(load, "");
+  if (!data) return null;
+
+  if (!data.base) {
+    return (
+      <Notice tone="attention">
+        <strong>Nobody can be redirected back here yet.</strong> A provider
+        sends people back to an address you register with it, and mcpd does not
+        know its own. Set the dashboard's public URL in the startup file
+        (<code className="font-mono">server.frontend_public_url</code>) and
+        restart, and the exact addresses to paste will appear here.
+      </Notice>
+    );
+  }
+
+  const entries = Object.entries(data.redirect_uris) as [ProviderName, string][];
+  if (entries.length === 0) return null;
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>Redirect addresses</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Paste these into the provider, exactly as they are.
+        </p>
+        <div className="scroll-x">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Provider</TableHead>
+                <TableHead>Address to register</TableHead>
+                <TableHead className="w-px">Where</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {entries.map(([provider, uri]) => (
+                <TableRow key={provider}>
+                  <TableCell className="capitalize">{provider}</TableCell>
+                  <TableCell>
+                    <code className="font-mono text-xs break-all">{uri}</code>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-sm">
+                    <Out href={CONSOLES[provider].href}>
+                      {CONSOLES[provider].label}
+                    </Out>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * People who have asked for an account and are waiting.
+ *
+ * They can sign in already — that is how they proved who they are — and they
+ * can do nothing else until somebody here says yes. Approving is a privilege
+ * grant and is recorded as one.
+ */
+function PendingQueue() {
+  const [waiting, setWaiting] = useState<PendingRegistration[] | null>(null);
+  const [error, setError] = useState("");
+  const notify = useNotify();
+
+  const load = useCallback(() => {
+    api.registrations()
+      .then((r) => { setWaiting(r.registrations ?? []); setError(""); })
+      .catch(() => setError("Couldn't load who is waiting."));
+  }, []);
+  usePoll(load, 30_000);
+
+  if (error) return <Notice tone="problem">{error}</Notice>;
+  // Nothing to show and nothing to explain: a host that has never had a
+  // registration should not carry an empty table saying so.
+  if (!waiting || waiting.length === 0) return null;
+
+  return (
+    <Card className="mt-4 overflow-hidden p-0">
+      <CardHeader className="p-4 pb-0">
+        <CardTitle>Waiting for you</CardTitle>
+      </CardHeader>
+      <CardContent className="p-0 pt-4">
+        <div className="scroll-x">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Email</TableHead>
+                <TableHead>Signs in with</TableHead>
+                <TableHead>Asked</TableHead>
+                <TableHead className="w-px" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {waiting.map((u) => (
+                <PendingRow key={u.id} user={u} onChanged={load} notify={notify} />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PendingRow({ user, onChanged, notify }: {
+  user: PendingRegistration;
+  onChanged: () => void;
+  notify: Notify;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const run = async (what: string, fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await fn();
+      onChanged();
+      notify("good", what);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <TableRow>
+      <TableCell>
+        <span className="flex flex-wrap items-center gap-2">
+          {user.name !== user.email && <span className="font-medium">{user.name}</span>}
+          <span className={user.name !== user.email ? "text-muted-foreground" : undefined}>
+            {user.email}
+          </span>
+          <Chip>waiting</Chip>
+        </span>
+        {error && <div className="mt-1 text-xs text-problem">{error}</div>}
+      </TableCell>
+      {/* What proved the address, which is what the decision turns on. A
+          provider checked it before mcpd saw it; the form checked nothing. */}
+      <TableCell className="text-muted-foreground">
+        {user.providers.length > 0 ? user.providers.join(", ") : "A password — unchecked"}
+      </TableCell>
+      <TableCell className="whitespace-nowrap text-muted-foreground">
+        {new Date(user.created_at).toLocaleString()}
+      </TableCell>
+      <TableCell className="whitespace-nowrap">
+        <Button
+          size="sm" disabled={busy}
+          onClick={() => run(`Approved ${user.email}.`,
+            () => api.approveRegistration(user.id))}
+        >
+          Approve
+        </Button>
+        <Button
+          variant="ghost" size="sm" disabled={busy}
+          onClick={() => {
+            if (!confirm(`Turn down ${user.email}? The account is removed.`)) return;
+            run("Turned down.", () => api.rejectRegistration(user.id));
+          }}
+        >
+          Turn down
+        </Button>
+      </TableCell>
+    </TableRow>
+  );
+}

@@ -1,6 +1,6 @@
 import {
-  Boxes, ClipboardCheck, Cog, Gauge, ScrollText, ShieldCheck, Store, UserRound,
-  Users, Waypoints, type LucideIcon,
+  Boxes, ClipboardCheck, Cog, Gauge, KeyRound, ScrollText, ShieldCheck, Store,
+  UserRound, Users, Waypoints, type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
 
@@ -114,6 +114,13 @@ export const NAV: NavGroup[] = [
             lede: "Which changes can run without asking anyone.",
             icon: ShieldCheck,
             capability: "read",
+          },
+          {
+            path: "/settings/authentication",
+            label: "Authentication",
+            lede: "How people sign in, and who is allowed to.",
+            icon: KeyRound,
+            capability: "admin",
           },
           {
             path: "/settings/users",
