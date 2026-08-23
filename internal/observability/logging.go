@@ -1,9 +1,11 @@
 package observability
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 )
 
 // redactedKeys name log attributes whose values must never be emitted.
@@ -37,17 +39,85 @@ const Redacted = "[REDACTED]"
 // the default because production output is consumed by journald and log
 // shippers, not read by eye.
 func NewLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
+	log, _ := NewSwitchableLogger(w, level, format)
+	return log
+}
+
+// NewSwitchableLogger builds the application logger together with the control
+// that changes how much it says and in what shape.
+//
+// Both of those are settings now, and settings live in the database -- which
+// is not open yet when the logger has to exist. The alternatives were to leave
+// logging in the startup file, or to have mcpd open its own database twice.
+// This is the third: the logger is built with both handlers at once and picks
+// between them per record, so the moment the settings are read the change
+// takes effect, with nothing to restart and nothing pretending it did.
+func NewSwitchableLogger(w io.Writer, level slog.Level, format string) (*slog.Logger, *LogControl) {
+	ctl := &LogControl{}
+	ctl.level.Set(level)
+	ctl.text.Store(strings.EqualFold(format, "text"))
+
 	opts := &slog.HandlerOptions{
-		Level:       level,
+		Level:       &ctl.level,
 		ReplaceAttr: redactAttr,
 	}
-	var h slog.Handler
-	if strings.EqualFold(format, "text") {
-		h = slog.NewTextHandler(w, opts)
-	} else {
-		h = slog.NewJSONHandler(w, opts)
+	return slog.New(switchHandler{
+		json: slog.NewJSONHandler(w, opts),
+		text: slog.NewTextHandler(w, opts),
+		ctl:  ctl,
+	}), ctl
+}
+
+// LogControl changes the level and the format of a running logger.
+type LogControl struct {
+	level slog.LevelVar
+	text  atomic.Bool
+}
+
+// Set applies a level and a format. Safe from any goroutine, which it has to
+// be: the change arrives on a dashboard request while every other goroutine is
+// logging.
+func (c *LogControl) Set(level slog.Level, format string) {
+	if c == nil {
+		return
 	}
-	return slog.New(h)
+	c.level.Set(level)
+	c.text.Store(strings.EqualFold(format, "text"))
+}
+
+// switchHandler dispatches each record to whichever handler the format
+// currently names.
+//
+// Both handlers are built up front and derived together, so log.With(...) on
+// one is log.With(...) on the other and a format change mid-life does not lose
+// the attributes a component was given when it was wired.
+type switchHandler struct {
+	json slog.Handler
+	text slog.Handler
+	ctl  *LogControl
+}
+
+func (h switchHandler) pick() slog.Handler {
+	if h.ctl.text.Load() {
+		return h.text
+	}
+	return h.json
+}
+
+func (h switchHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	return h.pick().Enabled(ctx, l)
+}
+
+func (h switchHandler) Handle(ctx context.Context, r slog.Record) error {
+	return h.pick().Handle(ctx, r)
+}
+
+func (h switchHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return switchHandler{json: h.json.WithAttrs(attrs), text: h.text.WithAttrs(attrs), ctl: h.ctl}
+}
+
+func (h switchHandler) WithGroup(name string) slog.Handler {
+	return switchHandler{json: h.json.WithGroup(name), text: h.text.WithGroup(name), ctl: h.ctl}
 }
 
 // redactAttr is the ReplaceAttr hook that censors sensitive values.

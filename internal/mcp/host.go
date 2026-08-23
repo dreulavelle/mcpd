@@ -30,10 +30,6 @@ type Options struct {
 	// say which scopes the endpoint being called actually needs.
 	Plugins func() []string
 
-	// PublicURL is the externally reachable base URL. It is what the
-	// dashboard renders as a connection address.
-	PublicURL string
-
 	// SessionTimeout bounds idle MCP sessions. It has no effect in stateless
 	// mode.
 	SessionTimeout time.Duration

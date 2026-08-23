@@ -128,17 +128,23 @@ type Options struct {
 	// registration off takes effect on the next attempt.
 	RegistrationPolicy func(ctx context.Context) users.RegistrationPolicy
 
-	// SessionTTL bounds a signed-in browser. Zero leaves the store's default.
-	SessionTTL time.Duration
+	// SessionTTL bounds a browser signed in from now on. Zero leaves the
+	// store's default.
+	//
+	// Read per sign-in rather than captured at startup, for the same reason as
+	// the addresses below: it is a setting somebody can change, and a copy
+	// taken when the process started would be the value the host was booted
+	// with rather than the value it is configured with.
+	SessionTTL func(ctx context.Context) time.Duration
 
 	// PublicURL is the address clients reach, used to render a connect URL an
 	// operator can copy rather than assemble.
-	PublicURL string
+	PublicURL func(ctx context.Context) string
 	// FrontendPublicURL is how a browser reaches this dashboard, when something
 	// in front of this process terminates TLS. Empty means the connection
 	// decides. It is deliberately not PublicURL: that is the MCP endpoint, a
 	// different listener that routinely differs in scheme.
-	FrontendPublicURL string
+	FrontendPublicURL func(ctx context.Context) string
 
 	// PluginSettings returns a plugin's configuration block for display.
 	// Values that name credentials are withheld before they are sent.
@@ -570,8 +576,8 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 // handleEndpoints reports the addresses a client can connect to.
 func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, endpointsResponse{
-		Aggregate: s.connectURL("/mcp"),
-		PerPlugin: s.connectURL("/mcp/{name}"),
+		Aggregate: s.connectURL(r.Context(), "/mcp"),
+		PerPlugin: s.connectURL(r.Context(), "/mcp/{name}"),
 	})
 }
 
@@ -808,7 +814,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		if !secret {
 			// Non-secret values are stored as JSON so they round-trip with
 			// their type intact.
-			encoded, err := encodeTyped(field.Kind, value)
+			encoded, err := settings.Encode(field.Kind, value)
 			if err != nil {
 				s.writeError(w, r, http.StatusBadRequest, err.Error())
 				return
@@ -858,46 +864,7 @@ func (s *Server) handleSettingsHistory(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"entries": entries, "count": len(entries)})
 }
 
-// encodeTyped converts a form string into the JSON its declared type implies,
-// so a number is stored as a number rather than a quoted string.
-func encodeTyped(kind settings.Kind, value string) (string, error) {
-	switch kind {
-	case settings.KindBool:
-		b, err := strconv.ParseBool(value)
-		if err != nil {
-			return "", fmt.Errorf("expected true or false")
-		}
-		return strconv.FormatBool(b), nil
-
-	case settings.KindInt, settings.KindDuration:
-		n, err := strconv.Atoi(value)
-		if err != nil {
-			return "", fmt.Errorf("expected a whole number")
-		}
-		return strconv.Itoa(n), nil
-
-	case settings.KindList:
-		items := []string{}
-		for _, part := range strings.Split(value, ",") {
-			if trimmed := strings.TrimSpace(part); trimmed != "" {
-				items = append(items, trimmed)
-			}
-		}
-		encoded, err := json.Marshal(items)
-		if err != nil {
-			return "", err
-		}
-		return string(encoded), nil
-
-	default:
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return "", err
-		}
-		return string(encoded), nil
-	}
-}
-
+// dedupe collapses repeats while keeping the first of each.
 func dedupe(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -1099,7 +1066,7 @@ func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
 		out = append(out, pluginDTO{
 			Name: d.Name, Version: d.Version, Title: d.Title,
 			Description: d.Description, Endpoint: d.Endpoint(),
-			ConnectURL: s.connectURL(d.Endpoint()),
+			ConnectURL: s.connectURL(r.Context(), d.Endpoint()),
 			Health:     string(h.State), Message: h.Message,
 			Tools:         tools,
 			Mutations:     mutations,
@@ -1135,12 +1102,37 @@ func (s *Server) settingsGroupFor(instance string) string {
 }
 
 // connectURL builds the address a client connects to.
-func (s *Server) connectURL(endpoint string) string {
-	base := strings.TrimRight(s.opts.PublicURL, "/")
+func (s *Server) connectURL(ctx context.Context, endpoint string) string {
+	base := strings.TrimRight(s.publicURL(ctx), "/")
 	if base == "" {
 		return endpoint
 	}
 	return base + endpoint
+}
+
+// publicURL and frontendPublicURL read the two addresses, or nothing when the
+// host did not supply a reader. Nil-safe because half the tests in this
+// package build a Server with only the options their case needs.
+func (s *Server) publicURL(ctx context.Context) string {
+	if s.opts.PublicURL == nil {
+		return ""
+	}
+	return s.opts.PublicURL(ctx)
+}
+
+func (s *Server) frontendPublicURL(ctx context.Context) string {
+	if s.opts.FrontendPublicURL == nil {
+		return ""
+	}
+	return s.opts.FrontendPublicURL(ctx)
+}
+
+// sessionTTL is how long a browser signing in now stays signed in.
+func (s *Server) sessionTTL(ctx context.Context) time.Duration {
+	if s.opts.SessionTTL == nil {
+		return 0
+	}
+	return s.opts.SessionTTL(ctx)
 }
 
 // secretish reports whether a configuration key names a credential.

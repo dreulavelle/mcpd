@@ -112,10 +112,29 @@ type App struct {
 	host        *mcphost.Host
 }
 
+// Option adjusts how the application is built.
+type Option func(*options)
+
+type options struct{ logControl *observability.LogControl }
+
+// WithLogControl hands New the control that changes the running logger.
+//
+// How much mcpd says and in what shape are settings, and settings are in a
+// database that is not open when the logger has to exist. This is how the
+// stored values reach a logger that was already built.
+func WithLogControl(ctl *observability.LogControl) Option {
+	return func(o *options) { o.logControl = ctl }
+}
+
 // New builds the application graph. It opens the database, applies migrations,
 // wires authentication and authorization, registers plugins, and constructs
 // the HTTP server — but starts nothing.
-func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error) {
+func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Option) (*App, error) {
+	var built options
+	for _, opt := range opts {
+		opt(&built)
+	}
+
 	for _, w := range cfg.Warnings() {
 		log.Warn("configuration warning", "detail", w)
 	}
@@ -124,12 +143,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		return nil, fmt.Errorf("app: create storage directory: %w", err)
 	}
 
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path:              cfg.Storage.Path,
-		ReadPoolSize:      cfg.Storage.ReadPoolSize,
-		BusyTimeout:       cfg.Storage.BusyTimeout,
-		RelaxedDurability: cfg.Storage.RelaxedDurability,
-	})
+	db, err := openStorage(ctx, cfg, log)
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +182,67 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		pluginOverrides: sqlite.NewPluginOverrideStore(db, time.Now),
 		overrideCache:   map[string]sqlite.PluginOverride{},
 	}
+	// Runtime configuration lives in the database so it can be managed from
+	// the dashboard. Secrets in it are encrypted with a key that stays
+	// outside, which is what makes typing one into a form safe.
+	//
+	// First, because almost everything below is built from it now: what this
+	// host advertises, how patient its listeners are, how long a session
+	// lasts, what the approval policy is. The file supplies where the database
+	// is and the key that opens it, and stops there.
+	var cipher *settings.Cipher
+	if ref := cfg.SecretKeyRef; ref != "" {
+		key, keyErr := settings.ResolveKey(ref, os.Getenv("CREDENTIALS_DIRECTORY"))
+		if keyErr != nil {
+			db.Close()
+			return nil, fmt.Errorf("app: settings encryption key: %w", keyErr)
+		}
+		if cipher, err = settings.NewCipher(key); err != nil {
+			db.Close()
+			return nil, err
+		}
+	} else {
+		log.Warn("no settings encryption key is configured; " +
+			"secrets cannot be set from the dashboard. " +
+			"Generate one with: openssl rand -base64 32")
+	}
+	a.settings = settings.NewStore(db, cipher, time.Now)
+
+	// One turn for the startup file, on the first start after an upgrade, and
+	// then never again. See configimport.go for why it is one turn and not a
+	// precedence rule.
+	imported, err := a.importLegacyConfig(ctx)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	a.applyLogSettings(ctx, built.logControl)
+	// Not on the start that did the importing. On that one the store holds
+	// what the file supplied because it was just put there, so there is
+	// nothing to disagree about and saying so would read as a complaint about
+	// an upgrade that went right. From the next start on, anything the file
+	// still names that differs is worth hearing about every time.
+	if !imported {
+		for _, w := range a.staleConfigWarnings(ctx) {
+			log.Warn("a setting is being read from the database, "+
+				"not from where it is written", "detail", w)
+		}
+	}
+
+	// Read once, because what they configure is built once. Every one of them
+	// is declared ApplyRestart, which is what the dashboard tells an operator
+	// who changes one.
+	boot := resolveStartup(ctx, a.settings)
+	for _, w := range (config.Effective{
+		PublicURL:         boot.publicURL,
+		FrontendEnabled:   boot.frontendEnabled,
+		MetricsEnabled:    cfg.Metrics.Enabled,
+		RelaxedDurability: boot.relaxedDurability,
+		TLSSelfSigned:     boot.tlsSelfSigned,
+	}).Warnings() {
+		log.Warn("configuration warning", "detail", w)
+	}
+
 	// Loaded before anything asks what is configured: a remote server is an
 	// instance, and instances() must be complete the first time it is called.
 	if err := a.loadMCPServers(ctx); err != nil {
@@ -230,30 +305,6 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	}
 	a.types = types
 
-	// Runtime configuration lives in the database so it can be managed from
-	// the dashboard. Secrets in it are encrypted with a key that stays
-	// outside, which is what makes typing one into a form safe.
-	//
-	// Before plugins are built, because a plugin's own settings live here now
-	// and it is constructed from them.
-	var cipher *settings.Cipher
-	if ref := cfg.SecretKeyRef; ref != "" {
-		key, keyErr := settings.ResolveKey(ref, os.Getenv("CREDENTIALS_DIRECTORY"))
-		if keyErr != nil {
-			db.Close()
-			return nil, fmt.Errorf("app: settings encryption key: %w", keyErr)
-		}
-		if cipher, err = settings.NewCipher(key); err != nil {
-			db.Close()
-			return nil, err
-		}
-	} else {
-		log.Warn("no settings encryption key is configured; " +
-			"secrets cannot be set from the dashboard. " +
-			"Generate one with: openssl rand -base64 32")
-	}
-	a.settings = settings.NewStore(db, cipher, time.Now)
-
 	// After the settings store, because the providers are settings: a client
 	// secret pasted into the dashboard has to work without a restart, which
 	// is why the service reads them per flow rather than holding a copy.
@@ -277,7 +328,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	a.executor = operations.NewExecutor(a.ops, plugins.NewRunner(a.manager),
 		operations.ExecutorConfig{
 			InstanceID: instanceID(cfg),
-			LeaseTTL:   cfg.Approval.LeaseTTL,
+			LeaseTTL:   a.settings.FieldDuration(ctx, settings.KeyApprovalLeaseTTL),
 		}, log, time.Now, ids, a.publisher.Notify)
 
 	a.reaper = operations.NewReaper(a.ops, log, time.Now, ids, a.publisher.Notify, 30*time.Second)
@@ -301,10 +352,10 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	//
 	// The tunnel needs nothing from it: it drives an MCP server in this
 	// process over an in-memory transport and never dials mcpd back.
-	if cfg.Server.TLS.Enabled() {
+	if boot.tlsSelfSigned {
 		materials, err := servertls.EnsureSelfSigned(
 			cfg.TLSDir(),
-			servertls.HostsFor(cfg.Server.PublicURL, cfg.Server.Listen),
+			servertls.HostsFor(boot.publicURL, cfg.Server.Listen),
 			time.Now())
 		if err != nil {
 			return nil, err
@@ -332,7 +383,6 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		Authorizer:     authorizer,
 		Health:         a.health,
 		Plugins:        func() []string { return a.manager.Names() },
-		PublicURL:      cfg.Server.PublicURL,
 		SessionTimeout: cfg.Server.SessionTimeout,
 	})
 	if err != nil {
@@ -344,7 +394,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	// The dashboard runs on its own listener. Agents reach MCP over a tunnel;
 	// operators reach the dashboard on an internal interface, and a firewall
 	// rule can only tell them apart if they are separate ports.
-	if cfg.Server.FrontendEnabled {
+	if boot.frontendEnabled {
 		dashboard := admin.NewServer(admin.Options{
 			Log:        log.With("component", "dashboard"),
 			Verifier:   verifier,
@@ -364,8 +414,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			}(),
 			MetricsPublic:     cfg.Metrics.Public,
 			Pruner:            a.audit,
-			PublicURL:         cfg.Server.PublicURL,
-			FrontendPublicURL: cfg.Server.FrontendPublicURL,
+			PublicURL:         a.publicURL,
+			FrontendPublicURL: a.frontendPublicURL,
 			Accounts:          a.accounts,
 			Identities:        a.accounts,
 			Groups:            a.groups,
@@ -455,7 +505,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			RemovePlugin:     a.RemoveInstance,
 			RestorePlugin:    a.RestoreInstance,
 			SetPluginEnabled: a.SetInstanceEnabled,
-			SessionTTL:       cfg.Auth.Accounts.SessionTTL,
+			SessionTTL:       a.sessionTTL,
 			Plugins:          func() []string { return a.manager.Names() },
 			Assignments:      func() map[string]string { return a.tunnelAssignments(context.Background()) },
 			Directory: func() *tunnel.Directory {
@@ -466,7 +516,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 				return tunnel.NewDirectory(
 					a.settings.Secret(ctx, settings.KeyTunnelAdminKey, ""),
 					a.settings.String(ctx, settings.KeyTunnelOrgID, ""),
-					a.cfg.Tunnel.ControlPlaneBaseURL)
+					a.settings.String(ctx, settings.KeyTunnelControlPlane, ""))
 			},
 			CACertificate: func() []byte {
 				if a.tls == nil {
@@ -485,10 +535,10 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		a.frontend = &http.Server{
 			Addr:              cfg.Server.FrontendListen,
 			Handler:           dashboard.Handler(),
-			ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
-			ReadTimeout:       cfg.Server.ReadTimeout,
-			WriteTimeout:      cfg.Server.WriteTimeout,
-			IdleTimeout:       cfg.Server.IdleTimeout,
+			ReadHeaderTimeout: boot.readHeaderTimeout,
+			ReadTimeout:       boot.readTimeout,
+			WriteTimeout:      boot.writeTimeout,
+			IdleTimeout:       boot.idleTimeout,
 			ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 		}
 	}
@@ -496,10 +546,10 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	a.server = &http.Server{
 		Addr:              cfg.Server.Listen,
 		Handler:           host.Handler(),
-		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
-		ReadTimeout:       cfg.Server.ReadTimeout,
-		WriteTimeout:      cfg.Server.WriteTimeout,
-		IdleTimeout:       cfg.Server.IdleTimeout,
+		ReadHeaderTimeout: boot.readHeaderTimeout,
+		ReadTimeout:       boot.readTimeout,
+		WriteTimeout:      boot.writeTimeout,
+		IdleTimeout:       boot.idleTimeout,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 	if a.tls != nil {
@@ -804,22 +854,21 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 
 // tunnelConfig resolves the tunnel's settings.
 //
-// The store wins over the file, because a value changed in the dashboard has
-// to take precedence over the one it was started with. The file supplies
-// defaults for a deployment that has never used the dashboard.
+// All of them from the store. The file used to supply defaults here; it does
+// not any more, because what a deployment had in its file was imported into
+// the store on the first start after the upgrade and the store is the only
+// authority now.
 func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
-	file := a.cfg.Tunnel
-
 	cfg := tunnel.Config{
-		Enabled:             a.settings.Bool(ctx, settings.KeyTunnelEnabled, file.Enabled),
-		TunnelID:            a.settings.String(ctx, settings.KeyTunnelID, file.TunnelID),
-		ControlPlaneBaseURL: file.ControlPlaneBaseURL,
+		Enabled:             a.settings.FieldBool(ctx, settings.KeyTunnelEnabled),
+		TunnelID:            a.settings.String(ctx, settings.KeyTunnelID, ""),
+		ControlPlaneBaseURL: a.settings.String(ctx, settings.KeyTunnelControlPlane, ""),
 		LogLevel:            slog.LevelInfo,
 		Principal: auth.Principal{
-			ID:          a.settings.String(ctx, settings.KeyTunnelPrincipal, orDefault(file.Principal, "svc:chatgpt")),
+			ID:          a.settings.String(ctx, settings.KeyTunnelPrincipal, "svc:chatgpt"),
 			DisplayName: "tunnel",
-			Role:        auth.Role(a.settings.String(ctx, settings.KeyTunnelRole, orDefault(file.Role, string(auth.RoleUser)))),
-			Plugins:     a.settings.Strings(ctx, settings.KeyTunnelPlugins, file.Plugins),
+			Role:        auth.Role(a.settings.FieldString(ctx, settings.KeyTunnelRole)),
+			Plugins:     a.settings.Strings(ctx, settings.KeyTunnelPlugins, nil),
 			TokenID:     "tunnel",
 		},
 	}
@@ -839,17 +888,13 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 	// Loopback only, and only inside this process's network namespace: it is
 	// unauthenticated, and it exists for someone already on the host running
 	// curl against it.
-	cfg.DiagnosticsAddr = a.cfg.Tunnel.DiagnosticsAddr
-	cfg.Debug = a.settings.Bool(ctx, settings.KeyTunnelDebug, false)
+	cfg.DiagnosticsAddr = a.settings.String(ctx, settings.KeyTunnelDiagnostics, "")
+	cfg.Debug = a.settings.FieldBool(ctx, settings.KeyTunnelDebug)
 
-	// The key comes from the store when it is there, and otherwise from the
-	// reference in the file, so an existing deployment keeps working.
+	// Encrypted at rest, like every other credential this host holds. A
+	// deployment that used to name a reference in the file had the key it
+	// pointed at read once, on upgrade, and written here.
 	cfg.APIKey = a.settings.Secret(ctx, settings.KeyTunnelAPIKey, "")
-	if cfg.APIKey == "" && file.APIKeyRef != "" {
-		if key, err := config.NewSecretResolver().Resolve(file.APIKeyRef); err == nil {
-			cfg.APIKey = key
-		}
-	}
 
 	// An empty grant reaches nothing, which is never what someone leaving the
 	// field blank meant. Everything the principal could see is the sensible
@@ -878,13 +923,6 @@ func (a *App) tunnelAssignments(ctx context.Context) map[string]string {
 	return out
 }
 
-func orDefault(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
-}
-
 func containsPrefix(values []string, prefix string) bool {
 	for _, v := range values {
 		if strings.HasPrefix(v, prefix) {
@@ -894,53 +932,75 @@ func containsPrefix(values []string, prefix string) bool {
 	return false
 }
 
-// bootstrapSettings describes what cannot be edited at runtime.
+// bootstrapSettings is the whole of what the startup file still decides.
 //
-// These are needed before the database opens, so they cannot live in it. The
-// dashboard shows them read-only rather than omitting them, because an
-// operator looking for a setting should find out where it lives instead of
-// concluding it does not exist.
+// Four values, and each is here for a reason it can state. The dashboard shows
+// them read-only rather than omitting them, because an operator looking for a
+// setting should find out where it lives instead of concluding it does not
+// exist -- and because "everything else is on this page" is only a useful
+// thing to know if the exceptions are named.
 func bootstrapSettings(cfg *config.Config) []admin.BootstrapSetting {
 	return []admin.BootstrapSetting{
 		{
 			Key: "server.listen", Label: "Where assistants connect", Value: cfg.Server.Listen,
-			Help: "Has to be known before mcpd can listen, so it can't be changed here.",
+			Help: "A bind address stored in the database could lock you out with no " +
+				"page left to fix it on, so this one stays in the file.",
 		},
 		{
-			Key: "server.frontend_listen", Label: "Where this page lives",
+			Key: "server.frontend_listen", Label: "Where this page is served",
 			Value: cfg.Server.FrontendListen,
-		},
-		{
-			Key: "server.public_url", Label: "Address others use",
-			Value: cfg.Server.PublicURL,
-			Help:  "How mcpd looks from outside. Must match what assistants actually use.",
+			Help:  "Same reason: it is how you got here.",
 		},
 		{
 			Key: "storage.path", Label: "Where everything is stored",
 			Value: cfg.Storage.Path,
-			Help:  "Everything mcpd remembers lives here. Worth backing up.",
+			Help: "Everything mcpd remembers lives here, including these settings. " +
+				"It cannot say where it is from inside itself. Worth backing up.",
 		},
 		{
-			Key: "auth.accounts", Label: "How people sign in", Value: "email and password",
-			Help: "Everyone has their own account, so the history names a person " +
-				"rather than a shared key. Manage them on the Users page.",
+			Key: "secret_key_ref", Label: "Key that unlocks stored credentials",
+			Value: orNone(cfg.SecretKeyRef),
+			Help: "A reference, not the key: the key itself is in the environment, " +
+				"or in a file beside the database at mode 600. Everything secret in " +
+				"the database is encrypted under it, so it is the one thing that " +
+				"cannot be kept in there too.",
 		},
 	}
 }
 
-// approvalPolicy resolves the approval settings, store over file.
-func (a *App) approvalPolicy(ctx context.Context) operations.Policy {
-	file := a.cfg.Approval
+func orNone(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "not set"
+	}
+	return v
+}
 
+// approvalPolicy resolves the approval settings.
+//
+// Read on every use rather than snapshotted, so a ceiling changed in the
+// dashboard applies to the next proposal instead of the next restart.
+func (a *App) approvalPolicy(ctx context.Context) operations.Policy {
 	return operations.Policy{
-		ProposalTTL: a.settings.Minutes(ctx, settings.KeyApprovalProposalTTL, file.ProposalTTL),
-		ApprovalTTL: a.settings.Minutes(ctx, settings.KeyApprovalApprovalTTL, file.ApprovalTTL),
-		LeaseTTL:    a.settings.Minutes(ctx, settings.KeyApprovalLeaseTTL, file.LeaseTTL),
+		ProposalTTL: a.settings.FieldDuration(ctx, settings.KeyApprovalProposalTTL),
+		ApprovalTTL: a.settings.FieldDuration(ctx, settings.KeyApprovalApprovalTTL),
+		LeaseTTL:    a.settings.FieldDuration(ctx, settings.KeyApprovalLeaseTTL),
 		InlineApproval: operations.InlineApprovalPolicy{
-			MaxRisk: operations.RiskLevel(file.InlineMaxRisk),
+			MaxRisk: inlineCeiling(a.settings.FieldString(ctx, settings.KeyApprovalInlineMaxRisk)),
 		},
 		AutoApprove: operations.AutoApprovalPolicy{Rules: a.autoApprovalRules(ctx)},
 	}
+}
+
+// inlineCeiling turns the stored enum into the policy's own vocabulary.
+//
+// The policy spells "nothing may be approved inline" as the empty risk level,
+// which a dropdown cannot offer and a person cannot tell apart from a field
+// nobody filled in. The dropdown says "none"; this is where the two meet.
+func inlineCeiling(stored string) operations.RiskLevel {
+	if stored == settings.RiskNone {
+		return ""
+	}
+	return operations.RiskLevel(stored)
 }
 
 // autoApprovalRules reads the standing rules that decide which changes are

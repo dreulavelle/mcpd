@@ -1,39 +1,39 @@
 # mcpd configuration.
 #
-# Secrets are never written here. Each credential names a *reference* --
-# env:NAME, credential:NAME (systemd LoadCredential), or file:/abs/path --
-# which is resolved at startup. A config file that never holds a token cannot
-# leak one into version control.
+# Short on purpose. Almost everything mcpd can be told to do is a setting in
+# its database, managed from the dashboard -- where a change is recorded
+# against whoever made it, with what it was before and what it became. Editing
+# a file leaves no such record, which is the argument for having moved them.
+#
+# Four things cannot live in the database, and they are the first four keys
+# below:
+#
+#   storage.path            where the database is. It cannot say where it is
+#                           from inside itself.
+#   secret_key_ref          the key everything secret in the database is
+#                           encrypted under. A lock does not hold its own key.
+#   server.listen           where to bind. A bad address stored in the database
+#   server.frontend_listen  would lock you out with no page left to fix it on,
+#                           so the file is the way back in.
+#
+# What is left after those is a handful of deployment-shaped things: which
+# integrations this host declares, which machine credentials it honours, and
+# where its catalogue reads from. None of them is a secret -- credentials are
+# named by *reference* (env:NAME, credential:NAME for systemd LoadCredential,
+# or file:/abs/path) and resolved at startup, so a config file that never holds
+# a token cannot leak one into version control.
+#
+# Keys that used to be here and are not any more -- server.public_url, the
+# timeouts, tls.mode, frontend_enabled, storage.busy_timeout,
+# relaxed_durability, auth.accounts.session_ttl, the whole approval block,
+# logging, and the tunnel -- are imported into the database once, on the first
+# start after upgrading, and ignored from then on. mcpd names any that are
+# still here and disagree with what it is running.
 
 server:
   # Bind to loopback. mcpd expects a reverse proxy in front of it to terminate
   # TLS; binding publicly would serve MCP, and its bearer tokens, in plaintext.
   listen: "127.0.0.1:8080"
-
-  # The address assistants reach the MCP endpoint at -- the `listen` port
-  # above, not the dashboard. It is what the dashboard shows as a connection
-  # address, so it must match what clients actually use.
-  #
-  # Behind a proxy that terminates TLS this is not cosmetic. mcpd is reached
-  # over plain HTTP in that shape, so it cannot tell from the connection that
-  # browsers are speaking https -- and this is what tells it the dashboard's
-  # session cookie needs Secure. X-Forwarded-Proto deliberately does not
-  # count: a header is set by whoever is talking to this process, and nothing
-  # here can tell a proxy's from a caller's.
-  public_url: "https://mcp.example.net"
-
-  tls:
-    # off | self-signed
-    #
-    # Self-signed matters for a private deployment: a bearer token has no
-    # business crossing even a private network in the clear.
-    #
-    # A publicly trusted certificate cannot be issued for an address like
-    # 192.168.1.10, so mcpd issues its own from a CA it keeps beside the
-    # database. The CA is downloadable from the dashboard; the embedded tunnel
-    # client is told about it directly. Leave this off when a reverse proxy in
-    # front already terminates TLS.
-    mode: off
 
   # Admin dashboard listener, separate from the MCP endpoint above.
   #
@@ -44,13 +44,17 @@ server:
   # Binding below 1024 needs CAP_NET_BIND_SERVICE. The systemd unit grants it;
   # under Docker the container binds 8081 and the host publishes 80.
   frontend_listen: ":80"
-  frontend_enabled: true
 
-  read_header_timeout: 10s
-  read_timeout: 60s
-  write_timeout: 120s
-  idle_timeout: 120s
-  shutdown_timeout: 30s
+  tls:
+    # Where the certificate authority and server certificate are kept. Empty
+    # puts them beside the database.
+    #
+    # Whether a certificate is served at all is Settings -> Addresses, not a
+    # key here.
+    dir: ""
+
+  # How long an idle MCP session is held open.
+  session_timeout: 10m
 
 storage:
   path: /var/lib/mcpd/mcpd.db
@@ -59,30 +63,38 @@ storage:
   # the writer under WAL, so this is what governs tool-call concurrency.
   read_pool_size: 0
 
-  busy_timeout: 5s
-
-  # Leave false. Under WAL, relaxed durability can lose the most recent
-  # transactions on power loss -- and those transactions authorise
-  # infrastructure changes.
-  relaxed_durability: false
+  # Where out-of-process plugins are discovered. Empty puts them in a plugins
+  # directory beside the database.
+  plugins_dir: ""
 
 # Key used to encrypt secrets stored in the database, so they can be set from
 # the dashboard without landing in plaintext beside the data they protect. The
 # key stays outside the database, which is what makes a stolen copy useless.
 #
+# This is the one secret on disk in the clear, and it cannot be anything else:
+# it is what every other stored credential is encrypted under, so it cannot
+# itself be encrypted by the system it unlocks. Keep the file it lives in at
+# mode 600. Everything else is either a bcrypt hash, a digest, or ciphertext.
+#
 # Generate one with:  openssl rand -base64 32
 secret_key_ref: env:MCPD_SECRET_KEY
 
 auth:
-  # People sign in to the dashboard with their own email and password. Roles
-  # and plugin grants are per account, so two people sharing a connector are
-  # still two identities in the history.
-  accounts:
-    session_ttl: 12h
+  # People sign in to the dashboard with their own email and password, and
+  # their passwords are bcrypt in the database -- there is no password in this
+  # file, and never was. Roles and plugin grants are per account, so two people
+  # sharing a connector are still two identities in the history.
+  #
+  # How long a signed-in browser lasts is Settings -> Authentication.
 
   # Bearer tokens for machine callers that cannot complete a sign-in form.
   # ChatGPT does not need one: the tunnel authenticates itself to OpenAI's
-  # control plane, and carries its identity from the tunnel block below.
+  # control plane, and carries the identity configured on the Settings page.
+  #
+  # These stay in the file because their values do: each names a reference this
+  # deployment arranges, which is not something a dashboard can offer. Keys
+  # issued from the dashboard are the other kind of bearer credential, and they
+  # live in the database as digests.
   static_tokens:
     # Scoping is per credential. This agent can reach /mcp/echo and nothing
     # else: other endpoints return 404, so it cannot even discover which other
@@ -100,28 +112,6 @@ auth:
       role: user
       plugins:
         - echo
-
-approval:
-
-  # How long a proposal waits for a decision.
-  proposal_ttl: 30m
-
-  # How long an approval stays executable. Without this, an approval granted
-  # weeks ago could still execute against a network that has since changed.
-  approval_ttl: 15m
-
-  # How long an execution claim is held before the reaper reclaims it.
-  lease_ttl: 2m
-
-  # Highest risk a user may approve from a single yes/no prompt raised by
-  # their assistant. Above it the shortcut is withheld, not the decision: the
-  # assistant has to show the change in full and be told explicitly. Either way
-  # the person decides in the conversation.
-  inline_max_risk: medium
-
-logging:
-  level: info
-  format: json
 
 # Prometheus metrics, served at GET /metrics on the *dashboard* listener.
 #
@@ -143,52 +133,14 @@ metrics:
   # way, so the choice is visible rather than assumed.
   public: false
 
-# OpenAI's Secure MCP Tunnel, running inside mcpd.
+# OpenAI's Secure MCP Tunnel is configured on the dashboard, not here.
 #
-# This is how ChatGPT reaches mcpd without an inbound port, public DNS, or a
-# NAT rule: the connection is dialled outward and held open. It runs in this
-# process over an in-memory transport, so requests never touch a socket and
-# there is no local address for anything else to find.
-#
-# Because there is no HTTP request to authenticate, what the tunnel may reach
-# is decided here rather than by a bearer token.
-tunnel:
-  enabled: false
-
-  # The tunnel runs the MCP server in this process over an in-memory
-  # transport: no port, no socket, no credential, and mcpd stays private.
-  #
-  # There is no option to bind it to a public address so a connector can sign
-  # people in. That needed an authorization server reachable from the internet,
-  # which is the one thing a tunnel exists to avoid -- OpenAI's documentation
-  # is explicit that the authorization server "is not automatically tunneled".
-
-  # Tunnels are normally made and assigned on the dashboard's Tunnels page,
-  # which needs an admin key and an organization id set there. This is the
-  # fallback for a deployment that would rather not give mcpd an admin key:
-  # make the tunnel in the OpenAI console and name it here.
-  #
-  # From platform.openai.com -> Settings -> Organization -> Tunnels.
-  tunnel_id: ""
-
-  # A *runtime* API key, referenced not written. An admin key is only for
-  # creating and deleting tunnels and must not be used for the connection.
-  api_key_ref: env:OPENAI_TUNNEL_API_KEY
-
-  # How ChatGPT is labelled in the history. Everyone using the connector
-  # shares it, so it names the connector rather than a person.
-  principal: svc:chatgpt
-  # user, because approval happens in the conversation and this is what carries
-  # the answer back. admin would additionally let it change this host's own
-  # settings, which is almost never what you want for a connector.
-  role: user
-  plugins:
-    - echo
-
-  # Report when a newer tunnel client is released. It only reports -- the
-  # client is compiled in, so picking one up means rebuilding mcpd, which is
-  # the point: the code that runs is the code that was built and reviewed.
-  check_for_updates: true
+# It is how ChatGPT reaches mcpd without an inbound port, public DNS, or a NAT
+# rule: the connection is dialled outward and held open, over an in-memory
+# transport inside this process. Because there is no HTTP request to
+# authenticate, what the tunnel may reach is a decision rather than a
+# credential -- and a decision belongs where it is recorded against whoever
+# made it. Settings -> ChatGPT, and the Tunnels page beside it.
 
 # Where the dashboard's server catalogue reads from.
 #

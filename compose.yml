@@ -28,10 +28,13 @@ services:
       # reaches a socket nothing is listening on. What the host exposes is
       # decided by the port mappings below, not here -- which is also why
       # these override the generated config.yaml rather than being editable
-      # in it. server.public_url is deliberately not overridden: it is the
-      # one address an operator has to be able to change.
+      # in it.
       MCPD_LISTEN: ":8080"
       MCPD_FRONTEND_LISTEN: ":8081"
+      # MCPD_PUBLIC_URL is deliberately not set. The address to advertise is a
+      # setting in the database now, managed on the Settings page, and this
+      # variable would only seed it on a first start against an empty volume.
+      # Setting it afterwards changes nothing and earns a warning at startup.
     ports:
       - "${MCPD_BIND:-127.0.0.1}:${MCPD_PORT:-8080}:8080"
       - "${MCPD_FRONTEND_BIND:-127.0.0.1}:${MCPD_FRONTEND_PORT:-80}:8081"
@@ -51,9 +54,9 @@ services:
       - ./data:/var/lib/mcpd
 
     # This proves the binary runs and the configuration still parses. It is
-    # deliberately not an HTTP probe: with tls.mode self-signed the listener
-    # speaks HTTPS with mcpd's own CA, and a probe that failed on that would
-    # report a healthy host as unhealthy.
+    # deliberately not an HTTP probe: with the self-signed certificate on, the
+    # listener speaks HTTPS with mcpd's own CA, and a probe that failed on that
+    # would report a healthy host as unhealthy.
     healthcheck:
       test: ["CMD", "/usr/local/bin/mcpd", "-config", "/var/lib/mcpd/config.yaml", "-check"]
       interval: 30s
@@ -61,9 +64,9 @@ services:
       retries: 3
       start_period: 10s
 
-    # Headroom over the 30s shutdown_timeout in the generated config, so a
-    # drain that runs to its own deadline is not killed a moment before it
-    # finishes.
+    # Headroom over the 30s drain budget mcpd defaults to (Settings ->
+    # Timeouts), so a drain that runs to its own deadline is not killed a
+    # moment before it finishes. Raise this if you raise that.
     stop_grace_period: 60s
 
     read_only: true

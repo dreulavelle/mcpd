@@ -46,7 +46,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/messaging` | In-process bus and outbox publisher |
 | `internal/cachestore` | The bounded, timed map every cache is built on |
 | `internal/servertls` | Self-signed CA and certificate issuance |
-| `internal/config` | File and environment configuration, validation |
+| `internal/config` | The four keys that stay in a file, and the one-time import of the ones that did not |
 | `sdk` | Building out-of-process plugins |
 
 ## The load-bearing decisions
@@ -138,8 +138,8 @@ specification's elicitation lets a server put a question to the user through
 the client, and the answer returns as a real user action rather than a model
 decision. `internal/plugins/elicit.go` raises it; `ApproveInline` records it.
 
-`approval.inline_max_risk` is the ceiling. Above it the shortcut is withheld,
-not the decision — the assistant has to show the change in full and be told
+The inline ceiling, `approval.inline_max_risk`, is a setting. Above it the
+shortcut is withheld, not the decision — the assistant has to show the change in full and be told
 explicitly, then call the approve tool.
 
 Enforcement is the same row either way. A client that cannot elicit gets the
@@ -507,7 +507,8 @@ claiming something that happened once. A rejection deletes the row and keeps the
 entry: the address and the provider account are free again, and what happened is
 still answerable.
 
-**Redirect URIs derive from `server.frontend_public_url`.** Not from the
+**Redirect URIs derive from the dashboard's own public address**, the
+`server.frontend_public_url` setting. Not from the
 request: a URI assembled from a `Host` header works when an operator tests it
 from the same machine and fails for everybody else, and the header is set by
 whoever is talking to this process. With no public URL configured there are no
@@ -731,6 +732,88 @@ identifier — a metric labelled with a device address is a new time series per
 device — and a plugin is handed an interface narrow enough to report its own
 cache and its own upstream latency and nothing else, so an integration cannot
 invent series this host then has to carry.
+
+## Where configuration lives
+
+One authority per setting, and it is the database for all but four.
+
+`config.yaml` holds `storage.path`, `secret_key_ref`, `server.listen` and
+`server.frontend_listen`. Nothing else. Two of those cannot move for a reason
+that is not a judgement: the database cannot say where it is from inside
+itself, and the key every stored credential is encrypted under cannot be
+encrypted by the system it unlocks. The other two are a judgement, and it is
+worth stating rather than assuming — a bad bind address in the database locks
+an operator out with no interface left to fix it on, so the file is the
+recovery path, and it is only a recovery path if it is the authority.
+
+Everything else is a `settings.Field`: the address to advertise, the
+dashboard's own address, TLS mode, whether the dashboard runs at all, the five
+listener timeouts, how long a statement waits for a lock, relaxed durability,
+the session TTL, the whole approval policy, logging, and the tunnel.
+
+**The argument is the record, not the tidiness.** Editing `config.yaml` leaves
+nothing behind: no actor, no before, no after, and nothing the dashboard can
+show. Every write through `settings.Store.Apply` lands a row in
+`settings_history` naming who made it and what it replaced. Moving a value is
+moving it from a place where changes are invisible to one where they are not.
+
+**The precedence rule, stated once.** For a key that moved, the database is the
+only authority. The file is not consulted to run, and neither is the `MCPD_`
+override that used to apply to it. What the file and the environment get is one
+turn: on the first start after an upgrade — and on the first start of a new
+deployment, which is the same code path — whatever they supply is imported into
+the store, once, attributed to `system:config-import`, and recorded like any
+other change. `config.KeyConfigImported` holds the record of what was imported,
+what was kept, and what was refused.
+
+The import never overwrites. A key the store already holds keeps its value: one
+was chosen and the other was inherited. A value the settings schema refuses —
+`tunnel.role: approver`, from before the roles collapsed to two — is left out
+and named, so the file cannot be a way around validation the dashboard applies.
+The tunnel's `api_key_ref` is resolved once and stored encrypted, which puts
+the last credential-shaped thing the file referenced where every other one
+already is.
+
+Afterwards the file is ignored, and any key still in it whose value *disagrees*
+with what the host is running is named at startup. Disagreeing rather than
+merely present: a container that keeps setting `MCPD_PUBLIC_URL` to the address
+already stored has no problem and should not be told it has one. What must
+never happen is two sources of truth quietly differing, which is how an
+operator edits a file for an hour and changes nothing.
+
+**Refusals became warnings, deliberately.** A bad value in a file is fixable
+with an editor, so validation could be fatal. A bad value in the database is
+fixed on a page that a refusal to start would remove, so `Effective.Warnings`
+says what is wrong and mcpd comes up. Write-time validation is unchanged and is
+the same `settings.Validate` the dashboard uses.
+
+**Two circularities, resolved rather than avoided.** How the SQLite pools are
+opened is stored inside the pools: `openStorage` opens once with the defaults,
+reads the two values, and reopens only if they differ. How much the logger says
+and in what shape is stored in a database the logger has to exist before
+opening: `observability.NewSwitchableLogger` builds both handlers up front and
+picks per record, so applying the stored values needs no restart and no second
+open. Before the store holds anything, the file's values seed both — the same
+one turn.
+
+**What needs a restart says so.** The address, the dashboard's address, the
+drain budget, the session TTL, the approval policy and logging are read at the
+point of use, so a change reaches the next request. TLS mode, whether the
+dashboard runs, the four listener timeouts and both storage settings configure
+things built once at startup; they are declared `ApplyRestart`, the dashboard
+puts a *needs a restart* chip on them, and the save reports them under
+`restart_required`. A field snapshotted at startup and a field claiming to
+apply live are the same claim made twice, and the dashboard is only honest
+while they agree.
+
+**Where the secrets are, plainly.** There are no plaintext passwords on disk.
+Account passwords are bcrypt in `users`. Plugin credentials, SSO client secrets
+and the tunnel key are encrypted at rest in `settings`. API keys are digests —
+mcpd checks one, it cannot read one back. Static tokens in the file are
+references resolved at startup, never values. The single plaintext secret is
+`MCPD_SECRET_KEY` in `data/.env` at mode 600, and it cannot be anything else:
+it is the key everything above is encrypted under, and a lock does not hold its
+own key.
 
 ## Storage
 
@@ -1399,14 +1482,18 @@ rewriting an operator's YAML was never only the mount flag — there is no code
 that writes it, and there is no reason to add one (see *plugin overrides*
 below). Under systemd it is still under `ProtectSystem=strict`.
 
+**The generated file is five lines**, and a test asserts it line for line. It
+is the claim the whole arrangement rests on: anything else appearing there is a
+key that could have been a recorded, attributed setting and was not.
+
 **Behind a reverse proxy, mcpd should not serve TLS itself.** The ordinary
 shape is an FQDN with Caddy, nginx or Cloudflare terminating TLS and forwarding
 plain HTTP, and the right setting for that is `tls.mode: off`; `self-signed` is
 for reaching mcpd directly, where the alternative is a browser warning on every
-visit. Set `server.public_url` to the address people actually type. It is not
-cosmetic: mcpd is reached over plain HTTP in that shape, so `r.TLS` is nil and
-the configured scheme is the only way it can know the session cookie needs
-`Secure`. `X-Forwarded-Proto` deliberately does not count — a header is set by
+visit. Both are settings, on the Settings page. Set the public address to the
+one people actually type. It is not cosmetic: mcpd is reached over plain HTTP
+in that shape, so `r.TLS` is nil and the configured scheme is the only way it
+can know the session cookie needs `Secure`. `X-Forwarded-Proto` deliberately does not count — a header is set by
 whoever is talking to this process, and nothing here can tell a proxy's from a
 caller's.
 

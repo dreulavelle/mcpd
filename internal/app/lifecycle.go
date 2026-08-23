@@ -106,7 +106,7 @@ func (a *App) Run(ctx context.Context) error {
 	// is what makes the executor restart-safe.
 	a.startWorker("claimable-scan", workerCtx, a.scanClaimable)
 
-	if a.cfg.Tunnel.CheckForUpdates {
+	if a.settings.FieldBool(ctx, settings.KeyTunnelUpdates) {
 		a.startWorker("tunnel-version-check", workerCtx, a.tunnelCheck.Run)
 	}
 
@@ -175,7 +175,7 @@ func (a *App) Run(ctx context.Context) error {
 	go func() {
 		a.log.Info("http server listening",
 			"addr", a.cfg.Server.Listen,
-			"public_url", a.cfg.Server.PublicURL,
+			"public_url", a.publicURL(workerCtx),
 			"plugins", a.manager.Names())
 		serve := func() error { return a.server.Serve(listener) }
 		if a.server.TLSConfig != nil {
@@ -211,7 +211,12 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) Shutdown() error {
 	// Deliberately detached from the cancelled context that triggered
 	// shutdown: every step below needs a live context to do its work.
-	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
+	//
+	// The budget is read here rather than at startup, which is what lets it be
+	// a live setting: a change to it applies to the next stop rather than to
+	// the start after it.
+	ctx, cancel := context.WithTimeout(
+		context.Background(), a.shutdownTimeout(context.Background()))
 	defer cancel()
 
 	var errs []error

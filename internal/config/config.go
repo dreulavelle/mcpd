@@ -16,23 +16,43 @@ import (
 	"strings"
 )
 
-// Config is the complete application configuration.
+// Config is what the startup file still decides.
+//
+// It is deliberately small. Everything a running host can be told to do
+// differently lives in the settings table, where a change is attributed and
+// recorded; what is left here is what cannot: where the database is, the key
+// that decrypts it, and where to bind. See docs/architecture.md, "Where
+// configuration lives".
 type Config struct {
-	Server   Server   `yaml:"server"`
-	Storage  Storage  `yaml:"storage"`
-	Auth     Auth     `yaml:"auth"`
-	Approval Approval `yaml:"approval"`
-	Logging  Logging  `yaml:"logging"`
+	Server  Server  `yaml:"server"`
+	Storage Storage `yaml:"storage"`
+	Auth    Auth    `yaml:"auth"`
 	// SecretKeyRef points at the key used to encrypt secrets stored in the
 	// database. Without it, secrets cannot be set from the dashboard -- they
 	// would have to be stored in the clear, which is worse than not offering
 	// the feature.
+	//
+	// It cannot move into the database for the reason it exists: it is the
+	// key the database's own secrets are encrypted under, and a lock does not
+	// hold its own key.
 	SecretKeyRef string `yaml:"secret_key_ref"`
 
 	Metrics Metrics                 `yaml:"metrics"`
-	Tunnel  Tunnel                  `yaml:"tunnel"`
 	Catalog Catalog                 `yaml:"catalog"`
 	Plugins map[string]PluginConfig `yaml:"plugins"`
+
+	// legacy is what the file says about keys that have moved. Nothing reads
+	// it to run; the first start after an upgrade reads it to import, and
+	// every start after that reads it to warn.
+	legacy *Legacy
+}
+
+// Legacy returns what the file still says about the settings that have moved.
+func (c *Config) Legacy() *Legacy {
+	if c.legacy == nil {
+		return &Legacy{sources: map[string]string{}}
+	}
+	return c.legacy
 }
 
 // Metrics configures the Prometheus endpoint.
@@ -110,49 +130,6 @@ func (c Catalog) Enabled() bool {
 	return c.Official || c.Docker || c.Smithery || c.PulseMCP
 }
 
-// Tunnel configures OpenAI's Secure MCP Tunnel, which runs inside mcpd.
-//
-// It lets ChatGPT reach mcpd without an inbound port, public DNS, or a NAT
-// rule: the connection is dialled outward and held open. Because it runs in
-// process there is no HTTP request to authenticate, so what the tunnel may
-// reach is decided here rather than by a bearer token.
-type Tunnel struct {
-	Enabled bool `yaml:"enabled"`
-
-	// TunnelID comes from the OpenAI platform's Tunnels settings.
-	TunnelID string `yaml:"tunnel_id"`
-
-	// APIKeyRef is a secret reference to a *runtime* API key. An admin key is
-	// only for creating and deleting tunnels and must not be used here.
-	APIKeyRef string `yaml:"api_key_ref"`
-
-	// Principal is the identity requests arriving through the tunnel act as.
-	Principal string `yaml:"principal"`
-	// Role is user or admin.
-	Role string `yaml:"role"`
-	// Plugins lists what the tunnel may reach, or ["*"]. This is the whole of
-	// its authorization, so it is worth being specific.
-	Plugins []string `yaml:"plugins"`
-
-	// ControlPlaneBaseURL overrides the OpenAI endpoint. Leave empty.
-	ControlPlaneBaseURL string `yaml:"control_plane_base_url"`
-
-	// CheckForUpdates enables a daily check for a newer tunnel client release.
-	//
-	// It only reports. The client is compiled in, so updating means rebuilding
-	// mcpd -- which is the point: the code that runs is the code that was
-	// built and reviewed.
-	CheckForUpdates bool `yaml:"check_for_updates"`
-
-	// DiagnosticsAddr binds the tunnel client's own health and admin listener,
-	// which reports OAuth discovery state mcpd cannot see: /readyz separates
-	// "still discovering" from "discovery failed", and /api/oauth reports what
-	// was actually discovered. Empty leaves it off, which is the default.
-	//
-	// Bind it to loopback. It is unauthenticated.
-	DiagnosticsAddr string `yaml:"diagnostics_addr"`
-}
-
 // PluginsDir is where out-of-process plugins are discovered.
 //
 // Each subdirectory holds a plugin.json and its executable. It is a bind mount
@@ -172,51 +149,29 @@ func (c *Config) PluginsDir() string {
 // segment worth encrypting, while the dashboard is served on an internal
 // interface to an operator who can be given the CA instead.
 type TLS struct {
-	// Mode is "off" or "self-signed".
-	//
-	// Self-signed is the only option a private deployment has. A publicly
-	// trusted certificate cannot be issued for an address like 192.168.1.10,
-	// and a host that already had a real certificate did not need a tunnel.
-	Mode string `yaml:"mode"`
-
 	// Dir holds the certificate authority and server certificate. Empty puts
 	// them beside the database, which is already the directory that has to
 	// survive a restart.
+	//
+	// Whether a certificate is served at all is a setting, not a file key:
+	// see settings.KeyServerTLSMode. This stays because it is a path, and a
+	// path beside the database belongs with the database's own.
 	Dir string `yaml:"dir"`
 }
 
-// Enabled reports whether the listener should serve HTTPS.
-func (t TLS) Enabled() bool { return t.Mode == "self-signed" }
-
-// Server configures the HTTP listener.
+// Server configures the two HTTP listeners.
+//
+// Only the bind addresses are here, and that is a judgement rather than a
+// technical limit. A bad bind address stored in the database locks an operator
+// out of the interface they would fix it on; the file is the recovery path,
+// and it is only a recovery path if it is the authority. Everything else about
+// the listeners -- the address they advertise, whether they serve TLS, how
+// patient they are -- is a setting.
 type Server struct {
 	// Listen is the bind address. Default is loopback: mcpd expects to sit
 	// behind a reverse proxy that terminates TLS, so binding all interfaces by
 	// default would expose it in plaintext.
 	Listen string `yaml:"listen"`
-
-	// PublicURL is the externally reachable base URL of the MCP endpoint --
-	// the Listen address above, not the dashboard.
-	//
-	// It is what the dashboard renders as a connection address, so it must
-	// match what clients actually use. A mismatch surfaces late and
-	// confusingly, as a copied address that reaches the wrong listener.
-	PublicURL string `yaml:"public_url"`
-
-	// FrontendPublicURL is how a browser reaches the dashboard, when that is
-	// not this process serving TLS directly.
-	//
-	// It exists because PublicURL above is the MCP endpoint, and the two are
-	// different listeners that routinely differ in scheme: the MCP endpoint on
-	// https behind a self-signed certificate while the dashboard is plain HTTP
-	// on the LAN. Deciding the session cookie's Secure flag from PublicURL
-	// marks it Secure on a plain-HTTP dashboard, the browser then refuses to
-	// send it back, and signing in appears to do nothing.
-	//
-	// Set it only when something in front of this process terminates TLS for
-	// the dashboard. Empty means the connection decides, which is correct for
-	// a direct deployment.
-	FrontendPublicURL string `yaml:"frontend_public_url"`
 
 	// FrontendListen is the bind address for the admin dashboard.
 	//
@@ -230,32 +185,22 @@ type Server struct {
 	// and Docker setup both handle it.
 	FrontendListen string `yaml:"frontend_listen"`
 
-	// FrontendEnabled turns the dashboard off entirely.
-	FrontendEnabled bool `yaml:"frontend_enabled"`
-
-	// TLS gives the MCP listener a certificate.
+	// TLS says where the certificate authority is kept.
 	TLS TLS `yaml:"tls"`
 
-	ReadHeaderTimeout time.Duration `yaml:"read_header_timeout"`
-	ReadTimeout       time.Duration `yaml:"read_timeout"`
-	WriteTimeout      time.Duration `yaml:"write_timeout"`
-	IdleTimeout       time.Duration `yaml:"idle_timeout"`
-	ShutdownTimeout   time.Duration `yaml:"shutdown_timeout"`
-	SessionTimeout    time.Duration `yaml:"session_timeout"`
+	// SessionTimeout bounds an idle MCP session.
+	SessionTimeout time.Duration `yaml:"session_timeout"`
 }
 
-// Storage configures the database.
+// Storage says where the database is.
+//
+// Where, and nothing else. How it is opened -- how long a statement waits for
+// a lock, whether durability is relaxed -- is a setting, read out of the
+// database itself before the pools are configured. Where the file is cannot
+// be, for the obvious reason.
 type Storage struct {
-	Path         string        `yaml:"path"`
-	ReadPoolSize int           `yaml:"read_pool_size"`
-	BusyTimeout  time.Duration `yaml:"busy_timeout"`
-
-	// RelaxedDurability drops synchronous from FULL to NORMAL.
-	//
-	// Leave this false in any environment whose approvals matter. Under WAL,
-	// NORMAL can lose the most recent transactions on power loss, and those
-	// transactions authorise infrastructure changes.
-	RelaxedDurability bool `yaml:"relaxed_durability"`
+	Path         string `yaml:"path"`
+	ReadPoolSize int    `yaml:"read_pool_size"`
 
 	// PluginsDir overrides where out-of-process plugins are discovered.
 	// Defaults to a plugins directory beside the database.
@@ -270,10 +215,13 @@ type Storage struct {
 type Auth struct {
 	// StaticTokens are machine credentials. Each names a secret reference
 	// rather than carrying the token itself.
+	//
+	// They stay in the file because their values do: each names a reference
+	// resolved from the environment or from systemd, which is a deployment's
+	// own arrangement rather than something the dashboard can offer. Keys
+	// issued from the dashboard are the other kind of bearer credential and
+	// live in the database, digest only.
 	StaticTokens []StaticTokenConfig `yaml:"static_tokens"`
-
-	// Accounts configures the people who sign in to the dashboard.
-	Accounts Accounts `yaml:"accounts"`
 }
 
 // StaticTokenConfig declares one machine credential and what it may reach.
@@ -292,56 +240,6 @@ type StaticTokenConfig struct {
 	// This is the per-agent scoping control: give an agent a token listing one
 	// plugin and it can neither invoke nor enumerate any other.
 	Plugins []string `yaml:"plugins"`
-}
-
-// Accounts configures the local identities that sign in to the dashboard.
-//
-// mcpd is no longer an OAuth authorization server. It reaches ChatGPT through
-// the tunnel, which carries the connection and the credential both, so the
-// authorize/token/consent machinery served no client that exists: signing
-// someone in through a tunnel needs mcpd reachable from the public internet,
-// which is the one thing a tunnel exists to avoid.
-type Accounts struct {
-	// SessionTTL bounds a signed-in browser.
-	SessionTTL time.Duration `yaml:"session_ttl"`
-}
-
-// The first administrator is not configured here. An instance with no accounts
-// offers to create one, and whoever does becomes administrator -- which puts
-// the only password anyone types into a form rather than into a file, and
-// removes the failure where an operator starts the host once with the password
-// unset and has to clear a table to get back in.
-
-// Approval configures the risk policy.
-type Approval struct {
-
-	// ProposalTTL bounds how long a proposal awaits approval.
-	ProposalTTL time.Duration `yaml:"proposal_ttl"`
-	// ApprovalTTL bounds how long an approval remains executable. Without it,
-	// an approval granted weeks ago could still execute against a network that
-	// has since changed.
-	ApprovalTTL time.Duration `yaml:"approval_ttl"`
-	// LeaseTTL bounds an execution claim before the reaper reclaims it.
-	LeaseTTL time.Duration `yaml:"lease_ttl"`
-
-	// InlineMaxRisk is the highest risk a user may approve from a single
-	// yes/no prompt raised by their client.
-	//
-	// Above it the shortcut is withheld, not the decision: the assistant has
-	// to show the change in full and be told explicitly before approving it.
-	// Either way the person decides in the conversation. Sending them to a
-	// separate console to approve is how a gate becomes an obstacle, and an
-	// obstacle is what people route around.
-	//
-	// Empty withholds the prompt for everything, which is the strictest
-	// setting rather than a disabled one.
-	InlineMaxRisk string `yaml:"inline_max_risk"`
-}
-
-// Logging configures output.
-type Logging struct {
-	Level  string `yaml:"level"`
-	Format string `yaml:"format"`
 }
 
 // PluginConfig is the host-level configuration common to every plugin.
@@ -392,6 +290,17 @@ func Load(path string) (*Config, error) {
 	if err := cfg.applyEnvOverrides(); err != nil {
 		return nil, err
 	}
+	// Read separately, from the same bytes, because these are not
+	// configuration any more: they are what an upgrade imports and what a
+	// startup warning names. Keeping them out of Config is what makes "the
+	// file is ignored for these keys" true by construction rather than by
+	// discipline.
+	legacy, err := parseLegacy(raw)
+	if err != nil {
+		return nil, err
+	}
+	cfg.legacy = legacy
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -404,37 +313,11 @@ func Default() *Config {
 		Server: Server{
 			// Loopback by default. mcpd expects a reverse proxy in front of
 			// it, and binding publicly by default would serve MCP in plaintext.
-			Listen:            "127.0.0.1:8080",
-			FrontendListen:    ":80",
-			FrontendEnabled:   true,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       60 * time.Second,
-			WriteTimeout:      120 * time.Second,
-			IdleTimeout:       120 * time.Second,
-			ShutdownTimeout:   30 * time.Second,
-			SessionTimeout:    10 * time.Minute,
+			Listen:         "127.0.0.1:8080",
+			FrontendListen: ":80",
+			SessionTimeout: 10 * time.Minute,
 		},
-		Storage: Storage{
-			Path:        "/var/lib/mcpd/mcpd.db",
-			BusyTimeout: 5 * time.Second,
-		},
-		Auth: Auth{
-			Accounts: Accounts{
-				// Long enough that a working day does not require signing in
-				// twice, short enough that an unattended browser does not stay
-				// signed in indefinitely.
-				SessionTTL: 12 * time.Hour,
-			},
-		},
-		Approval: Approval{
-			// Routine changes are confirmed in the conversation; anything
-			// weightier goes to the dashboard.
-			InlineMaxRisk: "medium",
-			ProposalTTL:   30 * time.Minute,
-			ApprovalTTL:   15 * time.Minute,
-			LeaseTTL:      2 * time.Minute,
-		},
-		Tunnel: Tunnel{CheckForUpdates: true},
+		Storage: Storage{Path: "/var/lib/mcpd/mcpd.db"},
 		// The three that need no credential are on. They cost nothing until a
 		// page asks for one, and an operator who wants only the official
 		// registry says so rather than discovering that the others existed and
@@ -442,8 +325,8 @@ func Default() *Config {
 		// has to be issued by hand; see Catalog.
 		Catalog: Catalog{Official: true, Docker: true, Smithery: true},
 		Metrics: Metrics{Enabled: true},
-		Logging: Logging{Level: "info", Format: "json"},
 		Plugins: map[string]PluginConfig{},
+		legacy:  &Legacy{sources: map[string]string{}},
 	}
 }
 

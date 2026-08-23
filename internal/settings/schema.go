@@ -2,6 +2,8 @@ package settings
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,6 +39,21 @@ func (k Kind) Valid() bool {
 	return false
 }
 
+// Units a duration field can be counted in. Empty means minutes, which is
+// what every duration meant before any of them was counted in anything else.
+const (
+	UnitSeconds = "seconds"
+	UnitMinutes = "minutes"
+	UnitHours   = "hours"
+)
+
+// RiskNone is the enum value standing for "no risk level at all".
+//
+// The policy spells this as the empty string, which a dropdown cannot offer
+// and a person cannot tell apart from an unset field. It is spelled out here
+// and translated where the policy is read.
+const RiskNone = "none"
+
 // Apply describes when a change takes effect.
 type Apply string
 
@@ -69,6 +86,13 @@ type Field struct {
 	// Min and Max bound an int or duration, in the unit the field uses.
 	Min *int `json:"min,omitempty"`
 	Max *int `json:"max,omitempty"`
+	// Unit names what a duration is counted in -- "seconds", "minutes",
+	// "hours". Durations are stored as a whole number of their own unit
+	// rather than as a Go duration string, because the dashboard renders them
+	// as a number box and a value a person typed should round-trip as the
+	// number they typed. Empty means minutes, which is what every duration
+	// field meant before any of them was counted in anything else.
+	Unit string `json:"unit,omitempty"`
 	// Required marks a field that must be set when its group is enabled.
 	Required bool `json:"required,omitempty"`
 	// Placeholder is example text for the input.
@@ -138,11 +162,69 @@ const (
 	KeyTunnelUpdates   = "tunnel.check_for_updates"
 	KeyTunnelDebug     = "tunnel.debug"
 
+	// KeyTunnelDiagnostics binds the tunnel client's own health and admin
+	// listener, which reports OAuth discovery state mcpd cannot see. Empty
+	// leaves it off. Bind it to loopback: it is unauthenticated.
+	KeyTunnelDiagnostics = "tunnel.diagnostics_addr"
+
+	// KeyTunnelControlPlane overrides the OpenAI endpoint the tunnel client
+	// dials.
+	//
+	// Deliberately not a field, for the same reason as the tunnel id above.
+	// It exists so a test can point the client somewhere it controls, and for
+	// the day OpenAI moves the endpoint; nobody operating this host should be
+	// typing one, and a text box in the tunnel form would invite it.
+	KeyTunnelControlPlane = "tunnel.control_plane_base_url"
+
 	KeyHistoryRetentionDays = "history.retention_days"
+
+	// The host's own runtime configuration. These were once keys in
+	// config.yaml; the file no longer supplies them, and the database is the
+	// only authority for what they are. See docs/architecture.md, "Where
+	// configuration lives".
+	//
+	// A duration counts whole units of its own Unit rather than carrying a Go
+	// duration string, so the number in the box is the number that was typed.
+	KeyServerPublicURL         = "server.public_url"
+	KeyServerFrontendPublicURL = "server.frontend_public_url"
+	KeyServerTLSMode           = "server.tls_mode"
+	KeyServerFrontendEnabled   = "server.frontend_enabled"
+
+	KeyServerReadHeaderTimeout = "server.read_header_timeout_seconds"
+	KeyServerReadTimeout       = "server.read_timeout_seconds"
+	KeyServerWriteTimeout      = "server.write_timeout_seconds"
+	KeyServerIdleTimeout       = "server.idle_timeout_seconds"
+	KeyServerShutdownTimeout   = "server.shutdown_timeout_seconds"
+
+	KeyStorageBusyTimeout       = "storage.busy_timeout_seconds"
+	KeyStorageRelaxedDurability = "storage.relaxed_durability"
+
+	KeyAccountsSessionTTL = "auth.accounts.session_ttl_hours"
+
+	KeyLoggingLevel  = "logging.level"
+	KeyLoggingFormat = "logging.format"
+
+	// KeyConfigImported records that the values config.yaml used to supply
+	// have been read into this store, once.
+	//
+	// Deliberately not a field: it is a fact about this deployment's history
+	// rather than a knob, and an operator clearing it would make the file
+	// authoritative again for one start, which is the disagreement the whole
+	// arrangement exists to remove. It holds the JSON record of what was
+	// imported and when, so the question "where did this value come from" has
+	// an answer in the store rather than only in a log line.
+	KeyConfigImported = "config.file_imported"
 
 	KeyApprovalProposalTTL = "approval.proposal_ttl_minutes"
 	KeyApprovalApprovalTTL = "approval.approval_ttl_minutes"
 	KeyApprovalLeaseTTL    = "approval.lease_ttl_minutes"
+
+	// KeyApprovalInlineMaxRisk is the highest risk a person may approve from
+	// a single yes/no prompt raised by their own client. "none" withholds the
+	// prompt for everything, which is the strictest setting rather than a
+	// disabled one -- the decision still happens, it just cannot be made in
+	// one tap.
+	KeyApprovalInlineMaxRisk = "approval.inline_max_risk"
 
 	// KeyApprovalAutoRules holds the standing rules that decide which changes
 	// are authorised without asking anybody. It is a JSON array of rules.
@@ -228,6 +310,53 @@ func Schema() []Group { return schema() }
 func schema() []Group {
 	return []Group{
 		{
+			Name:    "server",
+			Title:   "Addresses",
+			Section: SectionSettings,
+			Help: "How this host is reached, and whether it serves its own " +
+				"certificate. Where it binds is in the startup file, not here: " +
+				"a bad bind address stored in the database would take away the " +
+				"page you would fix it on.",
+			Fields: []Field{
+				{
+					Key: KeyServerPublicURL, Label: "Address assistants use",
+					Kind: KindString, Group: "server", Apply: ApplyLive,
+					Placeholder: "https://mcp.example.net",
+					Help: "The MCP endpoint as it looks from outside, which is what " +
+						"gets copied into a client. Behind a proxy it is also how " +
+						"mcpd knows the connection is really https. If this host " +
+						"serves its own certificate, that certificate names the " +
+						"address it was issued for, so changing this needs a restart " +
+						"to reissue it.",
+				},
+				{
+					Key: KeyServerFrontendPublicURL, Label: "Address this page is on",
+					Kind: KindString, Group: "server", Apply: ApplyLive,
+					Placeholder: "https://mcpd.example.net",
+					Help: "Only when something in front of mcpd terminates TLS for " +
+						"the dashboard. Empty lets the connection decide, which is " +
+						"right when you reach mcpd directly. It also has to be right " +
+						"for signing in with Google, GitHub or Microsoft to work.",
+				},
+				{
+					Key: KeyServerTLSMode, Label: "Certificate for the MCP endpoint",
+					Kind: KindEnum, Group: "server", Apply: ApplyRestart,
+					Default: "off", Options: []string{"off", "self-signed"},
+					Help: "Leave this off when a reverse proxy already terminates " +
+						"TLS. Self-signed is for reaching mcpd directly, where the " +
+						"alternative is a browser warning every visit.",
+				},
+				{
+					Key: KeyServerFrontendEnabled, Label: "Serve this dashboard",
+					Kind: KindBool, Group: "server", Apply: ApplyRestart,
+					Default: true,
+					Help: "Turning it off leaves the MCP endpoint running and nothing " +
+						"to administer it from until you turn it back on in the " +
+						"database by hand.",
+				},
+			},
+		},
+		{
 			Name:      "tunnel",
 			Title:     "ChatGPT",
 			Section:   SectionSettings,
@@ -281,6 +410,15 @@ func schema() []Group {
 						"Turn it off when you're done.",
 				},
 				{
+					Key: KeyTunnelDiagnostics, Label: "Diagnostics address",
+					Kind: KindString, Group: "tunnel", Apply: ApplyReconnect,
+					Placeholder: "127.0.0.1:9095",
+					Help: "Where the tunnel client answers its own health questions, " +
+						"which say more than mcpd can about a connection that will " +
+						"not come up. Empty leaves it off. Bind it to loopback: " +
+						"nothing authenticates it.",
+				},
+				{
 					Key: KeyTunnelUpdates, Label: "Mention new versions",
 					Kind: KindBool, Group: "tunnel", Apply: ApplyLive, Default: true,
 					Help: "Nothing updates itself.",
@@ -310,21 +448,132 @@ func schema() []Group {
 			Fields: []Field{
 				{
 					Key: KeyApprovalProposalTTL, Label: "Suggestions expire after",
-					Kind: KindDuration, Group: "approval", Apply: ApplyLive,
+					Kind: KindDuration, Unit: UnitMinutes, Group: "approval", Apply: ApplyLive,
 					Default: 30, Min: intPtr(1), Max: intPtr(10080),
 					Help: "A suggestion nobody acted on is dropped after this.",
 				},
 				{
 					Key: KeyApprovalApprovalTTL, Label: "Approvals expire after",
-					Kind: KindDuration, Group: "approval", Apply: ApplyLive,
+					Kind: KindDuration, Unit: UnitMinutes, Group: "approval", Apply: ApplyLive,
 					Default: 15, Min: intPtr(1), Max: intPtr(1440),
 					Help: "Stops an old decision firing against a system that has changed.",
 				},
 				{
 					Key: KeyApprovalLeaseTTL, Label: "Flag a stuck change after",
-					Kind: KindDuration, Group: "approval", Apply: ApplyLive,
+					Kind: KindDuration, Unit: UnitMinutes, Group: "approval", Apply: ApplyLive,
 					Default: 2, Min: intPtr(1), Max: intPtr(60),
 					Help: "How long before a half-applied change is flagged for checking.",
+				},
+				{
+					Key: KeyApprovalInlineMaxRisk, Label: "Approve in the conversation up to",
+					Kind: KindEnum, Group: "approval", Apply: ApplyLive,
+					Default: "medium", Options: []string{RiskNone, "low", "medium", "high", "critical"},
+					Help: "Above this the shortcut is withheld, not the decision: the " +
+						"assistant has to show the change in full and be told " +
+						"explicitly. Either way a person decides, in the conversation. " +
+						"\"Nothing\" is the strictest setting, not a disabled one.",
+				},
+			},
+		},
+		{
+			Name:    "timeouts",
+			Title:   "Timeouts",
+			Section: SectionSettings,
+			Help: "How patient the two HTTP listeners are. Both are built once " +
+				"when mcpd starts, so a change here waits for a restart.",
+			Fields: []Field{
+				{
+					Key: KeyServerReadHeaderTimeout, Label: "Wait for request headers",
+					Kind: KindDuration, Unit: UnitSeconds, Group: "timeouts", Apply: ApplyRestart,
+					Default: 10, Min: intPtr(1), Max: intPtr(600),
+					Help: "The defence against a caller that opens a connection and " +
+						"then dawdles. Keep it short.",
+				},
+				{
+					Key: KeyServerReadTimeout, Label: "Wait for the whole request",
+					Kind: KindDuration, Unit: UnitSeconds, Group: "timeouts", Apply: ApplyRestart,
+					Default: 60, Min: intPtr(1), Max: intPtr(3600),
+				},
+				{
+					Key: KeyServerWriteTimeout, Label: "Allow for a reply",
+					Kind: KindDuration, Unit: UnitSeconds, Group: "timeouts", Apply: ApplyRestart,
+					Default: 120, Min: intPtr(1), Max: intPtr(3600),
+					Help: "A tool call that reaches a slow upstream spends its time " +
+						"here, so this is the one to raise if long calls are being cut off.",
+				},
+				{
+					Key: KeyServerIdleTimeout, Label: "Hold an idle connection",
+					Kind: KindDuration, Unit: UnitSeconds, Group: "timeouts", Apply: ApplyRestart,
+					Default: 120, Min: intPtr(1), Max: intPtr(3600),
+				},
+				{
+					Key: KeyServerShutdownTimeout, Label: "Allow for a graceful stop",
+					Kind: KindDuration, Unit: UnitSeconds, Group: "timeouts", Apply: ApplyLive,
+					Default: 30, Min: intPtr(1), Max: intPtr(600),
+					Help: "How long work in flight is given to finish when mcpd is " +
+						"asked to stop. Read when that happens, so a change to it " +
+						"applies to the next stop rather than the next start.",
+				},
+			},
+		},
+		{
+			Name:    "storage",
+			Title:   "Database",
+			Section: SectionSettings,
+			Help: "Where the database is kept is in the startup file -- the host " +
+				"has to know it before it can read anything here. How it is " +
+				"opened is below, and the pools are opened once, so both take a " +
+				"restart.",
+			Fields: []Field{
+				{
+					Key: KeyStorageBusyTimeout, Label: "Wait for a locked database",
+					Kind: KindDuration, Unit: UnitSeconds, Group: "storage", Apply: ApplyRestart,
+					Default: 5, Min: intPtr(1), Max: intPtr(300),
+					Help: "How long a statement waits for a lock before giving up.",
+				},
+				{
+					Key: KeyStorageRelaxedDurability, Label: "Trade durability for speed",
+					Kind: KindBool, Group: "storage", Apply: ApplyRestart,
+					Default: false,
+					Help: "Leave this off. On, the most recent writes can be lost in a " +
+						"power cut -- and those writes are the approvals that " +
+						"authorise changes to your systems.",
+				},
+			},
+		},
+		{
+			Name:    "logging",
+			Title:   "Logging",
+			Section: SectionSettings,
+			Help:    "What mcpd writes to its own output.",
+			Fields: []Field{
+				{
+					Key: KeyLoggingLevel, Label: "How much to log", Kind: KindEnum,
+					Group: "logging", Apply: ApplyLive, Default: "info",
+					Options: []string{"debug", "info", "warn", "error"},
+					Help:    "Debug is loud. It is the right setting while something is wrong.",
+				},
+				{
+					Key: KeyLoggingFormat, Label: "Format", Kind: KindEnum,
+					Group: "logging", Apply: ApplyLive, Default: "json",
+					Options: []string{"json", "text"},
+					Help: "JSON for anything collecting logs; text when you are " +
+						"reading them yourself.",
+				},
+			},
+		},
+		{
+			Name:    "sessions",
+			Title:   "Sessions",
+			Section: SectionAuthentication,
+			Help:    "How long a signed-in browser stays signed in.",
+			Fields: []Field{
+				{
+					Key: KeyAccountsSessionTTL, Label: "Sign people out after",
+					Kind: KindDuration, Unit: UnitHours, Group: "sessions", Apply: ApplyLive,
+					Default: 12, Min: intPtr(1), Max: intPtr(8760),
+					Help: "Applies to sessions started from now on. Sessions already " +
+						"issued keep the expiry they were given.",
 				},
 			},
 		},
@@ -523,6 +772,42 @@ func validateAgainst(f Field, key, value string) error {
 					f.Label)
 			}
 		}
+		// The same argument for the addresses. A public URL with no scheme is
+		// the ordinary mistake, and it surfaces later as a client copying an
+		// address that reaches nothing.
+		if key == KeyServerPublicURL || key == KeyServerFrontendPublicURL {
+			if err := validPublicURL(f.Label, value); err != nil {
+				return err
+			}
+		}
+		if key == KeyTunnelDiagnostics && strings.TrimSpace(value) != "" {
+			if _, _, err := net.SplitHostPort(strings.TrimSpace(value)); err != nil {
+				return fmt.Errorf(
+					"settings: %s must be host:port, such as 127.0.0.1:9095", f.Label)
+			}
+		}
+	}
+	return nil
+}
+
+// validPublicURL checks one of the two address fields.
+//
+// Absent is allowed: an empty public URL means the dashboard cannot show a
+// connect address, which is a warning at startup rather than a refusal, and an
+// empty frontend URL is correct whenever nothing terminates TLS in front.
+func validPublicURL(label, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	u, err := url.Parse(value)
+	switch {
+	case err != nil:
+		return fmt.Errorf("settings: %s is not a valid URL: %v", label, err)
+	case u.Scheme != "http" && u.Scheme != "https":
+		return fmt.Errorf("settings: %s must start with http:// or https://", label)
+	case u.Host == "":
+		return fmt.Errorf("settings: %s has no host", label)
 	}
 	return nil
 }
