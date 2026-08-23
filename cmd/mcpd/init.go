@@ -69,10 +69,6 @@ func initialize(dir string) error {
 	// quietly take over the moment the environment stopped supplying one, and
 	// every credential encrypted under the environment's key would be
 	// unreadable with nothing saying why.
-	token, err := generateUnlessInEnv("MCPD_TOKEN_LOCAL")
-	if err != nil {
-		return err
-	}
 	secretKey, err := generateUnlessInEnv("MCPD_SECRET_KEY")
 	if err != nil {
 		return err
@@ -89,8 +85,8 @@ func initialize(dir string) error {
 	if err := writeFile(configPath, 0o640, initialConfig(gen)); err != nil {
 		return err
 	}
-	// 0600: this file holds a bearer token and the encryption key.
-	if err := writeFile(envPath, 0o600, initialEnv(token, secretKey)); err != nil {
+	// 0600: this file holds the key every stored secret is encrypted under.
+	if err := writeFile(envPath, 0o600, initialEnv(secretKey)); err != nil {
 		return err
 	}
 
@@ -244,15 +240,19 @@ auth:
   accounts:
     session_ttl: 12h
 
-  # Bearer tokens, for machine callers that cannot complete a sign-in form.
-  static_tokens:
-    - id: local
-      secret_ref: env:MCPD_TOKEN_LOCAL
-      principal: svc:local
-      role: admin
-      # Which plugins this credential may reach. Everything else returns 404,
-      # so a scoped agent cannot discover what else is deployed.
-      plugins: ["*"]
+  # Machine callers use keys issued from Settings -> Keys, which can be
+  # revoked without a restart and say in the audit trail which one acted.
+  #
+  # A token declared here still works, for a deployment that would rather
+  # keep its credentials in the file it already manages. It is matched before
+  # any key, holds no database row, and nothing in the dashboard can reach it:
+  #
+  #   static_tokens:
+  #     - id: ci
+  #       secret_ref: env:MCPD_TOKEN_CI
+  #       principal: svc:ci
+  #       role: user
+  #       plugins: ["echo"]
 
 approval:
 
@@ -305,18 +305,13 @@ plugins:
 // initialEnv writes the generated secrets. An empty value means the
 // environment already supplies that one, and the file says so rather than
 // carrying a second copy that could later diverge.
-func initialEnv(token, secretKey string) string {
+func initialEnv(secretKey string) string {
 	var b strings.Builder
 	b.WriteString(`# Secrets for mcpd. Mode 0600; never commit this file.
 #
 # Real environment variables take precedence over anything here, so an
 # orchestrator injecting a rotated secret is not overridden by a stale value.
 
-# Bearer token for machine callers. People sign in to the dashboard with an
-# email and password instead.
-`)
-	b.WriteString(secretLine("MCPD_TOKEN_LOCAL", token))
-	b.WriteString(`
 # Encrypts secrets stored in the database, so they can be set from the
 # dashboard. Keep it: without it, those secrets cannot be read back.
 `)
