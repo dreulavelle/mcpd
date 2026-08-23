@@ -400,7 +400,7 @@ func mountedManager(t *testing.T) *plugins.Manager {
 	t.Helper()
 	m := plugins.NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)), "test",
 		func(context.Context, string, auth.Capability) error { return nil },
-		stubApprovals{}, nil)
+		stubApprovals{}, nil, nil)
 	if err := m.Register(context.Background(), labelPlugin{}, "echo", false); err != nil {
 		t.Fatalf("register: %v", err)
 	}

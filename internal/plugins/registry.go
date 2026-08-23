@@ -141,6 +141,22 @@ type MutationSpec struct {
 	// reads says the change was applied but not confirmed.
 	Verifiable bool
 
+	// RateLimit bounds how often one caller may propose this mutation, in
+	// requests per second. Zero takes defaultMutationRateLimit; there is no
+	// value meaning unbounded.
+	//
+	// Per caller rather than global, and never absent, because this is the
+	// backpressure a standing rule removes. Before rules existed, a runaway
+	// agent could only pile up proposals somebody would decline; under a
+	// permissive rule the same calls are executed upstream writes, bounded
+	// only by the executor's concurrency and by how fast the far end answers.
+	// The human in the loop was doing this job as a side effect, and a rule is
+	// a decision to stop paying for it -- so something has to take it over.
+	//
+	// A plugin raises or lowers it knowing what its own upstream is: a mutation
+	// that writes a label can afford more than one that reboots a site.
+	RateLimit float64
+
 	// InputSchema overrides the schema derived from the handler's parameter
 	// type, for the same reason as ToolSpec.InputSchema.
 	InputSchema json.RawMessage
@@ -150,6 +166,9 @@ func (s MutationSpec) validate(plugin string) error {
 	if !actionPattern.MatchString(s.Action) {
 		return fmt.Errorf("plugins: %s mutation action %q must match %s",
 			plugin, s.Action, actionPattern)
+	}
+	if s.RateLimit < 0 {
+		return fmt.Errorf("plugins: %s mutation %q has a negative rate limit", plugin, s.Action)
 	}
 	if s.Description == "" {
 		return fmt.Errorf("plugins: %s mutation %q requires a description", plugin, s.Action)
@@ -198,7 +217,8 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 		return
 	}
 
-	qualified := r.descriptor.Name + "_" + spec.Name
+	plugin := r.descriptor.Name
+	qualified := plugin + "_" + spec.Name
 	openWorld := true
 	capability := spec.Capability
 	if capability == "" {
@@ -213,7 +233,7 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 		spec:       spec,
 		qualified:  qualified,
 		capability: capability,
-		attach: func(s *mcp.Server, mw ToolMiddleware) {
+		attach: func(s *mcp.Server, mw ToolMiddleware, obs ToolObserver) {
 			tool := &mcp.Tool{
 				Name:        qualified,
 				Description: spec.Description,
@@ -229,16 +249,21 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 			}
 			mcp.AddTool(s, tool, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 				var zero Out
+				started := time.Now()
 				if err := mw(ctx, qualified, capability); err != nil {
+					obs.ToolCall(plugin, spec.Name, observability.OutcomeDenied, 0)
 					return nil, zero, err
 				}
-				if err := limiter.wait(ctx); err != nil {
+				if err := limiter.allow(started); err != nil {
+					obs.ToolCall(plugin, spec.Name, observability.OutcomeRateLimited, 0)
 					return nil, zero, err
 				}
 				out, err := fn(ctx, in)
 				if err != nil {
+					obs.ToolCall(plugin, spec.Name, observability.OutcomeError, time.Since(started))
 					return nil, zero, err
 				}
+				obs.ToolCall(plugin, spec.Name, observability.OutcomeOK, time.Since(started))
 				return nil, out, nil
 			})
 		},
@@ -282,14 +307,19 @@ func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S])
 	}
 	adapter := newAdapter(h)
 	qualified := r.descriptor.Name + "_" + strings.ReplaceAll(spec.Action, ".", "_")
+	// Built once, at registration, so the budget belongs to the mutation
+	// rather than to whichever attachment happens to be current. A plugin
+	// rebuilt when its settings change re-registers and starts fresh, which is
+	// correct: it is a different upstream configuration.
+	limiter := newMutationLimiter(spec.RateLimit)
 
 	r.mutations = append(r.mutations, registeredMutation{
 		spec:      spec,
 		plugin:    r.descriptor.Name,
 		qualified: qualified,
 		adapter:   adapter,
-		attach: func(s *mcp.Server, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy) {
-			attachProposeTool[P](s, r.descriptor.Name, qualified, spec, adapter, gate, svc, inline)
+		attach: func(s *mcp.Server, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy, obs ToolObserver) {
+			attachProposeTool[P](s, r.descriptor.Name, qualified, spec, adapter, gate, svc, inline, limiter, obs)
 		},
 	})
 }
@@ -300,7 +330,7 @@ func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S])
 // the annotations say so, and the returned operation says so in a note field,
 // because a model that reads only a state string can still mistake "proposed"
 // for "done".
-func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec MutationSpec, adapter *handlerAdapter, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy) {
+func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec MutationSpec, adapter *handlerAdapter, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy, limiter *mutationLimiter, obs ToolObserver) {
 	mutating := false
 	description := spec.Description + "\n\n" +
 		"IMPORTANT: this only records a proposal. Nothing changes until a human " +
@@ -327,6 +357,17 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 
 	mcp.AddTool(srv, tool, func(ctx context.Context, req *mcp.CallToolRequest, in P) (*mcp.CallToolResult, operationView, error) {
 		if err := gate(ctx, qualified, auth.CapPropose); err != nil {
+			obs.MutationProposal(plugin, spec.Action, observability.OutcomeDenied)
+			return nil, operationView{}, err
+		}
+
+		// Before the plan and before the record. A refused proposal must cost
+		// nothing that a retry would then find already spent: no upstream
+		// read, no operation row, no idempotency key. The authorization check
+		// runs first so that a caller who may not propose at all is told that,
+		// and cannot spend a budget by being refused.
+		if err := limiter.allow(auth.FromContext(ctx).ID, time.Now()); err != nil {
+			obs.MutationProposal(plugin, spec.Action, observability.OutcomeRateLimited)
 			return nil, operationView{}, err
 		}
 
@@ -340,6 +381,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 		// compared -- which is what makes drift detectable.
 		plan, err := adapter.plan(ctx, params)
 		if err != nil {
+			obs.MutationProposal(plugin, spec.Action, observability.OutcomeError)
 			return nil, operationView{}, err
 		}
 
@@ -360,8 +402,10 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 			CorrelationID: observability.CorrelationID(ctx),
 		})
 		if err != nil {
+			obs.MutationProposal(plugin, spec.Action, observability.OutcomeError)
 			return nil, operationView{}, err
 		}
+		obs.MutationProposal(plugin, spec.Action, observability.OutcomeOK)
 
 		// The operation is recorded before anyone is asked, so a change that
 		// is declined -- or one where the client vanishes mid-question --
@@ -453,11 +497,31 @@ func derefRisk(r *operations.RiskLevel) operations.RiskLevel {
 // SDK reports to the caller as a tool error.
 type ToolMiddleware func(ctx context.Context, tool string, required auth.Capability) error
 
+// ToolObserver records what a call did, for the metrics endpoint.
+//
+// An interface rather than the metrics type, and narrow on purpose: this
+// package should be able to say "a call happened and it was refused" without
+// being able to invent a series the host then has to carry.
+type ToolObserver interface {
+	// ToolCall reports one read tool call. The duration is zero for a call
+	// refused before the handler ran, which is not a measurement of anything.
+	ToolCall(plugin, tool, outcome string, d time.Duration)
+	// MutationProposal reports one proposal, recorded or refused.
+	MutationProposal(plugin, action, outcome string)
+}
+
+// noObserver is what a host that wants no metrics gets, so no call site needs
+// a nil check.
+type noObserver struct{}
+
+func (noObserver) ToolCall(string, string, string, time.Duration) {}
+func (noObserver) MutationProposal(string, string, string)        {}
+
 type registeredTool struct {
 	spec       ToolSpec
 	qualified  string
 	capability auth.Capability
-	attach     func(*mcp.Server, ToolMiddleware)
+	attach     func(*mcp.Server, ToolMiddleware, ToolObserver)
 }
 
 type registeredMutation struct {
@@ -465,7 +529,7 @@ type registeredMutation struct {
 	plugin    string
 	qualified string
 	adapter   *handlerAdapter
-	attach    func(*mcp.Server, ToolMiddleware, ApprovalService, InlinePolicy)
+	attach    func(*mcp.Server, ToolMiddleware, ApprovalService, InlinePolicy, ToolObserver)
 }
 
 func (r *Registry) hasTool(name string) bool {

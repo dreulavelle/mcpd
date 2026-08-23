@@ -45,6 +45,9 @@ type App struct {
 	audit   *sqlite.AuditStore
 	manager *plugins.Manager
 	health  *observability.HealthRegistry
+	// metrics is nil when the endpoint is switched off. Every method on it is
+	// nil-safe, so nothing downstream branches on that.
+	metrics *observability.Metrics
 
 	accounts      *users.Store
 	types         *plugins.Catalog
@@ -123,7 +126,16 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	log.Info("database ready",
 		"path", db.Path(), "schema_version", version, "migrations_applied", applied)
 
+	// Built before the graph, because several components take an observer and
+	// a nil one taken before this ran would record nothing for the life of the
+	// process.
+	var metrics *observability.Metrics
+	if cfg.Metrics.Enabled {
+		metrics = observability.NewMetrics()
+	}
+
 	a := &App{
+		metrics:    metrics,
 		cfg:        cfg,
 		log:        log,
 		db:         db,
@@ -132,7 +144,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		audit:      sqlite.NewAuditStore(db),
 		mcpStore:   sqlite.NewMCPServerStore(db, time.Now),
 		mcpServers: map[string]mcpservers.Server{},
-		catalog:    buildCatalog(cfg.Catalog, log),
+		catalog:    buildCatalog(cfg.Catalog, metrics, log),
 		serving:    make(chan struct{}),
 		health:     observability.NewHealthRegistry(2 * time.Second),
 	}
@@ -164,7 +176,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	a.bus = messaging.NewInProcessBus(log)
 	a.publisher = messaging.NewPublisher(
 		sqlite.MessagingAdapter{OutboxStore: a.outbox}, a.bus, log,
-		messaging.PublisherConfig{}, time.Now)
+		messaging.PublisherConfig{}, time.Now, a.metrics.OutboxPublished)
 
 	ids := operations.NewULIDGenerator(time.Now)
 	// Read on every use rather than snapshotted, so a TTL changed in the
@@ -206,7 +218,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	a.settings = settings.NewStore(db, cipher, time.Now)
 
 	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService,
-		inlinePolicyFunc(policyFn))
+		inlinePolicyFunc(policyFn), a.metrics)
 
 	// A settings change rebuilds the plugin it belongs to, so the form takes
 	// effect rather than writing somewhere nothing reads until a restart.
@@ -269,6 +281,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	}
 
 	a.registerHealthChecks()
+	a.registerMetrics()
 
 	host, err := mcphost.NewHost(mcphost.Options{
 		Log:            log,
@@ -301,10 +314,17 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			Health:     a.health,
 			Version:    Version,
 			Audit:      a.audit,
-			Pruner:     a.audit,
-			PublicURL:  cfg.Server.PublicURL,
-			Accounts:   a.accounts,
-			Catalog:    a.settingsCatalog,
+			Metrics: func() http.Handler {
+				if a.metrics == nil {
+					return nil
+				}
+				return a.metrics.Handler()
+			}(),
+			MetricsPublic: cfg.Metrics.Public,
+			Pruner:        a.audit,
+			PublicURL:     cfg.Server.PublicURL,
+			Accounts:      a.accounts,
+			Catalog:       a.settingsCatalog,
 			PluginType: func(instance string) string {
 				for _, inst := range a.instances(context.Background()) {
 					if inst.Name == instance {
@@ -439,6 +459,70 @@ func splitToolName(qualified string) (plugin, bare string, ok bool) {
 		}
 	}
 	return qualified, "", false
+}
+
+// registerMetrics wires the numbers whose authority is not this process.
+//
+// A counter kept in Go would answer "how many operations has this process seen
+// since it started", which is a different question from the one an operator
+// asks and a worse one: it resets on restart and never mentions the row that
+// has been sitting in indeterminate since Tuesday. These are read from the
+// database when a scrape arrives.
+func (a *App) registerMetrics() {
+	if a.metrics == nil {
+		return
+	}
+
+	a.metrics.AddGauge("mcpd_operations",
+		"Operations currently in each state, by plugin and action.",
+		[]string{"plugin", "action", "state"},
+		func(ctx context.Context) []observability.Sample {
+			counts, err := a.ops.StateCounts(ctx)
+			if err != nil {
+				a.log.Warn("could not read operation counts for metrics", "error", err)
+				return nil
+			}
+			out := make([]observability.Sample, 0, len(counts))
+			for _, c := range counts {
+				out = append(out, observability.Sample{
+					Labels: []string{c.Plugin, c.Action, c.State},
+					Value:  float64(c.Count),
+				})
+			}
+			return out
+		})
+
+	// Separate from the total rather than a fourth label on it. "How many
+	// changes happened with nobody being asked" is the question a standing
+	// rule creates, and it is asked on its own.
+	a.metrics.AddGauge("mcpd_operations_authorized_by_rule",
+		"Operations a standing rule authorised, rather than a person, by plugin and action.",
+		[]string{"plugin", "action", "state"},
+		func(ctx context.Context) []observability.Sample {
+			counts, err := a.ops.StateCounts(ctx)
+			if err != nil {
+				return nil
+			}
+			out := make([]observability.Sample, 0, len(counts))
+			for _, c := range counts {
+				out = append(out, observability.Sample{
+					Labels: []string{c.Plugin, c.Action, c.State},
+					Value:  float64(c.AuthorizedByRule),
+				})
+			}
+			return out
+		})
+
+	a.metrics.AddGauge("mcpd_outbox_pending",
+		"Committed events not yet delivered to a consumer.",
+		nil,
+		func(ctx context.Context) []observability.Sample {
+			n, err := a.outbox.PendingCount(ctx)
+			if err != nil {
+				return nil
+			}
+			return []observability.Sample{{Value: float64(n)}}
+		})
 }
 
 // registerHealthChecks wires the components the readiness probe reports on.

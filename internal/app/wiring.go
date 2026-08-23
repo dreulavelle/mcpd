@@ -228,7 +228,34 @@ func (a *App) pluginDeps(name string) plugins.Deps {
 		Secrets:  newPluginSecrets(a.cfg, name),
 		HTTP:     newPluginHTTPClient(),
 		Now:      time.Now,
+		// Both are the metrics surface, handed over through interfaces narrow
+		// enough that a plugin can report its own cache and its own upstream
+		// latency and nothing else. Nil when the endpoint is switched off.
+		Cache:    a.cacheObserver(),
+		Upstream: a.upstreamObserver(),
 	}
+}
+
+// cacheObserver and upstreamObserver hand a plugin the metrics surface, or
+// nothing.
+//
+// Returning a typed nil inside a non-nil interface would be the easy mistake
+// here: a plugin checking `if deps.Cache != nil` would then call through to a
+// nil receiver. The methods are nil-safe, so it would work -- but relying on
+// that makes every call site depend on a detail of another package. Nil in,
+// nil out.
+func (a *App) cacheObserver() plugins.CacheObserver {
+	if a.metrics == nil {
+		return nil
+	}
+	return a.metrics
+}
+
+func (a *App) upstreamObserver() plugins.UpstreamObserver {
+	if a.metrics == nil {
+		return nil
+	}
+	return a.metrics
 }
 
 // newPluginHTTPClient builds the client plugins use to reach upstream systems.

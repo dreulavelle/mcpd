@@ -38,6 +38,11 @@ type Options struct {
 	Manager    *plugins.Manager
 	Health     *observability.HealthRegistry
 	Version    string
+
+	// Metrics serves the Prometheus exposition format, or is nil when the
+	// endpoint is switched off. MetricsPublic serves it unauthenticated.
+	Metrics       http.Handler
+	MetricsPublic bool
 	// Audit reads the append-only trail.
 	Audit AuditReader
 
@@ -231,6 +236,33 @@ func (s *Server) routes() {
 	// a public document, and requiring a sign-in to fetch it would mean
 	// needing the browser to trust it before it can be trusted.
 	s.mux.HandleFunc("GET /api/tls/ca", s.handleCACertificate)
+
+	// Metrics live here rather than beside /health/ready on the MCP listener.
+	// That listener is the one a third party reaches through a tunnel, and
+	// these series name every plugin, every tool, and how long each upstream
+	// takes -- which is exactly the operational detail an unauthenticated
+	// readiness probe is careful not to carry. This listener already has the
+	// right audience and the right exposure.
+	//
+	// `read` rather than `admin`: it is a read of this host's own state, which
+	// is what read means everywhere else here, and a scraper presents a static
+	// token like any other machine caller. MetricsPublic drops the check for a
+	// deployment that has fenced the port off instead.
+	//
+	// Registered even when the endpoint is off, so a scrape config pointing at
+	// it gets a 404 rather than the single-page application's own shell, which
+	// the catch-all below would otherwise hand back with a 200 and leave
+	// somebody reading a parse error.
+	switch {
+	case s.opts.Metrics == nil:
+		s.mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "metrics are not enabled", http.StatusNotFound)
+		})
+	case s.opts.MetricsPublic:
+		s.mux.Handle("GET /metrics", s.opts.Metrics)
+	default:
+		s.mux.Handle("GET /metrics", s.authenticate(auth.CapRead, s.opts.Metrics.ServeHTTP))
+	}
 
 	api("GET /api/operations", s.handleListOperations, auth.CapRead)
 	api("GET /api/operations/{id}", s.handleGetOperation, auth.CapRead)

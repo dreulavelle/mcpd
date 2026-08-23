@@ -164,6 +164,9 @@ type mutationDescriptor struct {
 	// the host reads the absence as "this outcome cannot be confirmed", which
 	// is the safe direction to be wrong in.
 	Verifiable bool `json:"verifiable,omitempty"`
+	// RateLimit is additive in the other direction: absent means the host's
+	// default applies, and the host's default is a limit rather than none.
+	RateLimit float64 `json:"rate_limit,omitempty"`
 }
 
 type callToolParams struct {
@@ -449,7 +452,7 @@ func (p *Plugin) describe() describeResult {
 			Action: m.spec.Action, Title: m.spec.Title,
 			Description: m.spec.Description, InputSchema: m.inputSchema,
 			Risk: string(m.spec.Risk), Reversible: m.spec.Reversible,
-			Verifiable: m.spec.Verifiable,
+			Verifiable: m.spec.Verifiable, RateLimit: m.spec.RateLimit,
 		})
 	}
 	for _, path := range p.resOrder {

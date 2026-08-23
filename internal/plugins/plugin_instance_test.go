@@ -27,7 +27,7 @@ func (s *stubPlugin) Register(_ context.Context, r *Registry) error {
 func testManager(t *testing.T) *Manager {
 	t.Helper()
 	return NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)), "test",
-		func(context.Context, string, auth.Capability) error { return nil }, nil, nil)
+		func(context.Context, string, auth.Capability) error { return nil }, nil, nil, nil)
 }
 
 // The configured name wins over the one the plugin declares. A plugin knows

@@ -199,7 +199,7 @@ func TestPlugin_RegisterReadsOnlyTheSnapshot(t *testing.T) {
 	}
 
 	m := plugins.NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)), "test",
-		func(context.Context, string, auth.Capability) error { return nil }, nil, nil)
+		func(context.Context, string, auth.Capability) error { return nil }, nil, nil, nil)
 	if err := m.Register(context.Background(), p, "weather", false); err != nil {
 		t.Fatalf("register must not need the network: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestPlugin_RegisterRefusesWithNothingEnabled(t *testing.T) {
 		t.Fatalf("new: %v", err)
 	}
 	m := plugins.NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)), "test",
-		func(context.Context, string, auth.Capability) error { return nil }, nil, nil)
+		func(context.Context, string, auth.Capability) error { return nil }, nil, nil, nil)
 	err = m.Register(context.Background(), p, "weather", false)
 	if err == nil || !strings.Contains(err.Error(), "discover them") {
 		t.Fatalf("expected a report naming the next step, got %v", err)

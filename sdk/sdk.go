@@ -247,6 +247,16 @@ type MutationSpec struct {
 	// used to say about every mutation whether or not anything was compared.
 	// Say true only if Observe really does read back what Apply wrote.
 	Verifiable bool
+	// RateLimit bounds how often one caller may propose this mutation, in
+	// requests per second. Zero takes the host's default, which is a real
+	// limit rather than an absence.
+	//
+	// There is no value meaning unbounded, and that is deliberate. A standing
+	// rule on the host can authorise a class of change with nobody being
+	// asked, so the only thing standing between an agent in a retry loop and a
+	// stream of writes against live equipment is this. Raise it for a cheap
+	// change; lower it for one that takes a site down.
+	RateLimit float64
 }
 
 // Plugin holds a plugin's declarations.
@@ -396,6 +406,11 @@ func RegisterMutation[P, S any](p *Plugin, spec MutationSpec, m Mutation[P, S]) 
 	if !validRisk(spec.Risk) {
 		p.addErr(fmt.Errorf("mutation %q declares invalid risk %q; use low, medium, high or critical",
 			spec.Action, spec.Risk))
+		return
+	}
+	if spec.RateLimit < 0 {
+		p.addErr(fmt.Errorf("mutation %q declares a negative rate limit; "+
+			"leave it zero to take the host's default", spec.Action))
 		return
 	}
 	if m == nil {

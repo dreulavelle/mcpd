@@ -123,6 +123,26 @@ logging:
   level: info
   format: json
 
+# Prometheus metrics, served at GET /metrics on the *dashboard* listener.
+#
+# Not on the MCP listener, and that is the decision rather than an accident.
+# /health/ready lives there unauthenticated because a load balancer in front of
+# that port has to reach it without a credential -- but the MCP port is also
+# what a third party reaches through the tunnel, and these series name every
+# mounted plugin, every tool, how long each upstream takes and how often each
+# fails. The dashboard listener has the audience this is for.
+metrics:
+  enabled: true
+
+  # Serve /metrics without authentication.
+  #
+  # Off by default. With it off, a Prometheus scrapes it holding a static token
+  # from auth.static_tokens like any other machine caller -- the endpoint needs
+  # `read`. Turn it on only where this listener is already reachable from a
+  # monitoring network and nowhere else; mcpd logs a warning at startup either
+  # way, so the choice is visible rather than assumed.
+  public: false
+
 # OpenAI's Secure MCP Tunnel, running inside mcpd.
 #
 # This is how ChatGPT reaches mcpd without an inbound port, public DNS, or a

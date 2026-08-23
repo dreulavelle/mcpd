@@ -388,6 +388,47 @@ func (s *OperationStore) Claimable(ctx context.Context, limit int) ([]*operation
 	return scanOperations(rows)
 }
 
+// StateCount is how many operations one plugin has in one state.
+type StateCount struct {
+	Plugin string
+	Action string
+	State  string
+	Count  int64
+	// AuthorizedByRule is how many of those a standing rule approved rather
+	// than a person. It is the number an operator checks after writing a rule,
+	// and it is only meaningful beside the total.
+	AuthorizedByRule int64
+}
+
+// StateCounts groups every operation by plugin, action and state.
+//
+// Read at scrape time rather than counted in Go, because SQLite is the
+// authority on this and an in-process counter would disagree with it after
+// every restart and every prune. The table holds one row per proposed change,
+// which is small enough that a grouped scan costs less than keeping a second
+// copy of the same number correct.
+func (s *OperationStore) StateCounts(ctx context.Context) ([]StateCount, error) {
+	rows, err := s.db.Reader().QueryContext(ctx,
+		`SELECT plugin, action, state, COUNT(*),
+		        SUM(CASE WHEN authorized_by_rule <> '' THEN 1 ELSE 0 END)
+		 FROM operations
+		 GROUP BY plugin, action, state`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: count operations by state: %w", err)
+	}
+	defer rows.Close()
+
+	var out []StateCount
+	for rows.Next() {
+		var c StateCount
+		if err := rows.Scan(&c.Plugin, &c.Action, &c.State, &c.Count, &c.AuthorizedByRule); err != nil {
+			return nil, fmt.Errorf("sqlite: scan operation counts: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // DueForExpiry returns operations the reaper must act on: expired proposals,
 // expired approvals, and executing operations whose lease has lapsed.
 func (s *OperationStore) DueForExpiry(ctx context.Context, now time.Time, limit int) ([]*operations.Operation, error) {
