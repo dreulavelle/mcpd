@@ -184,6 +184,24 @@
   :focus-visible {
     @apply outline-none ring-2 ring-ring/60 ring-offset-2 ring-offset-background;
   }
+
+  /* A native select's open list is drawn by the browser, not from these rules,
+     and the only declaration that reaches it is the inherited one. Preflight
+     gives every select `color: inherit` and `background-color: transparent`,
+     so the list was being handed the dark theme's near-white foreground and no
+     surface to put it on -- and a colour named without a background is exactly
+     when an engine stops using its own scheme-aware pair and falls back to a
+     white panel. Light text on white: the dropdown nobody could read.
+     `color-scheme` was never the missing piece; it is `light dark` on :root and
+     on the document's meta tag, and it does not survive a half-specified pair.
+     So both halves are named here, and the control is given the same surface
+     in native-select.tsx, because Chromium builds the popup's background from
+     the control's. */
+  option,
+  optgroup {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
+  }
 }
 
 /* A wide table scrolls inside its own box rather than pushing the page

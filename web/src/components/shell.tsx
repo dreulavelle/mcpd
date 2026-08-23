@@ -5,7 +5,7 @@ import type { Capability } from "@/lib/capabilities";
 import { usePoll } from "@/lib/hooks";
 import { covers, visibleNav, type NavItem } from "@/lib/nav";
 import { Link, useRouter } from "@/lib/router";
-import { useCan, useSession } from "@/lib/session";
+import { signedInAs, useCan, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -84,8 +84,12 @@ function Sidebar({ badges, onNavigate }: {
   };
   const groups = visibleNav((c) => held[c]);
 
+  // `flex-1` with `min-h-0` rather than `h-full`: this is the only part of the
+  // sidebar allowed to grow, so a long list of sections scrolls here instead of
+  // pushing the footer off the bottom. Without `min-h-0` a flex child refuses
+  // to shrink below its content and `overflow-y-auto` never engages.
   return (
-    <nav className="flex h-full flex-col gap-5 overflow-y-auto p-3">
+    <nav className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-3">
       {groups.map((group, i) => (
         <div key={group.title ?? `group-${i}`} className="space-y-1">
           {/* Not the faintest grey available. These headings were decoration
@@ -149,6 +153,43 @@ function HealthPill({ health }: { health: HealthReport | null }) {
   );
 }
 
+/**
+ * Who is signed in, whether the host is well, and the way out.
+ *
+ * Pinned under the navigation rather than sitting in the top-right corner.
+ * These are the console's standing facts and not the current page's, so they
+ * belong with the other standing furniture; the corner they used to occupy is
+ * the one a page's own actions want. It is outside the scrolling list on
+ * purpose -- the state of the host should not be something you have to scroll
+ * a menu to find out.
+ */
+function SidebarFooter({ health, onSignOut }: {
+  health: HealthReport | null;
+  onSignOut: () => void;
+}) {
+  const session = useSession();
+
+  return (
+    <div className="shrink-0 space-y-1 border-t p-3">
+      <HealthPill health={health} />
+      <div className="flex items-center gap-1">
+        {/* The email as the title even when it is also the text: once display
+            names are settable the visible line stops being the address, and
+            the address is what identifies the account to an administrator. */}
+        <span className="min-w-0 flex-1 truncate px-2 text-sm" title={session?.email}>
+          {signedInAs(session)}
+        </span>
+        <Button
+          variant="ghost" size="icon-sm"
+          aria-label="Sign out" onClick={onSignOut}
+        >
+          <LogOut className="size-4" aria-hidden="true" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function Brand({ compact }: { compact?: boolean }) {
   return (
     <div className={cn("flex items-center gap-2", compact ? "" : "h-14 px-4")}>
@@ -176,7 +217,6 @@ export function Shell({ badges, onSignOut, children }: {
   onSignOut: () => void;
   children: ReactNode;
 }) {
-  const session = useSession();
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -195,6 +235,7 @@ export function Shell({ badges, onSignOut, children }: {
         <Brand />
         <Separator />
         <Sidebar badges={badges} />
+        <SidebarFooter health={health} onSignOut={onSignOut} />
       </aside>
 
       {drawerOpen && (
@@ -209,14 +250,22 @@ export function Shell({ badges, onSignOut, children }: {
             <Brand />
             <Separator />
             <Sidebar badges={badges} onNavigate={closeDrawer} />
+            <SidebarFooter health={health} onSignOut={onSignOut} />
           </aside>
         </div>
       )}
 
       <div className="flex min-w-0 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur">
+        {/* Narrow windows only. With the health, the account and the way out
+            moved into the sidebar there is nothing left for a wide window's top
+            bar to hold -- every page draws its own heading -- so rather than
+            leave an empty strip across the top, the bar goes with them. It
+            survives here because a collapsed sidebar still needs a handle to
+            open it, and because health and sign-out should not be a drawer
+            away: they ride along beside the handle. */}
+        <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur lg:hidden">
           <Button
-            variant="ghost" size="icon-sm" className="lg:hidden"
+            variant="ghost" size="icon-sm"
             aria-label={drawerOpen ? "Close navigation" : "Open navigation"}
             onClick={() => setDrawerOpen((open) => !open)}
           >
@@ -224,21 +273,20 @@ export function Shell({ badges, onSignOut, children }: {
               ? <X className="size-4" aria-hidden="true" />
               : <Menu className="size-4" aria-hidden="true" />}
           </Button>
-          <span className="lg:hidden"><Brand compact /></span>
+          <Brand compact />
 
           <span className="flex-1" />
 
           <HealthPill health={health} />
-          <span className="hidden text-xs text-muted-foreground sm:inline">
-            {session?.display_name || session?.email}
-          </span>
-          <Button variant="ghost" size="sm" onClick={onSignOut}>
-            <LogOut className="size-3.5" aria-hidden="true" />
-            <span className="hidden sm:inline">Sign out</span>
+          <Button
+            variant="ghost" size="icon-sm"
+            aria-label="Sign out" onClick={onSignOut}
+          >
+            <LogOut className="size-4" aria-hidden="true" />
           </Button>
         </header>
 
-        <main className="min-w-0 flex-1 px-4 py-6 lg:px-8">
+        <main className="min-w-0 flex-1 px-4 py-6 lg:px-8 lg:py-8">
           <div className="mx-auto max-w-6xl">{children}</div>
         </main>
       </div>
