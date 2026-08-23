@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -265,6 +266,15 @@ func (c *Cached) Close() error {
 // Source names the catalogue underneath.
 func (c *Cached) Source() string { return c.upstream.Source() }
 
+// ReportsUses passes the catalogue's own answer through.
+//
+// A cache in front of a source must not lose what that source can do. Multi
+// asks its sources this to decide which of them a most-used listing covers,
+// and every source it holds is wrapped here -- so a cache that answered for
+// itself would report that no catalogue publishes a usage figure and quietly
+// empty the ordering.
+func (c *Cached) ReportsUses() bool { return reportsUses(c.upstream) }
+
 // List returns one page.
 //
 // Three states, and they are three different questions. Fresh is served.
@@ -279,7 +289,14 @@ func (c *Cached) List(ctx context.Context, q Query) (Page, error) {
 	// key of a page it is not when an over-long cursor is dropped downstream,
 	// and leave the size of a key set by whoever typed it.
 	q = q.Normalised()
-	key := c.key("list", q.Search+"\x00"+q.Cursor+"\x00"+strconv.Itoa(q.Limit))
+	// The order and the scope are in the key even though a catalogue's own
+	// client ignores both -- Multi reads them and asks each source a plain
+	// question. They are here because the key has to stand for the request,
+	// and a cache wrapped round something that *does* read them would
+	// otherwise serve one question's answer to another.
+	key := c.key("list", strings.Join([]string{
+		q.Search, q.Cursor, strconv.Itoa(q.Limit), string(q.Sort), q.Source,
+	}, "\x00"))
 
 	if !RefreshRequested(ctx) {
 		if hit := c.store.Get(key); hit != nil && hit.Err == nil {

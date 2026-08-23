@@ -46,6 +46,21 @@ func unreachable(c CatalogAPI) string {
 		"and it is worth trying again shortly"
 }
 
+// catalogueNames is what this host browses, for a refusal that has to say so.
+//
+// The composite's own name is the configured catalogues joined with commas,
+// which is already the list. It is this deployment's configuration rather than
+// anything a third party said, so it is quoted back plainly.
+func catalogueNames(c CatalogAPI) string {
+	if c.Source == nil {
+		return "nothing"
+	}
+	if s := c.Source(); s != "" {
+		return s
+	}
+	return "nothing"
+}
+
 // catalogPageLimit bounds a page. The registry caps its own at a hundred, and
 // asking for more than a screenful of a third party's list is a lot of prose
 // to render for a person who is going to pick one of them.
@@ -95,10 +110,27 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 			"no server catalogue is configured")
 		return
 	}
+	// An order this host does not have is refused rather than quietly
+	// replaced with the default. A page that came back in no particular order
+	// when one was asked for looks sorted and is not, and the caller has no
+	// way to tell.
+	order, err := registry.ParseSort(r.URL.Query().Get("sort"))
+	if err != nil {
+		s.writeError(w, r, http.StatusBadRequest,
+			"there is no such order here; this host sorts by "+
+				strings.Join(registry.SortNames(), ", "))
+		return
+	}
 	page, err := s.opts.ServerCatalog.List(catalogContext(r), registry.Query{
 		Search: r.URL.Query().Get("q"),
 		Cursor: r.URL.Query().Get("cursor"),
 		Limit:  parseLimit(r.URL.Query().Get("limit"), catalogDefaultLimit, catalogMaxLimit),
+		// One catalogue, or all of them. The four differ in kind -- who runs
+		// the server, who holds the credential, who vouched for the entry --
+		// which is a more useful cut than a category taxonomy none of them
+		// publishes, and it is one this host can answer completely.
+		Source: r.URL.Query().Get("source"),
+		Sort:   order,
 		// Off unless asked for, and there is no control in the dashboard that
 		// asks. Roughly half of what the catalogues publish only runs
 		// locally, and a page of ten that spends five rows explaining why
@@ -108,7 +140,23 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 		// in particular. This is a choice about what a *listing* is for.
 		IncludeUnaddable: truthy(r.URL.Query().Get("include_unaddable")),
 	})
-	if err != nil {
+	switch {
+	// A question this host cannot answer is the caller's mistake, not a third
+	// party being down, and answering it with "the catalogue could not be
+	// read" would send an operator looking for a network fault that is not
+	// there. Both sentences name what this host does have, so the next
+	// request can be a correct one.
+	case errors.Is(err, registry.ErrUnknownSource):
+		s.writeError(w, r, http.StatusBadRequest,
+			"there is no catalogue by that name here; this host browses "+
+				catalogueNames(s.opts.ServerCatalog))
+		return
+	case errors.Is(err, registry.ErrSortUnavailable):
+		s.writeError(w, r, http.StatusBadRequest,
+			"none of the catalogues here says how often a server is used, "+
+				"so there is nothing to put in that order")
+		return
+	case err != nil:
 		s.opts.Log.Warn("could not read the server catalogue", "error", err)
 		s.writeError(w, r, http.StatusBadGateway, unreachable(s.opts.ServerCatalog))
 		return

@@ -78,6 +78,22 @@ type Entry struct {
 	URL       string `json:"url,omitempty"`
 	// UpdatedAt is when the catalogue last changed the entry.
 	UpdatedAt time.Time `json:"updated_at"`
+	// Uses is how many times this entry's own catalogue has been asked to
+	// call the server. Absent where the catalogue publishes no such figure,
+	// which is three of the four today.
+	//
+	// A pointer, and that is the point of it. Absent and zero are different
+	// facts -- "nobody has told us" against "nobody has called it" -- and a
+	// plain int64 collapses them into a number that sorts with the servers
+	// nobody uses and renders as a count somebody measured. Neither is true.
+	//
+	// It is a count of calls, and only a count of calls. A catalogue that
+	// publishes some other popularity figure -- PulseMCP's weekly unique
+	// visitors to a listing page is the one that exists -- must leave this
+	// empty rather than fill it in: two different measurements under one
+	// field is a cross-source ranking invented at the point of assignment,
+	// and the number is rendered to an operator as a fact they can check.
+	Uses *int64 `json:"uses,omitempty"`
 	// Addable reports that this host would accept the document. It is decided
 	// by handing the document to the same parser the import endpoint uses, so
 	// an entry offered here is one that can actually be imported.
@@ -193,6 +209,15 @@ type SourceStatus struct {
 	// Judged is one page of theirs and nothing more.
 	Judged  int `json:"judged,omitempty"`
 	Addable int `json:"addable,omitempty"`
+	// Uses reports a catalogue that publishes how often each of its servers
+	// is called, which is what makes sort=most-used possible over it.
+	//
+	// It is on the response so that a dashboard can offer that order for the
+	// catalogues that support it and name them, rather than hard-coding which
+	// of the four does. A source scoped away by the caller is not in this
+	// list at all, so a consumer that wants the full set reads it from an
+	// unscoped page.
+	Uses bool `json:"uses,omitempty"`
 	// Total is how many servers this source says it holds altogether, when it
 	// says. Absent where it does not, and absent is not zero.
 	//
@@ -244,6 +269,21 @@ type Query struct {
 	// choosing not to show its refusals, and GET /api/catalog/{name} still
 	// explains one.
 	IncludeUnaddable bool
+	// Source scopes the listing to one catalogue by name. Empty covers them
+	// all.
+	//
+	// The four differ in kind rather than only in contents -- Smithery hosts
+	// and keys what it lists, the official registry is where a publisher
+	// registers their own, Docker's is curated -- so which one an entry came
+	// from is a real thing to filter on, and it is one this host can answer
+	// completely rather than estimate.
+	//
+	// Read by Multi, like Sort. A source knows nothing about the others and
+	// is never asked to filter itself out, so neither field reaches a
+	// catalogue's own client or its cache key.
+	Source string
+	// Sort is the order the assembled page is put in. See Sort.
+	Sort Sort
 }
 
 // Normalised returns the query as it will actually be asked, with every bound
@@ -271,6 +311,12 @@ func (q Query) Normalised() Query {
 		Cursor:           opaque(q.Cursor, maxCursorRunes),
 		Limit:            q.Limit,
 		IncludeUnaddable: q.IncludeUnaddable,
+		// A source name is matched against this host's own configured names,
+		// so an unrecognisable one is refused rather than dropped -- see
+		// Multi.scopeFor. Bounded here all the same, because what arrives is
+		// a caller's text and the refusal quotes it back.
+		Source: clean(q.Source, maxNameRunes),
+		Sort:   q.Sort.normalise(),
 	}
 }
 

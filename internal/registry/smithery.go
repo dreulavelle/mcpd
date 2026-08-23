@@ -226,6 +226,7 @@ func (s *Smithery) ListIfChanged(ctx context.Context, q Query, v Validators) (Pa
 		Source: s.Source(), OK: true,
 		RetrievedAt: page.RetrievedAt, Entries: len(page.Entries),
 		Judged: judged, Addable: addable, Total: total,
+		Uses: true,
 	}
 	// The note is attached to a browse and not to a search, because it is only
 	// true of a browse. A search was answered by Smithery over the whole
@@ -376,6 +377,30 @@ func (s *Smithery) fetchPage(ctx context.Context, search string, page int, v Val
 		out.Servers = out.Servers[:MaxEntriesPerPage]
 	}
 	return out, freshness, nil
+}
+
+// ReportsUses is true: every Smithery listing row carries a call count.
+//
+// It is what lets a caller ask for sort=most-used and get an answer rather
+// than a guess. The other three sources do not implement this interface, so a
+// most-used listing does not reach them at all -- which is the difference
+// between narrowing the page to what can be ordered and ordering a page whose
+// other three quarters have no figure and would sort as if they had zero.
+func (s *Smithery) ReportsUses() bool { return true }
+
+// smitheryUses is the call count as an Entry reports it.
+//
+// Nil for a figure that is not one. Smithery has never sent a negative count,
+// and if it did there would be no honest number to show: zero would say the
+// server has been measured and never called, which is a fact this host would
+// have made up. An entry with no figure sorts last under most-used and renders
+// nothing, which is what "we were not told" should look like.
+func smitheryUses(count int64) *int64 {
+	if count < 0 {
+		return nil
+	}
+	uses := count
+	return &uses
 }
 
 // rankedServer is one entry with the sort key that decides where it lands.
@@ -534,6 +559,7 @@ func (s *Smithery) translate(raw smitheryServer) (Entry, json.RawMessage, bool) 
 		// makes for the same reason.
 		Version:   "",
 		UpdatedAt: smitheryTimestamp(raw.CreatedAt),
+		Uses:      smitheryUses(raw.UseCount),
 		Source:    smitherySource,
 	}
 

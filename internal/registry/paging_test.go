@@ -352,8 +352,12 @@ func TestMulti_ACursorFromAnOlderBuildRestartsTheListing(t *testing.T) {
 // caller and arrives from a URL, so an offset in one is somebody's input.
 func TestMulti_AnOffsetOutsideAWindowIsNotTrusted(t *testing.T) {
 	for _, offset := range []int{-1, MaxEntriesPerPage + 1, 1 << 20} {
-		cursor := multiCursor{officialSource: {Offset: offset}}.encode()
-		decoded := decodeMultiCursor(cursor, []string{officialSource})
+		want := fingerprint(Query{})
+		cursor := multiCursor{
+			Query:     want,
+			Positions: map[string]sourcePosition{officialSource: {Offset: offset}},
+		}.encode()
+		decoded := decodeMultiCursor(cursor, []string{officialSource}, want)
 		if _, listed := decoded[officialSource]; listed {
 			t.Errorf("offset %d survived decoding", offset)
 		}

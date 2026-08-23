@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,9 +80,85 @@ func (m *Multi) Close() error {
 }
 
 // Sources names the catalogues, in preference order.
-func (m *Multi) Sources() []string {
-	out := make([]string, 0, len(m.sources))
+func (m *Multi) Sources() []string { return sourceNames(m.sources) }
+
+// ReportsUses is true when any catalogue behind this one publishes a usage
+// figure, so that a Multi composed into another Multi keeps the capability
+// rather than losing it at the join.
+func (m *Multi) ReportsUses() bool {
 	for _, s := range m.sources {
+		if reportsUses(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// ErrUnknownSource reports a catalogue this host is not configured with.
+var ErrUnknownSource = errors.New("registry: unknown catalogue")
+
+// ErrSortUnavailable reports an order no configured catalogue can support.
+var ErrSortUnavailable = errors.New("registry: that order is not available here")
+
+// scopeFor decides which catalogues one listing covers, and accounts for the
+// ones it does not.
+//
+// Two things narrow a listing, and they are narrowed differently on purpose.
+//
+// The caller's own scope is exact: name a catalogue and that is the listing.
+// A name this host does not have is refused rather than ignored, because
+// ignoring it would answer a request to see one catalogue with a page of all
+// four and nothing saying the filter had been dropped.
+//
+// The most-used order narrows by capability. Three of the four catalogues
+// publish no count of how often a server is called, and there is no honest
+// place to put them in an order built on one: sorting them below a server with
+// a single call says this host measured them at zero, and it did not. So they
+// are left out of that listing and reported as left out, which is the same
+// judgement the response already makes about a catalogue that failed. What is
+// bought is that the order shown is real -- and where exactly one catalogue
+// publishes the figure, as today, it is a total order over that catalogue
+// rather than a rearrangement of one page.
+func (m *Multi) scopeFor(q Query) (covered []Client, excluded []SourceStatus, err error) {
+	covered = m.sources
+	if q.Source != "" {
+		scoped := false
+		for _, s := range m.sources {
+			if strings.EqualFold(s.Source(), q.Source) {
+				covered, scoped = []Client{s}, true
+				break
+			}
+		}
+		if !scoped {
+			return nil, nil, fmt.Errorf("%w %q; this host browses %s",
+				ErrUnknownSource, q.Source, strings.Join(m.Sources(), ", "))
+		}
+	}
+	if q.Sort != SortMostUsed {
+		return covered, nil, nil
+	}
+	ranked := make([]Client, 0, len(covered))
+	for _, s := range covered {
+		if reportsUses(s) {
+			ranked = append(ranked, s)
+			continue
+		}
+		excluded = append(excluded, SourceStatus{
+			Source: s.Source(), OK: true,
+			Note: "does not publish how often a server is used, so it is not in this order",
+		})
+	}
+	if len(ranked) == 0 {
+		return nil, nil, fmt.Errorf(
+			"%w: no catalogue here publishes how often a server is used", ErrSortUnavailable)
+	}
+	return ranked, excluded, nil
+}
+
+// sourceNames names a set of catalogues, in the order given.
+func sourceNames(sources []Client) []string {
+	out := make([]string, 0, len(sources))
+	for _, s := range sources {
 		out = append(out, s.Source())
 	}
 	return out
@@ -160,11 +238,23 @@ func sourceFetchFor(limit int) int {
 // a server land in the same merge and one is removed -- the only situation in
 // which a person can see that there are two. Reconciling a browse across
 // twenty-four thousand entries would mean holding both catalogues whole.
+//
+// Query.Source and Query.Sort are read here and nowhere below: a catalogue's
+// own client is asked a plain question, and which catalogues to ask and how to
+// arrange the answer are this level's decisions. Both narrow before the fetch
+// -- see scopeFor -- and only the arrangement happens after it.
 func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 	if len(m.sources) == 0 {
 		return Page{}, errors.New("registry: no catalogue is configured")
 	}
 	q = q.Normalised()
+	if !q.Sort.known() {
+		return Page{}, fmt.Errorf("%w %q", ErrUnknownSort, q.Sort)
+	}
+	covered, excluded, err := m.scopeFor(q)
+	if err != nil {
+		return Page{}, err
+	}
 	limit := q.Limit
 	if limit <= 0 {
 		limit = defaultLimit
@@ -172,16 +262,23 @@ func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 	fetch := sourceFetchFor(limit)
 
 	// A cursor that decoded to nothing usable -- garbage, one written by a
-	// host configured with different sources, or one written by an older
-	// build -- restarts the listing rather than paging nothing. Restarting is
-	// a state the caller already handles; an empty page with no explanation
-	// is not.
-	resume := decodeMultiCursor(q.Cursor, m.Sources())
+	// host configured with different sources, one written by an older build,
+	// or one belonging to a different question -- restarts the listing rather
+	// than paging nothing. Restarting is a state the caller already handles;
+	// an empty page with no explanation is not.
+	resume := decodeMultiCursor(q.Cursor, sourceNames(covered), fingerprint(q))
 	resuming := len(resume) > 0
 
-	walkers := make([]*sourceWalk, len(m.sources))
-	for i, source := range m.sources {
-		w := &sourceWalk{client: source, index: i, name: source.Source()}
+	walkers := make([]*sourceWalk, len(covered))
+	for i, source := range covered {
+		w := &sourceWalk{
+			client: source, index: i, name: source.Source(),
+			// Read from the source rather than from its answer, so that it is
+			// still reported for a catalogue that failed or was exhausted on
+			// an earlier page. Whether a catalogue publishes a usage figure is
+			// a fact about the catalogue, not about one response.
+			uses: reportsUses(source),
+		}
 		if resuming {
 			pos, listed := resume[w.name]
 			// A source absent from the cursor had nothing further last time.
@@ -245,8 +342,26 @@ func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 		}
 	}
 
+	// Sorted after the page is assembled, which is the only place it can
+	// honestly happen and is why the label on the control matters. Which
+	// entries reach this line was decided by the round-robin merge over the
+	// window each source handed back; a *global* order would mean holding
+	// twenty-four thousand entries from behind four opaque cursors, and no
+	// source offers to sort for us. So this orders the rows on the page.
+	//
+	// Most used is the exception, and only because it was narrowed first: a
+	// most-used listing covers the catalogues that publish a figure, and
+	// where that is one catalogue the rows arrive in its own total order and
+	// stay in it page after page. That is a real global ordering over what is
+	// shown, and it is the only one here that is.
+	//
+	// It cannot disturb the cursor. Every position was recorded as rows were
+	// taken from the windows; rearranging the taken rows afterwards changes
+	// what a reader sees and nothing about where each source resumes.
+	sortEntries(entries, q.Sort)
+
 	page := Page{Source: m.Source(), Entries: entries}
-	next := multiCursor{}
+	next := multiCursor{Query: fingerprint(q), Positions: map[string]sourcePosition{}}
 	answered := 0
 	var failures []error
 	oldest := time.Time{}
@@ -257,6 +372,7 @@ func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 			failures = append(failures, w.err)
 			page.Sources = append(page.Sources, SourceStatus{
 				Source: w.name,
+				Uses:   w.uses,
 				Error:  clean(w.err.Error(), maxReasonRunes),
 			})
 			// A source that failed keeps the place it came in with, so the
@@ -268,7 +384,8 @@ func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 			// Exhausted on an earlier page. Reported so that the response
 			// still accounts for every configured source rather than looking
 			// as though one had vanished.
-			page.Sources = append(page.Sources, SourceStatus{Source: w.name, OK: true})
+			page.Sources = append(page.Sources, SourceStatus{
+				Source: w.name, OK: true, Uses: w.uses})
 		default:
 			answered++
 			page.Stale = page.Stale || w.stale
@@ -282,6 +399,7 @@ func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 				Judged:      w.judged,
 				Addable:     w.addable,
 				Total:       w.total,
+				Uses:        w.uses,
 				// Carried across rather than recomputed. The status this
 				// builds is this level's -- how many entries survived
 				// deduplication is not something a source can know -- but a
@@ -302,6 +420,14 @@ func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 		// does not fix one catalogue and find the other still broken.
 		return Page{}, joinSourceErrors(failures)
 	}
+
+	// The catalogues this order left out, after the ones that answered. They
+	// are reported for the same reason a failed source is: a page that is
+	// shorter because three of four catalogues are not in it reads as "there
+	// is nothing else" unless it says which are missing and why. A source the
+	// *caller* scoped away is not here -- they asked for one catalogue, and
+	// listing the others back at them is noise rather than an account.
+	page.Sources = append(page.Sources, excluded...)
 
 	page.NextCursor = next.encode()
 	page.AddableEstimate = estimateAddable(page.Sources)
@@ -454,6 +580,9 @@ type sourceWalk struct {
 	// done is a source with nothing further anywhere.
 	done bool
 
+	// uses is whether this catalogue publishes how often a server is called,
+	// asked of the source itself rather than read from an answer.
+	uses      bool
 	arrived   bool
 	answered  bool
 	err       error
@@ -717,44 +846,79 @@ type sourcePosition struct {
 	Offset int `json:"o,omitempty"`
 }
 
-// multiCursor carries one position per source.
+// multiCursor carries one position per source, and the question they are
+// positions in.
 //
 // Opaque to everyone outside this file, and it has to be: a source's cursor
 // belongs to that source and means nothing here. What this adds is which
 // source each one came from, so that a page continues each catalogue where it
 // left off rather than restarting one of them.
 //
-// A source absent from the map has no further pages. That is why the encoding
-// is a map rather than a list: adding or removing a source between two
-// requests changes the list's positions and would silently hand one source's
-// cursor to another.
-type multiCursor map[string]sourcePosition
+// A source absent from Positions has no further pages. That is why it is a map
+// rather than a list: adding or removing a source between two requests changes
+// a list's positions and would silently hand one source's cursor to another.
+//
+// Query is a fingerprint of the question, and it exists because "no further
+// pages" is only true of the question that was asked. Continuing a most-used
+// listing -- which covers one catalogue -- with a cursor from an unscoped one
+// would read the other three as exhausted and drop them from the rest of the
+// listing with nothing saying so. The same hazard has always been there for a
+// changed search term; the fingerprint closes both.
+type multiCursor struct {
+	Query     string                    `json:"q,omitempty"`
+	Positions map[string]sourcePosition `json:"p,omitempty"`
+}
 
-func (c multiCursor) set(source string, pos sourcePosition) { c[source] = pos }
+func (c multiCursor) set(source string, pos sourcePosition) { c.Positions[source] = pos }
 
 // encode renders the cursor for the wire. Empty when nothing has more pages,
 // which is how a caller learns the listing has ended.
 func (c multiCursor) encode() string {
-	if len(c) == 0 {
+	if len(c.Positions) == 0 {
 		return ""
 	}
-	raw, err := json.Marshal(map[string]sourcePosition(c))
+	raw, err := json.Marshal(c)
 	if err != nil {
 		return ""
 	}
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
+// fingerprint identifies the question a cursor belongs to.
+//
+// Everything that decides which rows a page is assembled from, and nothing
+// that does not. The limit is left out deliberately: a caller may ask for
+// twenty rows and then for ten, and every position stays exactly as valid,
+// because an offset counts rows accounted for in a source's window rather than
+// pages handed out.
+//
+// A hash rather than the values, because a search term is a hundred and
+// twenty-eight runes of somebody's text and a cursor is a thing that travels
+// in a URL. Collisions cost a resumed listing that should have restarted,
+// which is the failure this already had everywhere; sixty-four bits is far
+// more than enough to make that not the interesting case.
+func fingerprint(q Query) string {
+	h := fnv.New64a()
+	for _, part := range []string{
+		q.Search, string(q.Sort), strings.ToLower(q.Source),
+		strconv.FormatBool(q.IncludeUnaddable),
+	} {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	return strconv.FormatUint(h.Sum64(), 36)
+}
+
 // decodeMultiCursor reads a composite cursor.
 //
 // A cursor that will not decode, that names a source this host is not
-// configured with, or that an older build wrote in a shape this one does not
-// read, yields an empty one: the listing restarts rather than paging a
-// catalogue with a token from somewhere else. Restarting is a state the caller
-// already handles; handing an arbitrary string to a third party's pagination
-// is not.
-func decodeMultiCursor(encoded string, sources []string) multiCursor {
-	out := multiCursor{}
+// configured with, that an older build wrote in a shape this one does not
+// read, or that belongs to a different question, yields an empty one: the
+// listing restarts rather than paging a catalogue with a token from somewhere
+// else. Restarting is a state the caller already handles; handing an arbitrary
+// string to a third party's pagination is not.
+func decodeMultiCursor(encoded string, sources []string, want string) map[string]sourcePosition {
+	out := map[string]sourcePosition{}
 	if opaque(encoded, maxCursorRunes) == "" {
 		return out
 	}
@@ -762,15 +926,18 @@ func decodeMultiCursor(encoded string, sources []string) multiCursor {
 	if err != nil || len(raw) > maxCursorRunes*len(sources)+len(sources)*64+64 {
 		return out
 	}
-	var decoded map[string]sourcePosition
+	var decoded multiCursor
 	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return out
+	}
+	if decoded.Query != want {
 		return out
 	}
 	known := make(map[string]bool, len(sources))
 	for _, s := range sources {
 		known[s] = true
 	}
-	for source, pos := range decoded {
+	for source, pos := range decoded.Positions {
 		if !known[source] {
 			continue
 		}
