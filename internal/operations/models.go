@@ -149,12 +149,36 @@ type Change struct {
 	To    any    `json:"to"`
 }
 
+// Assurance names what an operation's record actually proves.
+//
+// Two different things get called an approval, and they are not the same
+// evidence. A reviewed change is one mcpd planned itself: the approver saw the
+// exact fields, drift between proposal and execution is detectable, and the
+// outcome is confirmed by re-reading the target. A gated call is one a human
+// authorised without mcpd being able to describe or confirm what it did -- all
+// the record proves is that somebody said yes and that the call was made.
+//
+// Calling both "approved" lets the second borrow the first's credibility,
+// which is the whole reason the word is worth splitting.
+type Assurance string
+
+const (
+	// AssuranceReviewedChange carries every proof: exact fields, drift
+	// detection, and a confirmed outcome.
+	AssuranceReviewedChange Assurance = "reviewed_change"
+	// AssuranceGatedCall carries only authorisation and the fact of the call.
+	AssuranceGatedCall Assurance = "gated_call"
+)
+
+// String implements fmt.Stringer.
+func (a Assurance) String() string { return string(a) }
+
 // Operation is the authoritative record of a proposed infrastructure mutation.
 //
-// Every field between Target and Impact is frozen once the operation leaves
-// StateDraft. The storage layer enforces this with a trigger as well as by
-// convention, because a payload that can change after approval makes approval
-// meaningless.
+// Every field between Target and Verifiable is frozen once the operation
+// leaves StateDraft. The storage layer enforces this with a trigger as well as
+// by convention, because a payload that can change after approval makes
+// approval meaningless.
 type Operation struct {
 	ID     string         `json:"id"`
 	Plugin string         `json:"plugin"`
@@ -172,6 +196,18 @@ type Operation struct {
 	Rollback      json.RawMessage `json:"rollback,omitempty"`
 	Changes       []Change        `json:"changes,omitempty"`
 	Impact        string          `json:"impact"`
+	// Verifiable is the mutation's own declaration that re-reading the target
+	// after the write confirms the result. It is declared by the plugin rather
+	// than inferred from an empty field, because an absent desired state is
+	// ambiguous: for a delete it means "the target should be gone", which is
+	// a meaningful thing to observe, and for a mutation that simply cannot
+	// verify it means nothing at all.
+	//
+	// The executor reads this from the stored row rather than from the plugin
+	// that is about to run, for the same reason it reads the payload and the
+	// approval from there: what the operation claims about itself must not be
+	// changeable by the code being checked.
+	Verifiable bool `json:"verifiable"`
 	// -------------------------------------------------------------------
 
 	RequestedBy string    `json:"requested_by"`
@@ -225,6 +261,24 @@ type Attempt struct {
 	Observed       json.RawMessage `json:"observed,omitempty"`
 	ErrorCode      string          `json:"error_code,omitempty"`
 	ErrorDetail    string          `json:"error_detail,omitempty"`
+}
+
+// DriftChecked reports whether this operation carries a precondition snapshot
+// that a re-plan can be compared against. A mutation declaring none is not
+// drift-checked, however cleanly its execution reports.
+func (o *Operation) DriftChecked() bool { return Declared(o.Preconditions) }
+
+// Assurance reports which of the two things called an approval this is.
+//
+// A mutation is a reviewed change only while it holds all three proofs. Drop
+// one -- no declared preconditions, no way to confirm the outcome -- and what
+// the record proves is what a gated call proves: it was authorised, and it
+// happened. That deserves the smaller word.
+func (o *Operation) Assurance() Assurance {
+	if o.Verifiable && o.DriftChecked() {
+		return AssuranceReviewedChange
+	}
+	return AssuranceGatedCall
 }
 
 // SystemActor identifies transitions performed by mcpd itself rather than by a

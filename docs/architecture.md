@@ -61,6 +61,20 @@ hashed at proposal and frozen. Before execution the hash is recomputed and
 compared inside the same statement that claims the operation, so a tampered
 payload cannot execute even if it slipped past every check above it.
 
+**A claim of verification has to be earned.** Three proofs make a change a
+*reviewed change*: the approver saw the exact fields, drift between proposal
+and execution is detectable, and the outcome is confirmed by re-reading the
+target. A mutation declares whether it can offer the third (`Verifiable`) and
+supplies the second by declaring preconditions. Anything short of all three is
+a *gated call* — a human authorised it and it happened, and that is the whole
+of the evidence. The two words are kept apart in the note the model reads and
+in what the API returns, because the second borrowing the first's credibility
+is exactly how a system ends up claiming more integrity than it has.
+
+An operation that cannot be verified settles with `outcome_verified` null, not
+false. "Not checked" and "checked and did not match" are different facts, and
+collapsing them is what let the executor report a confirmation it never made.
+
 **Proposing and approving are separate acts.** A model can describe a change;
 it cannot authorise one. Approval references a stored operation by id and
 cannot carry parameters, so the thing approved is exactly the thing reviewed.
@@ -177,9 +191,18 @@ list a binary can serve. Out-of-process plugins are ordinary programs speaking
 the `sdk` protocol over stdio, mounted from the plugins directory. A third
 kind is a remote MCP server, described below.
 
-A mutation declares its target, its desired state, and how to observe the
-result. The host plans against live upstream state, freezes the payload,
-executes at most once, then re-observes and compares.
+A mutation declares its target, its desired state, whether observing the result
+confirms it, and how to observe it. The host plans against live upstream state,
+freezes the payload, executes at most once, then re-observes and compares — the
+last step only when the mutation said it would mean something. Verifiability is
+declared rather than inferred from an empty desired state, because that field
+is ambiguous: for a delete it means "the target should be gone", which is a
+real thing to observe, and for a write that cannot be read back it means
+nothing at all.
+
+The plan travels from `Plan` to `Apply` in the argument. Nothing may key it on
+the parameters instead: two live proposals of the same change share those, and
+whichever executes first would consume the other's plan.
 
 The rule that matters most: if `Apply` cannot establish whether its write
 landed, it must return `sdk.Indeterminate`. Anything else tells the host the
@@ -213,6 +236,14 @@ that snapshot, so a host restarting while the far end is down comes up serving
 exactly what it served before and reports itself unhealthy. Calling `tools/list`
 at boot would give a host with no tools and a model that reasonably concludes
 the integration was removed.
+
+**Every administrative act is in the audit trail.** Importing a server, running
+discovery, classifying a tool and removing a server each append to the
+hash-chained `audit_events`, inside the transaction that performed them, naming
+the principal who acted. Enabling a tool is a privilege grant — it hands every
+caller of that plugin a path into a third party's code — so it belongs where
+privilege grants are recorded rather than in the settings history. Reads are
+deliberately not audited per call; this is about state changes.
 
 **Nothing the server says is authority.** `tools/list` is a claim. A tool
 arrives `pending` and is not served until an administrator classifies it, and

@@ -559,3 +559,44 @@ func TestApp_StartsDespiteAnInstanceOfAnUnknownType(t *testing.T) {
 		t.Error("the Plugins page should say why it is not serving")
 	}
 }
+
+// Admin actions on a remote server used to leave nothing behind: after an
+// import, a discovery and an enable, the audit table held zero rows. Enabling
+// a tool hands every caller of that plugin a path into somebody else's code,
+// which is a privilege grant, and it happened with no record of who or when.
+func TestMCPServer_AdminActionsReachTheAuditTrail(t *testing.T) {
+	rs := newRemote(t, map[string]string{"getWeather": "Reads the forecast."})
+	a := newAppIn(t, t.TempDir())
+	ctx := context.Background()
+
+	mustImport(t, a, "weather", rs.document())
+	mustDiscover(t, a, "weather")
+	mustEnable(t, a, "weather", "getWeather")
+	if err := a.RemoveMCPServer(ctx, "tester", "weather"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	records, err := a.audit.Recent(ctx, 200)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	seen := map[string]string{}
+	for _, r := range records {
+		if strings.HasPrefix(r.Entry.Kind, "mcpserver.") {
+			seen[r.Entry.Kind] = r.Entry.Actor
+		}
+	}
+	for _, kind := range []string{
+		"mcpserver.imported", "mcpserver.discovered",
+		"mcpserver.tool_classified", "mcpserver.removed",
+	} {
+		actor, ok := seen[kind]
+		if !ok {
+			t.Errorf("no %s entry in the audit trail", kind)
+			continue
+		}
+		if actor != "tester" {
+			t.Errorf("%s names actor %q, want the acting principal", kind, actor)
+		}
+	}
+}

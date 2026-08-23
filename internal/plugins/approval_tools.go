@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -71,6 +72,11 @@ type operationView struct {
 	Observed    any        `json:"observed_state,omitempty"`
 	ErrorCode   string     `json:"error_code,omitempty"`
 	ErrorDetail string     `json:"error_detail,omitempty"`
+	// Assurance says what this record can prove: "reviewed_change" when the
+	// exact fields were planned, drift is detectable and the outcome is
+	// confirmed by re-reading, "gated_call" when a human authorised it and
+	// that is the whole of the evidence.
+	Assurance string `json:"assurance"`
 	// Note tells the model, in the response itself, what has and has not
 	// happened. A model that reads only the state string can still misread
 	// "approved" as "done"; this leaves no room for that.
@@ -96,6 +102,7 @@ func viewOf(op *operations.Operation) operationView {
 		Observed:    decodeJSON(op.Observed),
 		ErrorCode:   op.ErrorCode,
 		ErrorDetail: op.ErrorDetail,
+		Assurance:   op.Assurance().String(),
 		Note:        noteFor(op),
 	}
 }
@@ -115,18 +122,30 @@ func decodeJSON(raw json.RawMessage) any {
 	return v
 }
 
-// noteFor states plainly what the current state means.
+// noteFor states plainly what the current state means, and how much of it is
+// actually known.
+//
+// The succeeded case used to say "Applied and confirmed by re-reading the
+// target" for every operation, including ones where nothing had been compared
+// against anything. A note that overstates the evidence is worse than none:
+// the model repeats it to a person, who now believes a check happened.
 func noteFor(op *operations.Operation) string {
 	switch op.State {
 	case operations.StatePendingApproval:
 		return "NOTHING HAS CHANGED YET. This is a proposal awaiting human approval. " +
-			"It will expire at the time shown unless someone approves it."
+			"It will expire at the time shown unless someone approves it." +
+			assuranceCaveat(op)
 	case operations.StateApproved:
 		return "Approved but not yet applied. It will be executed shortly, " +
-			"or expire at execute_by if it cannot be."
+			"or expire at execute_by if it cannot be." + assuranceCaveat(op)
 	case operations.StateExecuting:
 		return "Currently being applied."
 	case operations.StateSucceeded:
+		if op.OutcomeVerified == nil {
+			return "Applied. The upstream call reported success, but this change " +
+				"cannot be confirmed by re-reading the target, so nothing here " +
+				"proves what the result is. Say so rather than reporting it as verified."
+		}
 		return "Applied and confirmed by re-reading the target."
 	case operations.StateFailed:
 		return "Not applied. The target was left unchanged."
@@ -142,6 +161,30 @@ func noteFor(op *operations.Operation) string {
 	default:
 		return ""
 	}
+}
+
+// assuranceCaveat names the proofs a not-yet-executed operation will not be
+// able to offer, so a person deciding is told what approving it does and does
+// not buy them.
+//
+// Silence would be the wrong default. A gated call and a reviewed change reach
+// the approver through the same tool, wearing the same word, and the one that
+// carries less evidence is exactly the one that needs to say so.
+func assuranceCaveat(op *operations.Operation) string {
+	if op.Assurance() == operations.AssuranceReviewedChange {
+		return ""
+	}
+	var missing []string
+	if !op.DriftChecked() {
+		missing = append(missing, "it declares no preconditions, so a change made "+
+			"to the target between now and execution will not be noticed")
+	}
+	if !op.Verifiable {
+		missing = append(missing, "its outcome cannot be confirmed by re-reading "+
+			"the target, so success will mean the call was accepted and no more")
+	}
+	return " This is a gated call rather than a reviewed change: " +
+		strings.Join(missing, ", and ") + "."
 }
 
 // attachApprovalTools adds the operation lifecycle tools to a plugin endpoint.

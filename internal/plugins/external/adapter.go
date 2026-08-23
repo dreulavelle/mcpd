@@ -24,10 +24,9 @@ type Plugin struct {
 	dir      string
 	deps     plugins.Deps
 
-	mu        sync.RWMutex
-	proc      *Process
-	describe  DescribeResult
-	planState map[string]json.RawMessage
+	mu       sync.RWMutex
+	proc     *Process
+	describe DescribeResult
 }
 
 // NewPlugin builds an adapter. The subprocess starts in Start, not here, so a
@@ -211,6 +210,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 			Description: mutation.Description,
 			Risk:        operations.RiskLevel(mutation.Risk),
 			Reversible:  mutation.Reversible,
+			Verifiable:  mutation.Verifiable,
 			InputSchema: normalizeSchema(mutation.InputSchema),
 		}, &mutationBridge{plugin: p, action: mutation.Action})
 	}
@@ -320,19 +320,31 @@ func (b *mutationBridge) Plan(ctx context.Context, params json.RawMessage) (plug
 		Changes:       changes,
 		Impact:        result.Impact,
 		Rollback:      result.Rollback,
+		// The plugin's opaque state rides on the plan itself, which is the
+		// value Apply is handed. It stays out of the operation payload, which
+		// must remain exactly what was hashed.
+		State: result.State,
 	}
 	if risk := operations.RiskLevel(result.RiskOverride); risk.Valid() {
 		plan.RiskOverride = &risk
 	}
-	// The plugin's opaque state travels back to apply through Rollback's
-	// sibling field; storing it on the plan keeps it out of the operation
-	// payload, which must stay exactly what was hashed.
-	b.plugin.stashState(b.action, params, result.State)
 	return plan, nil
 }
 
-func (b *mutationBridge) Apply(ctx context.Context, params json.RawMessage, _ plugins.Plan[json.RawMessage]) (plugins.ApplyResult, error) {
+// Apply sends the write, carrying the state from the plan it was given.
+//
+// The plan is read from the argument rather than from a map on the plugin.
+// That map was keyed on the action and the parameters, which two live
+// proposals of the same change share: whichever applied first took the entry
+// and the second was handed nothing, silently, with no way for the plugin to
+// tell that its plan had been replaced by someone else's.
+func (b *mutationBridge) Apply(ctx context.Context, params json.RawMessage, plan plugins.Plan[json.RawMessage]) (plugins.ApplyResult, error) {
 	proc, err := b.plugin.process()
+	if err != nil {
+		return plugins.ApplyResult{}, err
+	}
+
+	state, err := planState(plan)
 	if err != nil {
 		return plugins.ApplyResult{}, err
 	}
@@ -341,7 +353,7 @@ func (b *mutationBridge) Apply(ctx context.Context, params json.RawMessage, _ pl
 	err = proc.Call(ctx, MethodApply, MutationParams{
 		Action: b.action,
 		Params: params,
-		Plan:   b.plugin.takeState(b.action, params),
+		Plan:   state,
 	}, &result)
 
 	if err != nil {
@@ -371,28 +383,23 @@ func (b *mutationBridge) Observe(ctx context.Context, params json.RawMessage) (j
 	return result, nil
 }
 
-// stashState retains a plugin's opaque plan state between plan and apply.
-func (p *Plugin) stashState(action string, params, state json.RawMessage) {
-	if len(state) == 0 {
-		return
+// planState recovers the opaque state this bridge put on the plan.
+//
+// Absent state is ordinary: a plugin whose apply needs nothing from its plan
+// returns none. State of an unexpected type is not, and is reported rather
+// than dropped -- it means the plan came from somewhere other than this
+// bridge, and a plugin handed nothing when it produced something would apply
+// against the wrong snapshot with no way to tell.
+func planState(plan plugins.Plan[json.RawMessage]) (json.RawMessage, error) {
+	if plan.State == nil {
+		return nil, nil
 	}
-	p.mu.Lock()
-	if p.planState == nil {
-		p.planState = make(map[string]json.RawMessage)
+	state, ok := plan.State.(json.RawMessage)
+	if !ok {
+		return nil, fmt.Errorf(
+			"external: plan state is %T, not the raw JSON this bridge stored", plan.State)
 	}
-	p.planState[action+"|"+string(params)] = state
-	p.mu.Unlock()
-}
-
-// takeState retrieves and clears stashed state. A plan is valid for exactly
-// one execution.
-func (p *Plugin) takeState(action string, params json.RawMessage) json.RawMessage {
-	key := action + "|" + string(params)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	state := p.planState[key]
-	delete(p.planState, key)
-	return state
+	return state, nil
 }
 
 // Discover reads every plugin manifest under root.

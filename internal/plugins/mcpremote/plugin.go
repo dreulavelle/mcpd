@@ -221,11 +221,12 @@ func (p *Plugin) registerTool(r *plugins.Registry, tool mcpservers.Tool) {
 	// client the structured result conforms to it, and nothing here validates
 	// that it does; a promise this host cannot keep is worse than no promise.
 	//
-	// map[string]any rather than json.RawMessage for the arguments: a byte
-	// slice reflects to an array of integers and marshals as an object, and
-	// the registry refuses that shape at registration. It costs nothing here
-	// -- the published schema is used verbatim either way, and MCP tool
-	// arguments are an object by definition.
+	// map[string]any rather than json.RawMessage for the arguments. Either
+	// would register now that the registry skips the derived-schema check when
+	// a schema is supplied, but this end wants a decoded object anyway: the
+	// call is re-encoded onto the wire by the MCP client, so there is no byte
+	// fidelity to preserve, and MCP tool arguments are an object by
+	// definition.
 	plugins.Tool(r, spec, func(ctx context.Context, args map[string]any) (any, error) {
 		return p.call(ctx, name, args)
 	})

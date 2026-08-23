@@ -138,7 +138,7 @@ func TestPayloadHash_FieldBoundariesUnambiguous(t *testing.T) {
 	}
 }
 
-func TestPreconditionsEqual(t *testing.T) {
+func TestCanonicalEqual(t *testing.T) {
 	tests := []struct {
 		name string
 		a, b string
@@ -153,9 +153,9 @@ func TestPreconditionsEqual(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := PreconditionsEqual(json.RawMessage(tc.a), json.RawMessage(tc.b))
+			got := CanonicalEqual(json.RawMessage(tc.a), json.RawMessage(tc.b))
 			if got != tc.want {
-				t.Fatalf("PreconditionsEqual(%q,%q) = %v, want %v", tc.a, tc.b, got, tc.want)
+				t.Fatalf("CanonicalEqual(%q,%q) = %v, want %v", tc.a, tc.b, got, tc.want)
 			}
 		})
 	}
@@ -186,5 +186,78 @@ func TestRecompute_MatchesStoredHashForUntouchedOperation(t *testing.T) {
 	}
 	if got == op.PayloadHash {
 		t.Fatal("tampered params must not reproduce the stored hash")
+	}
+}
+
+// PreconditionsEqual(nil, nil) returned true, and the executor read that as a
+// drift check that passed. It was not a check: two absent snapshots
+// canonicalise to "null" and compare equal without anything being examined.
+func TestCheckDrift(t *testing.T) {
+	tests := []struct {
+		name             string
+		proposed, actual string
+		want             DriftCheck
+	}{
+		{"neither declares anything", ``, ``, DriftNotChecked},
+		{"both are JSON null", `null`, `null`, DriftNotChecked},
+		{"both are empty objects", `{}`, `{}`, DriftNotChecked},
+		{"same snapshot", `{"a":1}`, `{"a":1}`, DriftNone},
+		{"key order does not matter", `{"a":1,"b":2}`, `{"b":2,"a":1}`, DriftNone},
+		{"value changed", `{"a":1}`, `{"a":2}`, DriftDetected},
+		{"the target grew state the proposal did not see", ``, `{"a":1}`, DriftDetected},
+		{"the target lost the state the proposal depends on", `{"a":1}`, ``, DriftDetected},
+		{"unreadable fails closed", `{`, `{`, DriftDetected},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CheckDrift(json.RawMessage(tc.proposed), json.RawMessage(tc.actual))
+			if got != tc.want {
+				t.Fatalf("CheckDrift(%q,%q) = %s, want %s", tc.proposed, tc.actual, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeclared(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want bool
+	}{
+		{``, false}, {`null`, false}, {`{}`, false}, {`[]`, false},
+		{`{"a":1}`, true}, {`[1]`, true}, {`0`, true}, {`false`, true},
+		// Unreadable counts as declared so it reaches CanonicalEqual and
+		// fails there, rather than being waved through as "asked for nothing".
+		{`{`, true},
+	} {
+		if got := Declared(json.RawMessage(tc.raw)); got != tc.want {
+			t.Errorf("Declared(%q) = %v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// Assurance is the vocabulary split: a change mcpd planned, checked and
+// confirmed is not the same evidence as a call a human waved through.
+func TestOperationAssurance(t *testing.T) {
+	tests := []struct {
+		name          string
+		verifiable    bool
+		preconditions string
+		want          Assurance
+	}{
+		{"all three proofs", true, `{"channel":"36"}`, AssuranceReviewedChange},
+		{"cannot confirm the outcome", false, `{"channel":"36"}`, AssuranceGatedCall},
+		{"cannot detect drift", true, ``, AssuranceGatedCall},
+		{"neither", false, ``, AssuranceGatedCall},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			op := &Operation{
+				Verifiable:    tc.verifiable,
+				Preconditions: json.RawMessage(tc.preconditions),
+			}
+			if got := op.Assurance(); got != tc.want {
+				t.Fatalf("Assurance() = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

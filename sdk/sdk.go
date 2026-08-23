@@ -230,6 +230,16 @@ type MutationSpec struct {
 	Description string
 	Risk        Risk
 	Reversible  bool
+	// Verifiable declares that Observe, run after Apply, confirms the outcome:
+	// what it returns can be compared against the plan's Desired state and the
+	// comparison means something.
+	//
+	// False by default, and the host believes it. A mutation that says nothing
+	// is settled as applied-but-unconfirmed rather than being reported to the
+	// model as "confirmed by re-reading the target", which is what the host
+	// used to say about every mutation whether or not anything was compared.
+	// Say true only if Observe really does read back what Apply wrote.
+	Verifiable bool
 }
 
 // Plugin holds a plugin's declarations.
