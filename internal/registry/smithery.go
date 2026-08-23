@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -86,9 +87,9 @@ const (
 // needs to know is the one looking at the last row of the list and wondering
 // where the other ten thousand are.
 var smitheryBrowseNote = fmt.Sprintf(
-	"Smithery's listing stops after %d servers of the ten thousand it holds; "+
-		"search to reach the rest, which asks Smithery directly rather than "+
-		"filtering this list.", smitheryBrowseCap)
+	"Smithery's listing stops after %d servers of the ten thousand it holds, "+
+		"most used first; search to reach the rest, which asks Smithery "+
+		"directly rather than filtering this list.", smitheryBrowseCap)
 
 // Smithery reads Smithery's registry.
 //
@@ -162,37 +163,56 @@ func (s *Smithery) ListIfChanged(ctx context.Context, q Query, v Validators) (Pa
 	// Normalised here as well as at the cache, so the client is bounded
 	// whether or not something cached it.
 	q = q.Normalised()
-	rows, freshness, err := s.fetchWindow(ctx, q.Search, v)
+	rows, total, freshness, err := s.fetchWindow(ctx, q.Search, v)
 	if err != nil {
 		return Page{Freshness: freshness}, err
 	}
 
-	entries := make([]Entry, 0, len(rows))
+	ranked := make([]rankedServer, 0, len(rows))
 	for _, raw := range rows {
 		entry, _, ok := s.translate(raw)
 		if !ok {
 			continue
 		}
-		entries = append(entries, entry)
+		ranked = append(ranked, rankedServer{entry: entry, key: smitheryRankKey(raw)})
 	}
-	// Sorted by name, which is what makes the cursor below a resume point
-	// rather than an offset. Smithery orders by popularity and repeats
-	// entries across pages while doing it -- see fetchWindow -- so its order
-	// is not one a cursor can be built on.
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	// Most used first. Smithery's own page order is by popularity but is not
+	// a total order -- it repeats rows across pages, which is why the window
+	// is deduplicated before anything is paged out of it -- so the order is
+	// rebuilt here from the numbers it publishes, and rebuilt as a total one
+	// so that the cursor below is a resume point rather than an offset into a
+	// list that reshuffles.
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].key < ranked[j].key })
+
+	// Measured over the whole window rather than the page, because the window
+	// is what makes it a sample worth quoting: five hundred rows deduplicated
+	// to a few hundred distinct servers, every one of them already put through
+	// describe() to get here. See estimateAddable for what is done with it,
+	// including why the sample being Smithery's most popular matters.
+	judged := len(ranked)
+	addable := 0
+	for _, r := range ranked {
+		if r.entry.Addable {
+			addable++
+		}
+	}
 
 	limit := q.Limit
 	if limit <= 0 {
 		limit = s.limit
 	}
 	if after := q.Cursor; after != "" {
-		i := sort.Search(len(entries), func(i int) bool { return entries[i].Name > after })
-		entries = entries[i:]
+		i := sort.Search(len(ranked), func(i int) bool { return ranked[i].key > after })
+		ranked = ranked[i:]
 	}
 	next := ""
-	if len(entries) > limit {
-		next = entries[limit-1].Name
-		entries = entries[:limit]
+	if len(ranked) > limit {
+		next = ranked[limit-1].key
+		ranked = ranked[:limit]
+	}
+	entries := make([]Entry, 0, len(ranked))
+	for _, r := range ranked {
+		entries = append(entries, r.entry)
 	}
 
 	page := Page{
@@ -205,6 +225,7 @@ func (s *Smithery) ListIfChanged(ctx context.Context, q Query, v Validators) (Pa
 	status := SourceStatus{
 		Source: s.Source(), OK: true,
 		RetrievedAt: page.RetrievedAt, Entries: len(page.Entries),
+		Judged: judged, Addable: addable, Total: total,
 	}
 	// The note is attached to a browse and not to a search, because it is only
 	// true of a browse. A search was answered by Smithery over the whole
@@ -272,10 +293,17 @@ func (s *Smithery) GetIfChanged(ctx context.Context, name string, v Validators) 
 // thirty-nine. Smithery orders by popularity, and the order is not a total one,
 // so a row can land on two pages. Page one is stable when refetched, so this
 // is not jitter that a retry would fix.
-func (s *Smithery) fetchWindow(ctx context.Context, search string, v Validators) ([]smitheryServer, Freshness, error) {
+func (s *Smithery) fetchWindow(ctx context.Context, search string, v Validators) ([]smitheryServer, int, Freshness, error) {
 	first, freshness, err := s.fetchPage(ctx, search, 1, v)
 	if err != nil {
-		return nil, freshness, err
+		return nil, 0, freshness, err
+	}
+	// What Smithery says it holds, which on a browse is the whole catalogue
+	// and on a search is the number of matches. The only one of the four
+	// sources that answers the question at all; see estimateAddable.
+	total := first.Pagination.TotalCount
+	if total < 0 {
+		total = 0
 	}
 
 	pages := first.Pagination.TotalPages
@@ -305,7 +333,7 @@ func (s *Smithery) fetchWindow(ctx context.Context, search string, v Validators)
 		wg.Wait()
 		for p := 2; p <= pages; p++ {
 			if err := results[p].err; err != nil {
-				return nil, Freshness{}, err
+				return nil, 0, Freshness{}, err
 			}
 			rows = append(rows, results[p].page.Servers...)
 		}
@@ -324,7 +352,7 @@ func (s *Smithery) fetchWindow(ctx context.Context, search string, v Validators)
 		seen[name] = true
 		out = append(out, row)
 	}
-	return out, freshness, nil
+	return out, total, freshness, nil
 }
 
 // fetchPage performs one bounded, optionally conditional GET of one page.
@@ -348,6 +376,52 @@ func (s *Smithery) fetchPage(ctx context.Context, search string, page int, v Val
 		out.Servers = out.Servers[:MaxEntriesPerPage]
 	}
 	return out, freshness, nil
+}
+
+// rankedServer is one entry with the sort key that decides where it lands.
+type rankedServer struct {
+	entry Entry
+	key   string
+}
+
+// smitheryRankKey orders Smithery's window: most used first.
+//
+// This is the one real quality signal any of the four catalogues publishes.
+// Smithery counts calls to each server it hosts and reports the count on every
+// listing row, and the numbers are not close -- the head of the catalogue is
+// in the tens of thousands and the tail is at zero. Ordering by it is the
+// difference between "here are ten servers people use" and "here are ten
+// servers", and the second is what the front page used to be.
+//
+// Verified is a tiebreak and deliberately not an override: it is Smithery
+// vouching for a listing, which is worth something between two servers nobody
+// has called yet and worth nothing against a server with fifty thousand calls
+// behind it. Name is the final discriminator, which is what makes the ordering
+// total -- and a total order is what lets the key below be a cursor.
+//
+// The key is a string because that is what a cursor is. Fixed-width fields in
+// descending-as-ascending form, so that plain string comparison is the
+// ordering and sort.Search can resume from one: twenty digits of
+// MaxInt64-useCount, then one digit of verified, then the name. A name
+// containing the separator is harmless, since everything before the name is
+// fixed width.
+//
+// Deliberately not applied to the other three sources. None of them publishes
+// a usage figure, and PulseMCP's visitor estimates -- weekly uniques on a
+// listing page -- are not the same measurement as a call count and would not
+// survive being added to one. A cross-source score composed out of those would
+// be a normalisation this host invented, presented as a ranking. Each source
+// is ordered by the best signal it actually has, and Multi interleaves them.
+func smitheryRankKey(raw smitheryServer) string {
+	uses := raw.UseCount
+	if uses < 0 {
+		uses = 0
+	}
+	verified := 1
+	if raw.Verified {
+		verified = 0
+	}
+	return fmt.Sprintf("%020d|%d|%s", math.MaxInt64-uses, verified, raw.QualifiedName)
 }
 
 // --- Smithery's wire format -------------------------------------------------
@@ -383,6 +457,17 @@ type smitheryServer struct {
 	Remote     bool   `json:"remote"`
 	IsDeployed bool   `json:"isDeployed"`
 	CreatedAt  string `json:"createdAt"`
+	// IconURL is Smithery's own icon for the server, which it serves for most
+	// of them. Sometimes a favicon service's URL rather than the project's
+	// own image; either way it is a third party's address bound for an
+	// <img src>, so it is validated rather than relayed.
+	IconURL string `json:"iconUrl"`
+	// UseCount is how many times Smithery has been asked to call this server,
+	// and Verified is Smithery vouching for it. They are the only usage
+	// signal any of the four catalogues publishes, and they are what orders
+	// this source's listing. See smitheryRankKey.
+	UseCount int64 `json:"useCount"`
+	Verified bool  `json:"verified"`
 }
 
 // smitheryDetail is the entry route's answer, which is shaped differently from
@@ -392,6 +477,9 @@ type smitheryDetail struct {
 	DisplayName   string `json:"displayName"`
 	Description   string `json:"description"`
 	Remote        bool   `json:"remote"`
+	IconURL       string `json:"iconUrl"`
+	UseCount      int64  `json:"useCount"`
+	Verified      bool   `json:"verified"`
 	// DeploymentURL is non-empty exactly when the listing would have said
 	// isDeployed: it is the address Smithery has stood up. It is read as that
 	// flag and not used as the endpoint -- see composeSmitheryDocument for why
@@ -415,6 +503,9 @@ func (d smitheryDetail) listing() smitheryServer {
 		Description:   d.Description,
 		Remote:        d.Remote,
 		IsDeployed:    strings.TrimSpace(d.DeploymentURL) != "",
+		IconURL:       d.IconURL,
+		UseCount:      d.UseCount,
+		Verified:      d.Verified,
 	}
 }
 
@@ -449,6 +540,7 @@ func (s *Smithery) translate(raw smitheryServer) (Entry, json.RawMessage, bool) 
 		// says in its own field that it is one. The same judgement docker.go
 		// makes for the same reason.
 		Version:   "",
+		Icon:      safeIconURL(raw.IconURL),
 		UpdatedAt: smitheryTimestamp(raw.CreatedAt),
 		Source:    smitherySource,
 	}

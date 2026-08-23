@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -94,167 +95,205 @@ func (m *Multi) Source() string {
 	return strings.Join(names, ", ")
 }
 
-// List returns one page from every source, merged and deduplicated.
+// How much Multi asks of each source, to fill a page of its own.
 //
-// Each source contributes at most one page of its own, so the merged page is
-// at most one page per source. MaxEntriesPerPage is per source by its own
-// terms -- it caps what "one page may contribute" -- and re-truncating the
-// merge would drop entries whose cursors had already advanced past them.
+// The limit a caller gives bounds the page it gets back. It cannot also be
+// what each source is asked for: three sources each honouring "ten"
+// independently returned thirty rows, which is why a request for ten used to
+// answer with thirty and a request for thirty with ninety. An operator reading
+// that concluded the catalogues held ninety servers between them.
 //
-// Deduplication is over the merged page, which is sufficient rather than
+// So each source is asked for more than the page needs and the merged result
+// is paged down here. How much more is a trade: too little and a page of ten
+// costs several round trips, too much and the first page waits on rows nobody
+// will scroll to.
+const (
+	// sourceOverFetch is the multiple of the page asked of each source.
+	// Roughly half of what the catalogues publish only runs locally and is
+	// not listed, and a few more rows are a preferred source's entry arriving
+	// twice, so a page of ten is filled comfortably out of twenty.
+	sourceOverFetch = 2
+	// minSourceFetch is the floor, and it is what makes paging cheap. A
+	// window of twenty serves two pages of ten and the second of them waits
+	// on nobody: the source's own cursor has not moved, so the second page is
+	// the same cached answer read from a different offset.
+	minSourceFetch = 20
+	// maxFillRounds bounds how many times one request goes back to a source
+	// for more. Two extra rounds finish a page that filtering emptied; past
+	// that, a search matching nothing addable would walk a whole catalogue at
+	// a third party's expense to prove it.
+	maxFillRounds = 3
+)
+
+// sourceFetchFor says how many rows to ask one source for.
+func sourceFetchFor(limit int) int {
+	fetch := limit * sourceOverFetch
+	if fetch < minSourceFetch {
+		fetch = minSourceFetch
+	}
+	if fetch > MaxEntriesPerPage {
+		fetch = MaxEntriesPerPage
+	}
+	return fetch
+}
+
+// List returns one page: the merged, deduplicated, filtered result, bounded by
+// the caller's limit.
+//
+// The limit means what it says here and nowhere else. Each source is asked for
+// a window of its own (see sourceFetchFor), the windows are merged in
+// preference order, entries this host could not import are dropped unless the
+// caller asked for them, duplicates are removed, and what survives is handed
+// out limit at a time. Everything else about paging follows from that being
+// the arrangement rather than the other way round.
+//
+// Sources are read round-robin rather than in preference order, so a page of
+// ten across four catalogues is a few from each. Preference order still
+// decides *which copy of a duplicate survives* -- that is what claimIdentities
+// is for -- but letting it decide the reading order too would mean the second
+// catalogue was never reached until the first's twenty-four thousand entries
+// ran out, which is the same as not having it.
+//
+// Deduplication is over the windows in hand, which is sufficient rather than
 // approximate for the case it is for. A search asks every source the same
-// question and every source answers with its matches at once, so the two
-// copies of a server land side by side and one of them is removed -- which is
-// the only situation in which a person can see that there are two. Browsing
-// the official registry's twenty-four thousand entries thirty at a time is not
-// that situation: its page of ai.* names and Docker's page of bare slugs have
-// no reason to hold the same server, and reconciling them would mean holding
-// both catalogues whole. That is the same judgement the official registry's own
-// page-local dedupe already makes, one level up.
+// question and every source answers with its matches at once, so two copies of
+// a server land in the same merge and one is removed -- the only situation in
+// which a person can see that there are two. Reconciling a browse across
+// twenty-four thousand entries would mean holding both catalogues whole.
 func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 	if len(m.sources) == 0 {
 		return Page{}, errors.New("registry: no catalogue is configured")
 	}
-
-	// A cursor that decoded to nothing usable -- garbage, or one written by a
-	// host configured with different sources -- restarts the listing rather
-	// than paging nothing. Restarting is a state the caller already handles;
-	// an empty page with no explanation is not.
-	cursors := decodeMultiCursor(q.Cursor, m.Sources())
-	resuming := len(cursors) > 0
-	results := make([]Page, len(m.sources))
-	failures := make([]error, len(m.sources))
-
-	// Concurrent, and bounded as a whole.
-	//
-	// Concurrent because a search across four catalogues must not cost four
-	// round trips one after another -- with a cold cache that is the
-	// difference between a page and a wait. Bounded because the slowest
-	// catalogue must not decide how long a page takes: past the budget this
-	// host stops waiting, serves what arrived, and says which source did not
-	// answer in time. The alternative is a dashboard whose speed is set by
-	// whichever third party is having the worst day.
-	//
-	// Results come back over a buffered channel rather than into the slice
-	// directly, because a goroutine still running when the budget expires
-	// would otherwise be writing to something already being read. The buffer
-	// is one slot per source, so a late answer is delivered to nobody and the
-	// goroutine ends rather than blocking.
-	type sourceResult struct {
-		index int
-		page  Page
-		err   error
+	q = q.Normalised()
+	limit := q.Limit
+	if limit <= 0 {
+		limit = defaultLimit
 	}
-	arrivals := make(chan sourceResult, len(m.sources))
-	// asked and arrived are tracked separately from the results, because
-	// "returned nothing" and "has not answered" look identical in a Page and
-	// mean opposite things to somebody reading the list.
-	asked := make([]bool, len(m.sources))
-	arrived := make([]bool, len(m.sources))
-	launched := 0
+	fetch := sourceFetchFor(limit)
+
+	// A cursor that decoded to nothing usable -- garbage, one written by a
+	// host configured with different sources, or one written by an older
+	// build -- restarts the listing rather than paging nothing. Restarting is
+	// a state the caller already handles; an empty page with no explanation
+	// is not.
+	resume := decodeMultiCursor(q.Cursor, m.Sources())
+	resuming := len(resume) > 0
+
+	walkers := make([]*sourceWalk, len(m.sources))
 	for i, source := range m.sources {
-		name := source.Source()
-		// A source that reported no further pages last time is not asked
-		// again: asking would restart it from the beginning and repeat its
-		// first page under every subsequent cursor.
-		if resuming && !cursors.more(name) {
-			continue
+		w := &sourceWalk{client: source, index: i, name: source.Source()}
+		if resuming {
+			pos, listed := resume[w.name]
+			// A source absent from the cursor had nothing further last time.
+			// Asking it again would restart it from the beginning and repeat
+			// its first window under every subsequent cursor.
+			w.done, w.pos = !listed, pos
 		}
-		asked[i] = true
-		launched++
-		go func(i int, source Client, cursor string) {
-			page, err := source.List(ctx, Query{
-				Search: q.Search, Cursor: cursor, Limit: q.Limit,
-			})
-			arrivals <- sourceResult{index: i, page: page, err: err}
-		}(i, source, cursors.get(name))
+		walkers[i] = w
 	}
 
-	budget := time.NewTimer(m.budget)
-	defer budget.Stop()
-collect:
-	for received := 0; received < launched; received++ {
-		select {
-		case r := <-arrivals:
-			results[r.index], failures[r.index] = r.page, r.err
-			arrived[r.index] = true
-		case <-budget.C:
-			// Whatever has not arrived is not going to be waited for.
-			break collect
-		case <-ctx.Done():
-			// The caller gave up, which is different from a catalogue being
-			// slow: there is nobody left to serve a partial page to.
-			return Page{}, ctx.Err()
+	// One deadline for the whole request rather than one per round, because
+	// what is being bounded is how long a person waits for a page. A source
+	// slower than this is dropped from the page it was too slow for; its own
+	// request runs on and fills the cache, so the next page has it.
+	deadline := time.Now().Add(m.budget)
+	entries := make([]Entry, 0, limit)
+	seen := map[string]bool{}
+
+	for round := 0; round < maxFillRounds; round++ {
+		var pending []*sourceWalk
+		for _, w := range walkers {
+			if w.needsFetch() {
+				pending = append(pending, w)
+			}
 		}
-	}
-	for i := range m.sources {
-		if asked[i] && !arrived[i] {
-			failures[i] = fmt.Errorf("registry: %s did not answer within %s",
-				m.sources[i].Source(), m.budget)
+		if len(pending) > 0 {
+			if err := m.fill(ctx, q, fetch, pending, deadline); err != nil {
+				return Page{}, err
+			}
+		}
+		claimed := claimIdentities(walkers)
+		for len(entries) < limit {
+			took := false
+			for _, w := range walkers {
+				if len(entries) >= limit {
+					break
+				}
+				if entry, ok := w.take(claimed, seen, q.IncludeUnaddable); ok {
+					entries = append(entries, entry)
+					took = true
+				}
+			}
+			if !took {
+				break
+			}
+		}
+		if len(entries) >= limit {
+			break
+		}
+		// Another round only where one would find something, and only while
+		// there is budget left to spend on asking.
+		refillable := false
+		for _, w := range walkers {
+			if w.needsFetch() {
+				refillable = true
+				break
+			}
+		}
+		if !refillable || !time.Now().Before(deadline) {
+			break
 		}
 	}
 
-	page := Page{Source: m.Source(), Entries: []Entry{}}
+	page := Page{Source: m.Source(), Entries: entries}
 	next := multiCursor{}
 	answered := 0
-	// Identity is remembered across sources so that the more preferred
-	// source's copy is the one kept. Sources are visited in preference order
-	// and the first claim on an identity wins.
-	seen := map[string]bool{}
+	var failures []error
 	oldest := time.Time{}
 
-	for i, source := range m.sources {
-		name := source.Source()
-		if err := failures[i]; err != nil {
+	for _, w := range walkers {
+		switch {
+		case w.err != nil:
+			failures = append(failures, w.err)
 			page.Sources = append(page.Sources, SourceStatus{
-				Source: name,
-				Error:  clean(err.Error(), maxReasonRunes),
+				Source: w.name,
+				Error:  clean(w.err.Error(), maxReasonRunes),
 			})
-			continue
-		}
-		if resuming && !cursors.more(name) {
+			// A source that failed keeps the place it came in with, so the
+			// next page asks it again. Dropping it -- which is what happened
+			// before -- turned one bad minute into the permanent end of that
+			// catalogue for the rest of the listing.
+			next.set(w.name, w.pos)
+		case w.done && !w.answered:
 			// Exhausted on an earlier page. Reported so that the response
 			// still accounts for every configured source rather than looking
 			// as though one had vanished.
-			page.Sources = append(page.Sources, SourceStatus{Source: name, OK: true})
-			continue
-		}
-		answered++
-		contributed := 0
-		for _, entry := range results[i].Entries {
-			if entry.Source == "" {
-				entry.Source = name
+			page.Sources = append(page.Sources, SourceStatus{Source: w.name, OK: true})
+		default:
+			answered++
+			page.Stale = page.Stale || w.stale
+			if !w.retrieved.IsZero() && (oldest.IsZero() || w.retrieved.Before(oldest)) {
+				oldest = w.retrieved
 			}
-			key := identity(entry)
-			if seen[key] {
-				continue
+			page.Sources = append(page.Sources, SourceStatus{
+				Source: w.name, OK: true, Stale: w.stale,
+				RetrievedAt: w.retrieved,
+				Entries:     w.emitted,
+				Judged:      w.judged,
+				Addable:     w.addable,
+				Total:       w.total,
+				// Carried across rather than recomputed. The status this
+				// builds is this level's -- how many entries survived
+				// deduplication is not something a source can know -- but a
+				// note is the source's own account of its answer, and
+				// dropping it here would silence the one catalogue that has
+				// something to say the moment it is merged with another.
+				Note: w.note,
+			})
+			if !w.done {
+				next.set(w.name, w.pos)
 			}
-			seen[key] = true
-			page.Entries = append(page.Entries, entry)
-			contributed++
 		}
-		if results[i].NextCursor != "" {
-			next.set(name, results[i].NextCursor)
-		}
-		page.Stale = page.Stale || results[i].Stale
-		if !results[i].RetrievedAt.IsZero() &&
-			(oldest.IsZero() || results[i].RetrievedAt.Before(oldest)) {
-			oldest = results[i].RetrievedAt
-		}
-		page.Sources = append(page.Sources, SourceStatus{
-			Source:      name,
-			OK:          true,
-			Stale:       results[i].Stale,
-			RetrievedAt: results[i].RetrievedAt,
-			Entries:     contributed,
-			// Carried across rather than recomputed. The status this builds is
-			// this level's -- how many entries survived deduplication is not
-			// something a source can know -- but a note is the source's own
-			// account of its answer, and dropping it here would silence the
-			// one catalogue that has something to say the moment it is merged
-			// with another.
-			Note: noteFrom(results[i], name),
-		})
 	}
 
 	if answered == 0 {
@@ -265,11 +304,276 @@ collect:
 	}
 
 	page.NextCursor = next.encode()
+	page.AddableEstimate = estimateAddable(page.Sources)
 	page.RetrievedAt = oldest
 	if page.RetrievedAt.IsZero() {
 		page.RetrievedAt = time.Now().UTC()
 	}
 	return page, nil
+}
+
+// fill asks several sources for their next window at once, bounded as a whole.
+//
+// Concurrent because a page across four catalogues must not cost four round
+// trips one after another -- with a cold cache that is the difference between
+// a page and a wait. Bounded because the slowest catalogue must not decide how
+// long a page takes.
+//
+// Results come back over a buffered channel rather than into the walkers
+// directly, because a goroutine still running when the deadline passes would
+// otherwise be writing to something already being read. The buffer is one slot
+// per source, so a late answer is delivered to nobody and the goroutine ends
+// rather than blocking.
+func (m *Multi) fill(ctx context.Context, q Query, limit int, pending []*sourceWalk, deadline time.Time) error {
+	type arrival struct {
+		w    *sourceWalk
+		page Page
+		err  error
+	}
+	arrivals := make(chan arrival, len(pending))
+	for _, w := range pending {
+		w.arrived = false
+		go func(w *sourceWalk) {
+			page, err := w.client.List(ctx, Query{
+				Search: q.Search, Cursor: w.pos.Cursor, Limit: limit,
+			})
+			arrivals <- arrival{w: w, page: page, err: err}
+		}(w)
+	}
+
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	for range pending {
+		select {
+		case a := <-arrivals:
+			a.w.receive(a.page, a.err)
+		case <-timer.C:
+			for _, w := range pending {
+				if !w.arrived {
+					w.receive(Page{}, fmt.Errorf(
+						"registry: %s did not answer within %s", w.name, m.budget))
+				}
+			}
+			return nil
+		case <-ctx.Done():
+			// The caller gave up, which is different from a catalogue being
+			// slow: there is nobody left to serve a partial page to.
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// estimateAddable is roughly how many servers across these catalogues could
+// be imported here.
+//
+// A floor and an estimate, and the shape of it is forced by what the sources
+// will say. Only two of the four report how much they hold: Smithery sends a
+// totalCount, and Docker's catalogue arrives as one document whose length is
+// the count. The official registry and PulseMCP page an opaque cursor and
+// report no size at all, so nothing here knows how many of their twenty-odd
+// thousand entries exist -- they contribute only what this host has actually
+// looked at.
+//
+// Addability cannot be counted either, because counting it means parsing every
+// document: mcpservers.Parse and mcpremote.Fields over twenty-four thousand
+// server.json files is not a thing to do behind a page load, and no catalogue
+// publishes the answer. So what is done instead is the honest cheap thing: the
+// ratio *is* measured, over the documents this host parsed anyway while
+// building the page, and applied to the size the source reported.
+//
+// Two consequences, both stated rather than hidden. Smithery's measured ratio
+// comes from the five hundred rows its listing will page to, which are its
+// most popular and so likelier to be deployed than its tail -- the
+// extrapolation is optimistic for Smithery. And the two sources that report no
+// size are counted at what was seen, which is a small fraction of what they
+// hold. The first pushes the number up and the second, much harder, pushes it
+// down; the result is a lower bound in practice, which is why it is rounded
+// down and rendered with a "+".
+//
+// Rounded to two significant figures above a thousand, deliberately. A page
+// that says "7,900+" is read as the estimate it is; one that says "7,952"
+// claims a precision nothing here has.
+func estimateAddable(sources []SourceStatus) int {
+	total := 0
+	for _, s := range sources {
+		switch {
+		case !s.OK || s.Judged <= 0:
+			// A source that did not answer contributes nothing, and the
+			// status beside it says so. Carrying a remembered figure for it
+			// would be the one thing worse than a smaller number: a total
+			// that does not move when a catalogue goes down.
+		case s.Total > s.Judged:
+			total += int(math.Round(float64(s.Total) * float64(s.Addable) / float64(s.Judged)))
+		default:
+			total += s.Addable
+		}
+	}
+	return floorSignificant(total)
+}
+
+// floorSignificant rounds down to two significant figures, above a thousand.
+//
+// Below that the number is small enough to be read as what it is, and rounding
+// 137 to 130 would discard a figure this host actually counted.
+func floorSignificant(n int) int {
+	if n < 1000 {
+		return n
+	}
+	scale := 1
+	for n/scale >= 100 {
+		scale *= 10
+	}
+	return (n / scale) * scale
+}
+
+// --- reading one source, one window at a time -------------------------------
+
+// sourceWalk is one source's place in a listing.
+//
+// The thing it exists to hold is the pair: which of the source's own windows
+// is being read, and how far into it. Before this, the merged cursor carried
+// only the first, which is all that is needed when every row of every window
+// is handed out. It is not enough once the merged page is bounded and filtered
+// -- stopping halfway through a source's window and resuming at the start of
+// the next one would silently skip the other half.
+type sourceWalk struct {
+	client Client
+	index  int
+	name   string
+
+	// pos is where this source resumes: its own cursor for the window being
+	// read, and how many of that window's rows are already accounted for --
+	// handed out, filtered away, or dropped as a duplicate.
+	pos sourcePosition
+	// window is the rows at pos.Cursor, and held says they are loaded.
+	window []Entry
+	held   bool
+	// next is the source's cursor after window. Empty ends the source.
+	next string
+	// done is a source with nothing further anywhere.
+	done bool
+
+	arrived   bool
+	answered  bool
+	err       error
+	stale     bool
+	retrieved time.Time
+	note      string
+	total     int
+	judged    int
+	addable   int
+	emitted   int
+}
+
+// needsFetch reports a source that could produce more but is holding nothing.
+func (w *sourceWalk) needsFetch() bool {
+	return !w.done && w.err == nil && !w.held
+}
+
+// receive takes one source's answer.
+func (w *sourceWalk) receive(page Page, err error) {
+	w.arrived = true
+	if err != nil {
+		w.err = err
+		return
+	}
+	w.answered = true
+	// Copied rather than referenced. The page underneath may be the cache's
+	// own, shared with every other request holding it, and the Source below
+	// is written into the rows.
+	w.window = append([]Entry(nil), page.Entries...)
+	for i := range w.window {
+		if w.window[i].Source == "" {
+			w.window[i].Source = w.name
+		}
+	}
+	w.next = page.NextCursor
+	w.held = true
+	w.stale = page.Stale
+	w.retrieved = page.RetrievedAt
+	// A window shorter than the offset means the source's answer changed
+	// under the cursor -- it was refetched and came back with fewer rows.
+	// Clamping is the honest recovery: what is skipped was already handed
+	// out, and what is left is read from where there is something to read.
+	if w.pos.Offset > len(w.window) {
+		w.pos.Offset = len(w.window)
+	}
+	for _, s := range page.Sources {
+		if s.Source == w.name {
+			w.note, w.total, w.judged, w.addable = s.Note, s.Total, s.Judged, s.Addable
+			break
+		}
+	}
+	w.advance()
+}
+
+// advance moves to the next window once the current one is used up.
+func (w *sourceWalk) advance() {
+	if !w.held || w.pos.Offset < len(w.window) {
+		return
+	}
+	if w.next == "" {
+		w.done, w.held, w.window = true, false, nil
+		return
+	}
+	w.pos = sourcePosition{Cursor: w.next}
+	w.window, w.next, w.held = nil, "", false
+}
+
+// take hands out this source's next eligible row, if it is holding one.
+//
+// Rows passed over on the way are accounted for as surely as the one returned:
+// an entry this host would refuse, or one a preferred source is going to show
+// instead, has been dealt with and must not be offered again on the next page.
+func (w *sourceWalk) take(claimed map[string]int, seen map[string]bool, includeUnaddable bool) (Entry, bool) {
+	for w.held && w.pos.Offset < len(w.window) {
+		entry := w.window[w.pos.Offset]
+		w.pos.Offset++
+		key := identity(entry)
+		switch {
+		case seen[key]:
+			// Already handed out on this page, by this source or another.
+		case claimed[key] != w.index:
+			// A more preferred source is holding this same server.
+		case !entry.Addable && !includeUnaddable:
+			// Not something a click could add. Half of what the catalogues
+			// publish only runs locally, and a page of ten that spends five
+			// rows saying so is a page of five.
+		default:
+			seen[key] = true
+			w.emitted++
+			w.advance()
+			return entry, true
+		}
+	}
+	w.advance()
+	return Entry{}, false
+}
+
+// claimIdentities decides, across every window currently held, which source
+// owns each server.
+//
+// Preference order, first claim wins -- the same rule that decides which
+// catalogue answers a Get, applied to the merge. It is computed up front
+// rather than as rows are taken because rows are taken round-robin: without
+// it, the least preferred catalogue holding a server early in its window would
+// hand it out before the most preferred catalogue reached its own copy, and
+// the preference order would decide nothing.
+func claimIdentities(walkers []*sourceWalk) map[string]int {
+	claimed := map[string]int{}
+	for _, w := range walkers {
+		if !w.held {
+			continue
+		}
+		for _, entry := range w.window[w.pos.Offset:] {
+			key := identity(entry)
+			if _, taken := claimed[key]; !taken {
+				claimed[key] = w.index
+			}
+		}
+	}
+	return claimed
 }
 
 // Get returns one entry, from the first source that has it.
@@ -391,7 +695,29 @@ func joinSourceErrors(failures []error) error {
 
 // --- the composite cursor ---------------------------------------------------
 
-// multiCursor carries one upstream cursor per source.
+// sourcePosition is where one source's listing has reached.
+//
+// Two fields, and the second is the whole reason this type exists. A source's
+// own cursor says which of its windows to read; it cannot say how much of that
+// window has already been handed out, and once the merged page is bounded and
+// filtered it very often stops halfway through one. Carrying the cursor alone
+// would resume at the start of the *next* window and lose everything after the
+// stopping point.
+//
+// The offset is an index into a window this host asked for and will ask for
+// again, not an offset into the catalogue. Re-asking is what makes it sound:
+// the source is behind a cache, so continuing a half-read window costs nothing
+// upstream, and re-reading rows that were already handed out is prevented by
+// the offset rather than by hoping the far end returns the same page twice.
+type sourcePosition struct {
+	// Cursor is the source's own cursor for the window being read -- not the
+	// one after it. Empty is the source's first window.
+	Cursor string `json:"c,omitempty"`
+	// Offset is how many of that window's rows are already accounted for.
+	Offset int `json:"o,omitempty"`
+}
+
+// multiCursor carries one position per source.
 //
 // Opaque to everyone outside this file, and it has to be: a source's cursor
 // belongs to that source and means nothing here. What this adds is which
@@ -402,13 +728,9 @@ func joinSourceErrors(failures []error) error {
 // is a map rather than a list: adding or removing a source between two
 // requests changes the list's positions and would silently hand one source's
 // cursor to another.
-type multiCursor map[string]string
+type multiCursor map[string]sourcePosition
 
-func (c multiCursor) get(source string) string { return c[source] }
-
-func (c multiCursor) more(source string) bool { return c[source] != "" }
-
-func (c multiCursor) set(source, cursor string) { c[source] = cursor }
+func (c multiCursor) set(source string, pos sourcePosition) { c[source] = pos }
 
 // encode renders the cursor for the wire. Empty when nothing has more pages,
 // which is how a caller learns the listing has ended.
@@ -416,7 +738,7 @@ func (c multiCursor) encode() string {
 	if len(c) == 0 {
 		return ""
 	}
-	raw, err := json.Marshal(map[string]string(c))
+	raw, err := json.Marshal(map[string]sourcePosition(c))
 	if err != nil {
 		return ""
 	}
@@ -425,11 +747,12 @@ func (c multiCursor) encode() string {
 
 // decodeMultiCursor reads a composite cursor.
 //
-// A cursor that will not decode, or that names a source this host is not
-// configured with, yields an empty one: the listing restarts rather than
-// paging a catalogue with a token from somewhere else. Restarting is a state
-// the caller already handles; handing an arbitrary string to a third party's
-// pagination is not.
+// A cursor that will not decode, that names a source this host is not
+// configured with, or that an older build wrote in a shape this one does not
+// read, yields an empty one: the listing restarts rather than paging a
+// catalogue with a token from somewhere else. Restarting is a state the caller
+// already handles; handing an arbitrary string to a third party's pagination
+// is not.
 func decodeMultiCursor(encoded string, sources []string) multiCursor {
 	out := multiCursor{}
 	if opaque(encoded, maxCursorRunes) == "" {
@@ -439,7 +762,7 @@ func decodeMultiCursor(encoded string, sources []string) multiCursor {
 	if err != nil || len(raw) > maxCursorRunes*len(sources)+len(sources)*64+64 {
 		return out
 	}
-	var decoded map[string]string
+	var decoded map[string]sourcePosition
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return out
 	}
@@ -447,13 +770,20 @@ func decodeMultiCursor(encoded string, sources []string) multiCursor {
 	for _, s := range sources {
 		known[s] = true
 	}
-	for source, cursor := range decoded {
+	for source, pos := range decoded {
 		if !known[source] {
 			continue
 		}
-		if bounded := opaque(cursor, maxCursorRunes); bounded != "" {
-			out[source] = bounded
+		// A negative offset is not a position; an over-long cursor is one the
+		// source would not be asked with anyway. Either way the source
+		// restarts rather than being handed nonsense.
+		if pos.Offset < 0 || pos.Offset > MaxEntriesPerPage {
+			continue
 		}
+		if pos.Cursor != "" && opaque(pos.Cursor, maxCursorRunes) == "" {
+			continue
+		}
+		out[source] = pos
 	}
 	return out
 }

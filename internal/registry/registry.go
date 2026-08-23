@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -55,6 +56,11 @@ const (
 	maxReasonRunes      = 512
 	maxQueryRunes       = 128
 	maxCursorRunes      = 512
+	// maxIconURLRunes bounds an icon address. Twice the longest icon URL any
+	// of the four catalogues serves today, and short of the 2048 a general
+	// URL is allowed: this one is going into an <img src> on an operator's
+	// page, and there is no honest icon at the far end of a kilobyte of URL.
+	maxIconURLRunes     = 1024
 	maxSchemaLabelRunes = 96
 )
 
@@ -76,6 +82,15 @@ type Entry struct {
 	// offers nothing this host can reach.
 	Transport string `json:"transport,omitempty"`
 	URL       string `json:"url,omitempty"`
+	// Icon is an address for a small image the catalogue offers for this
+	// server, absent when it offers none this host will pass on.
+	//
+	// A third party's URL, bound for an <img src> on an administrator's page,
+	// so it is validated rather than relayed: see safeIconURL. Nothing here
+	// fetches it, follows it or checks that anything is behind it -- the
+	// browser does that, and the page is written so that a dead host costs a
+	// placeholder rather than a broken row.
+	Icon string `json:"icon,omitempty"`
 	// UpdatedAt is when the catalogue last changed the entry.
 	UpdatedAt time.Time `json:"updated_at"`
 	// Addable reports that this host would accept the document. It is decided
@@ -144,6 +159,16 @@ type Page struct {
 	// Freshness is what the catalogue said about reusing this answer. Not part
 	// of the wire shape; see Detail.Freshness.
 	Freshness Freshness `json:"-"`
+	// AddableEstimate is roughly how many servers across these catalogues
+	// this host would accept an import of. A floor, and an estimate, and both
+	// on purpose -- see estimateAddable.
+	//
+	// It exists because the size of the catalogue is the question a page of
+	// ten cannot answer, and getting it wrong is what made an operator
+	// looking at thirty rows conclude there were ninety servers in the world.
+	// Zero means nothing could be said, which is different from zero servers
+	// and is why the field is omitted rather than sent as 0.
+	AddableEstimate int `json:"addable_estimate,omitempty"`
 	// Sources says which catalogues this page was assembled from and how each
 	// of them fared.
 	//
@@ -170,6 +195,29 @@ type SourceStatus struct {
 	// is what makes "this source answered" a checkable claim rather than a
 	// flag.
 	Entries int `json:"entries"`
+	// Judged is how many of this source's documents this host actually parsed
+	// while producing this answer, and Addable is how many of those it would
+	// accept. Together they are the measured ratio behind Page.AddableEstimate, and
+	// they are reported so that the estimate is a claim somebody can check
+	// rather than a number that appears.
+	//
+	// Their scope is whatever the source materialised. Docker holds its whole
+	// catalogue in one document and Smithery fetches its whole browse window,
+	// so for those two Judged covers everything they can offer or a stable
+	// sample of it. The two Generic-API sources page an opaque cursor, so
+	// Judged is one page of theirs and nothing more.
+	Judged  int `json:"judged,omitempty"`
+	Addable int `json:"addable,omitempty"`
+	// Total is how many servers this source says it holds altogether, when it
+	// says. Absent where it does not, and absent is not zero.
+	//
+	// It exists because a page of ten out of twelve thousand looks exactly
+	// like a catalogue of ten, and an operator who reads the second is
+	// deciding against a thing that is not true. Only two of the four sources
+	// can answer it -- Smithery reports a totalCount and Docker's whole
+	// catalogue is held in one document, so its length is the count -- which
+	// is why what the dashboard renders from these is a floor and says so.
+	Total int `json:"total,omitempty"`
 	// Error says what went wrong, when OK is false. It is a third party's
 	// failure, not this host's, and the operator deciding whether to wait
 	// needs to see which.
@@ -192,7 +240,25 @@ type Query struct {
 	// Cursor continues a previous page. Empty starts at the beginning.
 	Cursor string
 	// Limit bounds one page. Zero takes the client's default.
+	//
+	// It bounds the page a caller receives, not what each catalogue is asked
+	// for. Multi asks its sources for more than this and pages the merged,
+	// deduplicated, filtered result down to it, because a limit that is
+	// applied per source is a limit that means nothing: three sources each
+	// honouring "ten" produced thirty rows and a listing that could not say
+	// how large the catalogue was.
 	Limit int
+	// IncludeUnaddable keeps entries this host could not import in the
+	// listing. Off by default, because roughly half of what the catalogues
+	// publish only runs locally and a page of ten that spends five rows
+	// saying so is a page of five.
+	//
+	// Read by Multi, which is what pages and therefore what filters. A source
+	// always returns everything it has, with Addable and Reason on every row:
+	// the machinery that decides addability is not weakened by a listing
+	// choosing not to show its refusals, and GET /api/catalog/{name} still
+	// explains one.
+	IncludeUnaddable bool
 }
 
 // Normalised returns the query as it will actually be asked, with every bound
@@ -216,9 +282,10 @@ func (q Query) Normalised() Query {
 		q.Limit = 0
 	}
 	return Query{
-		Search: clean(q.Search, maxQueryRunes),
-		Cursor: opaque(q.Cursor, maxCursorRunes),
-		Limit:  q.Limit,
+		Search:           clean(q.Search, maxQueryRunes),
+		Cursor:           opaque(q.Cursor, maxCursorRunes),
+		Limit:            q.Limit,
+		IncludeUnaddable: q.IncludeUnaddable,
 	}
 }
 
@@ -304,6 +371,52 @@ func opaque(s string, maxRunes int) string {
 		}
 	}
 	return s
+}
+
+// safeIconURL bounds an icon address a catalogue offered, or returns nothing.
+//
+// This is the one field here that a browser will act on rather than render.
+// It becomes an <img src> on an administrator's page, so the rule is
+// allow-list and not sanitise: https, an absolute URL with a host, no
+// credentials in it, no control characters, and short. Anything else is
+// omitted, because an icon is decoration and a decoration is never worth
+// relaxing a rule for.
+//
+// https only, and not merely "not javascript:". A data: URI would let a
+// catalogue put arbitrary bytes -- an SVG carries script -- into the page's
+// own origin; a http: one would be a mixed-content request from a dashboard
+// that is served over TLS. Neither is a picture worth having.
+//
+// Nothing here fetches it. This host does not proxy, resolve, prefetch or
+// validate what is behind the URL: doing so would turn every catalogue row
+// into a request this deployment makes to an address a third party chose,
+// which is the shape of a server-side request forgery whatever the intent.
+// The browser fetches it, from the operator's machine, with no credential of
+// this host's attached.
+func safeIconURL(raw string) string {
+	trimmed := opaque(strings.TrimSpace(raw), maxIconURLRunes)
+	if trimmed == "" {
+		return ""
+	}
+	u, err := url.Parse(trimmed)
+	switch {
+	case err != nil:
+		return ""
+	case !strings.EqualFold(u.Scheme, "https"):
+		return ""
+	case u.Opaque != "":
+		// "https:something" is not a URL with a host; it is a scheme and an
+		// opaque tail, and what a browser does with one is not worth finding
+		// out.
+		return ""
+	case u.User != nil:
+		// Credentials in an image URL are either somebody's mistake or
+		// somebody's trick. Either way they are not sent from here.
+		return ""
+	case u.Host == "":
+		return ""
+	}
+	return trimmed
 }
 
 // SuggestName derives a local plugin name from a catalogue name.
@@ -437,6 +550,19 @@ func describe(document []byte) (transport, url string, addable bool, reason, aut
 		}
 	}
 	return remote.Type, clean(remote.URL, maxURLRunes), true, "", auth
+}
+
+// countAddable is how many of these entries this host would accept an import
+// of. Reported alongside how many were judged, because a ratio is only worth
+// anything next to the size of the sample it came from.
+func countAddable(entries []Entry) int {
+	n := 0
+	for _, e := range entries {
+		if e.Addable {
+			n++
+		}
+	}
+	return n
 }
 
 // declaredSchema renders a document's $schema for a one-line reason.

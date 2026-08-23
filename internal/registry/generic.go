@@ -223,6 +223,30 @@ type documentFields struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Version     string `json:"version"`
+	// Icons is server.json's own icon block, added in the 2025-10-17 format.
+	// Only the address is read: the mime type, sizes and theme are for a
+	// client choosing between several, and there is one slot to fill here.
+	Icons []documentIcon `json:"icons"`
+}
+
+type documentIcon struct {
+	Src string `json:"src"`
+}
+
+// icon is the first address in a document's icon block this host will pass on.
+//
+// First rather than best, because the format offers no ordering worth reading
+// and the alternative is a rule about sizes that would be this host's opinion
+// rather than the publisher's. Anything safeIconURL refuses is skipped rather
+// than ending the search, so one bad entry in a list does not cost the good
+// one after it.
+func (f documentFields) icon() string {
+	for _, candidate := range f.Icons {
+		if safe := safeIconURL(candidate.Src); safe != "" {
+			return safe
+		}
+	}
+	return ""
 }
 
 // entry turns one registry row into what the dashboard shows. The second
@@ -254,6 +278,7 @@ func (c catalogueEntry) entry(metaKey string) (Entry, bool) {
 		Title:         title,
 		Description:   clean(fields.Description, maxDescriptionRunes),
 		Version:       clean(fields.Version, maxVersionRunes),
+		Icon:          fields.icon(),
 		Transport:     transport,
 		URL:           endpoint,
 		UpdatedAt:     facts.UpdatedAt.UTC(),

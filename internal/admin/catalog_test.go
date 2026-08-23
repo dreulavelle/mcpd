@@ -301,3 +301,40 @@ func TestCatalog_SourcesIsNeverNull(t *testing.T) {
 		t.Errorf("body = %s, want an empty list rather than null", w.Body)
 	}
 }
+
+// TestCatalog_UnaddableEntriesAreLeftOutUnlessAskedFor.
+//
+// Roughly half of what the catalogues publish only runs locally. Those rows
+// used to be listed with a reason, which was the right answer when a page held
+// thirty of them and the wrong one at ten: a page of ten that spends five rows
+// explaining refusals is a page of five.
+//
+// The escape hatch stays, and there is no control in the dashboard that uses
+// it. What is not weakened is the machinery: the entry still carries addable
+// and its reason, and GET /api/catalog/{name} still explains a refusal in full
+// for anyone who came looking for one server in particular.
+func TestCatalog_UnaddableEntriesAreLeftOutUnlessAskedFor(t *testing.T) {
+	var got registry.Query
+	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+		List: func(_ context.Context, q registry.Query) (registry.Page, error) {
+			got = q
+			return registry.Page{Source: "fake"}, nil
+		},
+	})
+	for _, tc := range []struct {
+		query string
+		want  bool
+	}{
+		{"", false},
+		{"?include_unaddable=0", false},
+		{"?include_unaddable=nonsense", false},
+		{"?include_unaddable=1", true},
+		{"?include_unaddable=true", true},
+		{"?include_unaddable=yes", true},
+	} {
+		request(t, s, http.MethodGet, "/api/catalog"+tc.query, nil)
+		if got.IncludeUnaddable != tc.want {
+			t.Errorf("%q: include_unaddable = %t, want %t", tc.query, got.IncludeUnaddable, tc.want)
+		}
+	}
+}

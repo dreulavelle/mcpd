@@ -99,6 +99,14 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 		Search: r.URL.Query().Get("q"),
 		Cursor: r.URL.Query().Get("cursor"),
 		Limit:  parseLimit(r.URL.Query().Get("limit"), catalogDefaultLimit, catalogMaxLimit),
+		// Off unless asked for, and there is no control in the dashboard that
+		// asks. Roughly half of what the catalogues publish only runs
+		// locally, and a page of ten that spends five rows explaining why
+		// those five cannot be added is a page of five. The refusal is not
+		// hidden -- it is still on the entry, and GET /api/catalog/{name}
+		// still gives it in full for anyone who goes looking for one server
+		// in particular. This is a choice about what a *listing* is for.
+		IncludeUnaddable: truthy(r.URL.Query().Get("include_unaddable")),
 	})
 	if err != nil {
 		s.opts.Log.Warn("could not read the server catalogue", "error", err)
