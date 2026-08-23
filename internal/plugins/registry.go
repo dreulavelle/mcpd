@@ -346,6 +346,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 			Changes:       plan.Changes,
 			Impact:        plan.Impact,
 			Verifiable:    spec.Verifiable,
+			Reversible:    spec.Reversible,
 			CorrelationID: observability.CorrelationID(ctx),
 		})
 		if err != nil {
@@ -366,6 +367,18 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 // A client that cannot ask does not get an unguarded write; it gets the
 // two-step flow.
 func resolveApproval(ctx context.Context, req *mcp.CallToolRequest, svc ApprovalService, inline InlinePolicy, op *operations.Operation) operationView {
+	// A standing rule may already have authorised the change, in which case
+	// there is nobody to ask and asking anyway would be a prompt whose answer
+	// changes nothing. What is still owed is the outcome: the caller waits for
+	// the same bounded window an inline approval waits for, so the user is
+	// told what happened rather than left to ask.
+	if op.State != operations.StatePendingApproval {
+		if final, err := svc.AwaitOutcome(ctx, op.ID, 30*time.Second); err == nil && final != nil {
+			return viewOf(final)
+		}
+		return viewOf(op)
+	}
+
 	if inline == nil || !inline.AllowsInline(op.Risk) {
 		view := viewOf(op)
 		if inline != nil {

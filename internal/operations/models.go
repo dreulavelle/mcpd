@@ -217,6 +217,15 @@ type Operation struct {
 	ApprovedBy        string     `json:"approved_by,omitempty"`
 	ApprovedAt        *time.Time `json:"approved_at,omitempty"`
 	ApprovalExpiresAt *time.Time `json:"approval_expires_at,omitempty"`
+	// AuthorizedByRule names the standing rule that approved this operation
+	// without anyone being asked. Empty means a person decided.
+	//
+	// It is on the row rather than only in the audit detail because it is a
+	// fact about the operation that every reader needs: the executor's refusal
+	// to run a change whose risk was revised upward after nobody saw it turns
+	// on this, and so does the dashboard's obligation not to render "approved
+	// by system:policy" as though somebody clicked.
+	AuthorizedByRule string `json:"authorized_by_rule,omitempty"`
 
 	AttemptCount   int        `json:"attempt_count"`
 	LeaseOwner     string     `json:"lease_owner,omitempty"`
@@ -280,6 +289,10 @@ func (o *Operation) Assurance() Assurance {
 	}
 	return AssuranceGatedCall
 }
+
+// AutoApproved reports whether this operation was authorised by a standing
+// rule rather than by a person.
+func (o *Operation) AutoApproved() bool { return o.AuthorizedByRule != "" }
 
 // SystemActor identifies transitions performed by mcpd itself rather than by a
 // principal. Background components use a suffixed form, e.g. "system:reaper".

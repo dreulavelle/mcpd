@@ -62,16 +62,22 @@ type operationView struct {
 	// Target and Observed are decoded rather than raw. json.RawMessage is a
 	// []byte, and the SDK infers a byte array as an array-or-null schema,
 	// which fails validation against the object these actually contain.
-	Target      any        `json:"target,omitempty"`
-	RequestedBy string     `json:"requested_by"`
-	RequestedAt time.Time  `json:"requested_at"`
-	ExpiresAt   time.Time  `json:"expires_at"`
-	ApprovedBy  string     `json:"approved_by,omitempty"`
-	ExecuteBy   *time.Time `json:"execute_by,omitempty"`
-	Verified    *bool      `json:"verified,omitempty"`
-	Observed    any        `json:"observed_state,omitempty"`
-	ErrorCode   string     `json:"error_code,omitempty"`
-	ErrorDetail string     `json:"error_detail,omitempty"`
+	Target      any       `json:"target,omitempty"`
+	RequestedBy string    `json:"requested_by"`
+	RequestedAt time.Time `json:"requested_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	ApprovedBy  string    `json:"approved_by,omitempty"`
+	// AuthorizedByRule names the standing rule that authorised this change
+	// when nobody was asked. Its presence is the difference between "a person
+	// said yes" and "an administrator said in advance that this class of
+	// change does not need asking about", and a model that reports the second
+	// as the first is telling somebody something untrue.
+	AuthorizedByRule string     `json:"authorized_by_rule,omitempty"`
+	ExecuteBy        *time.Time `json:"execute_by,omitempty"`
+	Verified         *bool      `json:"verified,omitempty"`
+	Observed         any        `json:"observed_state,omitempty"`
+	ErrorCode        string     `json:"error_code,omitempty"`
+	ErrorDetail      string     `json:"error_detail,omitempty"`
 	// Assurance says what this record can prove: "reviewed_change" when the
 	// exact fields were planned, drift is detectable and the outcome is
 	// confirmed by re-reading, "gated_call" when a human authorised it and
@@ -85,25 +91,26 @@ type operationView struct {
 
 func viewOf(op *operations.Operation) operationView {
 	return operationView{
-		OperationID: op.ID,
-		State:       op.State.String(),
-		Plugin:      op.Plugin,
-		Action:      op.Action,
-		Risk:        op.Risk.String(),
-		Impact:      op.Impact,
-		Changes:     op.Changes,
-		Target:      decodeJSON(op.Target),
-		RequestedBy: op.RequestedBy,
-		RequestedAt: op.RequestedAt,
-		ExpiresAt:   op.ExpiresAt,
-		ApprovedBy:  op.ApprovedBy,
-		ExecuteBy:   op.ApprovalExpiresAt,
-		Verified:    op.OutcomeVerified,
-		Observed:    decodeJSON(op.Observed),
-		ErrorCode:   op.ErrorCode,
-		ErrorDetail: op.ErrorDetail,
-		Assurance:   op.Assurance().String(),
-		Note:        noteFor(op),
+		OperationID:      op.ID,
+		State:            op.State.String(),
+		Plugin:           op.Plugin,
+		Action:           op.Action,
+		Risk:             op.Risk.String(),
+		Impact:           op.Impact,
+		Changes:          op.Changes,
+		Target:           decodeJSON(op.Target),
+		RequestedBy:      op.RequestedBy,
+		RequestedAt:      op.RequestedAt,
+		ExpiresAt:        op.ExpiresAt,
+		ApprovedBy:       op.ApprovedBy,
+		AuthorizedByRule: op.AuthorizedByRule,
+		ExecuteBy:        op.ApprovalExpiresAt,
+		Verified:         op.OutcomeVerified,
+		Observed:         decodeJSON(op.Observed),
+		ErrorCode:        op.ErrorCode,
+		ErrorDetail:      op.ErrorDetail,
+		Assurance:        op.Assurance().String(),
+		Note:             noteFor(op),
 	}
 }
 
@@ -122,14 +129,37 @@ func decodeJSON(raw json.RawMessage) any {
 	return v
 }
 
-// noteFor states plainly what the current state means, and how much of it is
+// noteFor tells the model, in the response itself, what has and has not
+// happened -- and, where nobody was asked, that nobody was asked.
+func noteFor(op *operations.Operation) string {
+	return stateNote(op) + authorisationNote(op)
+}
+
+// authorisationNote says, in the note itself, that nobody was asked.
+//
+// The field beside it carries the same fact for anything that parses the
+// response, but the note is what a model repeats to a person, and "this was
+// approved" read out about a change no human ever saw is a claim about a
+// decision that was not made. Naming the rule is what turns it back into
+// something true: somebody did authorise this, in advance, and here is what
+// they wrote.
+func authorisationNote(op *operations.Operation) string {
+	if !op.AutoApproved() {
+		return ""
+	}
+	return " Nobody was asked about this change: it was authorised in advance " +
+		"by the standing rule \"" + op.AuthorizedByRule + "\". Say so rather than " +
+		"describing it as approved by a person."
+}
+
+// stateNote states plainly what the current state means, and how much of it is
 // actually known.
 //
 // The succeeded case used to say "Applied and confirmed by re-reading the
 // target" for every operation, including ones where nothing had been compared
 // against anything. A note that overstates the evidence is worse than none:
 // the model repeats it to a person, who now believes a check happened.
-func noteFor(op *operations.Operation) string {
+func stateNote(op *operations.Operation) string {
 	switch op.State {
 	case operations.StatePendingApproval:
 		return "NOTHING HAS CHANGED YET. This is a proposal awaiting human approval. " +

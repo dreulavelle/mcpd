@@ -245,6 +245,15 @@ func (s *Server) routes() {
 	// against the principal who made it.
 	api("PUT /api/settings", s.handlePutSettings, auth.CapAdmin)
 	api("GET /api/settings/history", s.handleSettingsHistory, auth.CapAdmin)
+	// The standing rules that decide which changes are authorised without
+	// asking anybody. Reading is an operator's business -- "why was I not
+	// asked" is a question they have to be able to answer -- while writing
+	// decides when the gate is skipped, which is administrative.
+	api("GET /api/approval-policy", s.handleGetApprovalPolicy, auth.CapRead)
+	api("PUT /api/approval-policy", s.handlePutApprovalPolicy, auth.CapAdmin)
+	// Answering "which rule would apply" computes over configuration and
+	// changes nothing, so it needs no more than reading the rules does.
+	api("POST /api/approval-policy/evaluate", s.handleEvaluateApprovalPolicy, auth.CapRead)
 	// Starting and stopping a tunnel changes what an external service can
 	// reach, so it takes administrator rights rather than read.
 	api("POST /api/tunnel/start", s.handleTunnelStart, auth.CapAdmin)
@@ -1119,8 +1128,13 @@ type operationDTO struct {
 	ApprovedBy      string     `json:"approved_by,omitempty"`
 	ApprovedByName  string     `json:"approved_by_name,omitempty"`
 	ApprovedAt      *time.Time `json:"approved_at,omitempty"`
-	ExecuteBy       *time.Time `json:"execute_by,omitempty"`
-	TerminalAt      *time.Time `json:"terminal_at,omitempty"`
+	// AuthorizedByRule names the standing rule that authorised this change
+	// when nobody was asked, and is empty where a person decided. The page
+	// must not render the two the same way: "approved by system:policy" reads
+	// as somebody having clicked, and nobody did.
+	AuthorizedByRule string     `json:"authorized_by_rule,omitempty"`
+	ExecuteBy        *time.Time `json:"execute_by,omitempty"`
+	TerminalAt       *time.Time `json:"terminal_at,omitempty"`
 	// Verified is three-valued on purpose. True means the target was re-read
 	// and matched, false means it was re-read and did not, and absent means no
 	// check was performed -- which is a different fact from a failed one, and
@@ -1154,7 +1168,8 @@ func toDTO(op *operations.Operation, names map[string]string) operationDTO {
 		RequestedAt: op.RequestedAt,
 		ExpiresAt:   op.ExpiresAt,
 		ApprovedBy:  op.ApprovedBy, ApprovedByName: renderName(names, op.ApprovedBy),
-		ApprovedAt: op.ApprovedAt, ExecuteBy: op.ApprovalExpiresAt,
+		AuthorizedByRule: op.AuthorizedByRule,
+		ApprovedAt:       op.ApprovedAt, ExecuteBy: op.ApprovalExpiresAt,
 		TerminalAt: op.TerminalAt, Verified: op.OutcomeVerified,
 		Assurance:    op.Assurance().String(),
 		DriftChecked: op.DriftChecked(), OutcomeVerifiable: op.Verifiable,

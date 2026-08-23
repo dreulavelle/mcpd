@@ -36,6 +36,11 @@ const (
 	CodeIndeterminate       = "INDETERMINATE"
 	CodeVerificationFailed  = "VERIFICATION_FAILED"
 	CodeLeaseExpired        = "LEASE_EXPIRED"
+	// CodeRiskRaised reports that re-reading the target before execution
+	// reclassified the change above what authorised it. It only ever applies
+	// to an operation a standing rule approved: where a person decided, they
+	// decided about this specific change and the re-plan does not unmake that.
+	CodeRiskRaised = "RISK_RAISED"
 )
 
 // TransitionError reports a rejected state change. It carries both states so

@@ -178,6 +178,25 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action)
 	}
 
+	// 2b. The same re-plan may reclassify the change. Where a person approved,
+	//     they approved this change and a revised classification does not
+	//     unmake their decision. Where a standing rule did, nobody ever looked:
+	//     the rule authorised a change of one severity and the target now says
+	//     it is another, so the authorisation does not cover what is about to
+	//     happen. Refusing sends it back through propose, where the raised risk
+	//     is what the policy sees and a person is asked.
+	if op.AutoApproved() && plan.RiskOverride != nil {
+		if raised := MaxRisk(op.Risk, *plan.RiskOverride); raised != op.Risk {
+			e.log.Warn("re-planning raised the risk of a change nobody was asked about; refusing to execute",
+				"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
+				"authorized_risk", op.Risk, "current_risk", raised, "rule", op.AuthorizedByRule)
+			return e.settleFailure(ctx, op, "", CodeRiskRaised, fmt.Sprintf(
+				"rule %s authorised this as a %s change and re-reading the target "+
+					"classified it %s; nobody has seen it at that classification",
+				op.AuthorizedByRule, op.Risk, raised))
+		}
+	}
+
 	// 3. Claim. The guarded update is what guarantees at-most-once execution:
 	//    losing the race is an ordinary outcome, not an error.
 	attemptID := e.ids.AttemptID()

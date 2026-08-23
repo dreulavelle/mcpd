@@ -98,6 +98,11 @@ type ApprovalFields struct {
 	ApprovedBy        string
 	ApprovedAt        time.Time
 	ApprovalExpiresAt time.Time
+	// AuthorizedByRule names the standing rule that authorised the change when
+	// nobody was asked. Empty for a decision a person made, and written in the
+	// same guarded statement as the approval itself so an operation cannot end
+	// up approved with no account of what authorised it.
+	AuthorizedByRule string
 }
 
 // ClaimRequest carries TX-3: the guarded transition into execution.

@@ -779,7 +779,44 @@ func (a *App) approvalPolicy(ctx context.Context) operations.Policy {
 		InlineApproval: operations.InlineApprovalPolicy{
 			MaxRisk: operations.RiskLevel(file.InlineMaxRisk),
 		},
+		AutoApprove: operations.AutoApprovalPolicy{Rules: a.autoApprovalRules(ctx)},
 	}
+}
+
+// autoApprovalRules reads the standing rules that decide which changes are
+// authorised without asking anybody.
+//
+// They live only in the settings store, and deliberately have no fallback in
+// the configuration file. A rule is the one setting whose effect is to skip a
+// human, so it has to be written where the change is recorded against the
+// administrator who made it -- and where an operator can see the whole set on
+// the page that owns it, rather than in a file the dashboard cannot show them.
+//
+// Anything unreadable produces no rules at all, which puts every change to a
+// person. It is the only direction to fail in: a policy that loosens when its
+// own configuration is corrupt is worse than no policy.
+func (a *App) autoApprovalRules(ctx context.Context) []operations.AutoApprovalRule {
+	var rules []operations.AutoApprovalRule
+	ok, err := a.settings.GetJSON(ctx, settings.KeyApprovalAutoRules, &rules)
+	if err != nil {
+		a.log.Error("the stored approval rules could not be read; "+
+			"every change will be put to a person", "error", err)
+		return nil
+	}
+	if !ok || len(rules) == 0 {
+		return nil
+	}
+	// Re-validated on read as well as on write. The write path is not the only
+	// way a value reaches this table -- a restore, a hand edit -- and a rule
+	// set the current rules refuse must not be the one deciding who gets
+	// interrupted.
+	normalised, err := operations.NormaliseRules(rules)
+	if err != nil {
+		a.log.Error("the stored approval rules are not valid; "+
+			"every change will be put to a person", "error", err)
+		return nil
+	}
+	return normalised
 }
 
 // inlinePolicyFunc adapts a live policy lookup to the plugins package's

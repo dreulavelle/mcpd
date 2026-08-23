@@ -37,7 +37,7 @@ const opColumns = `
 	approved_by, approved_at, approval_expires_at,
 	attempt_count, lease_owner, lease_expires_at,
 	terminal_at, outcome_verified, observed_json, error_code, error_detail,
-	correlation_id, idempotency_key, verifiable`
+	correlation_id, idempotency_key, verifiable, authorized_by_rule`
 
 // idempotencyColumns is how the driver names ux_operations_idem when it fires.
 // See isUniqueViolation for why the column list stands in for the index name.
@@ -145,11 +145,17 @@ func (s *OperationStore) Transition(ctx context.Context, req operations.Transiti
 	args := []any{string(req.To)}
 
 	if req.Approval != nil {
-		set = append(set, "approved_by = ?", "approved_at = ?", "approval_expires_at = ?")
+		// The rule goes in the same statement as the approval, not a second
+		// one. An operation approved with no account of what authorised it,
+		// even for the width of a transaction, is the thing this column
+		// exists to make impossible.
+		set = append(set, "approved_by = ?", "approved_at = ?", "approval_expires_at = ?",
+			"authorized_by_rule = ?")
 		args = append(args,
 			req.Approval.ApprovedBy,
 			req.Approval.ApprovedAt.UnixMilli(),
-			req.Approval.ApprovalExpiresAt.UnixMilli())
+			req.Approval.ApprovalExpiresAt.UnixMilli(),
+			nullStr(req.Approval.AuthorizedByRule))
 	}
 	if req.Terminal {
 		set = append(set, "terminal_at = ?")
@@ -444,6 +450,7 @@ func scanOperation(row scannable) (*operations.Operation, error) {
 		target, params                                        string
 		before, desired, precond, rollback, changes, observed sql.NullString
 		approvedBy, leaseOwner, errCode, errDetail            sql.NullString
+		authorizedByRule                                      sql.NullString
 		requestedAt, expiresAt                                int64
 		approvedAt, approvalExpiresAt, leaseExpiresAt, termAt sql.NullInt64
 		verified                                              sql.NullBool
@@ -456,7 +463,7 @@ func scanOperation(row scannable) (*operations.Operation, error) {
 		&approvedBy, &approvedAt, &approvalExpiresAt,
 		&op.AttemptCount, &leaseOwner, &leaseExpiresAt,
 		&termAt, &verified, &observed, &errCode, &errDetail,
-		&op.CorrelationID, &op.IdempotencyKey, &op.Verifiable)
+		&op.CorrelationID, &op.IdempotencyKey, &op.Verifiable, &authorizedByRule)
 	if err != nil {
 		return nil, err
 	}
@@ -473,6 +480,7 @@ func scanOperation(row scannable) (*operations.Operation, error) {
 	op.RequestedAt = time.UnixMilli(requestedAt).UTC()
 	op.ExpiresAt = time.UnixMilli(expiresAt).UTC()
 	op.ApprovedBy = approvedBy.String
+	op.AuthorizedByRule = authorizedByRule.String
 	op.LeaseOwner = leaseOwner.String
 	op.ErrorCode = errCode.String
 	op.ErrorDetail = errDetail.String
