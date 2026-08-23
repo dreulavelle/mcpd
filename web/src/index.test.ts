@@ -121,6 +121,7 @@ describe("motion", () => {
 
   it.each([
     "components/status.tsx",
+    "components/getting-started.tsx",
     "pages/approvals/Lifecycle.tsx",
   ])("does not animate %s, which reports state", (file) => {
     expect(readFileSync(join(SRC, file), "utf8")).not.toMatch(/\banimate-/);

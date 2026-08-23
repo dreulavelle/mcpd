@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, screen, waitFor } from "@testing-library/react";
 import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "@/lib/api";
@@ -335,5 +335,56 @@ describe("the profile", () => {
 
     expect(await screen.findByLabelText("Display name")).toBeInTheDocument();
     expect(screen.getByLabelText("New password")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The checklist is mounted by the console rather than by a page, so this is
+ * where its wiring is defended. It waits for the browser to be idle before it
+ * asks anything, which is why the idle callback is stubbed: jsdom has none, and
+ * the fallback timer would make this a race.
+ */
+describe("the getting-started checklist", () => {
+  const idle: IdleRequestCallback[] = [];
+
+  beforeEach(() => {
+    idle.length = 0;
+    vi.stubGlobal("requestIdleCallback", (fn: IdleRequestCallback) => idle.push(fn));
+    vi.stubGlobal("cancelIdleCallback", () => {});
+    localStorage.clear();
+    window.history.replaceState(null, "", "/");
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function whenIdle() {
+    await act(async () => {
+      idle.splice(0).forEach((fn) => fn({ didTimeout: false, timeRemaining: () => 0 }));
+      await Promise.resolve();
+    });
+  }
+
+  it("sits on the console without taking the page or the focus", async () => {
+    stubApi("admin");
+    render(<App />);
+    await screen.findByText("Hello, Smoke");
+    await whenIdle();
+
+    expect(screen.getByRole("button", { name: /get started/i })).toBeInTheDocument();
+    // Nothing waiting on the overview is still what the page is about.
+    expect(screen.getByText("Nothing waiting")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.body).toHaveFocus();
+  });
+
+  // Every step it lists takes admin to do. Offering them to somebody the server
+  // would refuse is worse than offering nothing.
+  it("is not offered to a user who could not complete any of it", async () => {
+    stubApi("user");
+    render(<App />);
+    await screen.findByText("Hello, Smoke");
+    await whenIdle();
+
+    expect(screen.queryByRole("button", { name: /get started/i })).toBeNull();
   });
 });
