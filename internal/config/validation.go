@@ -164,6 +164,22 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// A catalogue that authenticates every request is worth refusing to start
+	// without its credentials, rather than mounting and answering every page
+	// with a 401. The other three need nothing, so nothing is checked for them.
+	if c.Catalog.PulseMCP {
+		if strings.TrimSpace(c.Catalog.PulseMCPAPIKeyRef) == "" {
+			add("config: catalog.pulsemcp_api_key_ref is required when " +
+				"catalog.pulsemcp is on; PulseMCP's v0.1 API authenticates every request")
+		} else if !strings.Contains(c.Catalog.PulseMCPAPIKeyRef, ":") {
+			add("config: catalog.pulsemcp_api_key_ref must be a reference such as " +
+				"env:PULSEMCP_API_KEY, not the key itself")
+		}
+		if strings.TrimSpace(c.Catalog.PulseMCPTenant) == "" {
+			add("config: catalog.pulsemcp_tenant is required when catalog.pulsemcp is on")
+		}
+	}
+
 	// --- plugins ---
 	for name, p := range c.Plugins {
 		if !pluginNamePattern.MatchString(name) {

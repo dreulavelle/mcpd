@@ -132,7 +132,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 		audit:      sqlite.NewAuditStore(db),
 		mcpStore:   sqlite.NewMCPServerStore(db, time.Now),
 		mcpServers: map[string]mcpservers.Server{},
-		catalog:    buildCatalog(cfg.Catalog),
+		catalog:    buildCatalog(cfg.Catalog, log),
 		serving:    make(chan struct{}),
 		health:     observability.NewHealthRegistry(2 * time.Second),
 	}

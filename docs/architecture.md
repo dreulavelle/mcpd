@@ -319,16 +319,87 @@ Hand-authoring a `server.json` to add a server somebody else already published
 is copying. `internal/registry` browses the public catalogues of MCP servers so
 an operator can pick one instead.
 
-Two of them today. The **official MCP registry** is where a publisher registers
-a server themselves. **Docker's MCP catalogue** is built from
+Four of them today.
+
+| catalogue | what it is | default |
+|---|---|---|
+| `registry.modelcontextprotocol.io` | the official registry, where a publisher registers a server themselves | on |
+| `api.pulsemcp.com` | PulseMCP's v0.1 sub-registry, ~22,000 servers, mostly mirrored from the official one | **off** |
+| `docker/mcp-registry` | Docker's curated catalogue | on |
+| `registry.smithery.ai` | Smithery's registry, ~10,500 servers, all hosted behind one gateway | on |
+
+Docker's is built from
 [docker/mcp-registry](https://github.com/docker/mcp-registry), which is MIT
 licensed — the notice travels with the vendored fixtures and with every
-document composed from an entry, in its `_meta`. Both are on by default and
-either can be switched off under `catalog:` in the configuration file; a
-deployment with none gets an endpoint that says so.
+document composed from an entry, in its `_meta`. Any of the four can be
+switched off under `catalog:` in the configuration file; a deployment with none
+gets an endpoint that says so.
 
 Reading a catalogue is an HTTPS fetch of somebody's metadata. Nothing about
 Docker's involves Docker: no daemon, no container, no image.
+
+**A source is on by default when it is useful without a credential.** That is
+the whole of the rule, and it separates the two new ones. Smithery's *servers*
+need a key to dial, but its registry does not need one to browse — so an
+operator with no Smithery account still gets ten thousand descriptions, a
+search over them, and a row that says which ones would ask for a key.
+PulseMCP's v0.1 API authenticates every request, so the same deployment would
+get a page of 401s; a source that can only report its own misconfiguration is
+worse to default to than an absence, and it is off until a key and tenant are
+configured. Config validation refuses to start with it on and either missing,
+because "mounted and failing every page" is the state nobody wants.
+
+That is also why the obvious PulseMCP integration is not the one built. The
+unauthenticated `v0beta` API — `count_per_page`, `offset`, a `remotes[]`
+carrying `url_direct` and `cost` — is being switched off on a published
+schedule that reached 50% of requests randomly failing in June 2026 and reaches
+100% in September. Measured on 2026-08-23, three of six requests came back
+`410 API_SUNSET`. Building on it would have shipped a source already half dead.
+
+**Two catalogues speak one API, so there is one reader.** PulseMCP's v0.1
+implements the Generic MCP Registry API — the same `{server, _meta}` rows,
+`metadata.nextCursor` and pass-through `server.json` the official registry
+serves. What differs between the two is a base URL, two credential headers and
+the `_meta` key each writes its lifecycle facts under, which is a parameter
+list rather than a second implementation. `generic.go` is the reader;
+`official.go` and `pulsemcp.go` are its two configurations.
+
+**Smithery's listing is bounded, and says so.** Its API reports ten and a half
+thousand servers and then refuses to page past five hundred of them, whatever
+page size is asked for — at `pageSize=100` `totalPages` is 5, at `pageSize=3`
+it is 167, and both are the same five hundred rows. Search is not bounded that
+way, so `?q=` is passed upstream rather than used to filter a page that was
+already truncated: filtering locally would present the top five hundred as the
+catalogue, and a search for a server at position nine thousand would come back
+empty with nothing saying why. A browse carries a note on its `SourceStatus`
+saying the listing stops and search reaches the rest, because a page whose last
+row is the five hundredth looks exactly like the end of a catalogue.
+
+Smithery's paging also repeats itself: those five hundred rows held two hundred
+and sixty-nine distinct servers when measured, and pages one and two shared
+thirty-nine. Page one is stable when refetched, so it is not jitter a retry
+would fix — the ordering is by popularity and is not a total order. The window
+is fetched whole (page one, then the rest concurrently) and deduplicated by
+name before anything is paged out of it, which is also what makes the cursor a
+resume point rather than an offset into a list that reshuffles.
+
+**One Smithery key opens every Smithery server, and it still lives in the
+per-server settings.** Every hosted server is at
+`server.smithery.ai/{qualifiedName}/mcp`, streamable-http, `401 invalid_token`
+without an `Authorization` header — so the composed document declares that
+header with a `{SMITHERY_API_KEY}` placeholder behind it, marked secret, which
+is the shape Docker's entries already produce. The key then arrives the way
+every other credential does: typed into the dashboard, encrypted at rest,
+resolved store-then-file-then-default, never written into the stored document.
+
+Holding it once for the source instead was considered and refused. It would
+have to be either substituted into the document to be used — a credential at
+rest inside a stored, hashed document, which is the one thing the import path's
+verbatim storage makes indefensible — or resolved at dial time from a store the
+plugin does not belong to, which is a second credential path beside the one
+every other plugin uses and a hole in per-plugin scoping. The cost of refusing
+is real and is worth naming: an operator importing four Smithery servers pastes
+the same key four times, into four fields that each say what they are for.
 
 **It finds documents; it does not install them.** Selecting an entry hands its
 `server.json` to the same import endpoint a paste goes through, and everything
@@ -351,8 +422,9 @@ and so is not the leaf it otherwise would be. The alternative was to
 re-implement the acceptance rule beside the catalogue, which is the same bug
 with an extra copy of the code to keep in step.
 
-**Remote servers only.** Roughly half of the official registry, and three
-quarters of Docker's catalogue, is published solely as something to run
+**Remote servers only.** Roughly half of the official registry, three
+quarters of Docker's catalogue, and the servers Smithery does not host are
+published solely as something to run
 locally — an npm package, a container, a command. This host does not run those.
 They are listed with the reason rather than filtered out, because "why is the
 thing I came for not here" is a worse question than a greyed-out row that
@@ -436,12 +508,33 @@ server four times.
 
 Across catalogues a name cannot do the job — the official registry calls it
 `app.linear/linear` and Docker calls it `linear`, and no rule turns one into the
-other. The address does: thirty-two of the entries the two share resolve to the
-same URL, and two entries that dial one endpoint are one server however they
-are named. The official registry's copy is the one kept, because that is where
-the party who operates the server registered it. An entry with no address falls
-back to its own catalogue's name, since nothing can establish that two
-unreachable entries are the same thing.
+other. The address does: thirty-two of the entries those two share resolve to
+the same URL, and two entries that dial one endpoint are one server however they
+are named. An entry with no address falls back to its own catalogue's name,
+since nothing can establish that two unreachable entries are the same thing.
+
+Which copy survives is preference order, and with four sources the order needs
+a reason rather than a list. It is one idea applied four times — how far the
+entry is from the party that operates the server:
+
+1. **the official registry**, where the publisher registered it themselves;
+2. **PulseMCP**, an aggregator, but a pass-through one that hands back that
+   same first-party document unchanged;
+3. **Docker**, whose entry is not a `server.json` at all but a document this
+   host composed from a third party's description;
+4. **Smithery**, which describes its own proxy in front of the server rather
+   than the server.
+
+The pair that actually collides is the first two, because PulseMCP mirrors the
+official registry — which is exactly what the order is for. Smithery rarely
+competes, and understanding why matters more than the fact: every Smithery
+entry is addressed at `server.smithery.ai`, so a Smithery row and an official
+row for what is recognisably the same project have different addresses and do
+not merge. That is right rather than a miss. Dialling the publisher's endpoint
+with the publisher's key and dialling Smithery's gateway with a Smithery key
+are two different servers by every test that matters here — different address,
+different credential, different party to trust — and merging them on the
+strength of a similar name would hide one of two real choices.
 
 Browsing takes `admin`. Everything it returns is public; the privilege is
 making this host reach a third party from inside the deployment. Nothing about
