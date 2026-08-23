@@ -18,28 +18,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { RestoreButton } from "./PluginsList";
 import { RemoteServer } from "./RemoteServer";
 
-/**
- * One plugin, whatever kind it is.
- *
- * A page of its own rather than an expander in the list, because everything
- * here is long: a settings form, two tool catalogues, an address, and a
- * connector. The console this replaces put all of it inside a row and the file
- * that did so grew to twenty kilobytes doing it.
- *
- * A remote MCP server is managed here too. It used to send the operator to a
- * Marketplace page for its tools while its credentials stayed here, which is
- * one thing in two places and a link to bounce between them. Marketplace is
- * for finding a server; this is for running one.
- */
+/** One plugin, whatever kind it is. A remote MCP server is managed here too. */
 export function PluginDetail({ name }: { name: string }) {
   const [plugin, setPlugin] = useState<Plugin | null>(null);
   const [instance, setInstance] = useState<PluginInstance | null>(null);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [tunnels, setTunnels] = useState<TunnelInfo | null>(null);
-  // Both the plugin list and the instance list have answered at least once.
-  // Absent from the plugin list alone means unmounted, which is the case whose
-  // settings form is the whole reason this page exists; absent from both is
-  // the only thing that means the name is not a plugin here.
+  // Absent from the plugin list alone means unmounted, which this page exists
+  // to fix. Absent from both is the only thing that means "not a plugin here".
   const [asked, setAsked] = useState({ plugins: false, instances: false });
 
   const load = useCallback(() => {
@@ -155,8 +141,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
           </Notice>
         )}
 
-        {/* Settings first. It is why somebody opens the page of a plugin that
-            is not working, and everything below it is reference. */}
+        {/* Settings first: it is why the page of a broken plugin gets opened. */}
         {group && settings && (
           <Section title="Settings">
             <SettingsForm
@@ -166,16 +151,10 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
           </Section>
         )}
 
-        {/* Everything that is true of this plugin *because* it is somebody
-            else's server: its tool snapshot, what has been classified, the
-            document it was added from, and whether it is switched on. It goes
-            after the settings, which are the credentials the document asked
-            for and the reason it is not serving yet. */}
+        {/* After the settings, which are what it is usually waiting on. */}
         {runtime === "mcp" && <RemoteServer name={name} onChanged={onChanged} />}
 
-        {/* The remote panel lists tools in far more detail -- and in three
-            states rather than two -- so this pair of cards would be a worse
-            second copy of it. */}
+        {/* The remote panel lists tools in more detail, and in three states. */}
         {running && runtime !== "mcp" && (
           <Section title="Tools">
             <div className="grid gap-4 lg:grid-cols-2">
@@ -251,12 +230,9 @@ function ToolList({ tools, tone }: { tools: string[]; tone?: "attention" }) {
 }
 
 /**
- * What the configuration file says about this plugin, read-only.
- *
- * Shown because the honest answer to "I removed it, is it gone?" is "not from
- * your file" -- and the next question is which lines to delete when somebody
- * next touches the YAML. Keys without values: this rides on a read-capability
- * endpoint and a `settings:` block is usually where a credential is.
+ * What the configuration file says, read-only, because the honest answer to "I
+ * removed it, is it gone?" is "not from your file". Keys without values: this
+ * is a read-capability endpoint and `settings:` is where a credential lives.
  */
 function Declaration({ instance }: { instance: PluginInstance | null }) {
   const d = instance?.declaration;
@@ -295,12 +271,8 @@ function Declaration({ instance }: { instance: PluginInstance | null }) {
 }
 
 /**
- * A plugin removed here that the configuration file still declares.
- *
- * The wording is the point. An operator who reads "removed" and assumes their
- * file changed will be surprised twice: once when they cannot find the edit,
- * and once when a colleague redeploys and nothing comes back. So it says which
- * of the two happened, and offers the way out of it.
+ * A plugin removed here that the file still declares. The wording is the point:
+ * assuming the file changed leads to a surprise on the next deploy.
  */
 function RemovedNotice({ name, instance, mayManage, onChanged }: {
   name: string;
@@ -331,14 +303,9 @@ function RemovedNotice({ name, instance, mayManage, onChanged }: {
 }
 
 /**
- * Switching a plugin off without removing it.
- *
- * This works on a file-declared instance for the same reason removing one
- * does: `enabled: false` in a file nobody on this host can edit is the same
- * dead end one step smaller, and the store already beats the file everywhere
- * else. A remote MCP server is switched from its own panel, which owns the
- * column that decides it -- a record written here would be shadowed on the
- * next read, so the toggle would report success and change nothing.
+ * Switching a plugin off without removing it. Not for a remote MCP server: its
+ * own panel owns the column, and a record written here would be shadowed on the
+ * next read -- reporting success and changing nothing.
  */
 function EnabledControl({ name, instance, runtime, onChanged }: {
   name: string;
@@ -351,8 +318,7 @@ function EnabledControl({ name, instance, runtime, onChanged }: {
   const [busy, setBusy] = useState(false);
 
   if (!mayManage || !instance || runtime === "mcp") return null;
-  // Nothing to switch: it is not being served either way, and the notice at
-  // the top of the page owns the one control that changes that.
+  // The notice at the top of the page owns the only control that applies.
   if (instance.removed) return null;
 
   const on = instance.enabled;
@@ -409,15 +375,9 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
 
   if (!mayRemove || !instance) return null;
 
-  // A remote server is removed by the endpoint that owns its document, which
-  // takes the tool approvals and the settings with it. `DELETE /api/instances`
-  // refuses one outright -- there is no instances. key to delete -- so this
-  // button would have been an error message with a delay in front of it. The
-  // remote panel above carries the one that works.
+  // `DELETE /api/instances` refuses a remote server outright: it is removed by
+  // the endpoint that owns its document, from the panel above.
   if (runtime === "mcp") return null;
-
-  // Already removed: the notice at the top of the page owns this, and a second
-  // control offering to remove it again would be a button with nothing to do.
   if (instance.removed) return null;
 
   const fromFile = instance.from_file;

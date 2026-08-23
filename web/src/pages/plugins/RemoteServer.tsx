@@ -28,13 +28,7 @@ const TOOL_STATES: Record<MCPToolState, { label: string; tone: "good" | "attenti
 
 type ToolFilter = "all" | MCPToolState;
 
-/**
- * Where a server stands, in one chip.
- *
- * "Unreadable" first, because a row this build can no longer parse can only be
- * listed and removed -- none of the other states apply to it, and offering
- * them would be offering things that do nothing.
- */
+/** Where a server stands. "Unreadable" first: no other state applies to one. */
 export function ServerState({ server: s }: { server: MCPServer }) {
   if (!s.readable) {
     return <Chip tone="problem">Unreadable document</Chip>;
@@ -59,18 +53,9 @@ export function ServerState({ server: s }: { server: MCPServer }) {
 }
 
 /**
- * Everything about a plugin that happens to be somebody else's server.
- *
- * This lived on a Marketplace page of its own, which meant one installed
- * server was listed in two sections and looking after it was a matter of
- * knowing which half of it lived where -- its credentials on the plugin page,
- * its tools somewhere else. A remote server is a plugin; it is managed with
- * the plugins. Marketplace is where you find one.
- *
- * The snapshot is shown in full, in every state, because "pending" and
- * "disabled" mean different things and an operator deciding about a server
- * needs to see both: one is work outstanding and the other is a decision
- * already taken.
+ * Everything about a plugin that happens to be somebody else's server. The tool
+ * snapshot is shown in every state: "pending" is work outstanding and
+ * "disabled" is a decision already taken.
  */
 export function RemoteServer({ name, onChanged }: {
   name: string;
@@ -85,9 +70,8 @@ export function RemoteServer({ name, onChanged }: {
 
   const server = (servers.data?.servers ?? []).find((s) => s.name === name) ?? null;
 
-  // Depends on the three reload functions rather than the loader objects:
-  // those are fresh on every render, and a callback that changed with them
-  // would re-fire anything downstream that watched it.
+  // The reload functions, not the loader objects: those are fresh every render
+  // and would re-fire anything downstream that watched this.
   const { reload: reloadServers } = servers;
   const { reload: reloadTools } = tools;
   const reload = useCallback(() => {
@@ -126,11 +110,8 @@ function Body({ server, tools, toolsError, onChanged }: {
 }) {
   const notify = useNotify();
   const { navigate } = useRouter();
-  // Reading what a server offers is an operator's business; deciding what is
-  // served, asking the far end again, and removing it are an administrator's
-  // -- which is exactly how the endpoints are gated. Showing the buttons to
-  // somebody the API will refuse would be a worse way of saying the same
-  // thing.
+  // Reading is an operator's; classifying, discovering and removing are an
+  // administrator's, which is how the endpoints are gated.
   const mayAdminister = useCan("admin");
   const [filter, setFilter] = useState<ToolFilter>("all");
   const [classifying, setClassifying] = useState<MCPTool | null>(null);
@@ -214,7 +195,7 @@ function Body({ server, tools, toolsError, onChanged }: {
         </Notice>
       )}
 
-      {/* Said before the table rather than left to be counted off it: a
+      {/* Before the table rather than counted off it: a
           pending tool is not served, and that is the fact an operator most
           often has the wrong idea about. */}
       {pending > 0 && (

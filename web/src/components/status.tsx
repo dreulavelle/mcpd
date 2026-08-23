@@ -6,12 +6,8 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
- * Semantic status, kept separate from the accent.
- *
- * "neutral" is a real value and not a fallback: several things in this console
- * are genuinely neither good nor bad -- an operation nobody has decided on, a
- * check nobody has run -- and colouring those in would be saying something
- * untrue about them.
+ * Semantic status. "neutral" is a real value, not a fallback: a check nobody
+ * has run is neither good nor bad, and colouring it would say otherwise.
  */
 export type Tone = "good" | "attention" | "problem" | "info" | "neutral";
 
@@ -61,12 +57,8 @@ export function Chip({ tone = "neutral", className, children }: {
 /* -- operations ------------------------------------------------------------ */
 
 /**
- * The tone of each operation state.
- *
- * `indeterminate` is "attention" and never "problem". It is not a failure --
- * it means execution began and the outcome was never recorded, so the change
- * may be in place. Painting it the same as `failed` is what leads somebody to
- * retry and apply it twice.
+ * `indeterminate` is "attention" and never "problem": the change may be in
+ * place, and painting it as a failure invites a retry that applies it twice.
  */
 const STATE_TONE: Record<OperationState, Tone> = {
   draft: "neutral",
@@ -117,16 +109,9 @@ export function RiskBadge({ risk }: { risk: RiskLevel | string }) {
 /* -- verification ---------------------------------------------------------- */
 
 /**
- * Whether re-reading upstream confirmed the change.
- *
- * Three outcomes, and the third is the one that matters. `true` was confirmed,
- * `false` was checked and did not match, and null or absent means nobody has
- * checked -- which is the ordinary state of anything still in flight, and is
- * common enough that rendering it as a tick would be wrong most of the time it
- * appeared.
- *
- * `verified` is typed `boolean | null | undefined` so a call site cannot narrow
- * it to a boolean without deciding what to do about the third case.
+ * Three outcomes, and the third is the one that matters: null or absent is
+ * "nobody checked" and must never render as a tick. Typed to include null so a
+ * call site cannot narrow it to a boolean without deciding.
  */
 export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
   if (verified === true) {
@@ -176,26 +161,12 @@ export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
 /* -- assurance ------------------------------------------------------------- */
 
 /**
- * What the record proves, in one chip.
- *
- * "Reviewed change" and "gated call" are different words on purpose: the first
- * carries exact fields, drift detection and a confirmed outcome, the second a
- * person's yes and nothing else. Neither is a fault -- a gated call is a
- * legitimate, ordinary thing -- so neither is coloured as one. The distinction
- * is worth stating precisely because it is easy to read the smaller guarantee
- * as the larger one.
+ * What the record proves. Different words on purpose, and neither is coloured
+ * as a fault: a gated call is legitimate, it is just not the larger guarantee.
  */
 export function AssuranceBadge({ assurance, authorizedByRule }: {
   assurance: string;
-  /**
-   * The rule that authorised the change, when one did.
-   *
-   * Assurance says what can be proved, never who authorised it, so this does
-   * not touch the badge -- only the sentence beneath it, which used to state
-   * flatly that a person had said yes. A standing rule can now approve a
-   * change with nobody asked, and that sentence would be describing something
-   * that did not happen.
-   */
+  /** Changes the sentence, never the badge, which would claim a person said yes. */
   authorizedByRule?: string;
 }) {
   const reviewed = assurance === "reviewed_change";
@@ -212,7 +183,7 @@ export function AssuranceBadge({ assurance, authorizedByRule }: {
         {reviewed
           ? "Exact fields, a drift check against a stored snapshot, and an outcome confirmed by re-reading the target."
           : authorizedByRule
-            ? "A standing rule authorised it and the call was made. That is all this record proves — it does not say the change is in place."
+            ? "A rule allowed it and the call was made. That is all this record proves — it does not say the change is in place."
             : "A person authorised it and the call was made. That is all this record proves — it does not say the change is in place."}
       </TooltipContent>
     </Tooltip>
@@ -222,19 +193,8 @@ export function AssuranceBadge({ assurance, authorizedByRule }: {
 /* -- authorisation --------------------------------------------------------- */
 
 /**
- * A change a standing rule authorised, with nobody asked.
- *
- * `authorized_by_rule` is the discriminator and `approved_by` is not.
- * `approved_by` on one of these is `system:policy` and `approved_by_name` is
- * the same string -- it is not an account and there is no name behind it to
- * resolve. Rendering the approver field the ordinary way therefore says
- * "approved by system:policy", which reads as somebody having clicked, and
- * nobody did.
- *
- * Stated rather than warned about. An auto-approval is a legitimate thing an
- * administrator arranged in advance, so this is informational and not a fault
- * -- what would be wrong is leaving it indistinguishable from a decision
- * somebody took.
+ * A change a rule approved, with nobody asked. `authorized_by_rule` is the
+ * discriminator, never `approved_by` -- that is `system:policy`, not an account.
  */
 export function AuthorisedByRule({ rule }: { rule: string }) {
   return (
@@ -244,16 +204,14 @@ export function AuthorisedByRule({ rule }: { rule: string }) {
           <Chip tone="info">
             <ShieldCheck className="size-3 shrink-0" aria-hidden="true" />
             <span>
-              Authorised in advance by rule{" "}
-              <code className="font-mono">{rule}</code>
+              No one was asked — rule <code className="font-mono">{rule}</code>
             </span>
           </Chip>
         </span>
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
-        Nobody was asked. A standing rule covered this class of change, so it
-        was approved without going to a person. The approver on the record is
-        system:policy, which is not an account.
+        A rule allowed this kind of change, so it was approved without going to
+        a person.
       </TooltipContent>
     </Tooltip>
   );

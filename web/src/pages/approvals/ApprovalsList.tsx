@@ -32,15 +32,8 @@ const FILTERS: [Filter, string][] = [
 ];
 
 /**
- * Changes an assistant has proposed.
- *
- * The list shows what a change is and where it stands, and nothing else: a
- * decision is made on the detail page, where the change itself is. Approving
- * from a row would be approving a one-line summary, and "the thing approved is
- * exactly the thing reviewed" is the property this product exists to hold.
- *
- * Defaults to what is waiting, because that is the only part of this list
- * anyone is expected to act on.
+ * Changes an assistant has proposed. Nothing is decided here: approving from a
+ * row would be approving a one-line summary rather than the change.
  */
 export function ApprovalsList() {
   const [filter, setFilter] = useState<Filter>("pending_approval");
@@ -51,9 +44,8 @@ export function ApprovalsList() {
   );
   const { data, error } = useLoader(load, "Couldn't load proposed changes.", 10_000);
 
-  // Newest first. The endpoint walks plugin by plugin, so what comes back is
-  // grouped by integration rather than ordered in time, and an operator
-  // scanning for what just happened would have to read all of it.
+  // Newest first: the endpoint walks plugin by plugin, so what comes back is
+  // grouped by integration rather than ordered in time.
   const operations = useMemo(() => {
     const list = data?.operations ?? [];
     return [...list].sort(
@@ -144,15 +136,9 @@ function Row({ op }: { op: Operation }) {
           {op.plugin}
           {op.impact ? ` — ${op.impact}` : ""}
         </div>
-        {/* Only the weaker of the two, and in a neutral tone. A gated call is
-            an ordinary, legitimate thing rather than a fault; what it is not
-            is a reviewed change, and that is worth seeing before opening the
-            row. Flagging the stronger case as well would put a chip on every
-            line and say nothing.
-
-            The rule beside it is a different fact and stays a different chip:
-            what can be proved about a change and who authorised it are
-            orthogonal, and an auto-approved change can carry every proof. */}
+        {/* Only the weaker of the two: flagging both would chip every row.
+            The rule is a separate chip because what can be proved and who
+            authorised it are different facts. */}
         {(op.assurance === "gated_call" || op.authorized_by_rule) && (
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {op.assurance === "gated_call" && (
@@ -171,8 +157,7 @@ function Row({ op }: { op: Operation }) {
       <TableCell className="text-muted-foreground">{op.requested_by}</TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">
         {when(op.requested_at)}
-        {/* A proposal expires, so how long is left is the fact somebody is
-            acting on. Everything else can be read from the timestamp. */}
+        {/* A proposal expires, so how long is left is what matters. */}
         {waiting && op.expires_at && (
           <div className="text-xs text-attention">
             expires {relative(op.expires_at)}
@@ -180,8 +165,7 @@ function Row({ op }: { op: Operation }) {
         )}
       </TableCell>
       <TableCell>
-        {/* Only meaningful once execution has been attempted. Before that,
-            "not checked" is true of every row and says nothing. */}
+        {/* Before execution, "not checked" is true of every row. */}
         {op.state === "succeeded" || op.state === "failed" || op.state === "indeterminate"
           ? <VerifiedBadge verified={op.verified} />
           : <span className="text-xs text-muted-foreground">—</span>}

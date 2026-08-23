@@ -28,12 +28,8 @@ import {
 } from "@/components/ui/table";
 
 /**
- * One row of the list: a configured instance, whether or not it is serving.
- *
- * A plugin that has not been configured is not mounted, so it is absent from
- * the plugins endpoint -- and its own page is exactly where its settings form
- * lives. Without folding the instance list in, adding an integration produced
- * a notice saying what it needed and nowhere to type it.
+ * One row: a configured instance, serving or not. An unconfigured plugin is
+ * absent from the plugins endpoint, so the instance list is folded in.
  */
 export interface PluginRow {
   name: string;
@@ -46,23 +42,14 @@ export interface PluginRow {
   healthMessage: string;
   reads: number;
   writes: number;
-  /**
-   * Removed here while the configuration file still declares it.
-   *
-   * The row stays. An operator who removes the wrong plugin and then cannot
-   * find it again to undo is worse off than before the button existed.
-   */
+  /** Removed here while the file still declares it. The row stays, to undo. */
   removed: boolean;
   removedBy: string;
 }
 
 /**
- * Joins what is mounted with what is merely configured.
- *
- * Runtime comes from the instances endpoint, which is the only place that
- * carries it. An instance with no matching row there is assumed builtin,
- * because that is what every plugin compiled into the binary is and a remote
- * server always has a row.
+ * Joins what is mounted with what is merely configured. Runtime comes from the
+ * instances endpoint; an instance missing from it is builtin.
  */
 export function toRows(
   plugins: Plugin[], instances: PluginInstance[], types: PluginType[],
@@ -93,9 +80,7 @@ export function toRows(
       runtime: i.runtime ?? "builtin",
       running: false,
       health: "unhealthy",
-      // A removed plugin is not waiting on anything and is not broken. Saying
-      // "switched off" of it would hide the one fact that explains it, which
-      // is that somebody removed it and the file still declares it.
+      // A removed plugin is neither waiting nor broken.
       healthMessage: i.removed
         ? "Removed here. The configuration file still declares it."
         : i.missing?.length
@@ -112,13 +97,8 @@ export function toRows(
 }
 
 /**
- * Everything this host serves.
- *
- * Split on `runtime` rather than on a name or a type string, because the two
- * kinds carry different guarantees: a builtin proposes changes for approval
- * and mcpd can plan against its state, a remote server can do neither and only
- * serves the tools somebody classified. Both are managed from their own page
- * here -- the split is a statement about trust, not about where to go next.
+ * Everything this host serves, split on `runtime`. The split is about trust: a
+ * builtin proposes changes mcpd can plan against, a remote server cannot.
  */
 export function PluginsList() {
   const mayAdd = useCan("admin");
@@ -149,9 +129,6 @@ export function PluginsList() {
   );
   const builtin = rows?.filter((r) => r.runtime === "builtin") ?? [];
   const remote = rows?.filter((r) => r.runtime === "mcp") ?? [];
-  // A removed instance is not enabled, so it is already out of this -- which
-  // is right: it is not waiting on anything, it is not being served on
-  // purpose, and its own row says so.
   const waiting = instances.filter((i) => i.enabled && !i.mounted);
 
   return (
@@ -170,8 +147,7 @@ export function PluginsList() {
 
       {error && <Notice tone="problem">{error}</Notice>}
 
-      {/* An instance added since the last start is configured and not serving.
-          Saying so is the difference between "waiting" and "broken". */}
+      {/* "Waiting" and "broken" are different things to say. */}
       {waiting.length > 0 && (
         <Notice tone="attention">
           <div className="space-y-0.5">
@@ -255,19 +231,15 @@ function PluginTable({ rows, mayManage, onChanged }: {
           </TableHeader>
           <TableBody>
             {rows.map((row) => (
-              /* The whole row is the click target, and the row is the
-                 positioning context that makes that work. The alternative --
-                 wrapping the row in an anchor -- is invalid inside a table and
-                 would put the Restore button inside a link, which breaks both
-                 the keyboard and the button. */
+              /* The whole row is the click target, and this is its
+                 positioning context. Wrapping the row in an anchor is invalid
+                 inside a table and would nest Restore inside a link. */
               <TableRow
                 key={row.name}
                 className={cn(
                   "relative transition-colors hover:bg-muted/50",
-                  // The focus ring belongs to the row rather than to four
-                  // characters of link text, so tabbing through the list shows
-                  // where you are. The link's own outline is suppressed
-                  // because two rings on one target read as two targets.
+                  // The ring belongs to the row, not to the link text; the
+                  // link's own outline is suppressed so there is only one.
                   "has-[a:focus-visible]:bg-muted/50 has-[a:focus-visible]:outline-2",
                   "has-[a:focus-visible]:-outline-offset-2 has-[a:focus-visible]:outline-ring",
                   row.removed && "opacity-70",
@@ -278,14 +250,10 @@ function PluginTable({ rows, mayManage, onChanged }: {
                     to={`/plugins/${encodeURIComponent(row.name)}`}
                     className="font-medium outline-none hover:underline"
                   >
-                    {/* Raised above the surface below it, so the name can
-                        still be selected and copied. An overlay that swallows
-                        drag-select makes the one string an operator most often
-                        wants to copy impossible to copy. */}
+                    {/* Raised above the overlay, so the name stays selectable. */}
                     <span className="relative z-10">{row.name}</span>
-                    {/* The stretched link. A real element rather than a
-                        pseudo-element so that a test can click the row's
-                        surface the way a person does. */}
+                    {/* The stretched link. A real element, not a
+                        pseudo-element, so a test can click the row's surface. */}
                     <span aria-hidden="true" className="absolute inset-0" />
                   </Link>
                   <div className="max-w-[52ch] truncate text-xs text-muted-foreground">
@@ -333,12 +301,8 @@ function PluginTable({ rows, mayManage, onChanged }: {
 }
 
 /**
- * Undoes a removal that overrode the configuration file.
- *
- * Raised above the row's click surface, so it receives its own clicks and does
- * not also navigate. A button rather than a link, because one of those
- * performs an action and the other goes somewhere, and a control wearing the
- * wrong one is how somebody restores a plugin they meant to open.
+ * Undoes a removal. Raised above the row's click surface so it does not also
+ * navigate, and a button rather than a link because it acts.
  */
 export function RestoreButton({ name, label, onChanged }: {
   name: string;
@@ -373,16 +337,9 @@ export function RestoreButton({ name, label, onChanged }: {
 }
 
 /**
- * Removals with nothing left to remove.
- *
- * A removal is keyed on the name the configuration file used, and it outlives
- * the entry: an operator who removes a plugin here and later deletes the block
- * from their YAML leaves a row that matches nothing. Discarding those
- * automatically would mean one start against a truncated file forgetting every
- * removal and resurrecting all of them on the next good deploy, so they are
- * kept -- and shown here, because a name that would quietly refuse to come
- * back if it were ever declared again is the kind of thing that costs somebody
- * an afternoon.
+ * Removals whose declaration has left the file. Kept rather than discarded, so
+ * one bad deploy does not resurrect everything, and shown because a name that
+ * would refuse to come back is worth knowing about.
  */
 function StaleRemovals({ rows, mayManage, onChanged }: {
   rows: StaleRemoval[];
@@ -427,7 +384,6 @@ function AddPlugin({ types, open, onOpenChange, onAdded }: {
   const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Named after its type by default, which is right until there are two.
   const chosen = type || types[0]?.name || "";
   const effective = name.trim() || chosen;
 

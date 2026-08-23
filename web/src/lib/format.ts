@@ -19,20 +19,14 @@ export function whenExact(iso: string): string {
   });
 }
 
-/**
- * How long until a moment, or how long since.
- *
- * Approvals expire, so "in 4 minutes" is the fact an operator is acting on and
- * a wall-clock time is a subtraction they have to do themselves.
- */
+/** How long until a moment, or how long since. */
 export function relative(iso: string, now: number = Date.now()): string {
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return iso;
   const seconds = Math.round((t - now) / 1000);
   const abs = Math.abs(seconds);
 
-  // Largest unit the gap fills, in seconds. Ordered coarse to fine so the
-  // first match is the one to use.
+  // Coarse to fine, so the first match is the largest unit that fits.
   const scales: [Intl.RelativeTimeFormatUnit, number][] = [
     ["week", 604_800],
     ["day", 86_400],
@@ -71,12 +65,8 @@ export function describeEvent(r: AuditRecord): string {
 }
 
 /**
- * What each operation state is called, and what it means.
- *
- * `indeterminate` gets its own entry rather than being folded in with
- * `failed`, and the wording is the whole point: a failure did not happen, and
- * this may have. Anything that reads it as settled invites a retry that
- * applies the change twice.
+ * What each state is called and what it means. `indeterminate` is not
+ * `failed`: reading it as settled invites a retry that applies the change twice.
  */
 export const OPERATION_STATES: Record<OperationState, { label: string; meaning: string }> = {
   draft: { label: "Draft", meaning: "Being put together. Not asking for anything yet." },
@@ -105,13 +95,7 @@ export const RISK_LABELS: Record<RiskLevel, string> = {
   low: "Low", medium: "Medium", high: "High", critical: "Critical",
 };
 
-/**
- * A risk level, as a word.
- *
- * Takes a string rather than a `RiskLevel` because the approval policy hands
- * the console its own list of ceilings, and a value the server offers that
- * this build has not heard of should render as itself rather than as blank.
- */
+/** A risk level as a word. A level this build does not know renders as itself. */
 export function riskLabel(risk: string): string {
   return RISK_LABELS[risk as RiskLevel] ?? risk;
 }

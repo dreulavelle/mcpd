@@ -5,20 +5,10 @@ import { cn } from "@/lib/utils";
 /**
  * A plain `<select>`, styled to sit beside the other controls.
  *
- * Deliberately not Radix's Select. That component exists to make a listbox out
- * of divs so it can be styled and animated; it costs roughly twenty kilobytes,
- * needs a portal, and has to reimplement typeahead, scrolling and touch
- * behaviour the platform already has. Nothing on this console asks a select to
- * do anything a native one does not, and the native one is what a phone
- * renders as a proper picker.
- *
- * The cost of that choice is that the open list is the browser's, so it has to
- * be coloured through the two things the browser reads: the options' own
- * colours (set on the elements in index.css) and this control's background,
- * which Chromium copies onto the popup. The popover tokens are used for both
- * so the control and the list it opens are the same surface -- and so a
- * transparent control can never again hand the theme's foreground to a white
- * panel, which is what made these unreadable in the dark theme.
+ * `bg-popover` is load-bearing, not decoration: Chromium copies the control's
+ * background onto the popup it opens, and a transparent one leaves the theme's
+ * foreground on the engine's white panel. The other half of the pair is the
+ * `option, optgroup` rule in index.css.
  */
 function NativeSelect({ className, children, ...props }: React.ComponentProps<"select">) {
   return (

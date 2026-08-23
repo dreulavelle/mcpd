@@ -17,27 +17,13 @@ export interface FieldLink {
   label: string;
 }
 
-/**
- * A form over a set of setting groups.
- *
- * Shared rather than duplicated because settings live where they are used --
- * tunnel credentials belong on the Tunnels page, a plugin's credentials on its
- * own page, approval rules on Settings -- and a second copy of this would
- * drift from the first in exactly the ways that matter: validation, secret
- * handling, and what "saved" means.
- */
+/** A form over a set of setting groups, shared by every page that has some. */
 export function SettingsForm({ groups, settings, links, onSaved, readOnly = false }: {
   groups: SettingGroup[];
   settings: SettingsPayload;
   links?: Record<string, FieldLink>;
   onSaved: () => void;
-  /**
-   * Renders the values with no way to change them.
-   *
-   * Somebody who may read the host's configuration understands most of what it
-   * will do; changing it is an administrator's. The API refuses the write
-   * regardless -- this is so nobody fills in a field and then learns that.
-   */
+  /** Read-only, so nobody fills in a field and then meets a 403. */
   readOnly?: boolean;
 }) {
   const notify = useNotify();
@@ -69,11 +55,8 @@ export function SettingsForm({ groups, settings, links, onSaved, readOnly = fals
       onSaved();
     } catch (e) {
       if (e instanceof ApiError) {
-        // A bad value comes back as a list of field complaints with no detail
-        // at all, so falling through to `detail` would show the bare token
-        // "invalid_settings" and name no field. This used to read `problems`
-        // off a cast that could never find it, which is the same bug wearing a
-        // type assertion.
+        // A bad value comes back as `problems` with no `detail` at all, so
+        // falling through would show "invalid_settings" and name no field.
         setProblems(e.problems?.length ? e.problems : [e.detail]);
       } else {
         setProblems(["Couldn't save. Is mcpd still running?"]);
@@ -243,12 +226,7 @@ function Field({ field, value, link, isSet, clearing, readOnly, onChange, onTogg
   );
 }
 
-/**
- * Presents a stored enum value.
- *
- * Only roles need it, and only to capitalise them: the stored values are
- * lowercase and a dropdown reading "user" looks like a bug.
- */
+/** Only roles need this, and only to capitalise them. */
 function optionLabel(key: string, option: string): string {
   if (!key.endsWith("role")) return option;
   return { user: "User", admin: "Admin" }[option] ?? option;

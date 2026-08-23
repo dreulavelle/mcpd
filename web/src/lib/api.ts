@@ -1,8 +1,5 @@
-// The dashboard's typed view of the mcpd admin API.
-//
-// These mirror the Go DTOs in internal/admin. They are hand-written rather
-// than generated because the surface is small and a generator would be a
-// build-time dependency for very little.
+// The dashboard's typed view of the mcpd admin API, mirroring the Go DTOs in
+// internal/admin. Hand-written: the surface is small.
 
 export type OperationState =
   | "draft"
@@ -42,41 +39,25 @@ export interface Operation {
   approved_by?: string;
   approved_at?: string;
   /**
-   * The standing rule that authorised this change, when nobody was asked.
-   *
-   * This is the discriminator, not `approved_by`. An auto-approved operation
-   * carries `approved_by: "system:policy"`, which is not an account and reads
-   * as somebody having clicked if it is rendered on its own. Empty means a
-   * person decided.
+   * The rule that approved this with nobody asked, and the discriminator for
+   * that case -- never `approved_by`, which is the non-account "system:policy".
    */
   authorized_by_rule?: string;
   execute_by?: string;
   terminal_at?: string;
   /**
-   * Whether re-reading upstream confirmed the change landed.
-   *
-   * Three values, not two. `true` is confirmed, `false` is checked and did not
-   * match, and absent means nobody has checked -- which is the ordinary state
-   * of an operation still in flight. Typed to include null so a call site
-   * cannot narrow it to a boolean by accident and render "not checked" as a
-   * tick.
+   * Three values, not two: true confirmed, false checked and did not match,
+   * absent nobody checked. Null is in the type so a call site cannot narrow it
+   * to a boolean and render "not checked" as a tick.
    */
   verified?: boolean | null;
   /**
-   * Which of the two things called an approval this record is.
-   *
-   * A `reviewed_change` carries all three proofs: exact fields, drift
-   * detection, and an outcome that was confirmed. A `gated_call` carries a
-   * person's yes and the fact the call was made. The distinction is the
-   * server's, computed from the two flags below, and the console must not let
-   * the second wear the first's name.
+   * `reviewed_change` carries exact fields, a drift check and a confirmed
+   * outcome; `gated_call` carries an authorisation and nothing else. The
+   * console must not let the second wear the first's name.
    */
   assurance: "reviewed_change" | "gated_call";
-  /**
-   * Whether this operation carries a precondition snapshot a re-plan can be
-   * compared against. False means no drift check ran -- which is a different
-   * fact from one that ran and found nothing.
-   */
+  /** False means no drift check ran, which is not one that found nothing. */
   drift_checked: boolean;
   /** The mutation's own declaration that re-reading the target proves the write. */
   outcome_verifiable: boolean;
@@ -100,26 +81,15 @@ export interface AuditRecord {
   detail?: unknown;
 }
 
-/**
- * Two roles, and the line between them is administering the host rather than
- * operating it. A user reads, proposes, and approves; an administrator also
- * changes settings, makes tunnels, and manages accounts.
- */
+/** A user reads, proposes and approves; an administrator also administers. */
 export type Role = "user" | "admin";
 
 /** The signed-in person, as returned by the session endpoints. */
 export interface Session {
   email: string;
-  /**
-   * What to render. Never empty: the server resolves it, falling back to the
-   * address, and re-checks the stored value against the rules on the way out.
-   */
+  /** What to render. Never empty; the server falls back to the address. */
   name: string;
-  /**
-   * What is stored, which may be empty. It belongs in an edit field so a value
-   * round-trips; rendering it anywhere else would persist the fallback into
-   * the box somebody then saves.
-   */
+  /** The raw stored value, which may be empty. Only for an edit field. */
   display_name: string;
   role: Role;
   plugins: string[];
@@ -205,30 +175,14 @@ export interface PluginType {
 export interface PluginInstance {
   name: string;
   type: string;
-  /**
-   * What kind of thing this is: "builtin" for an integration compiled into
-   * this binary, "mcp" for a remote MCP server.
-   *
-   * Read this field rather than inferring it from `type`. The two are managed
-   * in entirely different places -- one has a compiled-in type and a settings
-   * form, the other an imported document and a tool list to classify -- and a
-   * name has never been a reliable way to tell them apart.
-   */
+  /** Read this rather than inferring from `type`, which is not reliable. */
   runtime?: "builtin" | "mcp";
   /**
-   * Declared in the configuration file.
-   *
-   * It can still be removed here. mcpd does not write that file -- it is
-   * mounted read-only in every deployment this ships as -- so what a removal
-   * records is an override that makes the host ignore the declaration, now and
-   * on every restart. The file itself is untouched, and the page says so.
+   * Declared in the configuration file. It can still be removed here: mcpd
+   * never writes that file, so a removal is an override, not an edit.
    */
   from_file: boolean;
-  /**
-   * The file's `required: true`: the deployment saying the host is meant not
-   * to run without this integration. Removing one takes a second, explicit
-   * yes.
-   */
+  /** The file's `required: true`. Removing one takes a second, explicit yes. */
   required?: boolean;
   enabled: boolean;
   /** Serving now. False until every required setting has a value. */
@@ -237,12 +191,7 @@ export interface PluginInstance {
   missing?: string[];
   /** Why a fully configured instance still is not serving. */
   problem?: string;
-  /**
-   * Removed here while the configuration file still declares it.
-   *
-   * It stays in the list rather than vanishing, because somebody who removes
-   * the wrong thing has to be able to find it again to restore it.
-   */
+  /** Removed here while the file still declares it. Listed, so it can be restored. */
   removed?: boolean;
   removed_by?: string;
   removed_at?: string;
@@ -250,13 +199,7 @@ export interface PluginInstance {
   declaration?: PluginDeclaration;
 }
 
-/**
- * The configuration file's entry for a plugin, shown read-only.
- *
- * Keys without values. This rides on a read-capability endpoint and a
- * `settings:` block is where a credential usually is; the settings page is
- * where values belong, and it redacts the secret ones.
- */
+/** The configuration file's entry, shown read-only. Keys without values. */
 export interface PluginDeclaration {
   type: string;
   enabled: boolean;
@@ -265,11 +208,8 @@ export interface PluginDeclaration {
 }
 
 /**
- * A removal whose declaration is no longer in the configuration file.
- *
- * Kept rather than discarded: a host that started once against a truncated
- * file must not forget every removal an operator made and resurrect them all
- * on the next good deploy. Shown, it is something to forget deliberately.
+ * A removal whose declaration has left the file. Kept, so one bad deploy does
+ * not resurrect every plugin an operator removed.
  */
 export interface StaleRemoval {
   name: string;
@@ -340,19 +280,15 @@ export interface TunnelInfo {
   /** Which credential is needed to manage tunnels, when one is absent. */
   missing?: string;
   /**
-   * Which system each tunnel is pointed at, by tunnel id, "" meaning every
-   * system. Read from the stored configuration, so a tunnel assigned to a
-   * plugin that has not started is here and absent from `tunnels`.
+   * Which system each tunnel is pointed at, "" meaning all. From the stored
+   * configuration, so it lists tunnels `tunnels` does not.
    */
   assignments?: Record<string, string>;
   /** The systems a tunnel can be pointed at. */
   plugins: string[];
   /**
-   * ChatGPT workspaces already in use by a tunnel here.
-   *
-   * OpenAI publishes no endpoint that lists workspaces, so these are read off
-   * the tunnels that have one. Empty means either no workspaces (a personal
-   * account has none) or no tunnel has been scoped to one yet.
+   * Workspaces in use by a tunnel here. OpenAI publishes no endpoint listing
+   * them, so these are read off the tunnels that have one.
    */
   workspaces: string[];
 }
@@ -428,24 +364,18 @@ export interface Endpoints {
 /* -- the approval policy --------------------------------------------------- */
 
 /**
- * A standing rule: an administrator saying in advance that a class of change
- * does not need to be asked about.
+ * A standing rule: a change of this shape may run without anyone being asked.
  *
- * `max_risk` is two different kinds of answer in one field. A level is a
- * grant, authorising up to that risk. Empty is an *exclusion* -- it authorises
- * nothing, and it beats every grant that matches beside it whatever their
- * scopes are. The two are not points on a scale and must not be offered as
- * one.
- *
- * A selector left blank is not the wildcard: the server refuses `""` so that
- * "anything" has one spelling. Send `policy.wildcard` instead.
+ * `max_risk` holds two kinds of answer. A level allows up to that risk; empty
+ * means always ask, and beats every allow rule it overlaps. They are not points
+ * on one scale. A blank selector is refused -- send `policy.wildcard`.
  */
 export interface ApprovalRule {
   id: string;
   plugin: string;
   action: string;
   principal: string;
-  /** A ceiling, or "" for an exclusion. Never "critical"; the server refuses it. */
+  /** A ceiling, or "" for always-ask. Never "critical"; the server refuses it. */
   max_risk: string;
   note?: string;
 }
@@ -456,11 +386,8 @@ export interface ApprovalPolicy {
   /** The selector meaning "anything", named by the server rather than hardcoded. */
   wildcard: string;
   /**
-   * The ceilings a grant may be given, least severe first.
-   *
-   * Not a priority order between rules -- an exclusion beats every grant it
-   * overlaps -- and the empty ceiling is deliberately absent, because an
-   * exclusion is a different choice rather than a lower level.
+   * The ceilings an allow rule may be given, least severe first. Not a priority
+   * order between rules, and the empty ceiling is deliberately absent.
    */
   ceilings: string[];
   /** What happens where no rule matches, in the server's own words. */
@@ -472,7 +399,7 @@ export interface ApprovalPolicy {
 /** What the policy would do with a change nobody has proposed yet. */
 export interface PolicyEvaluation {
   auto_approve: boolean;
-  /** The rule that decided, including when it is the exclusion doing the refusing. */
+  /** The rule that decided, including when it is the one saying always ask. */
   rule?: ApprovalRule;
   /** Prose meant to be shown as-is. Do not parse it. */
   reason: string;
@@ -488,21 +415,13 @@ export interface EvaluateRequest {
 
 /* -- remote MCP servers ---------------------------------------------------- */
 
-/**
- * Where a discovered tool stands.
- *
- * Three states rather than a boolean: "pending" is nobody has looked at it
- * yet, "disabled" is somebody looked and said no. Only "enabled" is served.
- */
+/** "pending" is nobody has looked yet; "disabled" is somebody said no. */
 export type MCPToolState = "pending" | "enabled" | "disabled";
 
 /**
- * A remote server's claims about one of its tools.
- *
- * The MCP specification says a client must not rely on annotations from an
- * untrusted server, and a remote server is by definition untrusted. They are
- * shown as the server's claim and may seed a default in the classify form;
- * nothing here treats one as fact.
+ * A remote server's *claims* about one of its tools. The specification says a
+ * client must not rely on them, so they are labelled as claims and never
+ * treated as fact.
  */
 export interface MCPToolAnnotations {
   title?: string;
@@ -525,10 +444,9 @@ export interface MCPTool {
   name: string;
   descriptor: MCPToolDescriptor;
   /**
-   * Identifies the descriptor, and is the guard on every state change. A
-   * classification carries the hash of the descriptor the administrator was
-   * actually looking at; if discovery replaced it in between, the write
-   * matches no rows and comes back 409.
+   * The guard on every state change: a classification carries the hash of the
+   * descriptor the administrator read, and a write against a stale one matches
+   * no rows and comes back 409.
    */
   descriptor_hash: string;
   state: MCPToolState;
@@ -561,63 +479,34 @@ export interface MCPServer {
 
 /* -- the public catalogue -------------------------------------------------- */
 
-/**
- * One server a public catalogue offers.
- *
- * Not a document. The listing carries what is needed to choose between
- * entries; the `server.json` itself is a second call, so browsing a hundred
- * servers does not mean holding a hundred documents nobody asked for.
- */
+/** One server a public catalogue offers. The `server.json` is a second call. */
 export interface CatalogEntry {
   /** The catalogue's own identifier -- "io.github.example/weather". */
   name: string;
-  /**
-   * A legal plugin name derived from `name`, ready to prefill the import
-   * form. Only a suggestion: many registry names end in `/mcp`, so this
-   * collides often and the operator is expected to change it.
-   */
+  /** A legal plugin name derived from `name`. Collides often; only a suggestion. */
   suggested_name: string;
   title: string;
   description: string;
   version: string;
   /**
-   * A small image for the entry, when a catalogue offers one this host will
-   * pass on.
-   *
-   * Validated on the server -- https, absolute, bounded, no credentials -- and
-   * never fetched there. The browser fetches it, so a dead or slow icon host
-   * costs a placeholder in one row and nothing else; see `EntryIcon`.
+   * A small image, validated on the server and fetched by the browser, so a
+   * dead icon host costs one row's monogram and nothing else.
    */
   icon?: string;
   /** From the document this host would dial, absent when there is nothing to dial. */
   transport?: string;
   url?: string;
   updated_at: string;
-  /**
-   * Whether this host would accept the document, decided by handing it to the
-   * same two calls the import endpoint makes. False for roughly half of what
-   * the catalogues publish -- servers that only run locally, which this host
-   * does not run.
-   */
+  /** Whether this host would accept the document. False for about half of them. */
   addable: boolean;
   /**
-   * Why not. Present exactly when `addable` is false.
-   *
-   * A listing does not return unaddable entries -- roughly half of what the
-   * catalogues publish only runs locally, and a page of ten that spends five
-   * rows saying so is a page of five. The fields stay because
-   * `GET /api/catalog/{name}` still explains a refusal, and because
-   * `?include_unaddable=1` still asks for them.
+   * Why not. Present exactly when `addable` is false, which a listing does not
+   * return -- only the detail endpoint and `?include_unaddable=1` do.
    */
   reason?: string;
   /**
-   * Whether importing will ask for a credential: "none" or "api_key". Empty
-   * where the entry cannot be imported at all and there is nothing to say.
-   *
-   * Worked out by this host from the document rather than taken from what a
-   * catalogue claims, so it means the same thing on every row -- and it means
-   * the thing an operator needs before clicking Add, which is whether they
-   * have to go and find a key first.
+   * Whether importing will ask for a credential: "none" or "api_key". Worked
+   * out here from the document, not taken from what a catalogue claims.
    */
   auth?: string;
   /** Which catalogue this entry came from, set on every entry. */
@@ -633,11 +522,7 @@ export interface CatalogSource {
   retrieved_at?: string;
   /** How many entries it contributed, after deduplication. */
   entries: number;
-  /**
-   * How many of this source's documents the host parsed to build the answer,
-   * and how many of those it would accept. The measured ratio behind
-   * `addable_estimate`.
-   */
+  /** The measured ratio behind `addable_estimate`. */
   judged?: number;
   addable?: number;
   /** How many servers this source says it holds. Absent where it does not say. */
@@ -655,13 +540,8 @@ export interface CatalogPage {
   /** Opaque, and absent at the end of the listing. */
   next_cursor?: string;
   /**
-   * Roughly how many servers across these catalogues could be added here.
-   *
-   * A floor and an estimate. Two of the four sources report how much they
-   * hold and two do not, and addability is measured over the documents the
-   * host parsed rather than over every one that exists — so this is rendered
-   * with a "+" and never as a precise figure. Absent when nothing could be
-   * said, which is not the same as none.
+   * A floor, not a count: two of four sources report a total and addability is
+   * measured over a sample. Render with a "+", never as a precise figure.
    */
   addable_estimate?: number;
   /** True when a catalogue could not be reached and what it last said was served. */
@@ -672,13 +552,7 @@ export interface CatalogPage {
 
 /** One entry together with the document that would be imported. */
 export interface CatalogDetail extends CatalogEntry {
-  /**
-   * The `server.json` itself.
-   *
-   * Unknown rather than a shape: the document is validated against a vendored
-   * schema on the server, and a type here would be a second, weaker opinion
-   * about what a valid one looks like.
-   */
+  /** Unknown rather than a shape: the server validates it against the schema. */
   document: unknown;
   stale: boolean;
   retrieved_at: string;
@@ -700,12 +574,8 @@ export class ApiError extends Error {
     readonly detail: string,
     readonly correlationId?: string,
     /**
-     * Field-level complaints, when the endpoint sends them.
-     *
-     * Saving settings is the one refusal that is a list rather than a
-     * sentence: `handlePutSettings` answers a bad value with `problems` and no
-     * `detail` at all. Without carrying them the form could only show the bare
-     * code `invalid_settings`, which does not say which field.
+     * Field-level complaints. Saving settings answers a bad value with these
+     * and no `detail` at all, so without them the form can name no field.
      */
     readonly problems?: string[],
   ) {
@@ -714,17 +584,8 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * The session itself lives in an HttpOnly cookie the browser sets and this
- * code cannot read. That is the point: the credential behind a console that
- * approves infrastructure changes should not be reachable from any script that
- * finds its way onto the page.
- *
- * What is held here is only the CSRF token. It is not a credential -- on its
- * own it authenticates nothing -- and it has to be readable by this code in
- * order to be echoed back, which is exactly the property being tested: a
- * cross-site request can cause the cookie to be sent but cannot read this.
- */
+// Only the CSRF token, never the session: that lives in an HttpOnly cookie
+// this code deliberately cannot read.
 let csrfToken: string | null = null;
 
 export function setCSRFToken(token: string | null): void {
@@ -740,9 +601,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const safe = method === "GET" || method === "HEAD" || method === "OPTIONS";
   if (!safe && csrfToken) headers.set("X-CSRF-Token", csrfToken);
 
-  // credentials: "include" so the session cookie travels. Same-origin would
-  // cover the deployed case, but the dashboard is also served through a dev
-  // proxy on another port, where it would not.
+  // "include" rather than same-origin: the dev proxy serves this from another
+  // port, where the cookie would not travel.
   const response = await fetch(path, { ...init, headers, credentials: "include" });
   if (response.status === 204) return undefined as T;
 
@@ -799,13 +659,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  /**
-   * Renames the account the request authenticated as.
-   *
-   * It carries no identifier and cannot address another account, which is
-   * what lets it take `read` rather than `admin`. Naming somebody else is
-   * still `updateUser`, and still administration.
-   */
+  /** Renames the calling account only, which is why it takes `read`. */
   updateAccount: (displayName: string) =>
     request<User>("/api/account", {
       method: "PATCH",
@@ -915,9 +769,8 @@ export const api = {
     }),
 
   /**
-   * Removes an instance, or overrides the configuration file's declaration of
-   * one. `acknowledgeRequired` says the operator has seen that the file marks
-   * it `required: true`; without it the host refuses that one case.
+   * Removes an instance, or overrides the file's declaration of one.
+   * `acknowledgeRequired` is needed only where the file marks it required.
    */
   removeInstance: (name: string, acknowledgeRequired = false) =>
     request<{ status: string }>(
@@ -931,14 +784,7 @@ export const api = {
     request<{ status: string; note?: string }>(
       `/api/instances/${encodeURIComponent(name)}/restore`, { method: "POST" }),
 
-  /**
-   * Browses the public catalogues.
-   *
-   * `refresh` bypasses the cache for one request, which is the escape hatch
-   * for an administrator standing in front of a catalogue that is visibly
-   * behind. It is not the default for the same reason it exists: every other
-   * answer is held for as long as the catalogue itself asked.
-   */
+  /** Browses the public catalogues. `refresh` bypasses the cache for one request. */
   catalog: (q: { search?: string; cursor?: string; limit?: number; refresh?: boolean } = {}) => {
     const params = new URLSearchParams();
     if (q.search) params.set("q", q.search);
@@ -950,12 +796,9 @@ export const api = {
   },
 
   /**
-   * One entry, with the document that would be imported.
-   *
-   * The name carries a slash -- "io.github.example/weather" -- and the route
-   * is a trailing wildcard, so the separator is left alone and only what sits
-   * either side of it is escaped. Encoding the whole string would send `%2F`
-   * and address a server nobody published.
+   * One entry, with the document that would be imported. The name carries a
+   * slash and the route is a trailing wildcard, so the separator is left alone
+   * -- encoding it would send `%2F` and address a server nobody published.
    */
   catalogEntry: (name: string, refresh = false) => {
     const path = name.split("/").map(encodeURIComponent).join("/");
@@ -994,11 +837,8 @@ export const api = {
     }),
 
   /**
-   * Records a decision about one tool.
-   *
-   * `descriptorHash` is the descriptor the operator actually read. A 409 means
-   * it no longer matches what is stored -- the far end changed its tool under
-   * them -- and the answer is to show them what changed, never to resend with
+   * Records a decision about one tool. A 409 means the far end changed the
+   * descriptor under the operator: show them what changed, never resend with
    * the new hash.
    */
   classifyMCPTool: (
@@ -1012,12 +852,8 @@ export const api = {
   approvalPolicy: () => request<ApprovalPolicy>("/api/approval-policy"),
 
   /**
-   * Replaces the whole rule set.
-   *
-   * Whole-set replacement is the only honest unit. Whether a rule is legal
-   * depends on the others beside it -- two rules on one scope are refused --
-   * so there is nothing smaller that can be checked, and a per-row save would
-   * be pretending otherwise.
+   * Replaces the whole set, which is the only unit at which "no two rules cover
+   * the same thing" can be checked.
    */
   saveApprovalPolicy: (rules: ApprovalRule[]) =>
     request<ApprovalPolicy>("/api/approval-policy", {

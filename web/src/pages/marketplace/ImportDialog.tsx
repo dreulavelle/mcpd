@@ -13,40 +13,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 /**
- * Importing a remote server from its server.json.
+ * Importing a remote server from its server.json, and the only way one is
+ * added -- a catalogued entry just seeds the fields.
  *
- * Importing records how to reach a server and nothing about what it offers.
- * Saying so here matters more than anywhere else on this page: an operator who
- * expects tools to appear reads the empty list as a failure, and the next
- * thing they do is import it again.
- *
- * The one way a server is added, whether the document was pasted by hand or
- * came from the catalog. A catalogued entry seeds the two fields and is
- * otherwise identical -- same JSON check here, same schema check on the
- * server, same settings derived from the document's inputs, same tools waiting
- * to be classified. A second, smoother path for catalogued servers is exactly
- * how one of them would end up skipping a step.
- *
- * The seeds are read once, at mount. The caller keys this component on which
- * entry it is for, so a fresh dialog is built rather than new values being
- * pushed underneath a half-edited paste.
- *
- * It is also where a catalogued entry's detail lives. Version, transport,
- * endpoint, credential, catalogue and date used to be on every card in the
- * listing, six facts to a card and most of a card, answering a question
- * nobody asks while scrolling past a hundred of them. Here they are in front
- * of one person deciding about one server, which is the moment they are worth
- * the space -- and the credential line especially, because needing a key is
- * better learned before pressing Add than after.
- *
- * The name collides more often than it looks like it should. Many registry
- * names end in `/mcp`, so the catalogue suggests `mcp` for a great many
- * unrelated servers, and the second one an operator adds is refused. Being
- * told before pressing Add beats being told afterwards, so the names already
- * taken come in as `taken` and the refusal is pre-empted -- and when the
- * server refuses anyway, for a name this page could not know about, the
- * complaint is attached to the field rather than left at the top of the
- * dialog.
+ * The seeds are read once at mount, so the caller keys this component on the
+ * entry rather than pushing new values under a half-edited paste.
  */
 export function ImportDialog({
   open, onOpenChange, onImported, seedName, seedDocument, seedEntry, taken,
@@ -58,13 +29,7 @@ export function ImportDialog({
   seedName?: string;
   /** The catalog's copy of the published document, shown for reading. */
   seedDocument?: unknown;
-  /**
-   * The catalogue entry behind the document, for reading only.
-   *
-   * Absent for a pasted document, which has no catalogue entry to describe.
-   * Nothing here is imported: what is imported is the text in the box, by the
-   * same call a paste makes.
-   */
+  /** For reading only; what is imported is the text in the box. */
   seedEntry?: CatalogEntry;
   /** Plugin names already in use here. */
   taken?: Set<string>;
@@ -80,9 +45,8 @@ export function ImportDialog({
   const nameField = useRef<HTMLInputElement>(null);
 
   const trimmed = name.trim();
-  // Known to be taken before anything is sent. The server would refuse it too,
-  // and its refusal costs a round trip and reads as a failure rather than as a
-  // field to change.
+  // Many registry names end in `/mcp`, so the suggestion collides often. Caught
+  // here, the refusal is a field to change rather than a round trip.
   const collides = trimmed !== "" && (taken?.has(trimmed) ?? false);
 
   function reset() {
@@ -100,8 +64,7 @@ export function ImportDialog({
     try {
       parsed = JSON.parse(documentText);
     } catch {
-      // Caught here rather than sent: a JSON error the browser can name
-      // precisely reads better than "the document could not be read".
+      // The browser names the position; the server can only say it failed.
       setProblem("That is not valid JSON. Paste the server.json exactly as published.");
       return;
     }
@@ -114,9 +77,7 @@ export function ImportDialog({
       onImported(name.trim());
     } catch (e) {
       const detail = e instanceof ApiError ? e.detail : "Couldn't import that.";
-      // A name already in use is a field to change, not a failure to read
-      // about. It is the one refusal an operator will hit repeatedly, so it
-      // goes next to the box and takes the cursor with it.
+      // Next to the box, with the cursor, because it is a field to change.
       if (/already exists/i.test(detail)) {
         setNameProblem(detail);
         nameField.current?.focus();
@@ -217,20 +178,8 @@ export function ImportDialog({
 }
 
 /**
- * What the catalogue says about this server, other than what it does.
- *
- * The half of an entry that is not a name and a description. It reads rather
- * than acts: the endpoint is shown because an operator about to let this host
- * reach somebody else's address should be able to see the address.
- *
- * The credential line is the one people act on. "Needs an API key" means the
- * settings form on the plugin page will ask for one, so the time to go and
- * find it is now rather than after the import.
- *
- * A field the catalogue did not fill in is left out rather than rendered
- * empty: Smithery versions a deployment rather than a release and Docker
- * versions an image, so both leave the version blank, and a dash there would
- * read as a value somebody chose.
+ * What the catalogue says about this server. A field it did not fill in is left
+ * out rather than dashed, which would read as a value somebody chose.
  */
 function CatalogFacts({ entry }: { entry: CatalogEntry }) {
   const credential = entry.auth === "api_key"

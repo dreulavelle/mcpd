@@ -13,8 +13,7 @@ import { Routes } from "@/Routes";
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
-  // Undecided until the cookie has been checked. Rendering the sign-in form
-  // first would flash it at everyone whose session is still good.
+  // Undecided until the cookie is checked, or the form flashes at everyone.
   const [checked, setChecked] = useState(false);
 
   const adopt = useCallback((s: Session) => {
@@ -24,8 +23,7 @@ export default function App() {
 
   useEffect(() => {
     api.meta().then(setMeta).catch(() => setMeta(null));
-    // The cookie survives a reload; the CSRF token does not, so it is fetched
-    // back rather than requiring another sign-in.
+    // The cookie survives a reload; the CSRF token does not.
     api.session().then(adopt).catch(() => undefined).finally(() => setChecked(true));
   }, [adopt]);
 
@@ -37,8 +35,7 @@ export default function App() {
   }, []);
 
   if (!checked || !meta) return null;
-  // An instance nobody has claimed shows a way to claim it. Offering a sign-in
-  // form instead would ask for credentials that cannot exist yet.
+  // Nothing to sign in with yet on an unclaimed instance.
   if (!session && meta.needs_setup) return <FirstRun meta={meta} onDone={adopt} />;
   if (!session) return <SignIn meta={meta} onDone={adopt} />;
 
@@ -72,14 +69,7 @@ function Console({ onSignOut }: { onSignOut: () => void }) {
   );
 }
 
-/**
- * The count beside Approvals in the sidebar.
- *
- * Lifted out of the page so it is right wherever the operator is standing. A
- * change proposed while somebody is reading the audit trail is exactly the one
- * they need to be told about, and a badge that only counted while the
- * approvals page was open would never tell them.
- */
+/** The count beside Approvals, polled wherever the operator is standing. */
 function usePendingCount(): Record<string, number> {
   const mayRead = useCan("read");
   const [pending, setPending] = useState(0);

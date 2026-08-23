@@ -16,30 +16,6 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 
-/**
- * The standing rules that decide when nobody is asked.
- *
- * This is the page the design rests on. Rules live in the settings store
- * rather than a configuration file so that a change is recorded against
- * whoever made it *and* so an operator can see the whole set at once -- and
- * until this existed, the second half of that was not true and the endpoints
- * were reachable only by curl.
- *
- * Two things here are dangerous to get wrong rather than merely ugly, and both
- * shape the layout:
- *
- * An **exclusion is not a level**. A rule with no ceiling authorises nothing
- * and beats every grant that matches beside it, whatever their scopes are. It
- * is a different kind of statement from "up to medium", so it is a separate
- * list with its own heading rather than the bottom of one ordered list. The
- * ceilings the server offers are what a *grant* may be set to; they are not a
- * ranking of rules, and nothing here draws them as one.
- *
- * The **set is the unit**. Whether a rule is legal depends on the others
- * beside it -- two rules on one scope are refused -- so there is one save for
- * the whole page and no per-row write pretending otherwise.
- */
-
 /** A rule being edited. `key` is React identity and is never sent. */
 interface Draft {
   key: string;
@@ -47,7 +23,7 @@ interface Draft {
   plugin: string;
   action: string;
   principal: string;
-  /** "" is an exclusion, not an unset field. */
+  /** "" means always ask. It is a kind of rule, not an unset field. */
   max_risk: string;
   note: string;
 }
@@ -66,16 +42,9 @@ function toDraft(rule: ApprovalRule): Draft {
   };
 }
 
-/**
- * A draft as the API will read it.
- *
- * Every field is named, which is what keeps `key` out of the body: the
- * endpoint refuses an unknown field, and it is right to -- a rule that decides
- * who may write unattended should not be accepted with a typo in it.
- *
- * A blank selector becomes the wildcard here rather than being sent as `""`,
- * which the server refuses so that "anything" has exactly one spelling.
- */
+// Every field is named so `key` cannot reach the body: the endpoint refuses an
+// unknown field. A blank selector is sent as the wildcard, never as "", which
+// the endpoint also refuses.
 function toRule(draft: Draft, wildcard: string): ApprovalRule {
   const selector = (value: string) => value.trim() || wildcard;
   return {
@@ -88,12 +57,8 @@ function toRule(draft: Draft, wildcard: string): ApprovalRule {
   };
 }
 
-/**
- * A rule set reduced to what a save would change.
- *
- * Order is not part of it. The server sorts the set canonically on the way
- * out, so a rule that moved between the two lists on screen is not an edit.
- */
+// Order-insensitive: the server sorts the set canonically, so a rule that moved
+// between the two lists on screen is not an edit.
 function signature(rules: ApprovalRule[]): string {
   return JSON.stringify(
     rules
@@ -103,15 +68,10 @@ function signature(rules: ApprovalRule[]): string {
 }
 
 /**
- * Puts each warning beside the rule it is about.
+ * Puts each warning beside the rule it names.
  *
- * The server phrases them as `rule "id" names ...`, which is the only handle
- * on offer -- the payload is a flat list of sentences. Anything that does not
- * name a rule this page is showing is kept rather than dropped: a warning
- * nobody sees is worse than one in the wrong place, and a rule the operator
- * has just deleted from the draft is exactly when the sentence still matters.
- *
- * Exported for its own test, because the parse is the fragile part.
+ * The server phrases them as `rule "id" names ...`, which is the only handle on
+ * offer. Anything unattributable is kept in `loose` rather than dropped.
  */
 export function warningsByRule(
   warnings: string[] | undefined,
@@ -157,15 +117,9 @@ export function ApprovalPolicy() {
     );
   }, [adopt]);
 
-  // Loaded once and never polled. This page is a form over the whole set, and
-  // a tick that replaced the draft would discard an edit somebody was halfway
-  // through writing.
+  // Never polled: a tick would replace a draft somebody is halfway through.
   useEffect(load, [load]);
 
-  // What this host actually serves, offered as suggestions. The failure these
-  // guard against is a typo in a rule: it is not refused, because a rule may
-  // legitimately name a plugin about to be added, so nothing but the operator
-  // stops it. A catalogue of real names is cheap and stops most of them.
   useEffect(() => {
     let live = true;
     api.plugins().then(
@@ -190,10 +144,8 @@ export function ApprovalPolicy() {
   const dirty = policy !== null && signature(rules) !== signature(policy.rules ?? []);
   const incomplete = drafts.some((d) => d.id.trim() === "");
 
-  // Attributed against the drafts rather than the stored set. A rule the
-  // operator has just renamed or deleted no longer has a row to sit beside, and
-  // matching on the stored ids would drop the sentence entirely -- attributed
-  // to a row that is gone and therefore rendered nowhere.
+  // Attributed against the drafts, not the stored set: a rule just renamed has
+  // no row under its old id, and its warning would be rendered nowhere.
   const { byRule, loose } = useMemo(
     () => warningsByRule(policy?.warnings, drafts.map((d) => d.id.trim())),
     [policy, drafts],
@@ -219,9 +171,6 @@ export function ApprovalPolicy() {
       adopt(await api.saveApprovalPolicy(rules));
       notify("good", "Rules saved.");
     } catch (e) {
-      // The endpoint validates everything before storing anything, so a
-      // refusal means nothing changed -- worth saying, because the operator's
-      // next question is whether half of it landed.
       setSaveProblem(e instanceof ApiError ? e.detail : "Couldn't save the rules.");
       notify("problem", "Nothing was saved.");
     } finally {
@@ -229,32 +178,23 @@ export function ApprovalPolicy() {
     }
   }
 
-  // Narrowed to the error itself rather than a boolean: "the stored rules do
-  // not read" and "there are no rules" produce the same behaviour from the
-  // host and are different facts, and the page has to say which.
+  // "The rules can't be read" and "there are no rules" behave the same way and
+  // are different facts. The page has to say which.
   const unreadable = loadProblem instanceof ApiError
     && loadProblem.code === "unreadable_rules" ? loadProblem : null;
 
-  /**
-   * The way out of a stored value this build cannot parse.
-   *
-   * Without it the page is a dead end: the editor cannot be rendered over a
-   * set it could not read, `PUT /api/settings` refuses this key on purpose,
-   * and so nothing in the console can replace it. Destroying the value is
-   * safe in the sense that matters -- the host is already ignoring it and
-   * asking about everything -- but it is destructive, so it is one deliberate
-   * click behind a confirmation rather than a side effect of loading the page.
-   */
+  // The only way out of a stored value this build cannot parse: the editor
+  // cannot be drawn over it, and PUT /api/settings refuses this key.
   async function clearUnreadable() {
     if (!confirm(
-      "Replace the stored approval rules with none? What is there now cannot be "
-      + "read and is not in effect, and this cannot be undone.",
+      "Delete the saved rules and start with none? They can't be read and "
+      + "aren't in effect. This cannot be undone.",
     )) return;
     setBusy(true);
     try {
       adopt(await api.saveApprovalPolicy([]));
       setLoadProblem(null);
-      notify("good", "The rules were replaced with none.");
+      notify("good", "Started over with no rules.");
     } catch (e) {
       notify("problem", e instanceof ApiError ? e.detail : "That didn't work.");
     } finally {
@@ -262,26 +202,23 @@ export function ApprovalPolicy() {
     }
   }
 
-  const exclusions = drafts.filter((d) => d.max_risk === "");
-  const grants = drafts.filter((d) => d.max_risk !== "");
+  const alwaysAsk = drafts.filter((d) => d.max_risk === "");
+  const allow = drafts.filter((d) => d.max_risk !== "");
 
   return (
     <>
       <PageHeader
         title="Approval policy"
         lede={mayWrite
-          ? "A rule here lets a change run with nobody asked. Everything not covered by one still goes to a person."
-          : "What this host will let through without asking anybody. Changing it takes an administrator."}
+          ? "Which changes can run without asking anyone."
+          : "Which changes run here without asking anyone. Only an administrator can change these."}
       />
 
       {unreadable ? (
         <Notice tone="problem" icon={<TriangleAlert />}>
-          <strong>The stored rules do not read.</strong> Every change is being
-          put to a person, which is what happens with no rules at all — but it
-          is a different fact, and what is stored is not what anybody
-          configured. Nothing is shown below because there is nothing this build
-          can show; these endpoints are the only way to write the value, so
-          replacing the set is the way out.
+          <strong>The saved rules can't be read.</strong> Every change is going
+          to a person, but that is not what anybody configured — and nothing can
+          be shown or edited until the rules are replaced.
           <span className="mt-1 block font-mono text-xs opacity-80">
             {unreadable.detail}
           </span>
@@ -290,7 +227,7 @@ export function ApprovalPolicy() {
               variant="outline" size="sm" className="mt-3" disabled={busy}
               onClick={clearUnreadable}
             >
-              {busy ? "Replacing…" : "Replace them with no rules"}
+              {busy ? "Starting over…" : "Start over with no rules"}
             </Button>
           )}
         </Notice>
@@ -304,11 +241,15 @@ export function ApprovalPolicy() {
 
       {policy === null && !loadProblem ? <Loading rows={5} /> : policy === null ? null : (
         <div className="space-y-6">
-          <HowItResolves policy={policy} />
+          <Notice tone="info">
+            <strong>Anything no rule covers goes to a person.</strong> An always-ask
+            rule beats an allow rule for the same change. Nothing limits how fast
+            an assistant can write, so keep allow rules narrow.
+          </Notice>
 
           {loose.length > 0 && (
             <Notice tone="attention" icon={<TriangleAlert />}>
-              <strong>Some rules match nothing this host serves.</strong>
+              <strong>Some rules match nothing here.</strong>
               {loose.map((w) => (
                 <span key={w} className="mt-1 block">{w}</span>
               ))}
@@ -316,26 +257,24 @@ export function ApprovalPolicy() {
           )}
 
           {/* The rules and their one save share a containing block, so the
-              sticky bar stops pinning where they stop rather than hovering
-              over the question below them. */}
+              sticky bar stops pinning where they stop. */}
           <div className="space-y-6">
             <Section
-              title="Exclusions — always ask"
-              description="A rule that authorises nothing. If one matches, a person is asked, whatever a grant beside it says."
+              title="Always ask"
+              description="There is no exception to one of these. To let only Alice run something automatically, write just her allow rule and nothing here."
               actions={mayWrite && (
                 <Button variant="outline" size="sm" onClick={() => add("")}>
-                  Add an exclusion
+                  Add an always-ask rule
                 </Button>
               )}
             >
-              {exclusions.length === 0 ? (
-                <EmptyState mark={<ShieldBan />} title="No exclusions">
-                  Nothing is carved out. A change is still only automatic if a
-                  grant below covers it.
+              {alwaysAsk.length === 0 ? (
+                <EmptyState mark={<ShieldBan />} title="No always-ask rules">
+                  Nothing is singled out to always go to a person.
                 </EmptyState>
               ) : (
                 <ul className="space-y-3">
-                  {exclusions.map((draft) => (
+                  {alwaysAsk.map((draft) => (
                     <RuleRow
                       key={draft.key} draft={draft} ceilings={ceilings}
                       wildcard={wildcard} suggestions={suggestions}
@@ -350,23 +289,20 @@ export function ApprovalPolicy() {
             </Section>
 
             <Section
-              title="Grants — authorised in advance"
-              description="The most specific matching grant decides, and only one ever does. They are never merged, and an exclusion above beats all of them."
+              title="Allow automatically"
               actions={mayWrite && ceilings.length > 0 && (
                 <Button variant="outline" size="sm" onClick={() => add(ceilings[0]!)}>
-                  Add a grant
+                  Add an allow rule
                 </Button>
               )}
             >
-              {grants.length === 0 ? (
-                <EmptyState mark={<ShieldCheck />} title="No grants">
-                  Nothing is authorised in advance, so every change goes to a
-                  person — which is where this starts and the direction to be
-                  wrong in.
+              {allow.length === 0 ? (
+                <EmptyState mark={<ShieldCheck />} title="No allow rules">
+                  Nothing runs without asking. Every change goes to a person.
                 </EmptyState>
               ) : (
                 <ul className="space-y-3">
-                  {grants.map((draft) => (
+                  {allow.map((draft) => (
                     <RuleRow
                       key={draft.key} draft={draft} ceilings={ceilings}
                       wildcard={wildcard} suggestions={suggestions}
@@ -382,8 +318,7 @@ export function ApprovalPolicy() {
 
             {saveProblem && (
               <Notice tone="problem">
-                <strong>Nothing was saved.</strong> Every rule is checked before
-                any of them is stored, so the set is as it was.
+                <strong>Nothing was saved — the rules are as they were.</strong>
                 <span className="mt-1 block font-mono text-xs opacity-80">
                   {saveProblem}
                 </span>
@@ -393,18 +328,18 @@ export function ApprovalPolicy() {
             {mayWrite && (
               <div className="sticky bottom-0 flex flex-wrap items-center gap-3 border-t bg-background/90 py-3 backdrop-blur">
                 <Button disabled={!dirty || busy || incomplete} onClick={save}>
-                  {busy ? "Saving…" : "Save all rules"}
+                  {busy ? "Saving…" : "Save rules"}
                 </Button>
                 {dirty ? (
                   <>
                     <Button variant="ghost" disabled={busy} onClick={() => adopt(policy)}>
                       Discard
                     </Button>
-                    <span className="text-xs text-muted-foreground">
-                      {incomplete
-                        ? "Every rule needs an id before the set can be saved."
-                        : "Saving replaces the whole set — this is the only unit at which two rules covering the same thing can be caught."}
-                    </span>
+                    {incomplete && (
+                      <span className="text-xs text-muted-foreground">
+                        Every rule needs a name.
+                      </span>
+                    )}
                   </>
                 ) : (
                   <span className="text-xs text-muted-foreground">Nothing to save.</span>
@@ -413,38 +348,10 @@ export function ApprovalPolicy() {
             )}
           </div>
 
-          <WhatWouldHappen
-            wildcard={wildcard}
-            suggestions={suggestions}
-            stale={dirty}
-          />
+          <WouldThisRun suggestions={suggestions} stale={dirty} />
         </div>
       )}
     </>
-  );
-}
-
-/**
- * How the two kinds of rule argue, said once at the top.
- *
- * The cost of exclusion-wins is the part that surprises people, so it is
- * stated rather than left to be discovered: a grant cannot carve an exception
- * out of an exclusion, and the way to write "nobody but Alice" is the narrow
- * grant on its own.
- */
-function HowItResolves({ policy }: { policy: Policy }) {
-  return (
-    <Notice tone="info">
-      <strong>{policy.default}</strong> An exclusion that matches wins outright
-      — specificity is not consulted — so a grant cannot carve an exception out
-      of one. Write “nobody but Alice may do this automatically” as the narrow
-      grant alone: the absence of a grant already means ask. Between grants, the
-      most specific matching one decides and nothing is merged. A change that
-      declares no way back, or whose risk this host does not recognise, is never
-      automatic. There is no rate limit on mutations, so a rule is the only
-      thing bounding how fast an assistant can write what it covers — scope one
-      as narrowly as the job allows.
-    </Notice>
   );
 }
 
@@ -460,41 +367,43 @@ function RuleRow({
   onChange: (patch: Partial<Draft>) => void;
   onRemove: () => void;
 }) {
-  const exclusion = draft.max_risk === "";
+  const ask = draft.max_risk === "";
   const field = (name: string) => `${draft.key}-${name}`;
   const actions = suggestions[draft.plugin] ?? [
     ...new Set(Object.values(suggestions).flat()),
   ];
+  const any = (value: string) => (value === wildcard ? "any" : value);
 
   if (readOnly) {
     return (
       <li className="space-y-2 rounded-lg border p-3">
         <div className="flex flex-wrap items-center gap-2">
           <code className="font-mono text-sm font-medium">{draft.id}</code>
-          <Kind exclusion={exclusion} maxRisk={draft.max_risk} />
+          {!ask && (
+            <Chip tone="info">
+              <ShieldCheck className="size-3" aria-hidden="true" />
+              Up to {riskLabel(draft.max_risk)}
+            </Chip>
+          )}
         </div>
-        <p className="font-mono text-xs text-muted-foreground">
-          {draft.plugin}/{draft.action} for {draft.principal}
+        <p className="text-xs text-muted-foreground">
+          {any(draft.plugin)} / {any(draft.action)}, proposed by {any(draft.principal)}
         </p>
         {draft.note && <p className="text-sm text-muted-foreground">{draft.note}</p>}
-        <RuleWarnings warnings={warnings} exclusion={exclusion} />
+        <RuleWarnings warnings={warnings} ask={ask} />
       </li>
     );
   }
 
   return (
     <li className="space-y-3 rounded-lg border p-3 sm:p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Kind exclusion={exclusion} maxRisk={draft.max_risk} />
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <div className="flex items-center gap-1">
-          {/* Changing what a rule *is* moves it to the other list, which is
-              the point: it is a different kind of statement, not a step up or
-              down a scale. */}
           <Button
             variant="ghost" size="sm"
-            onClick={() => onChange({ max_risk: exclusion ? ceilings[0] ?? "low" : "" })}
+            onClick={() => onChange({ max_risk: ask ? ceilings[0] ?? "low" : "" })}
           >
-            {exclusion ? "Make it a grant" : "Make it an exclusion"}
+            {ask ? "Change to allow" : "Change to always ask"}
           </Button>
           <Button
             variant="ghost" size="sm"
@@ -508,13 +417,14 @@ function RuleRow({
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div className="space-y-1.5">
-          <Label htmlFor={field("id")}>Rule id</Label>
+          <Label htmlFor={field("id")}>Name</Label>
           <Input
             id={field("id")} value={draft.id} placeholder="routine-radio"
             onChange={(e) => onChange({ id: e.target.value })}
           />
           <p className="text-xs text-muted-foreground">
-            What the audit trail names, so it should read as a reason.
+            Lowercase, no spaces. It appears in the audit trail whenever the rule
+            applies.
           </p>
         </div>
 
@@ -543,23 +453,20 @@ function RuleRow({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor={field("principal")}>Principal</Label>
+          <Label htmlFor={field("principal")}>Proposed by</Label>
           <Input
             id={field("principal")} value={draft.principal} placeholder={wildcard}
             onChange={(e) => onChange({ principal: e.target.value })}
           />
           <p className="text-xs text-muted-foreground">
-            Whose proposals — <code className="font-mono">user:alice@example.com</code>,{" "}
+            <code className="font-mono">user:alice@example.com</code>,{" "}
             <code className="font-mono">svc:chatgpt</code>, or {wildcard} for anyone.
           </p>
         </div>
 
-        {/* No ceiling control on an exclusion, because there is no ceiling to
-            set: it authorises nothing, and offering an empty entry in the list
-            would make "never" look like the bottom of the scale. */}
-        {!exclusion && (
+        {!ask && (
           <div className="space-y-1.5">
-            <Label htmlFor={field("ceiling")}>Authorises up to</Label>
+            <Label htmlFor={field("ceiling")}>Up to</Label>
             <NativeSelect
               id={field("ceiling")} value={draft.max_risk}
               onChange={(e) => onChange({ max_risk: e.target.value })}
@@ -569,8 +476,8 @@ function RuleRow({
               ))}
             </NativeSelect>
             <p className="text-xs text-muted-foreground">
-              Compared against the risk as it finally stands, after any raise.
-              Critical is never offered.
+              A change that turns out riskier than this goes to a person.
+              Critical always does.
             </p>
           </div>
         )}
@@ -579,62 +486,31 @@ function RuleRow({
           <Label htmlFor={field("note")}>Note</Label>
           <Input
             id={field("note")} value={draft.note}
-            placeholder="Why this is safe to do without asking"
+            placeholder={ask ? "Why this needs a person" : "Why this can run without asking"}
             onChange={(e) => onChange({ note: e.target.value })}
           />
           <p className="text-xs text-muted-foreground">
-            Carried into the audit entry of every change this rule authorises.
+            Recorded with every change this rule decides.
           </p>
         </div>
       </div>
 
-      <RuleWarnings warnings={warnings} exclusion={exclusion} />
+      <RuleWarnings warnings={warnings} ask={ask} />
     </li>
   );
 }
 
-/** Grant or exclusion, said in words rather than by the absence of a value. */
-function Kind({ exclusion, maxRisk }: { exclusion: boolean; maxRisk: string }) {
-  if (exclusion) {
-    return (
-      <Chip tone="neutral">
-        <ShieldBan className="size-3" aria-hidden="true" />
-        Exclusion — always ask
-      </Chip>
-    );
-  }
-  return (
-    <Chip tone="info">
-      <ShieldCheck className="size-3" aria-hidden="true" />
-      Grant — up to {riskLabel(maxRisk)}
-    </Chip>
-  );
-}
-
-/**
- * What the host has noticed about this rule.
- *
- * Beside the rule rather than in a list at the top, because the sentence is
- * about one rule and a heap of them at the top is read once and then not
- * again. On an exclusion it is worth more than it looks: a misspelled
- * exclusion refuses nothing, so it cannot do damage of its own — it simply
- * stops protecting what it was written for, and the broader grant decides.
- */
-function RuleWarnings({ warnings, exclusion }: {
-  warnings: string[];
-  exclusion: boolean;
-}) {
+function RuleWarnings({ warnings, ask }: { warnings: string[]; ask: boolean }) {
   if (warnings.length === 0) return null;
   return (
     <div className="space-y-2">
       {warnings.map((w) => (
         <Notice key={w} tone="attention" icon={<TriangleAlert />}>
           {w}
-          {exclusion && (
+          {ask && (
             <span className="mt-1 block">
-              An exclusion that matches nothing is not protecting what it was
-              written for. Whatever grant would have been beaten by it decides
-              instead.
+              So this rule is not sending anything to a person, and an allow rule
+              may be deciding instead.
             </span>
           )}
         </Notice>
@@ -645,18 +521,7 @@ function RuleWarnings({ warnings, exclusion }: {
 
 const RISKS = ["low", "medium", "high", "critical"];
 
-/**
- * Asking the host what it would do, before writing a rule that does it.
- *
- * Worth more than any amount of explanatory copy: resolution is deterministic
- * and the answer is a fact, so an operator can check the case they are worried
- * about rather than reasoning about specificity in their head.
- *
- * It reads the *stored* rules, which is what makes it trustworthy and also the
- * one thing it must say out loud when the form above has unsaved edits.
- */
-function WhatWouldHappen({ wildcard, suggestions, stale }: {
-  wildcard: string;
+function WouldThisRun({ suggestions, stale }: {
   suggestions: Record<string, string[]>;
   stale: boolean;
 }) {
@@ -694,24 +559,22 @@ function WhatWouldHappen({ wildcard, suggestions, stale }: {
 
   return (
     <Section
-      title="Would this be authorised?"
-      description="Ask about one change. Nothing is proposed and nothing is written."
+      title="Would this run without asking?"
+      description="Nothing is proposed and nothing changes."
     >
       <Card>
         <CardContent>
-          {/* A form, and named. Three of these fields share a label with the
-              rule rows above, and the form is what tells them apart -- for a
-              screen reader walking the page, and for a test. Enter submits it,
-              which is what somebody who has just typed a plugin name expects. */}
+          {/* Named, because three of these fields share a label with the rule
+              rows above and the form is what tells them apart. */}
           <form
             className="space-y-4"
-            aria-label="Would this be authorised?"
+            aria-label="Would this run without asking?"
             onSubmit={check}
           >
             {stale && (
               <Notice tone="attention">
-                This asks the rules as stored. The edits above have not been
-                saved, so they are not part of the answer.
+                Your unsaved edits above aren't included — this uses the saved
+                rules.
               </Notice>
             )}
 
@@ -741,7 +604,7 @@ function WhatWouldHappen({ wildcard, suggestions, stale }: {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="ask-principal">Principal</Label>
+                <Label htmlFor="ask-principal">Proposed by</Label>
                 <Input
                   id="ask-principal" value={principal}
                   placeholder="user:alice@example.com"
@@ -760,8 +623,7 @@ function WhatWouldHappen({ wildcard, suggestions, stale }: {
                   ))}
                 </NativeSelect>
                 <p className="text-xs text-muted-foreground">
-                  As it finally stands, after the plan and any override have
-                  raised it.
+                  How risky the change turns out to be.
                 </p>
               </div>
 
@@ -771,10 +633,9 @@ function WhatWouldHappen({ wildcard, suggestions, stale }: {
                   onCheckedChange={setReversible}
                 />
                 <div className="space-y-0.5">
-                  <Label htmlFor="ask-reversible">There is a way back</Label>
+                  <Label htmlFor="ask-reversible">Can be undone</Label>
                   <p className="text-xs text-muted-foreground">
-                    A change that declares no way back is never authorised in
-                    advance, whatever the rules say.
+                    A change that can't be undone always goes to a person.
                   </p>
                 </div>
               </div>
@@ -786,10 +647,7 @@ function WhatWouldHappen({ wildcard, suggestions, stale }: {
               </Button>
               {!ready && (
                 <span className="text-xs text-muted-foreground">
-                  A plugin, an action and a principal — the answer depends on
-                  all three. This asks about one real change, so{" "}
-                  <code className="font-mono">{wildcard}</code> is not an answer
-                  here.
+                  Fill in all three — the answer depends on them.
                 </span>
               )}
             </div>
@@ -807,28 +665,18 @@ function Answer({ result }: { result: PolicyEvaluation }) {
   const rule = result.rule;
   return (
     <div className="space-y-2 rounded-lg border p-3">
-      {/* Neither answer is coloured as a fault. An authorisation given in
-          advance is a legitimate thing an administrator arranged, and painting
-          it amber would be this page disagreeing with the operator. */}
       <Chip tone={result.auto_approve ? "info" : "neutral"}>
-        {result.auto_approve
-          ? "Authorised in advance — nobody would be asked"
-          : "A person would be asked"}
+        {result.auto_approve ? "Runs without asking" : "Goes to a person"}
       </Chip>
-      {/* The server's prose, shown as written. It names the rule and says why,
-          and rebuilding that sentence here would be a second opinion about a
-          decision this page does not make. */}
+      {/* The server's own sentence, shown as written. */}
       <p className="text-sm">{result.reason}</p>
       {rule && (
         <p className="text-xs text-muted-foreground">
-          Decided by <code className="font-mono">{rule.id}</code> —{" "}
-          <span className="font-mono">
-            {rule.plugin}/{rule.action} for {rule.principal}
-          </span>
+          Rule <code className="font-mono">{rule.id}</code> —{" "}
+          {rule.plugin} / {rule.action}, proposed by {rule.principal}
           {rule.max_risk === ""
-            ? ", an exclusion, which authorises nothing"
-            : `, which authorises up to ${riskLabel(rule.max_risk)}`}
-          .
+            ? " — always ask"
+            : ` — allow up to ${riskLabel(rule.max_risk)}`}
         </p>
       )}
     </div>

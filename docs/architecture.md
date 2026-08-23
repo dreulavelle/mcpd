@@ -885,6 +885,50 @@ The dashboard is a Vite/React app in `web/`, built into `internal/admin/dist`
 so `go:embed` can reach it. It is a build artifact — changing the UI means
 rebuilding the bundle before the binary serves it.
 
+### The dashboard's own decisions
+
+Four of them are worth writing down, because each was argued once and would
+otherwise be argued again in a review.
+
+**One table decides what a route needs.** `web/src/lib/nav.ts` holds the
+sections as data, and `capabilityFor` is the single answer to "may this be
+rendered" — the sidebar filters from it and the router gates from it. The
+arrangement it replaced spelled the same facts out per case in the router; they
+agreed, nothing made them, and Overview had already been missed. None of it is
+access control: the server authorises every call again. A route that renders
+its chrome and then fails every fetch is a worse answer than a sentence.
+
+**Routing is thirty lines rather than a dependency.** There are no nested
+layouts, no loaders and no route-level data — a section, an optional record
+within it, and the back button working. Real paths rather than a hash, which
+works because `staticHandler` already serves `index.html` for any path it has
+no file for.
+
+**A plain `<select>`, not Radix's.** That component exists to build a listbox
+out of divs so it can be styled and animated; it costs roughly twenty kilobytes,
+needs a portal, and reimplements typeahead, scrolling and touch behaviour the
+platform already has. Nothing here asks a select to do anything a native one
+does not, and the native one is what a phone renders as a proper picker. The
+cost is that the popup is the browser's, so it has to be coloured through the
+two things the browser reads — the options' own colours and the control's
+background, which Chromium copies onto the popup. Both halves are named, in
+`index.css` and in `native-select.tsx`, because naming one is the bug.
+
+**The catalogue list is memoised, not virtualised.** A held list re-renders on
+every keystroke during the search debounce, which is what memoising fixes.
+Windowing was considered and left out: reaching five hundred rows means pressing
+Show more a dozen times, the realistic ceiling is a screenful or two, and
+against a few milliseconds of render it costs a fixed-height scroll container
+fighting the page's own scroll, rows that are not in the DOM for browser find or
+a screen reader, and either a dependency or a hand-rolled implementation with
+its own bugs.
+
+Two rules about the UI itself are enforced by tests in `web/src/index.test.ts`
+rather than by memory: every colour token clears WCAG contrast on every surface
+it is drawn on, and nothing that reports state may carry an `animate-` class —
+a health pill that fades in or a lifecycle node that slides into place reads as
+a state that just changed, and none of them is.
+
 `make verify-deps` exists because `modernc.org/sqlite` requires
 `modernc.org/libc` at the exact version in its own `go.mod`. A mismatch fails
 at runtime rather than at build time, so it is checked in CI.

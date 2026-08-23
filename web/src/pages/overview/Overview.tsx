@@ -24,25 +24,14 @@ interface Snapshot {
   tunnels: TunnelInfo | null;
   health: HealthReport | null;
   audit: AuditRecord[];
-  /**
-   * The host's own addresses. Undefined while the first call is in flight and
-   * null once it has failed, which are different things to say: one is "not
-   * yet" and the other is "we asked and could not get it".
-   */
+  /** Undefined while in flight, null once it has failed. Different things. */
   endpoints: Endpoints | null | undefined;
 }
 
 /**
- * The first screen.
- *
- * It answers one question -- is anything waiting on me -- and then gives the
- * shape of the deployment underneath it. Nothing here is an action: everything
- * is a link to the page where the action belongs, because a dashboard that
- * lets you approve a change without reading it is the thing this product
- * exists to prevent.
- *
- * Every call is allowed to fail on its own. A tunnel endpoint that is down
- * should cost the tunnel tile, not the pending-approvals list beside it.
+ * The first screen: is anything waiting on me, then the shape of the
+ * deployment. Nothing here is an action -- approving from a summary is what
+ * this product exists to prevent -- and every call may fail on its own.
  */
 export function Overview() {
   const session = useSession();
@@ -79,9 +68,8 @@ export function Overview() {
   const unhealthy = snap.plugins.filter((p) => p.health !== "healthy");
   const notRunning = snap.instances.filter((i) => i.enabled && !i.mounted);
   const connected = (snap.tunnels?.tunnels ?? []).filter((t) => t.state === "connected");
-  // The first word of the resolved name, and only when the account has one of
-  // its own. `name` falls back to the address, and "Hello, ops@example.com" is
-  // worse than no greeting at all.
+  // Only when the account has a name of its own: `name` falls back to the
+  // address, and "Hello, ops@example.com" is worse than no greeting.
   const greeting = hasOwnName(session) ? signedInAs(session).split(" ")[0] : null;
 
   if (!loaded) {
@@ -244,16 +232,9 @@ export function Overview() {
 }
 
 /**
- * How to reach this host directly.
- *
- * It lived on the Plugins page, under the list, where it read as something to
- * do with the plugin above it. The address is the aggregate endpoint -- every
- * plugin the caller is scoped to, on one URL -- so it belongs to the
- * deployment rather than to any one integration, and this is the page about
- * the deployment.
- *
- * It says nothing rather than nothing at all: a card that returns null when
- * the endpoint fails looks exactly like a host with no address.
+ * How to reach this host directly: the aggregate endpoint, which belongs to the
+ * deployment rather than to any one plugin. It says so when it cannot say the
+ * address, because returning null looks like a host that has none.
  */
 function ConnectingDirectly({ endpoints }: { endpoints: Endpoints | null | undefined }) {
   return (
@@ -293,19 +274,7 @@ const CHECK_LABEL: Record<HealthCheck["status"], string> = {
   down: "Down",
 };
 
-/**
- * What `/api/health` actually said, check by check.
- *
- * This used to be a pill in the sidebar reading "All good", with the failing
- * checks hidden in a tooltip. A binary with no context is decoration: it
- * cannot say which check, or what the check complained about, and a tooltip is
- * not somewhere a person on a phone can reach. The endpoint has always
- * returned a list with a message on each entry, so the list is what gets
- * rendered.
- *
- * Failing checks sort first. On a healthy host that changes nothing; on an
- * unhealthy one it is the whole point.
- */
+/** What `/api/health` said, check by check, failing ones first. */
 function HostHealth({ health }: { health: HealthReport | null }) {
   const checks = useMemo(() => {
     const rank: Record<HealthCheck["status"], number> = { down: 0, degraded: 1, up: 2 };

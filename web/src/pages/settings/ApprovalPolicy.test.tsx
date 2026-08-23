@@ -5,13 +5,13 @@ import { api, ApiError, type ApprovalPolicy as Policy } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
 import { ApprovalPolicy, warningsByRule } from "./ApprovalPolicy";
 
-const EXCLUSION = {
+const ALWAYS_ASK = {
   id: "never-reboot", plugin: "*", action: "device.reboot",
   principal: "*", max_risk: "",
   note: "a reboot drops every client on the radio",
 };
 
-const GRANT = {
+const ALLOW = {
   id: "routine-radio", plugin: "cnmaestro", action: "*",
   principal: "*", max_risk: "low",
   note: "a channel change is undone by another channel change",
@@ -19,7 +19,7 @@ const GRANT = {
 
 function policy(overrides: Partial<Policy> = {}): Policy {
   return {
-    rules: [GRANT, EXCLUSION],
+    rules: [ALLOW, ALWAYS_ASK],
     wildcard: "*",
     ceilings: ["low", "medium", "high"],
     default: "Every change is put to a person unless a rule authorises it.",
@@ -55,66 +55,66 @@ beforeEach(() => {
 });
 
 /**
- * An exclusion is a distinct choice, not a level.
- *
- * An empty ceiling authorises nothing and beats every grant it overlaps,
- * whatever their scopes are. Offering it as the bottom of one ordered list of
- * levels would say the opposite of what it does, so the two live in separate
- * lists and only a grant is given a ceiling to set.
+ * "Always ask" is a kind of rule, not the bottom of the risk scale. Offering it
+ * as a level in one ordered list would say the opposite of what it does, so the
+ * two are separate lists and only an allow rule has a ceiling to set.
  */
-describe("exclusions and grants", () => {
-  it("lists them apart, and says which is which", async () => {
+describe("the two kinds of rule", () => {
+  it("lists them apart, under headings that say what each does", async () => {
     mount(policy());
 
-    expect(await screen.findByText("Exclusions — always ask")).toBeInTheDocument();
-    expect(screen.getByText("Grants — authorised in advance")).toBeInTheDocument();
-    expect(screen.getByText("Exclusion — always ask")).toBeInTheDocument();
-    expect(screen.getByText("Grant — up to Low")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Always ask" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Allow automatically" }))
+      .toBeInTheDocument();
+
+    // Always-ask rows come first, and only the allow row has a ceiling.
+    expect(within(rows()[0]!).getByDisplayValue("never-reboot")).toBeInTheDocument();
+    expect(within(rows()[1]!).getByDisplayValue("routine-radio")).toBeInTheDocument();
   });
 
-  it("gives an exclusion no ceiling to set, because it has none", async () => {
+  it("gives an always-ask rule no ceiling to set, because it has none", async () => {
     mount(policy());
-    await screen.findByText("Exclusion — always ask");
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
-    const exclusion = rows().find((r) => within(r).queryByDisplayValue("never-reboot"));
-    const grant = rows().find((r) => within(r).queryByDisplayValue("routine-radio"));
+    const ask = rows().find((r) => within(r).queryByDisplayValue("never-reboot"));
+    const allow = rows().find((r) => within(r).queryByDisplayValue("routine-radio"));
 
-    expect(within(exclusion!).queryByLabelText("Authorises up to")).toBeNull();
-    expect(within(grant!).getByLabelText("Authorises up to")).toBeInTheDocument();
+    expect(within(ask!).queryByLabelText("Up to")).toBeNull();
+    expect(within(allow!).getByLabelText("Up to")).toBeInTheDocument();
   });
 
-  // The empty value is deliberately absent from `ceilings`. A dropdown that
-  // offered it would make "never" look like the bottom of the scale rather
-  // than the thing that beats everything on it.
+  // The empty value is deliberately absent from `ceilings`: offering it would
+  // make "always ask" look like the bottom of the scale.
   it("never offers the empty ceiling as a level", async () => {
     mount(policy());
-    await screen.findByText("Grant — up to Low");
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
-    const grant = rows().find((r) => within(r).queryByDisplayValue("routine-radio"))!;
-    const options = within(grant).getByLabelText("Authorises up to")
+    const allow = rows().find((r) => within(r).queryByDisplayValue("routine-radio"))!;
+    const options = within(allow).getByLabelText("Up to")
       .querySelectorAll("option");
     expect([...options].map((o) => o.getAttribute("value")))
       .toEqual(["low", "medium", "high"]);
   });
 
-  // A grant cannot carve an exception out of an exclusion, which is the one
-  // consequence of deny-wins that surprises people. It is stated rather than
-  // left to be discovered.
-  it("states the cost of exclusion-wins", async () => {
+  // There is no exception to an always-ask rule, which is the part that
+  // surprises people, so the page says it where somebody would hit it.
+  it("says how to write the nobody-but-Alice case", async () => {
     mount(policy());
-    expect(await screen.findByText(/the absence of a grant already means ask/i))
+    expect(await screen.findByText(/write just her allow rule and nothing here/i))
       .toBeInTheDocument();
   });
 
   it("moves a rule between the two by an explicit act, not by clearing a field", async () => {
     mount(policy());
-    await screen.findByText("Grant — up to Low");
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
-    const grant = rows().find((r) => within(r).queryByDisplayValue("routine-radio"))!;
-    await userEvent.click(within(grant).getByRole("button", { name: "Make it an exclusion" }));
+    const allow = rows().find((r) => within(r).queryByDisplayValue("routine-radio"))!;
+    await userEvent.click(within(allow).getByRole("button", { name: "Change to always ask" }));
 
-    expect(screen.queryByText("Grant — up to Low")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Exclusion — always ask")).toHaveLength(2);
+    // Both rows are now always-ask, so neither offers a ceiling.
+    expect(screen.queryByLabelText("Up to")).toBeNull();
+    expect(rows()).toHaveLength(2);
   });
 });
 
@@ -125,13 +125,13 @@ describe("exclusions and grants", () => {
 describe("saving", () => {
   it("sends every rule, canonicalised, and never the row's own key", async () => {
     const save = vi.spyOn(api, "saveApprovalPolicy").mockResolvedValue(policy());
-    mount(policy({ rules: [GRANT] }));
-    await screen.findByText("Grant — up to Low");
+    mount(policy({ rules: [ALLOW] }));
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
-    const grant = rows()[0]!;
-    await userEvent.clear(within(grant).getByLabelText("Principal"));
-    await userEvent.type(within(grant).getByLabelText("Principal"), "svc:chatgpt");
-    await userEvent.click(screen.getByRole("button", { name: "Save all rules" }));
+    const allow = rows()[0]!;
+    await userEvent.clear(within(allow).getByLabelText("Proposed by"));
+    await userEvent.type(within(allow).getByLabelText("Proposed by"), "svc:chatgpt");
+    await userEvent.click(screen.getByRole("button", { name: "Save rules" }));
 
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     expect(save.mock.calls[0]![0]).toEqual([{
@@ -146,23 +146,23 @@ describe("saving", () => {
   // turn a harmless edit into a refusal.
   it("sends the wildcard for a selector left blank", async () => {
     const save = vi.spyOn(api, "saveApprovalPolicy").mockResolvedValue(policy());
-    mount(policy({ rules: [GRANT] }));
-    await screen.findByText("Grant — up to Low");
+    mount(policy({ rules: [ALLOW] }));
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
     await userEvent.clear(within(rows()[0]!).getByLabelText("Plugin"));
-    await userEvent.click(screen.getByRole("button", { name: "Save all rules" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save rules" }));
 
     await waitFor(() => expect(save).toHaveBeenCalled());
     expect(save.mock.calls[0]![0][0]!.plugin).toBe("*");
   });
 
-  it("will not save a rule with no id, because the id is what the trail names", async () => {
+  it("will not save a rule with no name, which is what the trail records", async () => {
     mount(policy({ rules: [] }));
-    await screen.findByText("No grants");
+    await screen.findByText("No allow rules");
 
-    await userEvent.click(screen.getByRole("button", { name: "Add a grant" }));
-    expect(screen.getByRole("button", { name: "Save all rules" })).toBeDisabled();
-    expect(screen.getByText(/needs an id before the set can be saved/i))
+    await userEvent.click(screen.getByRole("button", { name: "Add an allow rule" }));
+    expect(screen.getByRole("button", { name: "Save rules" })).toBeDisabled();
+    expect(screen.getByText(/Every rule needs a name/i))
       .toBeInTheDocument();
   });
 
@@ -171,26 +171,26 @@ describe("saving", () => {
       400, "invalid_rules",
       'operations: rules "a" and "b" both cover cnmaestro/* for *; one scope, one rule',
     ));
-    mount(policy({ rules: [GRANT] }));
-    await screen.findByText("Grant — up to Low");
+    mount(policy({ rules: [ALLOW] }));
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
-    await userEvent.clear(within(rows()[0]!).getByLabelText("Principal"));
-    await userEvent.type(within(rows()[0]!).getByLabelText("Principal"), "svc:chatgpt");
-    await userEvent.click(screen.getByRole("button", { name: "Save all rules" }));
+    await userEvent.clear(within(rows()[0]!).getByLabelText("Proposed by"));
+    await userEvent.type(within(rows()[0]!).getByLabelText("Proposed by"), "svc:chatgpt");
+    await userEvent.click(screen.getByRole("button", { name: "Save rules" }));
 
     // Everything is validated before anything is stored, so a refusal means
     // the set is exactly as it was -- which is the operator's next question.
     expect(
-      await screen.findByText(/Every rule is checked before any of them is stored/i),
+      await screen.findByText(/Nothing was saved — the rules are as they were/i),
     ).toBeInTheDocument();
     expect(screen.getByText(/one scope, one rule/)).toBeInTheDocument();
   });
 
   it("has nothing to save until something changes", async () => {
     mount(policy());
-    await screen.findByText("Grant — up to Low");
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
-    expect(screen.getByRole("button", { name: "Save all rules" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save rules" })).toBeDisabled();
     expect(screen.getByText("Nothing to save.")).toBeInTheDocument();
   });
 });
@@ -205,10 +205,10 @@ describe("a reader who is not an administrator", () => {
     mount(policy(), "user");
 
     expect(await screen.findByText("never-reboot")).toBeInTheDocument();
-    expect(screen.getByText("cnmaestro/* for *")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Save all rules" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Add a grant" })).toBeNull();
-    expect(screen.queryByLabelText("Rule id")).toBeNull();
+    expect(screen.getByText("cnmaestro / any, proposed by any")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save rules" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add an allow rule" })).toBeNull();
+    expect(screen.queryByLabelText("Name")).toBeNull();
   });
 });
 
@@ -223,23 +223,23 @@ describe("warnings", () => {
 
   it("puts the warning beside the rule it is about", async () => {
     mount(policy({ warnings: [typo] }));
-    await screen.findByText("Exclusion — always ask");
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
     const exclusion = rows().find((r) => within(r).queryByDisplayValue("never-reboot"))!;
     expect(within(exclusion).getByText(typo)).toBeInTheDocument();
-    expect(within(exclusion).getByText(/not protecting what it was written for/i))
+    expect(within(exclusion).getByText(/not sending anything to a person/i))
       .toBeInTheDocument();
   });
 
-  it("does not put that consequence on a grant, where it is not true", async () => {
-    const grantTypo = 'rule "routine-radio" names plugin "cnmaestroo", which is not '
+  it("does not put that consequence on an allow rule, where it is not true", async () => {
+    const allowTypo = 'rule "routine-radio" names plugin "cnmaestroo", which is not '
       + "mounted here, so it matches nothing";
-    mount(policy({ warnings: [grantTypo] }));
-    await screen.findByText("Grant — up to Low");
+    mount(policy({ warnings: [allowTypo] }));
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
-    const grant = rows().find((r) => within(r).queryByDisplayValue("routine-radio"))!;
-    expect(within(grant).getByText(grantTypo)).toBeInTheDocument();
-    expect(within(grant).queryByText(/not protecting what it was written for/i))
+    const allow = rows().find((r) => within(r).queryByDisplayValue("routine-radio"))!;
+    expect(within(allow).getByText(allowTypo)).toBeInTheDocument();
+    expect(within(allow).queryByText(/not sending anything to a person/i))
       .toBeNull();
   });
 
@@ -291,35 +291,35 @@ describe("rules that do not read", () => {
   it("says so, rather than rendering an empty set", async () => {
     mount(unreadable());
 
-    expect(await screen.findByText(/The stored rules do not read/i))
+    expect(await screen.findByText(/The saved rules can't be read/i))
       .toBeInTheDocument();
-    expect(screen.queryByText("Exclusions — always ask")).not.toBeInTheDocument();
+    expect(screen.queryByText("Always ask")).not.toBeInTheDocument();
   });
 
   it("does not offer a reader a way out they cannot take", async () => {
     mount(unreadable(), "user");
 
-    await screen.findByText(/The stored rules do not read/i);
-    expect(screen.queryByRole("button", { name: /Replace them with no rules/ }))
+    await screen.findByText(/The saved rules can't be read/i);
+    expect(screen.queryByRole("button", { name: /Start over with no rules/ }))
       .toBeNull();
   });
 
   // Without this the page is a dead end: the editor cannot be drawn over a set
   // it could not read, and `PUT /api/settings` refuses this key on purpose, so
   // nothing else in the console can replace it.
-  it("lets an administrator replace the whole set with none", async () => {
+  it("lets an administrator start over with no rules", async () => {
     const save = vi.spyOn(api, "saveApprovalPolicy")
       .mockResolvedValue(policy({ rules: [] }));
     vi.spyOn(window, "confirm").mockReturnValue(true);
     mount(unreadable());
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Replace them with no rules" }),
+      await screen.findByRole("button", { name: "Start over with no rules" }),
     );
 
     await waitFor(() => expect(save).toHaveBeenCalledWith([]));
-    expect(await screen.findByText("No grants")).toBeInTheDocument();
-    expect(screen.queryByText(/The stored rules do not read/i)).not.toBeInTheDocument();
+    expect(await screen.findByText("No allow rules")).toBeInTheDocument();
+    expect(screen.queryByText(/The saved rules can't be read/i)).not.toBeInTheDocument();
   });
 
   it("does nothing if the confirmation is declined", async () => {
@@ -329,11 +329,11 @@ describe("rules that do not read", () => {
     mount(unreadable());
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Replace them with no rules" }),
+      await screen.findByRole("button", { name: "Start over with no rules" }),
     );
 
     expect(save).not.toHaveBeenCalled();
-    expect(screen.getByText(/The stored rules do not read/i)).toBeInTheDocument();
+    expect(screen.getByText(/The saved rules can't be read/i)).toBeInTheDocument();
   });
 });
 
@@ -343,22 +343,22 @@ describe("rules that do not read", () => {
  */
 describe("asking whether a change would be authorised", () => {
   function ask() {
-    return within(screen.getByRole("form", { name: "Would this be authorised?" }));
+    return within(screen.getByRole("form", { name: "Would this run without asking?" }));
   }
 
   it("sends the change as asked and shows the server's own reason", async () => {
     const evaluate = vi.spyOn(api, "evaluateApprovalPolicy").mockResolvedValue({
       auto_approve: false,
-      rule: EXCLUSION,
+      rule: ALWAYS_ASK,
       reason: "rule never-reboot (*/device.reboot for *) excludes this from "
         + "automatic authorisation",
     });
     mount(policy());
-    await screen.findByText("Grant — up to Low");
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
     await userEvent.type(ask().getByLabelText("Plugin"), "cnmaestro");
     await userEvent.type(ask().getByLabelText("Action"), "device.reboot");
-    await userEvent.type(ask().getByLabelText("Principal"), "user:alice@example.com");
+    await userEvent.type(ask().getByLabelText("Proposed by"), "user:alice@example.com");
     await userEvent.click(ask().getByRole("button", { name: "Ask" }));
 
     await waitFor(() => expect(evaluate).toHaveBeenCalledWith({
@@ -369,16 +369,16 @@ describe("asking whether a change would be authorised", () => {
       reversible: true,
     }));
 
-    expect(await screen.findByText("A person would be asked")).toBeInTheDocument();
+    expect(await screen.findByText("Goes to a person")).toBeInTheDocument();
     expect(screen.getByText(/excludes this from automatic authorisation/))
       .toBeInTheDocument();
-    expect(screen.getByText(/an exclusion, which authorises nothing/))
+    expect(screen.getByText(/— always ask/))
       .toBeInTheDocument();
   });
 
   it("will not ask about half a change", async () => {
     mount(policy());
-    await screen.findByText("Grant — up to Low");
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
     await userEvent.type(ask().getByLabelText("Plugin"), "cnmaestro");
     expect(ask().getByRole("button", { name: "Ask" })).toBeDisabled();
@@ -387,14 +387,14 @@ describe("asking whether a change would be authorised", () => {
   // The endpoint reads what is stored. An answer that silently ignored the
   // edits on screen would be right about the host and wrong about the page.
   it("says the answer does not include unsaved edits", async () => {
-    mount(policy({ rules: [GRANT] }));
-    await screen.findByText("Grant — up to Low");
+    mount(policy({ rules: [ALLOW] }));
+    await screen.findByRole("heading", { name: "Allow automatically" });
 
-    expect(screen.queryByText(/have not been saved/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/aren't included/i)).not.toBeInTheDocument();
 
-    await userEvent.clear(within(rows()[0]!).getByLabelText("Principal"));
-    await userEvent.type(within(rows()[0]!).getByLabelText("Principal"), "svc:chatgpt");
+    await userEvent.clear(within(rows()[0]!).getByLabelText("Proposed by"));
+    await userEvent.type(within(rows()[0]!).getByLabelText("Proposed by"), "svc:chatgpt");
 
-    expect(screen.getByText(/have not been saved/i)).toBeInTheDocument();
+    expect(screen.getByText(/aren't included/i)).toBeInTheDocument();
   });
 });
