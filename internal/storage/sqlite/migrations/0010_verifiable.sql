@@ -18,10 +18,28 @@
 -- executor performs no verification and leaves outcome_verified null -- "not
 -- checked", which is a different fact from "checked and did not match".
 --
--- Existing rows default to 1. Every mutation this build could already have
--- written declared a desired state and was in fact verified against it, so 1
--- is what those rows record rather than an assumption made about them.
+-- Existing rows default to 1, then the ones that cannot have been verified are
+-- corrected below. Most historical operations were genuinely verified: they
+-- declared a desired state, and the executor compared it. Recording those as
+-- unverifiable would rewrite settled history into "nobody checked", which is
+-- the opposite lie to the one this migration exists to remove.
 ALTER TABLE operations ADD COLUMN verifiable INTEGER NOT NULL DEFAULT 1;
+
+-- The exception, and the reason a blanket default would not do. An
+-- out-of-process plugin registering mutations and no tools mounted fine under
+-- the old build -- the broken schema check lived in the tool path, not the
+-- mutation path -- and one of its mutations returning an empty desired state
+-- hit the short circuit and was settled outcome_verified = 1 having read
+-- nothing. Those rows exist in principle, they are indistinguishable
+-- afterwards, and blessing them here would have this migration reintroduce
+-- the exact claim it removes.
+--
+-- An absent desired state is the signature: with nothing to compare against,
+-- the old verify() returned true on the first pass without looking at the
+-- target. This runs before the trigger below is created, because the trigger
+-- fires on migration SQL too and would abort it.
+UPDATE operations SET verifiable = 0
+ WHERE desired_json IS NULL OR desired_json IN ('null','{}','[]');
 
 -- Frozen with the rest of the payload. What a mutation claims it can prove is
 -- part of what was approved, and a value that could be flipped afterwards

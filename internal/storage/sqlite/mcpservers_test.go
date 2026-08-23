@@ -619,14 +619,16 @@ func TestMCPServerStore_NoAuditForAnUnchangedToggle(t *testing.T) {
 	}
 }
 
-// An operation written before 0010 existed has to come back verifiable.
+// 0010 has to sort existing operations honestly in both directions, and it is
+// the only chance to: the column is immutable afterwards and the table refuses
+// deletion.
 //
-// Every mutation this build could already have produced declared a desired
-// state and was in fact compared against it, so 1 is what those rows record
-// rather than an assumption made about them. Defaulting them to 0 would
-// rewrite settled history into "we never checked", which is the opposite lie
-// to the one 0010 exists to fix.
-func TestMigrate_ExistingOperationsStayVerifiable(t *testing.T) {
+// One that declared a desired state really was compared against it, so
+// recording it as unverifiable would rewrite settled history into "nobody
+// checked". One that declared none was settled verified having read nothing,
+// so blessing it would have the migration reassert the very claim it exists to
+// remove.
+func TestMigrate_BackfillsVerifiabilityHonestly(t *testing.T) {
 	ctx := context.Background()
 
 	db, err := Open(ctx, Options{
@@ -657,30 +659,55 @@ func TestMigrate_ExistingOperationsStayVerifiable(t *testing.T) {
 		}
 	}
 
-	// A settled operation, written the way the older schema knew how.
+	// Two settled operations, written the way the older schema knew how. The
+	// first declared a desired state and really was compared against it. The
+	// second declared none, which is exactly the row the old short circuit
+	// settled as verified having read nothing -- reachable because the broken
+	// schema check lived in the tool path, so an out-of-process plugin
+	// registering only mutations mounted fine.
 	if _, err := db.Writer().ExecContext(ctx, `
 		INSERT INTO operations (
 			id, plugin, action, state, risk, target_json, params_json, payload_hash,
 			desired_json, precondition_json, impact, requested_by, requested_at,
 			expires_at, outcome_verified, correlation_id, idempotency_key
-		) VALUES ('op_old','echo','label.set','succeeded','low','{}','{}','hash',
-		          '{"label":"b"}','{"label":"a"}','', 'user:alice', 0, 0, 1, 'corr', 'idem')`,
+		) VALUES
+		  ('op_compared','echo','label.set','succeeded','low','{}','{}','h1',
+		   '{"label":"b"}','{"label":"a"}','','user:alice',0,0,1,'corr','idem-1'),
+		  ('op_uncompared','echo','thing.do','succeeded','low','{}','{}','h2',
+		   NULL,'{"label":"a"}','','user:alice',0,0,1,'corr','idem-2')`,
 	); err != nil {
-		t.Fatalf("insert legacy operation: %v", err)
+		t.Fatalf("insert legacy operations: %v", err)
 	}
 
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}
 
-	op, err := NewOperationStore(db, func() time.Time { return testClock }).Get(ctx, "op_old")
+	store := NewOperationStore(db, func() time.Time { return testClock })
+
+	compared, err := store.Get(ctx, "op_compared")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if !op.Verifiable {
-		t.Error("an operation written before 0010 must stay verifiable")
+	if !compared.Verifiable {
+		t.Error("an operation that declared a desired state must stay verifiable")
 	}
-	if op.Assurance() != operations.AssuranceReviewedChange {
-		t.Errorf("assurance = %s, want reviewed_change", op.Assurance())
+	if compared.Assurance() != operations.AssuranceReviewedChange {
+		t.Errorf("assurance = %s, want reviewed_change", compared.Assurance())
+	}
+
+	// The migration must not bless a row nothing ever re-read. It is the only
+	// chance to correct it: the column is immutable after this and the table
+	// refuses deletion.
+	uncompared, err := store.Get(ctx, "op_uncompared")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if uncompared.Verifiable {
+		t.Error("an operation with no desired state was never verified; " +
+			"0010 must not record it as verifiable")
+	}
+	if uncompared.Assurance() != operations.AssuranceGatedCall {
+		t.Errorf("assurance = %s, want gated_call", uncompared.Assurance())
 	}
 }

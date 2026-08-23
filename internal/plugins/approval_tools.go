@@ -141,10 +141,22 @@ func noteFor(op *operations.Operation) string {
 	case operations.StateExecuting:
 		return "Currently being applied."
 	case operations.StateSucceeded:
-		if op.OutcomeVerified == nil {
+		// Three-valued in the reader as well as the writer. Branching on the
+		// pointer alone would report a pointer to false -- "re-read, and it
+		// did not match" -- as a confirmation. Nothing produces that pairing
+		// today, because the executor writes false only alongside
+		// indeterminate, but the state machine permits indeterminate ->
+		// succeeded under TriggerReconcile and no transition clears the
+		// column, so the first reconciler to arrive would land here.
+		switch {
+		case op.OutcomeVerified == nil:
 			return "Applied. The upstream call reported success, but this change " +
 				"cannot be confirmed by re-reading the target, so nothing here " +
 				"proves what the result is. Say so rather than reporting it as verified."
+		case !*op.OutcomeVerified:
+			return "Recorded as applied, but the target was re-read and did not " +
+				"match what was requested. Do not report this as done; a human " +
+				"has to look at the target."
 		}
 		return "Applied and confirmed by re-reading the target."
 	case operations.StateFailed:

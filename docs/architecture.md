@@ -238,12 +238,14 @@ at boot would give a host with no tools and a model that reasonably concludes
 the integration was removed.
 
 **Every administrative act is in the audit trail.** Importing a server, running
-discovery, classifying a tool and removing a server each append to the
-hash-chained `audit_events`, inside the transaction that performed them, naming
-the principal who acted. Enabling a tool is a privilege grant — it hands every
-caller of that plugin a path into a third party's code — so it belongs where
-privilege grants are recorded rather than in the settings history. Reads are
-deliberately not audited per call; this is about state changes.
+discovery, classifying a tool, turning a server on or off, and removing one
+each append to the hash-chained `audit_events`, inside the transaction that
+performed them, naming the principal who acted. Enabling a tool is a privilege
+grant — it hands every caller of that plugin a path into a third party's code —
+so it belongs where privilege grants are recorded rather than in the settings
+history. A toggle that changes nothing writes nothing: a trail that records
+non-events is one nobody reads carefully. Reads are deliberately not audited
+per call; this is about state changes.
 
 **Nothing the server says is authority.** `tools/list` is a claim. A tool
 arrives `pending` and is not served until an administrator classifies it, and
