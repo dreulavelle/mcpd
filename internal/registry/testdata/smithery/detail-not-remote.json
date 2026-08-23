@@ -1,0 +1,31 @@
+{
+ "qualifiedName": "gautamgb/mcpindex",
+ "displayName": "mcpindex",
+ "description": "The MCP directory that vets servers, not just lists them. Search by task, then get an advisory screen on a server before your agent calls its tools: whether each tool does what it claims, backed by conformance monitoring and a public drift ledger. Advisory (REVIEW / UNVERIFIED), monitored not enforced, not a safety verdict.",
+ "iconUrl": null,
+ "remote": false,
+ "deploymentUrl": null,
+ "connections": [
+  {
+   "type": "stdio",
+   "bundleUrl": "f720c1cf-9ab1-4154-946d-0f71c7f7a671/b53298da-2f91-4fb3-a53a-65764ada8614/server.mcpb",
+   "runtime": "node",
+   "configSchema": {
+    "type": "object",
+    "required": [],
+    "properties": {
+     "api_base": {
+      "type": "string",
+      "title": "API base URL",
+      "default": "https://mcpindex.ai",
+      "x-order": 0,
+      "description": "Override the mcpindex API base if you self-host. Leave as the default otherwise."
+     }
+    }
+   }
+  }
+ ],
+ "security": null,
+ "resources": null,
+ "prompts": null
+}

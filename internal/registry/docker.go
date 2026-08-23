@@ -436,9 +436,10 @@ func translateDockerEntry(name string, raw dockerEntry) (Entry, json.RawMessage,
 	// handing the document to the parser the import endpoint uses. Composing
 	// it here and judging it by a different rule would let this source offer
 	// something the import path refuses.
-	transport, url, addable, describeReason := describe(document)
+	transport, url, addable, describeReason, auth := describe(document)
 	entry.Addable = addable
 	entry.Reason = clean(describeReason, maxReasonRunes)
+	entry.Auth = auth
 	if !addable {
 		return entry, nil, true
 	}

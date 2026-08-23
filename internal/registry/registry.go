@@ -26,6 +26,7 @@ import (
 
 	"github.com/spoked/mcpd/internal/mcpservers"
 	"github.com/spoked/mcpd/internal/plugins/mcpremote"
+	"github.com/spoked/mcpd/internal/settings"
 )
 
 // ErrNotFound reports a name no catalogue has.
@@ -86,6 +87,16 @@ type Entry struct {
 	// servers, and offering an Add button that cannot work is worse than
 	// saying so.
 	Reason string `json:"reason,omitempty"`
+	// Auth says whether importing this entry will ask the operator for a
+	// credential: AuthNone or AuthAPIKey, and empty where there is nothing to
+	// say because the entry cannot be imported at all.
+	//
+	// It is derived from the document rather than from anything a catalogue
+	// claims about the server, so it means the same thing on all four sources
+	// -- and it means the thing an operator actually needs to know before
+	// clicking Add, which is whether they need to go and find a key first.
+	// See authFromDocument.
+	Auth string `json:"auth,omitempty"`
 	// Source names the catalogue this entry came from. On a page merged from
 	// more than one it is the only thing that distinguishes them, and it is
 	// set on every entry rather than only on merged pages so that a consumer
@@ -163,6 +174,15 @@ type SourceStatus struct {
 	// failure, not this host's, and the operator deciding whether to wait
 	// needs to see which.
 	Error string `json:"error,omitempty"`
+	// Note is what a source has to say about a page it *did* answer.
+	//
+	// Not an error and not a warning about this deployment: it is a fact about
+	// the answer that the answer itself cannot show. Smithery is the reason it
+	// exists -- its listing stops at five hundred of ten thousand servers, and
+	// a page whose last row is the five hundredth looks exactly like the end
+	// of a catalogue. Saying so is the difference between a bound and a lie by
+	// omission.
+	Note string `json:"note,omitempty"`
 }
 
 // Query is one browse or search request.
@@ -348,11 +368,39 @@ func SuggestName(catalogueName string) string {
 // them, or a field the settings catalogue will not take. Checking only the
 // first is how this offers an Add button that fails, which is the one thing
 // it exists to prevent.
-func describe(document []byte) (transport, url string, addable bool, reason string) {
+// The fifth result is Auth, and it comes from here rather than from a second
+// pass because Fields has already been called by the time it is known: the
+// same list that decides whether an operator *could* fill the form in says
+// whether any of it is a secret. Working it out again outside would be a
+// second parse of every row on the page to learn what this one already holds.
+//
+// How an entry is authenticated, as far as the document can say.
+//
+// A closed vocabulary rather than a catalogue's own words, because the point
+// is that a row from Smithery and a row from the official registry answer the
+// same question the same way. Absent when the entry is not addable: an entry
+// nobody can import has no credential story worth reporting, and "none" there
+// would read as "free to add".
+//
+// Deliberately not read from what a catalogue claims about the server. Two of
+// the four have a field for it, they spell it differently, and one of those
+// two fills it in only for a paying tenant -- so a value taken from upstream
+// would mean three different things across a merged page and nothing at all on
+// most rows. A fact this host works out for itself is the one that is there
+// for every row and means one thing.
+const (
+	// AuthNone is an entry this host can dial with no credential at all.
+	AuthNone = "none"
+	// AuthAPIKey is an entry whose import will ask for a secret -- a token in
+	// a header, typed into the dashboard and encrypted at rest.
+	AuthAPIKey = "api_key"
+)
+
+func describe(document []byte) (transport, url string, addable bool, reason, auth string) {
 	if len(document) > MaxDocumentBytes {
 		return "", "", false, fmt.Sprintf(
 			"the catalogue's document is %d KiB, and this host stores at most %d KiB",
-			len(document)>>10, MaxDocumentBytes>>10)
+			len(document)>>10, MaxDocumentBytes>>10), ""
 	}
 	doc, err := mcpservers.Parse(document)
 	if err != nil {
@@ -369,18 +417,26 @@ func describe(document []byte) (transport, url string, addable bool, reason stri
 			return "", "", false, fmt.Sprintf(
 				"declares the server.json format %s, which this host does not read; "+
 					"it reads %s", declaredSchema(document),
-				strings.Join(mcpservers.SupportedSchemaLabels(), ", "))
+				strings.Join(mcpservers.SupportedSchemaLabels(), ", ")), ""
 		}
-		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpservers: "), maxReasonRunes)
+		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpservers: "), maxReasonRunes), ""
 	}
 	remote, err := doc.Remote()
 	if err != nil {
-		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpservers: "), maxReasonRunes)
+		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpservers: "), maxReasonRunes), ""
 	}
-	if _, err := mcpremote.Fields(doc); err != nil {
-		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpremote: "), maxReasonRunes)
+	fields, err := mcpremote.Fields(doc)
+	if err != nil {
+		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpremote: "), maxReasonRunes), ""
 	}
-	return remote.Type, clean(remote.URL, maxURLRunes), true, ""
+	auth = AuthNone
+	for _, f := range fields {
+		if f.Kind == settings.KindSecret {
+			auth = AuthAPIKey
+			break
+		}
+	}
+	return remote.Type, clean(remote.URL, maxURLRunes), true, "", auth
 }
 
 // declaredSchema renders a document's $schema for a one-line reason.

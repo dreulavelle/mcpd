@@ -17,6 +17,7 @@ func TestWireShape(t *testing.T) {
 		Transport: "streamable-http", URL: "https://weather.example/mcp",
 		UpdatedAt: time.Date(2026, 4, 13, 17, 32, 20, 0, time.UTC),
 		Addable:   true, Reason: "",
+		Auth:   AuthAPIKey,
 		Source: officialSource,
 	}
 
@@ -41,13 +42,29 @@ func TestWireShape(t *testing.T) {
 	assertRawKeys(t, "source status", sourceBody.Sources[0],
 		"source", "ok", "stale", "retrieved_at", "entries")
 
+	// A note is what a source has to say about a page it did answer -- the
+	// bound on Smithery's listing is the case it exists for. Present only when
+	// there is one, so an ordinary page does not carry an empty field.
+	noted := page
+	noted.Sources = []SourceStatus{{
+		Source: smitherySource, OK: true,
+		RetrievedAt: time.Now().UTC(), Entries: 1,
+		Note: "this listing is bounded",
+	}}
+	var notedBody struct {
+		Sources []json.RawMessage `json:"sources"`
+	}
+	encode(t, noted, &notedBody)
+	assertRawKeys(t, "source status with a note", notedBody.Sources[0],
+		"source", "ok", "stale", "retrieved_at", "entries", "note")
+
 	var pageBody struct {
 		Entries []json.RawMessage `json:"entries"`
 	}
 	encode(t, page, &pageBody)
 	assertRawKeys(t, "entry", pageBody.Entries[0],
 		"name", "suggested_name", "title", "description", "version",
-		"transport", "url", "updated_at", "addable", "source")
+		"transport", "url", "updated_at", "addable", "auth", "source")
 
 	// Detail carries the entry's own fields flat, plus the document. The
 	// document is what the import endpoint is posted, so it has to be an
@@ -58,7 +75,7 @@ func TestWireShape(t *testing.T) {
 	}
 	assertKeys(t, "detail", detail,
 		"name", "suggested_name", "title", "description", "version",
-		"transport", "url", "updated_at", "addable",
+		"transport", "url", "updated_at", "addable", "auth",
 		"document", "source", "stale", "retrieved_at")
 
 	var withDoc struct {
@@ -71,9 +88,13 @@ func TestWireShape(t *testing.T) {
 
 	// A reason only appears when there is one, so an addable entry does not
 	// carry an empty field for the page to test.
+	// An entry nobody can import carries no auth either: there is no
+	// credential story for a server that cannot be added, and "none" there
+	// would read as "free to add".
 	unavailable := entry
 	unavailable.Addable, unavailable.Reason, unavailable.Transport, unavailable.URL =
 		false, "declares no remotes", "", ""
+	unavailable.Auth = ""
 	assertKeys(t, "unavailable entry", unavailable,
 		"name", "suggested_name", "title", "description", "version",
 		"updated_at", "addable", "reason", "source")

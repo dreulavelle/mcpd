@@ -36,21 +36,46 @@ type Config struct {
 
 // Catalog says which public catalogues of MCP servers the dashboard browses.
 //
-// Both are on by default, and both are reached only when an administrator asks
-// for a page -- nothing here is fetched at startup, so turning one off is
-// about what an operator sees and where this host is willing to make a
-// request, not about boot time. Turning both off leaves the catalogue
-// endpoints answering "no server catalogue is configured", which is the right
-// answer for a deployment that will not reach the internet at all.
+// Four of them, and each is reached only when an administrator asks for a
+// page -- nothing here is fetched at startup, so turning one off is about what
+// an operator sees and where this host is willing to make a request, not about
+// boot time. Turning all of them off leaves the catalogue endpoints answering
+// "no server catalogue is configured", which is the right answer for a
+// deployment that will not reach the internet at all.
+//
+// Three are on by default and one is not, and the line between them is whether
+// the source is any use without a credential. Official, Docker and Smithery
+// are all readable by anybody: Smithery's *servers* need a key to dial, but its
+// registry does not need one to browse, so an operator with no Smithery account
+// still gets ten thousand descriptions and a search over them and is told which
+// ones would ask for a key. PulseMCP's v0.1 API authenticates every request, so
+// a deployment without a key gets a page of 401s rather than a catalogue --
+// which is a worse thing to default to than an absence.
 type Catalog struct {
 	// Official is the official MCP registry at registry.modelcontextprotocol.io.
 	Official bool `yaml:"official"`
 	// Docker is Docker's MCP catalogue, built from docker/mcp-registry.
 	Docker bool `yaml:"docker"`
+	// Smithery is Smithery's registry at registry.smithery.ai.
+	Smithery bool `yaml:"smithery"`
+	// PulseMCP is PulseMCP's v0.1 sub-registry. Off unless configured; see
+	// the credentials below.
+	PulseMCP bool `yaml:"pulsemcp"`
+
+	// PulseMCPAPIKeyRef is a secret reference -- env:, credential: or file: --
+	// to the key PulseMCP issues. A reference rather than a value, like every
+	// other credential in this file, so that a token cannot be pasted into
+	// something that ends up in version control.
+	PulseMCPAPIKeyRef string `yaml:"pulsemcp_api_key_ref"`
+	// PulseMCPTenant is the tenant id that accompanies the key. Not a secret
+	// -- it identifies rather than authenticates -- so it is written plainly.
+	PulseMCPTenant string `yaml:"pulsemcp_tenant"`
 }
 
 // Enabled reports whether any catalogue is switched on.
-func (c Catalog) Enabled() bool { return c.Official || c.Docker }
+func (c Catalog) Enabled() bool {
+	return c.Official || c.Docker || c.Smithery || c.PulseMCP
+}
 
 // Tunnel configures OpenAI's Secure MCP Tunnel, which runs inside mcpd.
 //
@@ -362,10 +387,12 @@ func Default() *Config {
 			LeaseTTL:      2 * time.Minute,
 		},
 		Tunnel: Tunnel{CheckForUpdates: true},
-		// Both catalogues on. They cost nothing until a page asks for one,
-		// and an operator who wants only the official registry says so rather
-		// than discovering that the second one existed and was off.
-		Catalog: Catalog{Official: true, Docker: true},
+		// The three that need no credential are on. They cost nothing until a
+		// page asks for one, and an operator who wants only the official
+		// registry says so rather than discovering that the others existed and
+		// were off. PulseMCP is off because it cannot answer without a key it
+		// has to be issued by hand; see Catalog.
+		Catalog: Catalog{Official: true, Docker: true, Smithery: true},
 		Logging: Logging{Level: "info", Format: "json"},
 		Plugins: map[string]PluginConfig{},
 	}

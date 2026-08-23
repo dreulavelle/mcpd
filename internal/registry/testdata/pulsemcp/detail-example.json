@@ -1,0 +1,50 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+    "name": "io.github.modelcontextprotocol/filesystem",
+    "title": "Filesystem Server",
+    "description": "MCP server providing secure filesystem operations including read, write, directory listing, and file search capabilities",
+    "version": "1.2.0",
+    "websiteUrl": "https://modelcontextprotocol.io/servers/filesystem",
+    "repository": {
+      "url": "https://github.com/modelcontextprotocol/servers",
+      "source": "github",
+      "id": "abc123de-fgh4-5678-ijkl-mnopqrstuvwx"
+    },
+    "remotes": [
+      {
+        "type": "sse",
+        "url": "https://mcp-filesystem.modelcontextprotocol.io/sse"
+      },
+      {
+        "type": "streamable-http",
+        "url": "https://mcp-filesystem.modelcontextprotocol.io/mcp"
+      }
+    ],
+    "_meta": {
+      "io.modelcontextprotocol.registry/publisher-provided": {
+        "tool": "mcp-publisher",
+        "version": "1.2.0",
+        "buildInfo": {
+          "commit": "a1b2c3d4e5f6",
+          "timestamp": "2025-11-15T09:30:00Z"
+        }
+      }
+    }
+  },
+  "_meta": {
+    "com.pulsemcp/server": {
+      "visitorsEstimateMostRecentWeek": 1250,
+      "visitorsEstimateLastFourWeeks": 4820,
+      "visitorsEstimateTotal": 28500,
+      "isOfficial": true
+    },
+    "com.pulsemcp/server-version": {
+      "source": "registry.modelcontextprotocol.io",
+      "status": "active",
+      "publishedAt": "2025-06-15T10:30:00Z",
+      "updatedAt": "2025-11-20T14:22:00Z",
+      "isLatest": true
+    }
+  }
+}
