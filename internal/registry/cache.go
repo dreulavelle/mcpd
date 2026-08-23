@@ -17,12 +17,14 @@ import (
 // a network call.
 const DefaultTTL = 15 * time.Minute
 
-// maxCacheEntries bounds the cache.
+// maxCacheEntries bounds how many answers are held.
 //
 // The key includes a search term, and a search term is whatever somebody typed,
-// so an unbounded cache is an unbounded allocation driven by keystrokes. When
-// it is full the oldest fetch is dropped; this is a cache in front of a
-// browse, not a store anything depends on.
+// so an unbounded cache is an unbounded allocation driven by keystrokes. The
+// size of a single key is bounded separately, by normalising a query before it
+// becomes one -- both halves are needed, since a cap on the count of unbounded
+// keys is not a cap on anything. When it is full the oldest fetch is dropped;
+// this is a cache in front of a browse, not a store anything depends on.
 const maxCacheEntries = 256
 
 // Cached wraps a catalogue with a TTL and the rule that matters most here: a
@@ -76,6 +78,12 @@ func (c *Cached) Source() string { return c.upstream.Source() }
 // catalogue otherwise. An upstream failure with something cached is not an
 // error: the stale page is returned and says so.
 func (c *Cached) List(ctx context.Context, q Query) (Page, error) {
+	// Normalised before it becomes a key, so the key stands for the request
+	// that will actually be made. Raw query-string text would file "weather "
+	// and "weather" as two answers to one question, put page one under the
+	// key of a page it is not when an over-long cursor is dropped downstream,
+	// and leave the size of a key set by whoever typed it.
+	q = q.Normalised()
 	key := "list\x00" + q.Search + "\x00" + q.Cursor + "\x00" + strconv.Itoa(q.Limit)
 
 	if hit, fresh := c.lookup(key); fresh {
@@ -101,6 +109,9 @@ func (c *Cached) List(ctx context.Context, q Query) (Page, error) {
 
 // Get returns one entry, with the same staleness rule as List.
 func (c *Cached) Get(ctx context.Context, name string) (Detail, error) {
+	// Bounded for the same reason, and by the same rule the client applies: a
+	// name it would refuse to ask for must not become an entry held here.
+	name = clean(name, maxNameRunes)
 	key := "get\x00" + name
 
 	if hit, fresh := c.lookup(key); fresh {

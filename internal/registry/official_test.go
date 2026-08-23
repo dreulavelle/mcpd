@@ -169,37 +169,74 @@ func TestList_APackageOnlyEntryIsNotAddable(t *testing.T) {
 	}
 }
 
-// Addability is decided by the parser the import endpoint uses, not by looking
+// Addability is decided by the calls the import endpoint makes, not by looking
 // for a remotes array. A document with remotes this host will not dial imports
 // as a refusal, and offering it would be offering a button that fails.
+//
+// Both calls, and the second is the one that drifted. Import runs
+// mcpremote.Fields after mcpservers.Parse, and Fields refuses documents Parse
+// accepts: an input declaring choices whose default is not one of them was
+// listed as addable and refused on the way in.
 func TestList_AddabilityMatchesWhatImportWouldAccept(t *testing.T) {
-	plaintext := fmt.Sprintf(`{
-	  "server": {
-	    "$schema": %q,
-	    "name": "io.example/insecure",
-	    "description": "Plaintext to a public host.",
-	    "version": "1.0.0",
-	    "remotes": [{"type": "streamable-http", "url": "http://insecure.example/mcp"}]
-	  },
-	  "_meta": {"io.modelcontextprotocol.registry/official": {
-	    "status": "active", "isLatest": true,
-	    "publishedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
-	  }}
-	}`, mcpservers.SchemaURI)
-
-	r := newRegistry(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(listBody("", plaintext)))
-	})
-
-	page, err := r.List(context.Background(), Query{})
-	if err != nil {
-		t.Fatal(err)
+	entryFor := func(name, remotes string) string {
+		return fmt.Sprintf(`{
+		  "server": {
+		    "$schema": %q,
+		    "name": %q,
+		    "description": "A fixture.",
+		    "version": "1.0.0",
+		    "remotes": %s
+		  },
+		  "_meta": {"io.modelcontextprotocol.registry/official": {
+		    "status": "active", "isLatest": true,
+		    "publishedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
+		  }}
+		}`, mcpservers.SchemaURI, name, remotes)
 	}
-	if len(page.Entries) != 1 {
-		t.Fatalf("entries = %+v", page.Entries)
-	}
-	if page.Entries[0].Addable {
-		t.Error("an entry this host would refuse at import must not be offered as addable")
+
+	for _, tc := range []struct {
+		name    string
+		docName string
+		remotes string
+		// why names a fragment the reason must carry, so a refusal for the
+		// wrong reason does not pass as the right one.
+		why string
+	}{
+		{
+			name:    "parse refuses plaintext to a public host",
+			docName: "io.example/insecure",
+			remotes: `[{"type": "streamable-http", "url": "http://insecure.example/mcp"}]`,
+			why:     "plaintext http",
+		},
+		{
+			name:    "fields refuses a default that is not one of the choices",
+			docName: "io.example/enum",
+			remotes: `[{"type": "streamable-http", "url": "https://enum.example/mcp",
+			            "headers": [{"name": "X-Mode", "default": "nope",
+			                         "choices": ["a", "b"]}]}]`,
+			why: "not one of its choices",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRegistry(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(listBody("", entryFor(tc.docName, tc.remotes))))
+			})
+
+			page, err := r.List(context.Background(), Query{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Entries) != 1 {
+				t.Fatalf("entries = %+v", page.Entries)
+			}
+			got := page.Entries[0]
+			if got.Addable {
+				t.Fatal("an entry this host would refuse at import must not be offered as addable")
+			}
+			if !strings.Contains(got.Reason, tc.why) {
+				t.Errorf("reason = %q, want it to mention %q", got.Reason, tc.why)
+			}
+		})
 	}
 }
 
@@ -232,7 +269,7 @@ func TestList_BoundsUntrustedText(t *testing.T) {
 	entry := fmt.Sprintf(`{
 	  "server": {
 	    "$schema": %q,
-	    "name": "io.example/loud\ntitle: something else",
+	    "name": "io.example/loud",
 	    "title": %q,
 	    "description": %q,
 	    "version": "1.0.0",
@@ -256,9 +293,6 @@ func TestList_BoundsUntrustedText(t *testing.T) {
 		t.Fatalf("entries = %+v", page.Entries)
 	}
 	e := page.Entries[0]
-	if strings.ContainsAny(e.Name, "\n\r\t") {
-		t.Errorf("name still carries a control character: %q", e.Name)
-	}
 	if n := len([]rune(e.Title)); n > maxTitleRunes+1 {
 		t.Errorf("title is %d runes, want it bounded to %d", n, maxTitleRunes)
 	}
@@ -445,5 +479,62 @@ func TestList_CursorsAreOpaque(t *testing.T) {
 	}
 	if page.NextCursor != "" {
 		t.Errorf("next_cursor = %q, want it dropped", page.NextCursor)
+	}
+}
+
+// Name is the identifier the dashboard sends back to the entry route, so it is
+// the one field that must not be cleaned. A truncated or rewritten name is a
+// row that 404s when somebody clicks it, and a row that is absent is better
+// than one that is dead.
+func TestList_ARowWhoseNameCannotSurviveIsDropped(t *testing.T) {
+	entryFor := func(name string) string {
+		return fmt.Sprintf(`{
+		  "server": {
+		    "$schema": %q, "name": %s, "title": "Loud",
+		    "description": "A fixture.", "version": "1.0.0",
+		    "remotes": [{"type": "streamable-http", "url": "https://loud.example/mcp"}]
+		  },
+		  "_meta": {"io.modelcontextprotocol.registry/official": {
+		    "status": "active", "isLatest": true,
+		    "publishedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"
+		  }}
+		}`, mcpservers.SchemaURI, name)
+	}
+	overlong, err := json.Marshal("io.example/" + strings.Repeat("n", maxNameRunes))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ name, raw string }{
+		{"a newline in the name", `"io.example/loud\ntitle: something else"`},
+		{"a bidirectional override", `"io.example/lo‮ud"`},
+		{"past the length bound", string(overlong)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRegistry(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(listBody("", entryFor(tc.raw))))
+			})
+			page, err := r.List(context.Background(), Query{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Entries) != 0 {
+				t.Errorf("entries = %+v, want the unusable row dropped", page.Entries)
+			}
+		})
+	}
+
+	// And a name that is merely long, but within the bound, is kept whole --
+	// dropping those would empty the catalogue rather than protect it.
+	ordinary := "io.example/" + strings.Repeat("n", 40)
+	r := newRegistry(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(listBody("", entryFor(`"`+ordinary+`"`))))
+	})
+	page, err := r.List(context.Background(), Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) != 1 || page.Entries[0].Name != ordinary {
+		t.Errorf("entries = %+v, want the name kept whole", page.Entries)
 	}
 }

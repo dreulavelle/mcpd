@@ -74,12 +74,28 @@ type User struct {
 // address is what that falls back to: technical, but it names a real person,
 // which an empty string does not.
 //
+// It falls back for a stored value the rules now refuse, too, and that is the
+// second job this does. The column predates every rule about what may go in
+// it, so a database may hold a name written when nothing was checked -- one
+// carrying a bidirectional override, or an invisible character, or a byte that
+// is not UTF-8. The schema cannot help: a CHECK can express the length and
+// nothing else, and enumerating the format characters in SQL would cover a
+// score of the hundred and seventy in the category and drift from this
+// package the first time either changed. Re-checking on the way out is the
+// same rule, applied by the same code, to every row however it got there --
+// and every render goes through here.
+//
+// The stored value is left alone rather than corrected. It stays visible as
+// display_name so its owner can see what is there and replace it, which they
+// can now do themselves; guessing what it was meant to say is not this
+// function's business.
+//
 // This is never an identity. Two accounts may render the same, and the value
 // changes whenever its owner decides to change it, so anything that has to
 // name *which* account -- the audit trail above all -- uses the address.
 func (u *User) Name() string {
-	if u.DisplayName != "" {
-		return u.DisplayName
+	if name, err := ValidateDisplayName(u.DisplayName); err == nil && name != "" {
+		return name
 	}
 	return u.Email
 }
@@ -189,6 +205,11 @@ const MaxDisplayNameRunes = 64
 //
 // Three rules, and each exists for something that actually happens:
 //
+//   - Well-formed UTF-8. Ranging over a string yields U+FFFD for a malformed
+//     byte rather than the byte itself, so the checks below would pass it and
+//     the column would store it -- and the JSON encoder substitutes U+FFFD on
+//     the way out, leaving the operator looking at a name they cannot correct
+//     by retyping it, because what they typed was never what was stored.
 //   - Length, because an unbounded name is a row somebody else's browser has
 //     to render and a column this host has to hold.
 //   - No control or format characters. A newline in a name breaks a log line
@@ -202,6 +223,9 @@ func ValidateDisplayName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" {
 		return "", nil
+	}
+	if !utf8.ValidString(name) {
+		return "", fmt.Errorf("users: a display name must be valid UTF-8")
 	}
 	for _, r := range name {
 		switch {

@@ -343,8 +343,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 			// one, so a registry that is down, or a deployment with no route
 			// to it, costs a page rather than a boot.
 			ServerCatalog: admin.CatalogAPI{
-				List: a.catalog.List,
-				Get:  a.catalog.Get,
+				List:   a.catalog.List,
+				Get:    a.catalog.Get,
+				Source: a.catalog.Source,
 			},
 			MCPServers: admin.MCPServerAPI{
 				List: func(ctx context.Context) (any, error) {

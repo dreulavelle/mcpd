@@ -162,6 +162,19 @@ so nothing renders blank, and is resolved when a page is drawn rather than
 stored beside the thing it describes — a record keyed on a value its own
 subject can edit would be a record of nothing.
 
+The rule is enforced twice, and the second time is not belt-and-braces. It is
+checked on the way in, and checked again by the one function every render goes
+through, because the column is older than any rule about what may go in it and
+a database may hold a name written when nothing was checked. A value the rules
+now refuse renders as the address instead. The schema cannot cover this and it
+would be dishonest to pretend otherwise: a `CHECK` can express the length, and
+enumerating the format characters in SQL would catch a score of the hundred and
+seventy in the category and drift from the Go rule the first time either
+changed. Migration `0011` therefore normalises the length retroactively and
+nothing else, and re-checking on read is what makes that sufficient. The stored
+value is left alone rather than corrected, so its owner can see what is there
+and replace it.
+
 Because identity does not depend on it, an account may set its own name without
 `admin`. `PATCH /api/account` carries no identifier and can only ever edit the
 account the request authenticated as, so there is no check to get wrong;
@@ -314,10 +327,18 @@ which is the only way to be sure the catalogue cannot become a way around one
 of those steps.
 
 That is also what decides whether an entry is offered at all. Addability is not
-"does it have a `remotes` array" — it is `mcpservers.Parse` returning nil, the
-same call the import endpoint makes. A document with remotes this host will not
-dial, or a credential written into its own text, imports as a refusal; offering
-an Add button for one would be offering a button that fails.
+"does it have a `remotes` array" — it is the two calls the import endpoint
+makes, both of them: `mcpservers.Parse` on the document, then `mcpremote.Fields`
+on the result. The second is not redundant. `Parse` judges the document;
+`Fields` derives the form an operator would fill in, and refuses things `Parse`
+accepts — an input declaring choices whose default is not one of them, or a
+field the settings catalogue will not take. Checking only the first is how this
+offers an Add button that fails, which is the one thing it exists to prevent.
+
+This is the reason `internal/registry` imports `internal/plugins/mcpremote`,
+and so is not the leaf it otherwise would be. The alternative was to
+re-implement the acceptance rule beside the catalogue, which is the same bug
+with an extra copy of the code to keep in step.
 
 **Remote servers only.** Roughly a tenth of the registry is published solely as
 something to run locally, which this host does not do. Those are listed with

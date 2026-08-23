@@ -23,6 +23,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/spoked/mcpd/internal/mcpservers"
+	"github.com/spoked/mcpd/internal/plugins/mcpremote"
 )
 
 // ErrNotFound reports a name no catalogue has.
@@ -123,6 +124,33 @@ type Query struct {
 	Cursor string
 	// Limit bounds one page. Zero takes the client's default.
 	Limit int
+}
+
+// Normalised returns the query as it will actually be asked, with every bound
+// already applied.
+//
+// It exists so that a cache key and the request it stands for cannot disagree.
+// A query arrives from a URL, so it is whatever somebody typed: "weather " and
+// "weather" are one upstream search, a cursor past the bound is dropped rather
+// than sent, and a limit outside the permitted range becomes the client's
+// default. Keying on the raw form would hold several entries for one answer,
+// and -- worse -- would file page one under the key of a page it is not.
+//
+// It is also what bounds the key itself. The cache caps how many entries it
+// holds; without this it would cap nothing about how large one of them is.
+//
+// Idempotent, so a client that applies it again gets the same query.
+func (q Query) Normalised() Query {
+	if q.Limit < 0 || q.Limit > MaxEntriesPerPage {
+		// Out of range means "no usable preference", which is the same thing
+		// zero means: take whatever the client's default is.
+		q.Limit = 0
+	}
+	return Query{
+		Search: clean(q.Search, maxQueryRunes),
+		Cursor: opaque(q.Cursor, maxCursorRunes),
+		Limit:  q.Limit,
+	}
 }
 
 // Client is a catalogue of MCP servers.
@@ -241,11 +269,18 @@ func SuggestName(catalogueName string) string {
 // describe turns a decoded document into the parts of an Entry that come from
 // it, and says whether this host would accept it.
 //
-// The judgement is made by the parser the import endpoint uses, not by looking
+// The judgement is made by the calls the import endpoint makes, not by looking
 // for a remotes array. Those differ in ways that matter: a document offering
 // only sse, or plaintext http to a public host, or a credential written into
 // its own text, parses as having remotes and is still refused at import. An
 // entry offered as addable here has to be one that actually imports.
+//
+// Both calls, because import makes both. Parse checks the document; Fields
+// derives the form an operator would fill in, and refuses documents Parse
+// accepts -- an input declaring choices with a default that is not one of
+// them, or a field the settings catalogue will not take. Checking only the
+// first is how this offers an Add button that fails, which is the one thing
+// it exists to prevent.
 func describe(document []byte) (transport, url string, addable bool, reason string) {
 	if len(document) > MaxDocumentBytes {
 		return "", "", false, fmt.Sprintf(
@@ -272,6 +307,9 @@ func describe(document []byte) (transport, url string, addable bool, reason stri
 	remote, err := doc.Remote()
 	if err != nil {
 		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpservers: "), maxReasonRunes)
+	}
+	if _, err := mcpremote.Fields(doc); err != nil {
+		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpremote: "), maxReasonRunes)
 	}
 	return remote.Type, clean(remote.URL, maxURLRunes), true, ""
 }

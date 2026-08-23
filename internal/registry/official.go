@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -103,18 +104,23 @@ func (o *Official) Source() string { return officialSource }
 // far end promises one row per name" is exactly the kind of promise that turns
 // a catalogue page into a list of the same server four times.
 func (o *Official) List(ctx context.Context, q Query) (Page, error) {
+	// Normalised again rather than assumed. The cache in front applies this so
+	// its keys match the requests they stand for, and this client is also
+	// usable on its own; the operation is idempotent, so doing it twice costs
+	// nothing and doing it never is a bound that was not applied.
+	q = q.Normalised()
 	limit := q.Limit
-	if limit <= 0 || limit > MaxEntriesPerPage {
+	if limit <= 0 {
 		limit = o.limit
 	}
 	values := url.Values{}
 	values.Set("version", "latest")
-	values.Set("limit", fmt.Sprint(limit))
-	if s := clean(q.Search, maxQueryRunes); s != "" {
-		values.Set("search", s)
+	values.Set("limit", strconv.Itoa(limit))
+	if q.Search != "" {
+		values.Set("search", q.Search)
 	}
-	if c := opaque(q.Cursor, maxCursorRunes); c != "" {
-		values.Set("cursor", c)
+	if q.Cursor != "" {
+		values.Set("cursor", q.Cursor)
 	}
 
 	var body listResponse
@@ -277,7 +283,11 @@ func (c catalogueEntry) entry() (Entry, bool) {
 	if err := json.Unmarshal(c.Server, &fields); err != nil {
 		return Entry{}, false
 	}
-	name := clean(fields.Name, maxNameRunes)
+	// Not cleaned: Name is the identifier the dashboard sends back to the
+	// entry route, so a truncated or rewritten one is a row that 404s when
+	// somebody clicks it. It survives unchanged or the row is dropped, and a
+	// row that is absent is better than one that is dead.
+	name := opaque(fields.Name, maxNameRunes)
 	if name == "" {
 		return Entry{}, false
 	}
@@ -338,7 +348,9 @@ func dedupe(rows []catalogueEntry) []catalogueEntry {
 		if err := json.Unmarshal(row.Server, &fields); err != nil {
 			continue
 		}
-		name := clean(fields.Name, maxNameRunes)
+		// The same bound entry() applies, so the two cannot disagree about
+		// which rows exist.
+		name := opaque(fields.Name, maxNameRunes)
 		if name == "" {
 			continue
 		}

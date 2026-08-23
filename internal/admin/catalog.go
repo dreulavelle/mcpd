@@ -19,6 +19,30 @@ type CatalogAPI struct {
 	List func(ctx context.Context, q registry.Query) (registry.Page, error)
 	// Get returns one entry with the server.json that would be imported.
 	Get func(ctx context.Context, name string) (registry.Detail, error)
+	// Source names the catalogue, so a refusal can say which third party was
+	// not reachable without quoting anything that third party said.
+	Source func() string
+}
+
+// unreachable is what a caller is told when the catalogue could not be read.
+//
+// A fixed sentence and the catalogue's name, not the error. The error is a
+// third party's -- it can carry their status line, or the address of a
+// redirect they tried to send this host on -- and the fetch two layers down
+// already drains and discards their response body for that reason. Relaying
+// the same text in a header-shaped wrapper would put it back.
+//
+// The detail is not lost, it is filed where it belongs: the log line above
+// carries the whole error for the operator who has to diagnose it.
+func unreachable(c CatalogAPI) string {
+	name := "the server catalogue"
+	if c.Source != nil {
+		if s := c.Source(); s != "" {
+			name = s
+		}
+	}
+	return name + " could not be read just now; nothing here is broken, " +
+		"and it is worth trying again shortly"
 }
 
 // catalogPageLimit bounds a page. The registry caps its own at a hundred, and
@@ -47,11 +71,8 @@ func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
 		Limit:  parseLimit(r.URL.Query().Get("limit"), catalogDefaultLimit, catalogMaxLimit),
 	})
 	if err != nil {
-		// The catalogue is somebody else's service, and it being unreachable
-		// is not a fault in this host. 502 says which end failed, and the
-		// message is what an operator would need to decide whether to wait.
 		s.opts.Log.Warn("could not read the server catalogue", "error", err)
-		s.writeError(w, r, http.StatusBadGateway, err.Error())
+		s.writeError(w, r, http.StatusBadGateway, unreachable(s.opts.ServerCatalog))
 		return
 	}
 	// Entries is never null. A page rendering `entries.map` over null is a
@@ -85,8 +106,9 @@ func (s *Server) handleGetCatalogEntry(w http.ResponseWriter, r *http.Request) {
 			"the catalogue has no active server by that name")
 		return
 	case err != nil:
-		s.opts.Log.Warn("could not read a catalogue entry", "server", name, "error", err)
-		s.writeError(w, r, http.StatusBadGateway, err.Error())
+		s.opts.Log.Warn("could not read a catalogue entry",
+			"server", name, "error", err)
+		s.writeError(w, r, http.StatusBadGateway, unreachable(s.opts.ServerCatalog))
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, detail)

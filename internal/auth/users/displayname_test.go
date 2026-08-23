@@ -45,6 +45,11 @@ func TestValidateDisplayName(t *testing.T) {
 			why: "at most",
 		},
 		{
+			name: "malformed utf-8 is refused rather than stored as replacement characters",
+			in:   "Ali\xffce", refused: true,
+			why: "valid UTF-8",
+		},
+		{
 			name: "the bound is in runes, not bytes",
 			in:   strings.Repeat("é", MaxDisplayNameRunes),
 			want: strings.Repeat("é", MaxDisplayNameRunes),
@@ -230,5 +235,86 @@ func TestCreate_RefusesANameThatIsAnotherAccountsAddress(t *testing.T) {
 		DisplayName: "Bob", Role: auth.RoleUser, Plugins: []string{auth.Wildcard},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
+	}
+}
+
+// A row written before there were rules must not render what the rules exist
+// to prevent.
+//
+// 0011's retroactive normalisation covers the length, because that is the one
+// rule a CHECK can express and the rebuild would have failed without it. The
+// character rules are not in the schema and cannot be: enumerating the format
+// characters in SQL would cover a score of the hundred and seventy in the
+// category, and would drift from the Go rule the first time either changed.
+// So the same function that refuses them on the way in refuses them on the
+// way out, and every render goes through Name().
+func TestName_FallsBackForALegacyValueTheRulesRefuse(t *testing.T) {
+	store, _ := newStore(t)
+	ctx := context.Background()
+	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdmin)
+
+	for _, tc := range []struct {
+		name     string
+		stored   string
+		rendered string
+	}{
+		{name: "a bidirectional override", stored: "Alice‮Bob"},
+		{name: "a zero-width space", stored: "Al​ice"},
+		{name: "a control character", stored: "Alice\x01"},
+		{name: "a byte that is not UTF-8", stored: "Ali\xffce"},
+		{
+			// At the bound rather than past it, so the fallback cannot pass
+			// by refusing everything it is handed.
+			name:     "an ordinary name is still rendered",
+			stored:   strings.Repeat("a", MaxDisplayNameRunes),
+			rendered: strings.Repeat("a", MaxDisplayNameRunes),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := tc.rendered
+			if want == "" {
+				want = "alice@example.com"
+			}
+			// Written past this package, the way a value predating the rules
+			// got there. The schema bounds the length and nothing else, so
+			// every one of these is a row a real database can hold.
+			if _, err := store.db.Writer().ExecContext(ctx,
+				`UPDATE users SET display_name = ? WHERE id = ?`, tc.stored, alice.ID); err != nil {
+				t.Fatalf("seed a legacy row: %v", err)
+			}
+			u, err := store.ByID(ctx, alice.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := u.Name(); got != want {
+				t.Errorf("Name() = %q, want %q", got, want)
+			}
+			// The principal a page and a log line read is built from Name().
+			if got := u.Principal("ses_1").DisplayName; got != want {
+				t.Errorf("principal DisplayName = %q, want %q", got, want)
+			}
+			// The stored value is left alone, so its owner can see what is
+			// there and replace it.
+			if u.DisplayName != tc.stored {
+				t.Errorf("the stored value was rewritten to %q", u.DisplayName)
+			}
+		})
+	}
+}
+
+// The write path still refuses every value Name falls back from, so nothing
+// can put one back through this package.
+func TestUpdate_StillRefusesTheValuesNameFallsBackFrom(t *testing.T) {
+	store, _ := newStore(t)
+	ctx := context.Background()
+	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdmin)
+
+	for _, bad := range []string{
+		"Alice‮Bob", "Al​ice", "Alice\x01", "Ali\xffce",
+		strings.Repeat("a", MaxDisplayNameRunes+1),
+	} {
+		if _, err := store.Update(ctx, alice.ID, UpdateRequest{DisplayName: &bad}); err == nil {
+			t.Errorf("Update accepted %q", bad)
+		}
 	}
 }

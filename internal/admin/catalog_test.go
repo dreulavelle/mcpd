@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,19 +102,56 @@ func TestCatalogEntry_NameCarriesASlash(t *testing.T) {
 // A catalogue that cannot be reached is somebody else's outage. It is reported
 // as a bad gateway, never as a fault in this host, and it never takes the
 // dashboard down with it.
+//
+// The body says which catalogue and nothing the catalogue said. The error can
+// carry their status line or the address of a redirect they tried to send this
+// host on, and the fetch two layers down already discards their response body
+// for exactly that reason -- relaying the same text here would put it back.
 func TestCatalog_UpstreamFailureIsABadGateway(t *testing.T) {
+	const leak = "418 I am a teapot at https://attacker.example/"
 	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+		Source: func() string { return "registry.modelcontextprotocol.io" },
 		List: func(context.Context, registry.Query) (registry.Page, error) {
-			return registry.Page{}, errors.New("registry: connection refused")
+			return registry.Page{}, errors.New(leak)
 		},
 		Get: func(context.Context, string) (registry.Detail, error) {
-			return registry.Detail{}, errors.New("registry: connection refused")
+			return registry.Detail{}, errors.New(leak)
 		},
 	})
 	for _, path := range []string{"/api/catalog", "/api/catalog/io.example/weather"} {
-		if got := request(t, s, http.MethodGet, path, nil).Code; got != http.StatusBadGateway {
-			t.Errorf("%s: status = %d, want 502", path, got)
+		w := request(t, s, http.MethodGet, path, nil)
+		if w.Code != http.StatusBadGateway {
+			t.Errorf("%s: status = %d, want 502", path, w.Code)
 		}
+		var body map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(body["error"], "teapot") ||
+			strings.Contains(body["error"], "attacker.example") {
+			t.Errorf("%s: the far end's text reached the caller: %q", path, body["error"])
+		}
+		if !strings.Contains(body["error"], "registry.modelcontextprotocol.io") {
+			t.Errorf("%s: the refusal should name the catalogue: %q", path, body["error"])
+		}
+	}
+}
+
+// Without a Source the refusal still reads as a sentence rather than as an
+// empty string with a suffix.
+func TestCatalog_UpstreamFailureWithoutASourceName(t *testing.T) {
+	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+		List: func(context.Context, registry.Query) (registry.Page, error) {
+			return registry.Page{}, errors.New("boom")
+		},
+	})
+	w := request(t, s, http.MethodGet, "/api/catalog", nil)
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(body["error"], "the server catalogue") {
+		t.Errorf("error = %q", body["error"])
 	}
 }
 

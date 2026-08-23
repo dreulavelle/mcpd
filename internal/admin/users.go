@@ -17,6 +17,11 @@ import (
 // has to round-trip -- rendering the fallback into the input would make saving
 // the form persist the address as a name. Name is what to render, and is never
 // empty.
+//
+// A page must render Name. DisplayName is raw: on a database old enough it
+// can be a value written before there were rules about what may go in it, so
+// it belongs in an input where its owner can see it and replace it, and
+// nowhere that treats it as text to display.
 type userView struct {
 	ID          string   `json:"id"`
 	Email       string   `json:"email"`

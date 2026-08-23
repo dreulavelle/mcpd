@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -218,5 +219,69 @@ func TestCached_HandsOutCopies(t *testing.T) {
 	}
 	if second.Entries[0].Name != "io.example/weather" {
 		t.Errorf("the cache was edited through a returned slice: %q", second.Entries[0].Name)
+	}
+}
+
+// The key has to stand for the request that will actually be made. Two
+// searches differing only in whitespace are one upstream query, and caching
+// them separately means two fetches, two entries, and a bound on the entry
+// count that bounds nothing about their size.
+func TestCached_KeysOnTheNormalisedQuery(t *testing.T) {
+	up, _, cache := newFixture()
+	ctx := context.Background()
+
+	for _, q := range []Query{
+		{Search: "weather"},
+		{Search: "weather "},
+		{Search: "  weather"},
+		{Search: "weather\n"},
+	} {
+		if _, err := cache.List(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if up.count() != 1 {
+		t.Errorf("the catalogue was called %d times, want 1 for one query", up.count())
+	}
+
+	// A limit outside the permitted range means "no usable preference", which
+	// is what zero means, so those are one request too.
+	for _, q := range []Query{{Limit: 0}, {Limit: -5}, {Limit: MaxEntriesPerPage + 1}} {
+		if _, err := cache.List(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if up.count() != 2 {
+		t.Errorf("calls = %d, want one more for the unbounded-limit query", up.count())
+	}
+
+	// A cursor past the bound is dropped on the way out, so it must not file
+	// the first page under the key of a page it is not.
+	long := Query{Cursor: strings.Repeat("x", maxCursorRunes+1)}
+	if _, err := cache.List(ctx, long); err != nil {
+		t.Fatal(err)
+	}
+	if up.count() != 2 {
+		t.Errorf("calls = %d, want the dropped cursor to hit the first page's entry", up.count())
+	}
+}
+
+// The key is bounded because the query is, and nothing longer than the bounds
+// can be held however long the input was.
+func TestCached_KeysAreBounded(t *testing.T) {
+	_, _, cache := newFixture()
+	huge := Query{
+		Search: strings.Repeat("q", 100_000),
+		Cursor: strings.Repeat("c", 100_000),
+	}
+	if _, err := cache.List(context.Background(), huge); err != nil {
+		t.Fatal(err)
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	for key := range cache.entries {
+		if len(key) > maxQueryRunes*4+maxCursorRunes*4+64 {
+			t.Errorf("a cache key is %d bytes; the bounds should have cut it", len(key))
+		}
 	}
 }
