@@ -74,7 +74,12 @@ func (s *Server) secureCookies(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	u, err := url.Parse(s.opts.PublicURL)
+	// FrontendPublicURL, not PublicURL. PublicURL is the MCP endpoint, and the
+	// two are different listeners: the MCP endpoint commonly serves TLS from a
+	// self-signed certificate while the dashboard is plain HTTP on the LAN.
+	// Reading the wrong one marks this cookie Secure on a plain-HTTP origin,
+	// the browser drops it, and signing in appears to do nothing.
+	u, err := url.Parse(s.opts.FrontendPublicURL)
 	return err == nil && u.Scheme == "https"
 }
 

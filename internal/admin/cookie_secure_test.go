@@ -13,9 +13,9 @@ import (
 func serverWithPublicURL(t *testing.T, accounts Accounts, publicURL string) *Server {
 	t.Helper()
 	return NewServer(Options{
-		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Accounts:  accounts,
-		PublicURL: publicURL,
+		Log:               slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Accounts:          accounts,
+		FrontendPublicURL: publicURL,
 	})
 }
 
@@ -153,5 +153,45 @@ func TestSessionCookie_IgnoresXForwardedProto(t *testing.T) {
 
 	if sessionCookieFrom(t, w.Result()).Secure {
 		t.Error("a caller-set header must not decide a cookie attribute")
+	}
+}
+
+// A plain-HTTP dashboard beside an https MCP endpoint is the ordinary
+// self-signed shape, and it is where deciding the cookie from the wrong URL
+// broke signing in outright.
+//
+// server.public_url describes the MCP endpoint. The dashboard is a separate
+// listener, and the two routinely differ in scheme: mcpd serves TLS on the MCP
+// port from a certificate it issued itself, while the dashboard is reached
+// over plain HTTP on the LAN. Reading public_url marked this cookie Secure on
+// a plain-HTTP origin; the browser dropped it, every request after the sign-in
+// arrived anonymous, and the page said authentication was required.
+func TestSessionCookie_TheMCPEndpointsSchemeDoesNotDecideTheDashboards(t *testing.T) {
+	srv := NewServer(Options{
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Accounts: &fakeAccounts{},
+		// The MCP endpoint serves TLS; the dashboard does not.
+		PublicURL: "https://192.168.50.125:9080",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://192.168.50.125:9090/", nil)
+	if srv.secureCookies(req) {
+		t.Fatal("the dashboard cookie was marked Secure because the MCP endpoint " +
+			"serves https; a browser drops it on a plain-http origin and signing " +
+			"in silently does nothing")
+	}
+}
+
+// And the reverse-proxy shape still works, from the dashboard's own URL.
+func TestSessionCookie_TheDashboardsOwnURLStillWidens(t *testing.T) {
+	srv := NewServer(Options{
+		Log:               slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Accounts:          &fakeAccounts{},
+		FrontendPublicURL: "https://mcpd.example.com",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://10.0.0.5:8081/", nil)
+	if !srv.secureCookies(req) {
+		t.Fatal("a dashboard behind a TLS-terminating proxy must still get Secure")
 	}
 }
