@@ -177,3 +177,46 @@ describe("the drift proof", () => {
     expect(screen.getByText(/never ran/)).toBeInTheDocument();
   });
 });
+
+/**
+ * A change nobody was asked about still went through the machine.
+ *
+ * It really did pass through waiting and really did become approved, so every
+ * node is drawn as it stands. What the picture cannot say is that no person
+ * was involved -- "approved" reads as somebody having approved it -- so the
+ * caption says it, and says it plainly rather than as a fault, because an
+ * authorisation given in advance is a legitimate route through.
+ */
+describe("a change a standing rule authorised", () => {
+  it("says nobody was asked, and names the rule", () => {
+    mount(operation({
+      state: "succeeded", terminal: true, verified: true,
+      approved_by: "system:policy", authorized_by_rule: "routine-radio",
+    }));
+
+    expect(screen.getByText("Nobody was asked.")).toBeInTheDocument();
+    expect(screen.getByText("routine-radio")).toBeInTheDocument();
+  });
+
+  // The caption sits beside the picture; somebody reaching the picture through
+  // its description would otherwise be the one person not told.
+  it("puts it in the diagram's description too", () => {
+    mount(operation({
+      state: "succeeded", terminal: true,
+      authorized_by_rule: "routine-radio",
+    }));
+
+    expect(screen.getByRole("img")).toHaveAccessibleName(
+      /Rule routine-radio authorised it in advance, so nobody was asked/i,
+    );
+  });
+
+  it("says nothing of the sort where a person decided", () => {
+    mount(operation({
+      state: "succeeded", terminal: true,
+      approved_by: "user:alice@example.com",
+    }));
+
+    expect(screen.queryByText("Nobody was asked.")).not.toBeInTheDocument();
+  });
+});

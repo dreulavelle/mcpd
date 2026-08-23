@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { CircleAlert, TriangleAlert } from "lucide-react";
 import { api, ApiError, type AuditRecord, type Operation } from "@/lib/api";
-import { pretty, relative, when, whenExact } from "@/lib/format";
+import { pretty, relative, riskLabel, when, whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { useRouter } from "@/lib/router";
 import { useCan } from "@/lib/session";
@@ -10,8 +10,9 @@ import {
   CodeBlock, Detail, Loading, Notice, PageHeader, Section,
 } from "@/components/chrome";
 import {
-  AssuranceBadge, RiskBadge, StateBadge, VerifiedBadge,
+  AssuranceBadge, AuthorisedByRule, RiskBadge, StateBadge, VerifiedBadge,
 } from "@/components/status";
+import { policyAuthorisation, type PolicyAuthorisation } from "./authorisation";
 import { Lifecycle } from "./Lifecycle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -59,6 +60,8 @@ function Body({ operation: op, audit, onChanged }: {
   audit: AuditRecord[];
   onChanged: () => void;
 }) {
+  const authorisation = policyAuthorisation(op, audit);
+
   return (
     <>
       <PageHeader
@@ -67,7 +70,10 @@ function Body({ operation: op, audit, onChanged }: {
         lede={op.impact || undefined}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <AssuranceBadge assurance={op.assurance} />
+            <AssuranceBadge
+              assurance={op.assurance}
+              authorizedByRule={op.authorized_by_rule}
+            />
             <RiskBadge risk={op.risk} />
             <StateBadge state={op.state} />
           </div>
@@ -93,6 +99,8 @@ function Body({ operation: op, audit, onChanged }: {
             )}
           </Notice>
         )}
+
+        {authorisation && <AuthorisedInAdvance authorisation={authorisation} />}
 
         <Section
           title="Where this stands"
@@ -167,9 +175,25 @@ function Body({ operation: op, audit, onChanged }: {
                     {relative(op.expires_at)}
                   </span>
                 </Detail>
-                {op.approved_by && <Detail label="Decided by">{op.approved_by}</Detail>}
+                {/* Never the approver field on its own. On an auto-approval
+                    `approved_by` is `system:policy` and `approved_by_name` is
+                    the same string -- not an account, nothing to resolve -- so
+                    rendering it here would say "decided by system:policy",
+                    which reads as somebody having clicked. */}
+                {op.authorized_by_rule ? (
+                  <Detail label="Authorised by">
+                    Rule <code className="font-mono text-xs">{op.authorized_by_rule}</code>
+                    <span className="block text-xs text-muted-foreground">
+                      A standing rule, not a person. Nobody was asked.
+                    </span>
+                  </Detail>
+                ) : op.approved_by ? (
+                  <Detail label="Decided by">{op.approved_by}</Detail>
+                ) : null}
                 {op.approved_at && (
-                  <Detail label="Decided at">{whenExact(op.approved_at)}</Detail>
+                  <Detail label={op.authorized_by_rule ? "Authorised at" : "Decided at"}>
+                    {whenExact(op.approved_at)}
+                  </Detail>
                 )}
                 {op.execute_by && (
                   <Detail label="Must run by">
@@ -248,6 +272,54 @@ function Body({ operation: op, audit, onChanged }: {
 }
 
 /**
+ * The standing rule that authorised this, and what it said at the time.
+ *
+ * The scope, ceiling and note are read from the `operation.approved` audit
+ * entry rather than from the policy endpoint. The rule can be edited or
+ * deleted afterwards; the entry was written with the rule in full precisely so
+ * this page can describe the authorisation that happened rather than whatever
+ * the identifier means today.
+ *
+ * Informational and not a warning. Nobody being asked is what the
+ * administrator arranged, and colouring it as a problem would be the console
+ * disagreeing with a decision it exists to record.
+ */
+function AuthorisedInAdvance({ authorisation: a }: {
+  authorisation: PolicyAuthorisation;
+}) {
+  return (
+    <Section title="Authorised in advance">
+      <Card>
+        <CardContent className="space-y-3">
+          <AuthorisedByRule rule={a.rule} />
+          {a.reason && <p className="text-sm">{a.reason}</p>}
+          {a.recorded ? (
+            <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <Detail label="Scope at the time">
+                <code className="font-mono text-xs">{a.scope ?? "not recorded"}</code>
+              </Detail>
+              <Detail label="Authorised up to">
+                {a.maxRisk ? riskLabel(a.maxRisk) : "not recorded"}
+              </Detail>
+              <Detail label="The rule's note">
+                {a.note ?? <span className="text-muted-foreground">None was written.</span>}
+              </Detail>
+            </dl>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              The trail no longer holds the entry that recorded this, so what
+              the rule covered cannot be shown here. The name above is on the
+              operation itself and is what authorised the change; the rule of
+              that name today may say something else.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </Section>
+  );
+}
+
+/**
  * What this record will be able to prove afterwards.
  *
  * Placed above the decision rather than in the record below it, because it is
@@ -273,8 +345,14 @@ function WhatThisProves({ operation: op }: { operation: Operation }) {
 
   return (
     <Notice tone="info">
-      <strong>This is a gated call, not a reviewed change.</strong> Approving it
-      records that a person authorised it and that the call was made —{" "}
+      <strong>This is a gated call, not a reviewed change.</strong>{" "}
+      {op.authorized_by_rule
+        // Nobody is about to approve this one, and nobody did. Saying
+        // "approving it records that a person authorised it" would describe an
+        // act that never happened and is not going to.
+        ? <>A standing rule authorised it and the call was made — </>
+        : <>Approving it records that a person authorised it and that the call
+            was made — </>}
       {missing.join(", and ")}. The record will not say the change is in place.
     </Notice>
   );

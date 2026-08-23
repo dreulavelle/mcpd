@@ -6,7 +6,7 @@ import { useLoader } from "@/lib/hooks";
 import { Link } from "@/lib/router";
 import { EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
 import {
-  AssuranceBadge, RiskBadge, StateBadge, VerifiedBadge,
+  AssuranceBadge, AuthorisedByRule, RiskBadge, StateBadge, VerifiedBadge,
 } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -148,10 +148,22 @@ function Row({ op }: { op: Operation }) {
             an ordinary, legitimate thing rather than a fault; what it is not
             is a reviewed change, and that is worth seeing before opening the
             row. Flagging the stronger case as well would put a chip on every
-            line and say nothing. */}
-        {op.assurance === "gated_call" && (
-          <div className="mt-1">
-            <AssuranceBadge assurance={op.assurance} />
+            line and say nothing.
+
+            The rule beside it is a different fact and stays a different chip:
+            what can be proved about a change and who authorised it are
+            orthogonal, and an auto-approved change can carry every proof. */}
+        {(op.assurance === "gated_call" || op.authorized_by_rule) && (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {op.assurance === "gated_call" && (
+              <AssuranceBadge
+                assurance={op.assurance}
+                authorizedByRule={op.authorized_by_rule}
+              />
+            )}
+            {op.authorized_by_rule && (
+              <AuthorisedByRule rule={op.authorized_by_rule} />
+            )}
           </div>
         )}
       </TableCell>

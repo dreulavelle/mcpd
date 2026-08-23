@@ -190,7 +190,7 @@ export function Lifecycle({ operation: op, audit }: {
               viewBox="0 0 760 224"
               className="h-auto w-full min-w-[560px]"
               role="img"
-              aria-label={summary(op.state, remaining)}
+              aria-label={summary(op.state, remaining, op.authorized_by_rule)}
             >
               <defs>
                 <marker
@@ -230,6 +230,25 @@ export function Lifecycle({ operation: op, audit }: {
             it is waiting, withdrawn by whoever proposed it, expired when nobody
             decided in time or the approval itself ran out.
           </p>
+
+          {/* The picture cannot show this on its own. The change did pass
+              through waiting and did become approved, so every node is drawn
+              truthfully -- but a reader takes "approved" to mean somebody
+              approved it, and here nobody was asked. Said plainly rather than
+              flagged: an authorisation given in advance is a legitimate route
+              through the machine, not a step that went wrong. */}
+          {op.authorized_by_rule && (
+            <p className="text-xs text-muted-foreground">
+              <strong className="font-medium text-foreground">
+                Nobody was asked.
+              </strong>{" "}
+              It went from waiting to approved because rule{" "}
+              <code className="font-mono">{op.authorized_by_rule}</code>{" "}
+              authorised this class of change in advance. Everything after that
+              is an ordinary operation — the payload was frozen and hashed, and
+              every transition is in the trail.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -396,8 +415,18 @@ function Proof({ label, tone, mark, children }: {
 }
 
 /** The diagram, for somebody who cannot see it. */
-function summary(state: OperationState, remaining: OperationState[]): string {
+function summary(
+  state: OperationState,
+  remaining: OperationState[],
+  authorizedByRule?: string,
+): string {
   const now = `This change is ${stateLabel(state).toLowerCase()}.`;
-  if (remaining.length === 0) return `${now} Nothing else can happen to it.`;
-  return `${now} It can still become ${remaining.map(stateLabel).join(", ")}.`;
+  // In the label rather than only in the caption beside it: the caption is
+  // read by everyone, and somebody reaching the diagram through its
+  // description would otherwise be the one person not told nobody was asked.
+  const how = authorizedByRule
+    ? ` Rule ${authorizedByRule} authorised it in advance, so nobody was asked.`
+    : "";
+  if (remaining.length === 0) return `${now}${how} Nothing else can happen to it.`;
+  return `${now}${how} It can still become ${remaining.map(stateLabel).join(", ")}.`;
 }
