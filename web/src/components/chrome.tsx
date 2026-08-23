@@ -1,0 +1,271 @@
+import {
+  Component, useCallback, useEffect, useRef, useState,
+  type ErrorInfo, type ReactNode,
+} from "react";
+import { Check, ChevronLeft, Copy } from "lucide-react";
+import { Link } from "@/lib/router";
+import { cn } from "@/lib/utils";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import type { Tone } from "./status";
+
+/* -- page furniture -------------------------------------------------------- */
+
+/** The heading block every page starts with. */
+export function PageHeader({ title, lede, actions, back }: {
+  title: string;
+  lede?: ReactNode;
+  actions?: ReactNode;
+  /** A link out of a detail view, back to the list it came from. */
+  back?: { to: string; label: string };
+}) {
+  return (
+    <div className="mb-6 space-y-2">
+      {back && (
+        <Link
+          to={back.to}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeft className="size-4" aria-hidden="true" />
+          {back.label}
+        </Link>
+      )}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
+      </div>
+      {lede && <p className="max-w-[68ch] text-sm text-muted-foreground">{lede}</p>}
+    </div>
+  );
+}
+
+/** A labelled heading over a block within a page. */
+export function Section({ title, description, actions, children, className }: {
+  title?: string;
+  description?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={cn("space-y-3", className)}>
+      {(title || actions) && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            {title && (
+              <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                {title}
+              </h2>
+            )}
+            {description && (
+              <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+            )}
+          </div>
+          {actions}
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}
+
+/** One label-and-value pair, for a detail page. */
+export function Detail({ label, children, className }: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("space-y-1", className)}>
+      <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        {label}
+      </dt>
+      <dd className="text-sm">{children}</dd>
+    </div>
+  );
+}
+
+export function EmptyState({ mark, title, children }: {
+  mark?: ReactNode;
+  title: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center">
+      {mark && <div className="text-muted-foreground [&_svg]:size-6" aria-hidden="true">{mark}</div>}
+      <h3 className="text-sm font-medium">{title}</h3>
+      {children && (
+        <p className="max-w-[46ch] text-sm text-muted-foreground">{children}</p>
+      )}
+    </div>
+  );
+}
+
+/** Shaped like the content it replaces, so the page does not jump when it arrives. */
+export function Loading({ rows = 4 }: { rows?: number }) {
+  return (
+    <div className="space-y-3" aria-busy="true" aria-label="Loading">
+      {Array.from({ length: rows }, (_, i) => (
+        <Skeleton key={i} className="h-9" style={{ width: `${94 - i * 9}%` }} />
+      ))}
+    </div>
+  );
+}
+
+const NOTICE_TONE: Record<Tone, string> = {
+  good: "border-good/30 bg-good-soft text-good",
+  attention: "border-attention/30 bg-attention-soft text-attention",
+  problem: "border-problem/30 bg-problem-soft text-problem",
+  info: "border-info/30 bg-info-soft text-info",
+  neutral: "border-border bg-muted text-muted-foreground",
+};
+
+/** Something the page has to say, that stays until the reason for it goes. */
+export function Notice({ tone = "info", icon, children }: {
+  tone?: Tone;
+  icon?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Alert
+      role={tone === "problem" ? "alert" : undefined}
+      className={cn(NOTICE_TONE[tone], "[&>svg]:text-current")}
+    >
+      {icon}
+      {/* `block` rather than the description's default grid: a notice's body
+          is a sentence with emphasis inside it, and grid would put every
+          child on a row of its own -- splitting "<strong>It may have
+          landed.</strong> Execution began…" across two lines. */}
+      <AlertDescription className="block text-current [&_p]:text-current">
+        {children}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/* -- copying --------------------------------------------------------------- */
+
+function useCopy(value: string) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Refused outside a secure context, which is normal on a plain-http LAN
+      // address. The text stays selectable, so there is still a way through.
+      setCopied(false);
+    }
+  }, [value]);
+
+  return { copied, copy };
+}
+
+export function Copyable({ value, label, className }: {
+  value: string;
+  label?: string;
+  className?: string;
+}) {
+  const { copied, copy } = useCopy(value);
+  return (
+    <div className={cn("flex items-center gap-2 rounded-md border bg-muted/50 px-2 py-1", className)}>
+      <code className="scroll-x min-w-0 flex-1 font-mono text-xs whitespace-nowrap">
+        {value}
+      </code>
+      <Button
+        variant="ghost" size="icon-sm" onClick={copy}
+        aria-label={label ? `Copy ${label}` : "Copy"}
+      >
+        {copied
+          ? <Check className="size-3.5 text-good" aria-hidden="true" />
+          : <Copy className="size-3.5" aria-hidden="true" />}
+      </Button>
+    </div>
+  );
+}
+
+export function CodeBlock({ children, className }: { children: string; className?: string }) {
+  const { copied, copy } = useCopy(children);
+  return (
+    <div className={cn("relative rounded-md border bg-muted/50", className)}>
+      <Button
+        variant="ghost" size="icon-sm" onClick={copy}
+        className="absolute top-1.5 right-1.5"
+        aria-label="Copy"
+      >
+        {copied
+          ? <Check className="size-3.5 text-good" aria-hidden="true" />
+          : <Copy className="size-3.5" aria-hidden="true" />}
+      </Button>
+      <pre className="scroll-x p-3 pr-10 font-mono text-xs leading-relaxed">{children}</pre>
+    </div>
+  );
+}
+
+/** A link that leaves the app. Marked so it is obvious before clicking. */
+export function Out({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <a
+      className="text-primary underline underline-offset-4 hover:no-underline"
+      href={href} target="_blank" rel="noopener noreferrer"
+    >
+      {children}
+    </a>
+  );
+}
+
+/* -- failure --------------------------------------------------------------- */
+
+/**
+ * A page that throws does not take the console with it.
+ *
+ * React unmounts the whole tree when a render throws and nothing catches it,
+ * so one bad field in one panel left an empty window -- no navigation, no
+ * error, nothing to act on. That happened twice for the same shape of bug: a
+ * list the server sent as null where the page mapped over it.
+ *
+ * A class because there is no hook form of this; React offers the lifecycle
+ * only to classes.
+ *
+ * Recovery is by remount rather than a retry button: the shell keys this on
+ * the current path, so navigating away and back builds a new boundary and
+ * tries again. A button that retried in place would re-run the same render
+ * against the same state and fail identically.
+ */
+export class ErrorBoundary extends Component<
+  { children: ReactNode },
+  { problem: string }
+> {
+  state = { problem: "" };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { problem: error instanceof Error ? error.message : String(error) };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    // The console is where an operator is standing when this happens, so the
+    // detail goes to the place they can copy it from.
+    console.error("a dashboard page failed to render", error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.problem) return this.props.children;
+    return (
+      <Notice tone="problem">
+        This page could not be drawn, so it is showing this instead of nothing.
+        The rest of the console still works — go somewhere else and come back to
+        try it again.
+        <span className="mt-1 block font-mono text-xs opacity-80">
+          {this.state.problem}
+        </span>
+      </Notice>
+    );
+  }
+}

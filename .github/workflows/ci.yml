@@ -72,6 +72,12 @@ jobs:
         working-directory: web
         run: npm run build
 
+      # After the build, so a type error is reported as one rather than as a
+      # pile of failing tests.
+      - name: Test
+        working-directory: web
+        run: npm test
+
   docker:
     runs-on: ubuntu-latest
     steps:
