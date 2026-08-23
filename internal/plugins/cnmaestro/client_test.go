@@ -88,13 +88,23 @@ func testClient(t *testing.T, f *fakeAPI, mutate func(*Config)) *Client {
 		ClientSecret: "client-secret",
 		// Fast enough that a paging test is not a sleep.
 		RequestsPerSecond: 1000,
+		// Caching off unless a test asks for it. Most of these count requests
+		// against the fake API, and a cache would make them assert that the
+		// cache works rather than what they were written to defend.
+		InventoryCacheSeconds: intPtr(0),
+		DeviceCacheSeconds:    intPtr(0),
 	}
 	if mutate != nil {
 		mutate(&cfg)
 	}
 	cfg.withDefaults()
+
+	var cache *readCache
+	if cfg.InventoryCacheTTL > 0 || cfg.DeviceCacheTTL > 0 {
+		cache = newReadCache("cnmaestro", cfg, time.Now, nil)
+	}
 	return NewClient(f.server.Client(), cfg, "client-id", "client-secret",
-		discardLogger(), time.Now)
+		discardLogger(), time.Now, cache, nil)
 }
 
 // The credentials go in the Authorization header rather than the body. Both

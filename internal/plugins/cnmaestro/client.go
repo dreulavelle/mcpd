@@ -36,6 +36,12 @@ type Client struct {
 	limiter *rate.Limiter
 	cfg     Config
 	log     *slog.Logger
+	// cache holds answers to the reads it is safe to reuse, and nothing else.
+	// See readcache.go for which those are and why the rest are not.
+	cache *readCache
+	// observe records how long one upstream request took, so a slow answer can
+	// be attributed to cnMaestro rather than to this host. Never nil.
+	observe func(outcome string, d time.Duration)
 }
 
 // NewClient builds an API client. cfg is assumed already defaulted.
@@ -43,8 +49,14 @@ type Client struct {
 // The read-only guard is applied here rather than by the caller, so there is
 // no way to construct a client without it -- including in a test, which is
 // where an unguarded one would otherwise be most likely to appear.
-func NewClient(httpClient *http.Client, cfg Config, clientID, secret string, log *slog.Logger, now func() time.Time) *Client {
+func NewClient(httpClient *http.Client, cfg Config, clientID, secret string, log *slog.Logger, now func() time.Time, cache *readCache, observe func(string, time.Duration)) *Client {
 	guarded := readOnly(httpClient)
+	if now == nil {
+		now = time.Now
+	}
+	if observe == nil {
+		observe = func(string, time.Duration) {}
+	}
 	return &Client{
 		http:   guarded,
 		tokens: newTokenManager(guarded, cfg.BaseURL, clientID, secret, now),
@@ -54,6 +66,8 @@ func NewClient(httpClient *http.Client, cfg Config, clientID, secret string, log
 		limiter: rate.NewLimiter(rate.Limit(cfg.RequestsPerSecond), 1),
 		cfg:     cfg,
 		log:     log,
+		cache:   cache,
+		observe: observe,
 	}
 }
 
@@ -93,18 +107,54 @@ type Paging struct {
 	NextContinuationToken string `json:"next_continuation_token"`
 }
 
+// held is one cached single-resource answer.
+//
+// The undecoded body rather than the caller's struct, because two callers of
+// one endpoint may decode into different types and a cache that held the first
+// caller's struct could not serve the second.
+type held struct {
+	data     json.RawMessage
+	warnings []string
+}
+
 // Get fetches a single resource and decodes its data field into out.
 func (c *Client) Get(ctx context.Context, path string, params url.Values, out any) ([]string, error) {
-	env, err := c.do(ctx, path, params)
+	answer, err := c.reuse(ctx, "get", path, params, func(ctx context.Context) (any, error) {
+		env, err := c.do(ctx, path, params)
+		if err != nil {
+			return nil, err
+		}
+		return held{data: env.Data, warnings: env.Warnings}, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if out != nil && len(env.Data) > 0 {
-		if err := json.Unmarshal(env.Data, out); err != nil {
-			return env.Warnings, fmt.Errorf("cnmaestro: decode %s: %w", path, err)
+	got, _ := answer.(held)
+	if out != nil && len(got.data) > 0 {
+		if err := json.Unmarshal(got.data, out); err != nil {
+			return got.warnings, fmt.Errorf("cnmaestro: decode %s: %w", path, err)
 		}
 	}
-	return env.Warnings, nil
+	return got.warnings, nil
+}
+
+// reuse runs fetch through the cache when this endpoint is one that may be
+// reused, and straight through when it is not.
+//
+// The key is built from the *resolved* parameters -- the account applied, the
+// way do applies it -- so it stands for the request that will be made rather
+// than for the arguments a tool was called with. Two callers who reach the
+// same upstream URL share an answer; two who do not, do not.
+func (c *Client) reuse(ctx context.Context, kind, path string, params url.Values, fetch func(context.Context) (any, error)) (any, error) {
+	if c.cache == nil {
+		return fetch(ctx)
+	}
+	ttl := c.cfg.cacheTTL(path)
+	if ttl <= 0 {
+		return fetch(ctx)
+	}
+	key := cacheKey(kind, path, c.resolveAccount(params))
+	return c.cache.do(ctx, cacheKind(path), key, ttl, fetch)
 }
 
 // Page is one page of a collection, plus what it took to get there.
@@ -126,9 +176,26 @@ type Page struct {
 // an endpoint moving between schemes — which is happening, one at a time,
 // ahead of offset's removal in 6.4.0 — does not need this client changed.
 func (c *Client) List(ctx context.Context, path string, params url.Values) (Page, error) {
-	if params == nil {
-		params = url.Values{}
+	answer, err := c.reuse(ctx, "list", path, params, func(ctx context.Context) (any, error) {
+		return c.walk(ctx, path, params)
+	})
+	if err != nil {
+		return Page{}, err
 	}
+	page, _ := answer.(Page)
+	// The slice header is copied so that a caller appending to what it was
+	// given cannot reach a held answer. The records inside are shared and must
+	// be treated as read-only -- they are marshalled into a tool result and
+	// never written to, and copying an estate's worth of maps on every hit
+	// would spend most of what the cache saves.
+	page.Items = append([]Record(nil), page.Items...)
+	page.Warnings = append([]string(nil), page.Warnings...)
+	return page, nil
+}
+
+// walk is the pagination loop List used to be, minus the caching around it.
+func (c *Client) walk(ctx context.Context, path string, params url.Values) (Page, error) {
+	params = cloneValues(params)
 	params.Set("limit", strconv.Itoa(c.cfg.PageSize))
 
 	var page Page
@@ -221,19 +288,7 @@ func (c *Client) do(ctx context.Context, path string, params url.Values) (envelo
 		return env, err
 	}
 
-	q := cloneValues(params)
-	// The caller's account wins, and the configured one is the default it
-	// falls back to. A tool that takes an account argument can then answer a
-	// question about one tenant without the instance being reconfigured --
-	// which is what an assistant asked about "the other site" needs to do.
-	if acct := c.cfg.Account(q.Get(managedAccountKV)); acct != "" {
-		q.Set(managedAccountKV, acct)
-	} else {
-		// Never send it empty: the API treats an empty value as if the
-		// parameter were absent, and sending it that way only invites the
-		// belief that an account was selected.
-		q.Del(managedAccountKV)
-	}
+	q := c.resolveAccount(params)
 
 	target := host + apiPrefix + path
 	if encoded := q.Encode(); encoded != "" {
@@ -261,6 +316,29 @@ func (c *Client) do(ctx context.Context, path string, params url.Values) (envelo
 	return env, nil
 }
 
+// resolveAccount returns params with the account this request will actually
+// read from, which is what both the request and its cache key are built from.
+//
+// The caller's account wins, and the configured one is the default it falls
+// back to. A tool that takes an account argument can then answer a question
+// about one tenant without the instance being reconfigured -- which is what an
+// assistant asked about "the other site" needs to do.
+//
+// Applying it twice is the same as applying it once, which matters: the cache
+// key is built from the result and do resolves again on the way out.
+func (c *Client) resolveAccount(params url.Values) url.Values {
+	q := cloneValues(params)
+	if acct := c.cfg.Account(q.Get(managedAccountKV)); acct != "" {
+		q.Set(managedAccountKV, acct)
+	} else {
+		// Never send it empty: the API treats an empty value as if the
+		// parameter were absent, and sending it that way only invites the
+		// belief that an account was selected.
+		q.Del(managedAccountKV)
+	}
+	return q
+}
+
 // send issues the request and reads the response.
 func (c *Client) send(ctx context.Context, target, token string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
@@ -270,11 +348,14 @@ func (c *Client) send(ctx context.Context, target, token string) ([]byte, int, e
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 
+	started := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
+		c.observe("error", time.Since(started))
 		return nil, 0, fmt.Errorf("cnmaestro: reach %s: %w", redactURL(target), err)
 	}
 	defer resp.Body.Close()
+	c.observe(outcomeFor(resp.StatusCode), time.Since(started))
 
 	limit := int64(maxErrorBody)
 	if resp.StatusCode == http.StatusOK {
@@ -290,6 +371,16 @@ func (c *Client) send(ctx context.Context, target, token string) ([]byte, int, e
 // APIHost reports where data calls are going, which is not necessarily where
 // tokens were obtained.
 func (c *Client) APIHost() string { return c.tokens.host() }
+
+// outcomeFor labels a response for the latency histogram. Two values, because
+// the question is "was this slow" and a status-code label would multiply the
+// series for no gain.
+func outcomeFor(status int) string {
+	if status == http.StatusOK {
+		return "ok"
+	}
+	return "error"
+}
 
 func cloneValues(v url.Values) url.Values {
 	out := make(url.Values, len(v))

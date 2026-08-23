@@ -113,7 +113,7 @@ func proposeThrough(t *testing.T, spec MutationSpec, svc ApprovalService, inline
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	gate := func(context.Context, string, auth.Capability) error { return nil }
-	r.mutations[0].attach(srv, gate, svc, inline)
+	r.mutations[0].attach(srv, gate, svc, inline, noObserver{})
 
 	ctx := context.Background()
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()

@@ -3,6 +3,7 @@ package cnmaestro
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/settings"
@@ -67,6 +68,29 @@ func Type() plugins.Type {
 				Default: defaultRPS, Min: intPtr(1), Max: intPtr(100),
 				Help: "Listing walks pages in a loop, which is the shape most " +
 					"likely to trip an upstream rate limit.",
+			},
+			{
+				Key: "device_cache_seconds", Label: "Reuse device reads for", Kind: settings.KindInt,
+				Default: int(defaultDeviceTTL / time.Second), Min: intPtr(0), Max: intPtr(300),
+				Help: "Seconds a device listing may be answered from memory " +
+					"instead of walking every page again. Zero fetches every " +
+					"time. Keep it short: cnMaestro's own view of whether a " +
+					"device is up is already minutes behind, so a few seconds " +
+					"here costs nothing that is not already lost -- but a long " +
+					"window would hand an assistant a picture of the estate " +
+					"that has stopped being true.",
+			},
+			{
+				Key: "inventory_cache_seconds", Label: "Reuse inventory reads for",
+				Kind:    settings.KindInt,
+				Default: int(defaultInventoryTTL / time.Second), Min: intPtr(0), Max: intPtr(3600),
+				Help: "Seconds a read of networks, sites, towers, WLANs, AP " +
+					"groups or tenants may be answered from memory. These " +
+					"describe how the estate is arranged and change when " +
+					"somebody changes them, so they can be held far longer than " +
+					"device state. Zero fetches every time. Alarms, events, " +
+					"connected clients and statistics are never held, whatever " +
+					"either of these says.",
 			},
 		},
 		New: func(deps plugins.Deps, cfg map[string]any) (plugins.Plugin, error) {

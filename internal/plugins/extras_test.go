@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
 )
@@ -64,7 +65,7 @@ func TestToolLimiter_UnboundedIsFree(t *testing.T) {
 	if l := newToolLimiter(0); l.limiter != nil {
 		t.Error("no limit must mean no limiter")
 	}
-	if err := newToolLimiter(0).wait(context.Background()); err != nil {
+	if err := newToolLimiter(0).allow(time.Now()); err != nil {
 		t.Errorf("an unbounded limiter must never refuse: %v", err)
 	}
 	if l := newToolLimiter(5); l.limiter == nil {

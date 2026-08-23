@@ -294,6 +294,20 @@ func (c *Config) Warnings() []string {
 					"a plaintext endpoint.", u.Hostname()))
 		}
 	}
+	if c.Metrics.Enabled && !c.Server.FrontendEnabled {
+		// Not an error: a headless deployment is a legitimate choice, and
+		// refusing to start over a metrics endpoint would be out of
+		// proportion. But a scrape config pointing at a port that answers 404
+		// is a monitoring gap somebody discovers during an incident.
+		out = append(out, "metrics.enabled is set but server.frontend_enabled is not: "+
+			"/metrics is served on the dashboard listener, so nothing is exposing it.")
+	}
+	if c.Metrics.Enabled && c.Metrics.Public {
+		out = append(out, "metrics.public is set: /metrics is served without "+
+			"authentication and names every plugin, every tool, and how long each "+
+			"upstream takes. Only do this where the dashboard listener is already "+
+			"reachable only from a monitoring network.")
+	}
 	return out
 }
 

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/spoked/mcpd/internal/cachestore"
 )
 
 // DefaultTTL is how long a catalogue answer is reused when the catalogue says
@@ -75,12 +77,13 @@ const DefaultMaxCacheEntries = 256
 // rather than on each source, and so eviction drops the least useful entry
 // anywhere rather than the least useful entry of whichever source happened to
 // fill up.
-type CacheStore struct {
-	limit int
-
-	mu      sync.Mutex
-	entries map[string]*cacheEntry
-}
+//
+// The bounded map itself lives in internal/cachestore, because a plugin's read
+// cache needs the same thing with a different policy over it and two copies of
+// a bounded map is one copy too many. What stays here is everything a
+// catalogue is particular about: stale-while-revalidate, validators, and the
+// short memory of a name that 404s.
+type CacheStore = cachestore.Store
 
 // NewCacheStore builds the shared cache. A limit of zero takes
 // DefaultMaxCacheEntries.
@@ -88,66 +91,31 @@ func NewCacheStore(limit int) *CacheStore {
 	if limit <= 0 {
 		limit = DefaultMaxCacheEntries
 	}
-	return &CacheStore{limit: limit, entries: make(map[string]*cacheEntry)}
-}
-
-// Len reports how many answers are held, for a test that has something to say
-// about the bound.
-func (s *CacheStore) Len() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.entries)
+	return cachestore.New(limit)
 }
 
 // cacheEntry is one held answer.
 //
-// Immutable once stored: a renewal replaces it rather than editing it, so a
-// reader holding a pointer cannot see a half-updated entry.
-type cacheEntry struct {
-	page   Page
-	detail Detail
-	// err is a remembered refusal. Only ErrNotFound is ever held, and only for
-	// negativeTTL: a catalogue being down is not an answer and must not become
-	// one.
-	err        error
-	validators Validators
-	fetchedAt  time.Time
-	// ttl and staleWhile are what the catalogue said about this answer, or the
-	// configured defaults where it said nothing. Held per entry because they
-	// arrived with the entry.
-	ttl        time.Duration
-	staleWhile time.Duration
+// A view over the stored entry rather than a second type: the store holds the
+// timing and the opaque value, and this says what this package puts in it.
+type cacheEntry = cachestore.Entry
+
+// entryPage reads back a cached listing.
+func entryPage(e *cacheEntry) Page {
+	page, _ := e.Value.(Page)
+	return page
 }
 
-func (s *CacheStore) get(key string) *cacheEntry {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.entries[key]
+// entryDetail reads back a cached document.
+func entryDetail(e *cacheEntry) Detail {
+	detail, _ := e.Value.(Detail)
+	return detail
 }
 
-func (s *CacheStore) put(key string, entry *cacheEntry) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, replacing := s.entries[key]; !replacing && len(s.entries) >= s.limit {
-		s.evictOldestLocked()
-	}
-	s.entries[key] = entry
-}
-
-// evictOldestLocked drops the least recently fetched entry. A linear scan over
-// a few hundred entries, on the miss path only, is cheaper than maintaining an
-// order that nothing else needs.
-func (s *CacheStore) evictOldestLocked() {
-	var oldestKey string
-	var oldest time.Time
-	for k, v := range s.entries {
-		if oldestKey == "" || v.fetchedAt.Before(oldest) {
-			oldestKey, oldest = k, v.fetchedAt
-		}
-	}
-	if oldestKey != "" {
-		delete(s.entries, oldestKey)
-	}
+// entryValidators reads back what was held to revalidate with.
+func entryValidators(e *cacheEntry) Validators {
+	v, _ := e.Meta.(Validators)
+	return v
 }
 
 // Cached wraps a catalogue with the freshness the catalogue itself asked for,
@@ -175,6 +143,8 @@ type Cached struct {
 	// Background refreshes are owned here so that they cannot outlive
 	// shutdown: at most one goroutine per key, and Close cancels every one of
 	// them and waits.
+	observe CacheObserver
+
 	refreshMu sync.Mutex
 	refreshes map[string]bool
 	ctx       context.Context
@@ -182,9 +152,55 @@ type Cached struct {
 	wg        sync.WaitGroup
 }
 
+// CacheObserver records what the cache did, for the metrics endpoint.
+//
+// Narrow, and about the cache rather than about catalogues in general: whether
+// a browse was served from memory and how long a real fetch took are the two
+// questions an operator asks when a page is slow, and neither of them needs
+// this package to know what a metric is.
+type CacheObserver interface {
+	// CatalogRequest reports how one read was answered; see the Cache* result
+	// constants.
+	CatalogRequest(source, result string)
+	// CatalogFetch reports one round trip that actually left this host.
+	CatalogFetch(source string, d time.Duration)
+}
+
+// How a catalogue read was answered.
+const (
+	// CacheFresh was served from an entry still inside its TTL.
+	CacheFresh = "fresh"
+	// CacheStale was served from an expired entry inside the window the
+	// catalogue granted, with a refresh started behind it.
+	CacheStale = "stale"
+	// CacheFetched went to the catalogue and got a body back.
+	CacheFetched = "fetched"
+	// CacheRevalidated went to the catalogue and got a 304, so nothing
+	// travelled but the headers. Separate from fetched because that is the
+	// whole point of holding a validator.
+	CacheRevalidated = "revalidated"
+	// CacheServedStale is the failure case that still answers: the fetch
+	// failed and what was last seen was served instead, marked stale.
+	CacheServedStale = "served_stale"
+	// CacheError is a read nothing could answer.
+	CacheError = "error"
+	// CacheAbsent is a name the catalogue does not have. An answer, not a
+	// failure -- see negativeTTL.
+	CacheAbsent = "absent"
+)
+
+// noCacheObserver is what a cache with nowhere to report gets.
+type noCacheObserver struct{}
+
+func (noCacheObserver) CatalogRequest(string, string)      {}
+func (noCacheObserver) CatalogFetch(string, time.Duration) {}
+
 // CacheOptions configures the cache. Every field has a working default, so the
 // zero value is usable and a test can replace exactly what it needs.
 type CacheOptions struct {
+	// Observe records how each read was answered. Nil records nothing.
+	Observe CacheObserver
+
 	// Store is the shared memory bound. Nil gives this cache one of its own,
 	// which is right for a test and wrong for a deployment.
 	Store *CacheStore
@@ -217,10 +233,15 @@ func NewCached(upstream Client, opts CacheOptions) *Cached {
 		now = time.Now
 	}
 	conditional, _ := upstream.(Revalidating)
+	observe := opts.Observe
+	if observe == nil {
+		observe = noCacheObserver{}
+	}
 	ctx, stop := context.WithCancel(context.Background())
 	return &Cached{
 		upstream:    upstream,
 		conditional: conditional,
+		observe:     observe,
 		store:       store,
 		defaultTTL:  defaultTTL,
 		detailTTL:   detailTTL,
@@ -261,16 +282,18 @@ func (c *Cached) List(ctx context.Context, q Query) (Page, error) {
 	key := c.key("list", q.Search+"\x00"+q.Cursor+"\x00"+strconv.Itoa(q.Limit))
 
 	if !RefreshRequested(ctx) {
-		if hit := c.store.get(key); hit != nil && hit.err == nil {
+		if hit := c.store.Get(key); hit != nil && hit.Err == nil {
 			switch c.state(hit) {
 			case entryFresh:
-				return c.staleness(hit.page, hit), nil
+				c.observe.CatalogRequest(c.Source(), CacheFresh)
+				return c.staleness(entryPage(hit), hit), nil
 			case entryServeableStale:
-				c.refreshInBackground(key, hit.validators, func(ctx context.Context, v Validators) error {
+				c.observe.CatalogRequest(c.Source(), CacheStale)
+				c.refreshInBackground(key, entryValidators(hit), func(ctx context.Context, v Validators) error {
 					_, err := c.fetchList(ctx, key, q, v)
 					return err
 				})
-				return c.staleness(hit.page, hit), nil
+				return c.staleness(entryPage(hit), hit), nil
 			}
 		}
 	}
@@ -280,9 +303,11 @@ func (c *Cached) List(ctx context.Context, q Query) (Page, error) {
 		// A cancelled request is this host giving up, not the catalogue
 		// failing, and answering it with stale data would be answering a
 		// question nobody is still asking.
-		if hit := c.store.get(key); hit != nil && hit.err == nil && !isCancelled(ctx, err) {
-			return c.staleness(hit.page, hit), nil
+		if hit := c.store.Get(key); hit != nil && hit.Err == nil && !isCancelled(ctx, err) {
+			c.observe.CatalogRequest(c.Source(), CacheServedStale)
+			return c.staleness(entryPage(hit), hit), nil
 		}
+		c.observe.CatalogRequest(c.Source(), CacheError)
 		return Page{}, err
 	}
 	return page, nil
@@ -296,23 +321,26 @@ func (c *Cached) Get(ctx context.Context, name string) (Detail, error) {
 	key := c.key("get", name)
 
 	if !RefreshRequested(ctx) {
-		if hit := c.store.get(key); hit != nil && c.state(hit) != entryExpired {
+		if hit := c.store.Get(key); hit != nil && c.state(hit) != entryExpired {
 			switch {
-			case hit.err != nil:
+			case hit.Err != nil:
 				// A remembered refusal is served only while fresh; it has no
 				// stale window, because a name that is about to exist should
 				// not keep answering 404 behind a refresh nobody sees.
 				if c.state(hit) == entryFresh {
-					return Detail{}, hit.err
+					c.observe.CatalogRequest(c.Source(), CacheAbsent)
+					return Detail{}, hit.Err
 				}
 			case c.state(hit) == entryFresh:
-				return c.detailStaleness(hit.detail, hit), nil
+				c.observe.CatalogRequest(c.Source(), CacheFresh)
+				return c.detailStaleness(entryDetail(hit), hit), nil
 			default:
-				c.refreshInBackground(key, hit.validators, func(ctx context.Context, v Validators) error {
+				c.observe.CatalogRequest(c.Source(), CacheStale)
+				c.refreshInBackground(key, entryValidators(hit), func(ctx context.Context, v Validators) error {
 					_, err := c.fetchDetail(ctx, key, name, v)
 					return err
 				})
-				return c.detailStaleness(hit.detail, hit), nil
+				return c.detailStaleness(entryDetail(hit), hit), nil
 			}
 		}
 	}
@@ -324,11 +352,14 @@ func (c *Cached) Get(ctx context.Context, name string) (Detail, error) {
 		// answered from a stale positive entry, because that would resurrect
 		// a withdrawn server.
 		if errors.Is(err, ErrNotFound) {
+			c.observe.CatalogRequest(c.Source(), CacheAbsent)
 			return Detail{}, err
 		}
-		if hit := c.store.get(key); hit != nil && hit.err == nil && !isCancelled(ctx, err) {
-			return c.detailStaleness(hit.detail, hit), nil
+		if hit := c.store.Get(key); hit != nil && hit.Err == nil && !isCancelled(ctx, err) {
+			c.observe.CatalogRequest(c.Source(), CacheServedStale)
+			return c.detailStaleness(entryDetail(hit), hit), nil
 		}
+		c.observe.CatalogRequest(c.Source(), CacheError)
 		return Detail{}, err
 	}
 	return detail, nil
@@ -338,16 +369,19 @@ func (c *Cached) Get(ctx context.Context, name string) (Detail, error) {
 func (c *Cached) fetchList(ctx context.Context, key string, q Query, v Validators) (Page, error) {
 	var page Page
 	var err error
+	started := time.Now()
 	if c.conditional != nil && !v.empty() {
 		page, err = c.conditional.ListIfChanged(ctx, q, v)
 	} else {
 		page, err = c.upstream.List(ctx, q)
 	}
+	c.observe.CatalogFetch(c.Source(), time.Since(started))
 	if errors.Is(err, ErrNotModified) {
 		// The catalogue confirmed what is held. Nothing travelled but the
 		// headers, and the answer's clock starts again.
 		if hit := c.renew(key, page.Freshness); hit != nil {
-			return c.staleness(hit.page, hit), nil
+			c.observe.CatalogRequest(c.Source(), CacheRevalidated)
+			return c.staleness(entryPage(hit), hit), nil
 		}
 		// Nothing to renew: the entry was evicted between the lookup and the
 		// answer. Ask again unconditionally rather than return an empty page.
@@ -357,10 +391,11 @@ func (c *Cached) fetchList(ctx context.Context, key string, q Query, v Validator
 		return Page{}, err
 	}
 	entry := c.entryFor(page.Freshness, c.defaultTTL)
-	entry.page = page
+	entry.Value = page
 	if !page.Freshness.NoStore {
-		c.store.put(key, entry)
+		c.store.Put(key, entry)
 	}
+	c.observe.CatalogRequest(c.Source(), CacheFetched)
 	return c.staleness(page, entry), nil
 }
 
@@ -369,29 +404,33 @@ func (c *Cached) fetchList(ctx context.Context, key string, q Query, v Validator
 func (c *Cached) fetchDetail(ctx context.Context, key, name string, v Validators) (Detail, error) {
 	var detail Detail
 	var err error
+	started := time.Now()
 	if c.conditional != nil && !v.empty() {
 		detail, err = c.conditional.GetIfChanged(ctx, name, v)
 	} else {
 		detail, err = c.upstream.Get(ctx, name)
 	}
+	c.observe.CatalogFetch(c.Source(), time.Since(started))
 	if errors.Is(err, ErrNotModified) {
 		if hit := c.renew(key, detail.Freshness); hit != nil {
-			return c.detailStaleness(hit.detail, hit), nil
+			c.observe.CatalogRequest(c.Source(), CacheRevalidated)
+			return c.detailStaleness(entryDetail(hit), hit), nil
 		}
 		detail, err = c.upstream.Get(ctx, name)
 	}
 	if errors.Is(err, ErrNotFound) {
-		c.store.put(key, &cacheEntry{err: err, fetchedAt: c.now(), ttl: negativeTTL})
+		c.store.Put(key, &cacheEntry{Err: err, FetchedAt: c.now(), TTL: negativeTTL})
 		return Detail{}, err
 	}
 	if err != nil {
 		return Detail{}, err
 	}
 	entry := c.entryFor(detail.Freshness, c.detailTTL)
-	entry.detail = detail
+	entry.Value = detail
 	if !detail.Freshness.NoStore {
-		c.store.put(key, entry)
+		c.store.Put(key, entry)
 	}
+	c.observe.CatalogRequest(c.Source(), CacheFetched)
 	return c.detailStaleness(detail, entry), nil
 }
 
@@ -445,11 +484,10 @@ const (
 )
 
 func (c *Cached) state(hit *cacheEntry) entryState {
-	age := c.now().Sub(hit.fetchedAt)
-	switch {
-	case age < hit.ttl:
+	switch hit.State(c.now()) {
+	case cachestore.Fresh:
 		return entryFresh
-	case age < hit.ttl+hit.staleWhile:
+	case cachestore.Stale:
 		return entryServeableStale
 	default:
 		return entryExpired
@@ -468,39 +506,39 @@ func (c *Cached) entryFor(f Freshness, fallback time.Duration) *cacheEntry {
 		staleWhile = staleServeCeiling
 	}
 	return &cacheEntry{
-		validators: f.Validators,
-		fetchedAt:  c.now(),
-		ttl:        ttl,
-		staleWhile: staleWhile,
+		Meta:       f.Validators,
+		FetchedAt:  c.now(),
+		TTL:        ttl,
+		StaleWhile: staleWhile,
 	}
 }
 
 // renew restarts a held answer's clock after a 304, keeping the body.
 func (c *Cached) renew(key string, f Freshness) *cacheEntry {
-	hit := c.store.get(key)
-	if hit == nil || hit.err != nil {
+	hit := c.store.Get(key)
+	if hit == nil || hit.Err != nil {
 		return nil
 	}
 	renewed := *hit
-	renewed.fetchedAt = c.now()
+	renewed.FetchedAt = c.now()
 	if f.TTL > 0 {
-		renewed.ttl = f.TTL
+		renewed.TTL = f.TTL
 	}
 	if f.StaleWhile > 0 {
-		renewed.staleWhile = min(f.StaleWhile, staleServeCeiling)
+		renewed.StaleWhile = min(f.StaleWhile, staleServeCeiling)
 	}
 	// A 304 may carry a new ETag. Keeping the old one would make the next
 	// conditional request ask about a version the far end has moved past.
 	if !f.Validators.empty() {
-		renewed.validators = f.Validators
+		renewed.Meta = f.Validators
 	}
-	c.store.put(key, &renewed)
+	c.store.Put(key, &renewed)
 	return &renewed
 }
 
 func (c *Cached) validatorsFor(key string) Validators {
-	if hit := c.store.get(key); hit != nil {
-		return hit.validators
+	if hit := c.store.Get(key); hit != nil {
+		return entryValidators(hit)
 	}
 	return Validators{}
 }
@@ -512,7 +550,7 @@ func (c *Cached) key(kind, rest string) string {
 }
 
 func (c *Cached) staleness(page Page, entry *cacheEntry) Page {
-	page.RetrievedAt = entry.fetchedAt.UTC()
+	page.RetrievedAt = entry.FetchedAt.UTC()
 	page.Stale = c.state(entry) != entryFresh
 	page.Entries = append([]Entry(nil), page.Entries...)
 	// The per-source report is corrected too, not just the page's own flag.
@@ -531,7 +569,7 @@ func (c *Cached) staleness(page Page, entry *cacheEntry) Page {
 }
 
 func (c *Cached) detailStaleness(detail Detail, entry *cacheEntry) Detail {
-	detail.RetrievedAt = entry.fetchedAt.UTC()
+	detail.RetrievedAt = entry.FetchedAt.UTC()
 	detail.Stale = c.state(entry) != entryFresh
 	// The document is copied out rather than shared. A handler that wrote
 	// through the slice it was handed would be editing the cache, and the

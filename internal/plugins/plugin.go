@@ -213,6 +213,33 @@ type SecretSource interface {
 	Secret(name string) (string, error)
 }
 
+// CacheObserver records what a plugin's own read cache did.
+//
+// Narrow deliberately. A plugin that could reach the whole metrics surface
+// could invent series the host then has to carry, and an integration's own
+// domain data is exactly the thing that does not belong in a metric -- see the
+// test in docs/architecture.md for what belongs in this host at all. Reporting
+// a cache hit is not domain data; it is this host's own behaviour, and the
+// question it answers is whether a cache is earning its memory.
+//
+// kind is a class of read, never an identifier: a label carrying a device
+// address is a new time series per device.
+type CacheObserver interface {
+	CacheEvent(plugin, kind, event string)
+}
+
+// What a plugin's read cache did with one call.
+const (
+	// CacheHit was answered from memory.
+	CacheHit = "hit"
+	// CacheMiss went upstream.
+	CacheMiss = "miss"
+	// CacheShared joined a fetch already in flight rather than starting a
+	// second one. Counted separately because it is the half of the win a hit
+	// rate does not show.
+	CacheShared = "shared"
+)
+
 // Deps is what a plugin receives at construction.
 //
 // Note what is deliberately absent: no operations service, no audit service,
@@ -238,4 +265,21 @@ type Deps struct {
 	HTTP *http.Client
 	// Now is injectable so plugins can be tested deterministically.
 	Now func() time.Time
+	// Cache records what a plugin's own read cache did. Nil is allowed and is
+	// what a host with no metrics endpoint supplies.
+	Cache CacheObserver
+	// Upstream records how long one request to this plugin's own API took, so
+	// a slow answer can be attributed to the far end rather than to this host.
+	// Nil is allowed.
+	Upstream UpstreamObserver
+}
+
+// UpstreamObserver records one round trip a plugin made to its own API.
+//
+// As narrow as CacheObserver and for the same reason. outcome is two words --
+// whether the request worked -- rather than a status code, because the
+// question a latency histogram answers is "was this slow", and a label per
+// status multiplies the series for no gain.
+type UpstreamObserver interface {
+	UpstreamRequest(plugin, outcome string, d time.Duration)
 }

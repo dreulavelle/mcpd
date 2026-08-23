@@ -41,6 +41,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/plugins/mcpremote` | Mounting a remote MCP server as a plugin |
 | `internal/registry` | Browsing the public catalogues of MCP servers |
 | `internal/messaging` | In-process bus and outbox publisher |
+| `internal/cachestore` | The bounded, timed map every cache is built on |
 | `internal/servertls` | Self-signed CA and certificate issuance |
 | `internal/config` | File and environment configuration, validation |
 | `sdk` | Building out-of-process plugins |
@@ -232,13 +233,35 @@ administrator's rule, not the proposer's standing; what bounds the proposer is
 reading them is `CapRead`, because "why was I not asked" is a question an
 operator has to be able to answer.
 
-**A rule removes the only backpressure there is.** Nothing rate-limits a
-mutation — `ToolSpec.RateLimit` bounds read tools, and a propose tool has no
-equivalent. Before a rule existed, a runaway agent could only pile up proposals
-somebody would decline; under one it lands writes at whatever rate it can call.
-The human in the loop was doing that job as a side effect, and a rule is a
-decision to stop paying for it. Scope rules narrowly until there is a
-per-mutation rate limit.
+**A rule removes an interruption, and something else has to take over the
+backpressure.** Before a rule existed, a runaway agent could only pile up
+proposals somebody would decline; under one it lands writes at whatever rate it
+can call. The human in the loop was doing that job as a side effect, and a rule
+is a decision to stop paying for it.
+
+So a mutation now carries a rate limit of its own, and unlike a read tool's it
+is never absent: `MutationSpec.RateLimit` defaults to one proposal a second and
+a plugin may raise or lower it knowing what its own upstream costs. Unbounded is
+not a defensible zero value for a write. A read tool that declares no limit
+costs an upstream a request; a mutation that declares none costs it a *change*,
+and under a rule nobody is asked first.
+
+**The limit is per caller; the read tool's is global.** The difference is not an
+inconsistency. A read tool's limit protects an upstream's quota, which is a
+shared resource no caller has a claim on. A mutation's limit exists because one
+agent can loop, and a single global budget would let that agent spend it and
+leave the operator's own corrective change refused — and the corrective change
+is the one that stops the runaway. What protects the target from many callers at
+once is where it has always been: the plugin's client, which knows what its API
+can take.
+
+**A refusal costs nothing a retry would find spent.** It is checked after the
+authorization gate and before everything else — before the plan, which reads
+upstream, and before the operation is recorded. So a refused proposal leaves no
+row, spends no idempotency key, and makes no upstream call. That matters more
+here than for a read: a refusal that consumed the idempotency of the operation
+it refused would make the retry the caller was told to make return the wrong
+answer.
 
 **A rule is decoded strictly, and a misspelled selector is an error.** An
 omitted selector means "anything", which is the convenience that makes
@@ -315,6 +338,45 @@ needs mcpd reachable from the public internet, which is the one thing a tunnel
 avoids. OpenAI's documentation states the authorization server "is not
 automatically tunneled".
 
+## Telling what it is doing
+
+`/health/live` and `/health/ready` are on the MCP listener because a load
+balancer in front of that port has to reach them without a credential, and they
+carry aggregate state and nothing else for the same reason.
+
+`/metrics` is not on that listener. It is on the **dashboard** one, and the
+difference is deliberate: the MCP port is what a third party reaches through a
+tunnel, and metrics name every mounted plugin, every tool, how long each named
+upstream takes to answer, and how often each fails. That is exactly the
+operational detail the readiness probe is careful not to carry. The dashboard
+listener already has the right audience — operators, on an internal interface —
+and the rest of the operational detail already lives there.
+
+It takes `read`, which is what a read of this host's own state takes
+everywhere else here, and a Prometheus satisfies it with a static token like
+any other machine caller. `metrics.public` drops the check for a deployment
+that has already fenced the port off to a monitoring network; it is off by
+default and config validation says plainly what turning it on means. Switching
+metrics off leaves the route answering 404 rather than the dashboard's own
+shell, so a scrape config pointing at a host that is not serving them fails
+instead of quietly parsing HTML.
+
+**Some numbers are not this process's to keep.** How many operations are in
+each state is answered by SQLite, and a counter incremented in Go would
+disagree with it after every restart and every prune — and would never mention
+the row that has been sitting in `indeterminate` since Tuesday. Those are read
+when a scrape arrives, bounded by their own timeout so a busy database costs
+the series rather than the response. Counters for things that only happen in
+memory — a tool call, a refused proposal, a cache hit — are ordinary counters.
+
+Every series is there because somebody asks the question it answers; the list
+and the question each one is for are in `internal/observability/metrics.go`.
+Two cardinality rules hold throughout: a label is a class and never an
+identifier — a metric labelled with a device address is a new time series per
+device — and a plugin is handed an interface narrow enough to report its own
+cache and its own upstream latency and nothing else, so an integration cannot
+invent series this host then has to carry.
+
 ## Storage
 
 Tables: `operations`, `operation_transitions`, `execution_attempts`,
@@ -345,6 +407,28 @@ In-process plugins register in `registerPlugins`; the switch is the complete
 list a binary can serve. Out-of-process plugins are ordinary programs speaking
 the `sdk` protocol over stdio, mounted from the plugins directory. A third
 kind is a remote MCP server, described below.
+
+**A subprocess's stdio is multiplexed, and a caller's deadline is its own.**
+One goroutine owns the pipe's read side for the process's whole life and hands
+each frame to the caller whose id it carries; the write lock covers the write
+and nothing else. What that buys is not throughput so much as independence.
+Holding one lock across the whole round trip made every caller queue behind the
+one in flight — and worse, each of them had already started its own timeout
+before joining the queue, so the first to acquire the lock immediately found its
+deadline gone and killed the plugin to recover a pipe that was not blocked.
+A slow call took down every other caller, including the ones about to succeed.
+
+Now a timeout fails one call. The process is left alone, a late answer is
+discarded by id rather than handed to the next caller, and a plugin that has
+genuinely stopped answering fails every call and reports itself unhealthy. Two
+things still end it: a frame over the cap, because the rest of the line has not
+been read and the stream position is no longer known, and shutdown.
+
+The write lock is a channel rather than a mutex, because it has to be possible
+to give up on. A plugin that stops reading its stdin will eventually block a
+writer, and a `sync.Mutex` would queue every other caller behind that with no
+way out — which is the shape being removed. Acquiring selects on the caller's
+context, so a caller that cannot get the pipe fails on its own deadline.
 
 A mutation declares its target, its desired state, whether observing the result
 confirms it, and how to observe it. The host plans against live upstream state,
@@ -619,6 +703,14 @@ an error only when nothing answered at all.
 every cache, because a cap each source gets its own copy of is a cap a fourth
 source silently quadruples.
 
+That store is `internal/cachestore` and it is not a cache. It is a bounded map
+of timed entries plus the rule that six callers asking one question at the same
+moment should cost one answer, and it holds no policy at all — because the
+policy differs between the two things that use it, and a store that decided it
+would be one of them wearing a general name. Everything a catalogue is
+particular about stays here: `stale-while-revalidate`, validators, and the
+short memory of a name that 404s.
+
 **The registry's content is a third party's text, arriving in whatever quantity
 they choose to send.** The response is bounded before it is decoded, the entry
 count per page is capped, and every field is bounded and stripped of control
@@ -763,6 +855,39 @@ A tool may raise its capability above read — for the read that is not merely a
 read, where seeing something is itself the privilege — and may declare a rate
 limit, per tool rather than per plugin, because the expensive call is usually
 one endpoint rather than an integration.
+
+**A rate limit refuses; it does not queue.** It used to wait for a turn, which
+looks like the polite thing to do and is the wrong thing here. The caller is a
+model with a deadline: a queued call arrives at the front having spent most of
+the budget it needed to do the work, and every caller behind it holds a
+goroutine and a context for as long as the queue is. Refusing immediately turns
+a hidden stall into a fact the model can act on, so the error says how long to
+wait and in what units. A refusal does not consume the turn it was refused,
+which is what keeps a burst of rejections from pushing everybody back.
+
+**A read tool's result is evidence a model acts on, which is what decides
+whether it may be reused.** Caching a plugin read is not only a freshness
+question. A stale device state does not merely look out of date to a person; it
+is a premise a model reasons from and then proposes a change against. So where
+a plugin caches, three rules hold, and they are the opposite of the
+catalogue's.
+
+Nothing stale is ever served. The catalogue cache serves an expired answer
+while a refresh runs behind it, because a browse page rendering slightly behind
+beats one that does not render. Here the reader is about to act, and "this is
+what the estate looked like a while ago" is not a safer answer than waiting.
+
+What may be reused at all is an allow-list, so an endpoint nobody has thought
+about is fetched every time. And a key is built from the upstream request that
+will actually be made — the endpoint and the fully resolved query — never from
+the arguments a tool was called with. That is what makes a shared cache
+defensible: every caller of one plugin instance reaches the same upstream with
+the same credential, so two callers producing one key produce byte-identical
+requests and therefore identical responses. A plugin whose request varies by
+caller — a per-user token, a header derived from the principal — must put the
+caller in the key or not cache at all. A cache keyed without the caller, where
+the response depends on them, is an access-control hole rather than a
+performance decision.
 
 **Settings belong to the plugin, resolution belongs to the host.** A type
 declares its fields; the host namespaces them per instance, validates them,

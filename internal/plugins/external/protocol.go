@@ -194,6 +194,11 @@ type MutationDescriptor struct {
 	// host records its mutations as applied-but-unconfirmed, which is what the
 	// host actually knows about them.
 	Verifiable bool `json:"verifiable,omitempty"`
+	// RateLimit bounds how often one caller may propose this mutation, in
+	// requests per second. Absent takes the host's default, which is a real
+	// limit rather than an absence: a write is not something to leave
+	// unbounded because a plugin author did not think about it.
+	RateLimit float64 `json:"rate_limit,omitempty"`
 }
 
 // ReadResourceParams reads one resource.

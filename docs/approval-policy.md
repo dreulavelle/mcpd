@@ -66,10 +66,23 @@ absence of a grant already means ask.
 
 ## Before you write a rule
 
-There is **no rate limit on mutations**. `ToolSpec.RateLimit` bounds read
-tools; a propose tool has no equivalent. The human in the loop was the only
-backpressure on how fast an agent could write, and a rule removes it for
-everything it covers. Scope rules as narrowly as the job allows.
+**A rule removes an interruption, not the backpressure.** It used to remove
+both: the human in the loop was the only thing bounding how fast an agent could
+write, and a rule took them out of it. There is now a per-caller limit on
+proposing each mutation — `MutationSpec.RateLimit`, one a second unless the
+plugin says otherwise, and never absent. A caller past it is refused before
+anything is planned or recorded, with a message saying how long to wait.
+
+That is a floor, not a plan. One a second is far above any workflow a person
+drives and far below what a model in a retry loop produces, which is the gap it
+is sized for — it stops a runaway, and it does not make a badly scoped rule
+safe. Scope rules as narrowly as the job allows.
+
+The limit is per caller rather than global on purpose: a single shared budget
+would let one runaway agent spend it and leave the operator's own corrective
+change refused, and the corrective change is the one that stops the runaway.
+What protects the upstream itself is the plugin's own client, which knows what
+its API can take.
 
 ## `GET /api/approval-policy`
 

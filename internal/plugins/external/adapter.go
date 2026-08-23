@@ -211,6 +211,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 			Risk:        operations.RiskLevel(mutation.Risk),
 			Reversible:  mutation.Reversible,
 			Verifiable:  mutation.Verifiable,
+			RateLimit:   mutation.RateLimit,
 			InputSchema: normalizeSchema(mutation.InputSchema),
 		}, &mutationBridge{plugin: p, action: mutation.Action})
 	}

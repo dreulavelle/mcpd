@@ -66,6 +66,27 @@ func (c *PublisherConfig) withDefaults() {
 	}
 }
 
+// PublishObserver records how one event's publication went. Nil is allowed,
+// which is what a deployment with no metrics endpoint gets.
+//
+// Results are deliberately two words rather than an error: what an operator
+// needs from the endpoint is the shape of the failure rate over time, and the
+// reason for any one failure is already in the log line beside it.
+type PublishObserver func(result string)
+
+// Results a PublishObserver is called with.
+const (
+	// PublishDelivered is an event handed to the bus and marked published.
+	PublishDelivered = "delivered"
+	// PublishFailed is an event the bus refused; it will be retried.
+	PublishFailed = "failed"
+	// PublishUnmarked is the awkward one: the bus took it and the mark did
+	// not land, so it will be delivered again. Counted separately because a
+	// consumer seeing duplicates has this as its explanation, and nothing
+	// else in the system says it happened.
+	PublishUnmarked = "delivered_unmarked"
+)
+
 // Publisher drains the outbox onto the bus.
 //
 // It is the only component that turns a committed state change into a
@@ -74,29 +95,34 @@ func (c *PublisherConfig) withDefaults() {
 // be wrong, because an unpublished row looks identical whether it was written
 // a millisecond ago or before the last crash.
 type Publisher struct {
-	repo   OutboxReader
-	bus    Bus
-	log    *slog.Logger
-	cfg    PublisherConfig
-	now    func() time.Time
-	notify chan struct{}
+	repo    OutboxReader
+	bus     Bus
+	log     *slog.Logger
+	cfg     PublisherConfig
+	now     func() time.Time
+	notify  chan struct{}
+	observe PublishObserver
 
 	stopOnce sync.Once
 	done     chan struct{}
 }
 
 // NewPublisher builds the drain worker.
-func NewPublisher(repo OutboxReader, bus Bus, log *slog.Logger, cfg PublisherConfig, now func() time.Time) *Publisher {
+func NewPublisher(repo OutboxReader, bus Bus, log *slog.Logger, cfg PublisherConfig, now func() time.Time, observe PublishObserver) *Publisher {
 	cfg.withDefaults()
 	if now == nil {
 		now = time.Now
 	}
+	if observe == nil {
+		observe = func(string) {}
+	}
 	return &Publisher{
-		repo: repo,
-		bus:  bus,
-		log:  log,
-		cfg:  cfg,
-		now:  now,
+		repo:    repo,
+		bus:     bus,
+		log:     log,
+		cfg:     cfg,
+		now:     now,
+		observe: observe,
 		// Buffered depth one: many commits collapsing into one wake-up is
 		// exactly right, since the drain reads a batch rather than a single
 		// event.
@@ -186,6 +212,7 @@ func (p *Publisher) publishOne(ctx context.Context, ev PendingEvent) {
 			p.log.Error("failed to record a publication failure",
 				"event_id", ev.EventID, "error", mErr)
 		}
+		p.observe(PublishFailed)
 		return
 	}
 
@@ -199,7 +226,10 @@ func (p *Publisher) publishOne(ctx context.Context, ev PendingEvent) {
 	if err := p.repo.MarkPublished(ctx, ev.EventID, p.now()); err != nil {
 		p.log.Error("event was published but could not be marked; it will be redelivered",
 			"event_id", ev.EventID, "error", err)
+		p.observe(PublishUnmarked)
+		return
 	}
+	p.observe(PublishDelivered)
 }
 
 // backoff returns the retry delay for an attempt count, with jitter.

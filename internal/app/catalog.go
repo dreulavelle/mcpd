@@ -53,13 +53,13 @@ import (
 // process did not get more memory by being pointed at more catalogues.
 //
 // Nothing here reaches the network. A source is constructed, not contacted.
-func buildCatalog(cfg config.Catalog, log *slog.Logger) *registry.Multi {
+func buildCatalog(cfg config.Catalog, observe registry.CacheObserver, log *slog.Logger) *registry.Multi {
 	if !cfg.Enabled() {
 		return nil
 	}
 	agent := "mcpd/" + Version
 	shared := registry.NewCacheStore(0)
-	options := registry.CacheOptions{Store: shared}
+	options := registry.CacheOptions{Store: shared, Observe: observe}
 
 	var sources []registry.Client
 	if cfg.Official {

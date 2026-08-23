@@ -140,6 +140,52 @@ Prefer the continuation token wherever it is offered regardless: offset paging
 is unsound while an estate is changing, because rows shift between pages as
 devices come and go.
 
+## Reusing an answer
+
+A listing walks every page, so asking twice in one conversation walks the whole
+estate twice. Some of those answers may be held for a moment and some may not,
+and the line between them is not how expensive they are.
+
+**Held.** How the estate is *arranged*: `/networks`, `/msp/managed_accounts`,
+`/networks/{n}/sites`, `/networks/{n}/towers`, `/wifi_enterprise/wlans`,
+`/wifi_enterprise/ap_groups`. These change when a person changes them, which is
+not something that happens between two tool calls. Five minutes by default
+(`inventory_cache_seconds`).
+
+**Held briefly.** `/devices` and one device by address. Fifteen seconds by
+default (`device_cache_seconds`), and short for a reason worth stating rather
+than out of caution: a device's state is a premise a model reasons from, so a
+stale one is a correctness problem and not a freshness one. What makes any
+window defensible is that cnMaestro's own view is already behind — the
+controller learns a device has gone offline on its own polling interval,
+measured in minutes — so fifteen seconds adds nothing measurable to an error
+that is already there, while removing the second and third full walk of one
+estate inside a single conversation. Set it to zero if that trade is not one
+your deployment wants.
+
+**Never held**, whatever either setting says:
+
+| | why |
+|---|---|
+| `/alarms`, `/alarms/history`, `/events` | Asked in order to find out whether something is wrong *now*. A cached "no alarms" says the network is fine at the moment it stopped being fine. They are also cheap next to a device walk, so there is nothing to buy. |
+| `/devices/clients`, `/devices/{mac}/clients`, `/devices/wired_clients`, `/devices/mesh/peers` | Who is connected changes second to second, and is asked in order to act on it. |
+| `/devices/statistics`, `/devices/{mac}/statistics`, `/devices/{mac}/performance` | Readings rather than records, usually over a window ending at "now" — so the key would differ on every call, and a cache would hold memory it never answered from. |
+| anything else | Deny by default. An endpoint added to the client later is fetched every time until somebody decides otherwise. |
+
+The key is the endpoint plus the fully resolved query, including the account
+this request will actually read from. Two callers who name the same account —
+one explicitly, one by leaving it to the configured default — ask one question
+and share one answer; two who name different accounts never do. Nothing about
+the caller is in the key, and nothing needs to be: every caller of one
+configured instance reaches cnMaestro with the same credential, so identical
+keys mean identical upstream requests. Two configured instances hold two
+separate caches.
+
+A miss is shared rather than duplicated: six tool calls that all need the
+device list arrive together and cost one walk. A failure is never held — an
+upstream that is down is reported as down on every call, rather than remembered
+as an empty estate.
+
 ## Response envelope
 
 ```json
