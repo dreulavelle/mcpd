@@ -244,6 +244,13 @@ const (
 	// cover the same thing" can be checked.
 	KeyApprovalAutoRules = "approval.auto_approve_rules"
 
+	// KeyApprovalUnmatched is what happens to a change no rule covers.
+	//
+	// The lowest-precedence thing in the model: an exclusion still wins
+	// outright and a matching grant still decides, so a carve-out written for
+	// one dangerous action keeps working whatever this says.
+	KeyApprovalUnmatched = "approval.unmatched"
+
 	// Who may make an account here, and on what terms.
 	//
 	// Off is the default and the default is load-bearing. A host that had no
@@ -481,6 +488,21 @@ func schema() []Group {
 					Kind: KindDuration, Unit: UnitMinutes, Group: "approval", Apply: ApplyLive,
 					Default: 2, Min: intPtr(1), Max: intPtr(60),
 					Help: "How long before a half-applied change is flagged for checking.",
+				},
+				{
+					Key: KeyApprovalUnmatched, Label: "When no rule covers a change",
+					Kind: KindEnum, Group: "approval", Apply: ApplyLive,
+					// Allow, because the alternative puts a queue in this app
+					// between an assistant and the person already talking to
+					// it. The assistant is where the person is; asking them
+					// there is asking them, and asking them twice is not
+					// twice as safe.
+					Default: "high", Options: []string{RiskNone, "low", "medium", "high"},
+					Help: "Assistants ask before they change things. This decides " +
+						"whether mcpd asks a second time. \"Nothing\" holds every " +
+						"change for approval here; a level lets changes up to it " +
+						"run when no rule says otherwise. A change that cannot be " +
+						"undone is always held, whatever this says.",
 				},
 				{
 					Key: KeyApprovalInlineMaxRisk, Label: "Approve in the conversation up to",

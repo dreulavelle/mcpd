@@ -1000,7 +1000,12 @@ func (a *App) approvalPolicy(ctx context.Context) operations.Policy {
 		InlineApproval: operations.InlineApprovalPolicy{
 			MaxRisk: inlineCeiling(a.settings.FieldString(ctx, settings.KeyApprovalInlineMaxRisk)),
 		},
-		AutoApprove: operations.AutoApprovalPolicy{Rules: a.autoApprovalRules(ctx)},
+		AutoApprove: operations.AutoApprovalPolicy{
+			Rules: a.autoApprovalRules(ctx),
+			// The same spelling problem as the inline ceiling, and the same
+			// answer: "nothing" in a dropdown is the empty level here.
+			Unmatched: inlineCeiling(a.settings.FieldString(ctx, settings.KeyApprovalUnmatched)),
+		},
 	}
 }
 

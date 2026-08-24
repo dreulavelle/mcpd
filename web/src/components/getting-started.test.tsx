@@ -46,7 +46,7 @@ function stub({
     rules: Array.from({ length: rules }, (_, i) => ({
       id: `r${i}`, plugin: "*", action: "*", principal: "*", max_risk: "low",
     })),
-    wildcard: "*", ceilings: ["low"], default: "Ask about everything.",
+    wildcard: "*", ceilings: ["low"], default: "Ask about everything.", unmatched: "none",
   });
   vi.spyOn(api, "users").mockResolvedValue({ users: [], count: users });
 }

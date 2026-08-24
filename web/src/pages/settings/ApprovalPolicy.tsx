@@ -241,11 +241,9 @@ export function ApprovalPolicy() {
 
       {policy === null && !loadProblem ? <Loading rows={5} /> : policy === null ? null : (
         <div className="space-y-6">
-          <Notice tone="info">
-            <strong>Anything no rule covers goes to a person.</strong> An always-ask
-            rule beats an allow rule for the same change. Nothing limits how fast
-            an assistant can write, so keep allow rules narrow.
-          </Notice>
+          <DefaultDecision
+            policy={policy} mayWrite={mayWrite} onSaved={load}
+          />
 
           {loose.length > 0 && (
             <Notice tone="attention" icon={<TriangleAlert />}>
@@ -680,5 +678,60 @@ function Answer({ result }: { result: PolicyEvaluation }) {
         </p>
       )}
     </div>
+  );
+}
+
+
+/**
+ * What a change meets when no rule covers it.
+ *
+ * At the top of this page rather than buried in Settings, because it is the
+ * rule everything else is an exception to. Reading a list of exceptions
+ * without knowing what they are exceptions to tells nobody anything.
+ */
+function DefaultDecision({ policy, mayWrite, onSaved }: {
+  policy: Policy;
+  mayWrite: boolean;
+  onSaved: () => void;
+}) {
+  const notify = useNotify();
+  const [busy, setBusy] = useState(false);
+
+  async function choose(value: string) {
+    setBusy(true);
+    try {
+      await api.saveSettings({ "approval.unmatched": value });
+      notify("good", "Saved.");
+      onSaved();
+    } catch (e) {
+      notify("problem", e instanceof ApiError ? e.detail : "Couldn't save that.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="unmatched">When no rule covers a change</Label>
+          <NativeSelect
+            id="unmatched" value={policy.unmatched || "none"} disabled={!mayWrite || busy}
+            onChange={(e) => choose(e.target.value)}
+          >
+            <option value="high">Let it run — the assistant already asked</option>
+            <option value="medium">Let it run up to medium risk</option>
+            <option value="low">Let it run up to low risk</option>
+            <option value="none">Hold it for approval here</option>
+          </NativeSelect>
+        </div>
+        <p className="text-sm text-muted-foreground">{policy.default}</p>
+        <p className="text-xs text-muted-foreground">
+          An always-ask rule below beats this, and beats an allow rule for the
+          same change. Nothing limits how fast an assistant can write, so keep
+          allow rules narrow.
+        </p>
+      </CardContent>
+    </Card>
   );
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/operations"
+	"github.com/spoked/mcpd/internal/settings"
 )
 
 const approverToken = "approver-token-000000000000000000000000"
@@ -41,7 +42,24 @@ func newApprovalApp(t *testing.T) *App {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { a.db.Close() })
+
+	// These tests are about the flow that puts a change to a person, so they
+	// say so rather than inheriting it. The host's default is to let a change
+	// no rule covers go ahead -- an assistant asks before it changes things,
+	// and mcpd asking a second time only moves the question somewhere the
+	// person is not.
+	holdEverything(t, a)
 	return a
+}
+
+// holdEverything makes this host ask about every change, whatever the default.
+func holdEverything(t *testing.T, a *App) {
+	t.Helper()
+	if err := a.settings.Apply(context.Background(), "test", []settings.Change{{
+		Key: settings.KeyApprovalUnmatched, Value: settings.RiskNone,
+	}}); err != nil {
+		t.Fatalf("hold every change: %v", err)
+	}
 }
 
 // callTool invokes an MCP tool and returns its structured result.
