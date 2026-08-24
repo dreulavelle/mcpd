@@ -1,24 +1,31 @@
 package operations
 
-// InlineApprovalPolicy decides which changes may be approved from a
-// conversation rather than the dashboard.
+// InlineApprovalPolicy decides which changes a client's own yes/no prompt may
+// settle on its own.
 //
-// It is a ceiling rather than a switch, because the two places are not
-// equivalent. Approving a routine change inline is what stops the gate being
-// worked around: an operator who has to open a dashboard for every trivial
-// edit eventually stops using the gate at all. But a consequential change
-// deserves the dashboard, where the full before-and-after is visible, the
-// audit trail is at hand, and -- where identities are real -- a second person
-// can be required. A one-line confirmation in a chat window gives none of
-// those.
+// It is a ceiling on the *shortcut*, not on where the decision happens. Every
+// approval happens in the conversation: sending someone to a dashboard to
+// approve a tool call breaks the thing they were doing, and a gate that costs
+// a context switch is one people arrange not to need. What the ceiling changes
+// is how much the assistant has to do first. Below it, a single confirmation
+// is enough. Above it the prompt is withheld and the assistant must show the
+// change in full and be told explicitly before calling the approve tool --
+// because a one-line confirmation is too thin a thing to hang a consequential
+// change on, not because somewhere else would be a better place to answer it.
+//
+// The dashboard remains where an operator reviews history, writes standing
+// rules and reads the audit trail. It is not a step in this flow.
 type InlineApprovalPolicy struct {
-	// MaxRisk is the highest risk approvable in a conversation. The zero
-	// value permits nothing, so a deployment that never configures this keeps
-	// every approval at the dashboard.
+	// MaxRisk is the highest risk a client's confirmation may settle by
+	// itself. The zero value permits nothing, so a deployment that never
+	// configures this makes the assistant show every change in full and be
+	// told explicitly -- still in the conversation, and still without anyone
+	// leaving it.
 	MaxRisk RiskLevel
 }
 
-// Allows reports whether a risk level may be approved inline.
+// Allows reports whether a risk level may be settled by a client's own
+// confirmation prompt.
 func (p InlineApprovalPolicy) Allows(risk RiskLevel) bool {
 	if !p.MaxRisk.Valid() {
 		return false

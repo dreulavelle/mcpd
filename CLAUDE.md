@@ -77,6 +77,23 @@ person approved can carry none.
 **Indeterminate is not terminal.** It means a write may have landed. Treating
 it as failed invites a retry that applies the change twice.
 
+**Approval happens where the work is.** No path sends a person to the
+dashboard to approve a tool call. Below the inline ceiling a client's own
+confirmation settles it; above it the assistant shows the change in full and
+is told explicitly — still in the conversation. The dashboard is for history,
+standing rules and the audit trail. An approval that costs a context switch is
+one people arrange not to need, and the arrangement they reach for is a rule
+broader than the one they meant to write.
+
+**Tool annotations are the only lever over a client's confirmation, so they
+must be accurate about what a call *can* do** — not what it usually does.
+`destructiveHint` follows `MutationSpec.Reversible`; a mutation sets
+`openWorldHint`. They enforce nothing, which is exactly why getting them wrong
+is invisible until a change reaches live infrastructure without anyone seeing
+it. A standing rule means a propose call can execute before it returns, so a
+hint chosen for the case where a human is always asked is wrong in the case
+where nobody is.
+
 **A tunnel carries its own identity**, so it builds its own MCP server rather
 than sharing the cached one. Writing a principal into a shared server lets the
 first caller answer for everyone.

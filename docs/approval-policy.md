@@ -84,6 +84,46 @@ change refused, and the corrective change is the one that stops the runaway.
 What protects the upstream itself is the plugin's own client, which knows what
 its API can take.
 
+## Writing rules for a chat client
+
+An agent's own confirmation prompt and a rule do different jobs, and they
+compose. The client's prompt asks whether the call may be made at all; the rule
+decides whether mcpd needs a person for the change behind it. Where a rule
+matches, the propose call is approved and executed before it returns and the
+user answers one dialog — their client's. Where none matches they answer two,
+and the second is mcpd's, which is the one carrying the impact and the diff.
+
+Neither is a place anyone leaves the conversation. There is no path in mcpd
+that requires opening the dashboard to approve a tool call; above the inline
+ceiling the assistant shows the change in full and is told explicitly instead,
+still in the chat. The dashboard is for history, rules and the audit trail.
+
+So a rule for a chat client is a decision about which changes are routine
+enough that the client's prompt is the whole of the interruption:
+
+```json
+{ "id": "chatgpt-routine-radio", "principal": "svc:chatgpt",
+  "plugin": "cnmaestro", "action": "device.set_radio_channel",
+  "max_risk": "low",
+  "note": "ChatGPT confirms the call; a channel change is undone by another" }
+```
+
+Scope it by `principal` as well as by change. A rule written for one agent's
+prompt should not silently authorise a script that has no prompt at all.
+
+Two things the client cannot do for you, so do not write rules as though it
+could:
+
+- **Its prompt shows the argument JSON, not the change.** `{"device_id":
+  "a3f9c2"}` tells a person nothing. Where the client's dialog is the only one
+  a user will see, the mutation's parameters and description are the approval
+  UI — name things so the payload reads.
+- **Nothing on the wire says the user was asked.** `auto` mode, a user holding
+  down Confirm, and a plain API key are indistinguishable to mcpd. A rule is an
+  administrator's decision recorded against them; it is not a claim that
+  somebody clicked, and `authorized_by_rule` exists so the two are never read
+  as the same thing.
+
 ## `GET /api/approval-policy`
 
 Capability: `read`.

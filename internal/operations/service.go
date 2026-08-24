@@ -321,14 +321,20 @@ func (s *Service) Approve(ctx context.Context, p *auth.Principal, operationID, r
 	return s.approve(ctx, p, op, reason, "dashboard")
 }
 
-// ApproveInline records an approval given through the client rather than the
-// dashboard.
+// ApproveInline records an approval given through a client's own confirmation
+// prompt rather than a deliberate call to the approve tool.
 //
 // It is a distinct method from Approve because the audit trail should say
-// which it was. The two carry different evidence: a dashboard approval was
-// made by someone looking at the full before-and-after, while an inline one
-// was a confirmation in a conversation. Both are human decisions; they are not
-// the same decision.
+// which it was. The two carry different evidence: an explicit approval was
+// made by someone who had been shown the full before-and-after, while an
+// inline one was a yes/no answered in the flow of a conversation. Both are
+// human decisions made in the same place; they are not the same decision.
+//
+// The refusal above the ceiling withholds the shortcut, never the decision:
+// the person still settles it here, by being shown the change and telling the
+// assistant to go ahead. Nothing in this package requires anyone to open the
+// dashboard, and nothing should -- an approval that costs a context switch is
+// one people arrange not to need.
 func (s *Service) ApproveInline(ctx context.Context, p *auth.Principal, operationID string) (*Operation, error) {
 	op, err := s.repo.Get(ctx, operationID)
 	if err != nil {
@@ -338,8 +344,9 @@ func (s *Service) ApproveInline(ctx context.Context, p *auth.Principal, operatio
 		return nil, &GuardError{
 			ErrCode: CodeNotAuthorized,
 			Detail: fmt.Sprintf(
-				"a %s-risk change cannot be approved from a conversation; "+
-					"approve it in the dashboard", op.Risk),
+				"a %s-risk change cannot be settled by a yes/no prompt; show the "+
+					"person what will change, in full, and call approve_operation "+
+					"once they say to go ahead", op.Risk),
 		}
 	}
 	return s.approve(ctx, p, op, "approved in conversation", "inline")
