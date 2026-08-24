@@ -145,6 +145,7 @@ func (s *Server) handleAuthRedirectURIs(w http.ResponseWriter, r *http.Request) 
 	}
 	for _, p := range []users.Provider{
 		users.ProviderGoogle, users.ProviderGitHub, users.ProviderEntra,
+		users.ProviderOIDC,
 	} {
 		if uri, err := sso.RedirectURI(resp.Base, p); err == nil {
 			resp.URIs[string(p)] = uri

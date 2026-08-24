@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/spoked/mcpd/internal/auth/users"
+	"github.com/spoked/mcpd/internal/settings"
 )
 
 // Errors this package returns. They are coarse where the difference would tell
@@ -61,6 +62,13 @@ type Config struct {
 	// somebody in this organisation rather than anybody with a Microsoft
 	// account.
 	TenantID string
+	// IssuerURL is where a self-hosted provider publishes its metadata.
+	// ProviderOIDC only, and required there -- it is the whole difference
+	// between one operator's Keycloak and another's.
+	IssuerURL string
+	// Label is what the button says for a provider whose name this build does
+	// not know. Cosmetic, and never used to decide anything.
+	Label string
 }
 
 // Ready reports whether a provider has everything it needs to run a flow.
@@ -71,7 +79,23 @@ func (c Config) Ready() bool {
 	if c.Provider == users.ProviderEntra && !validTenant(c.TenantID) {
 		return false
 	}
+	if c.Provider == users.ProviderOIDC && !validIssuer(c.IssuerURL) {
+		return false
+	}
 	return c.Provider.Valid()
+}
+
+// validIssuer reports whether s names one OpenID provider this host can talk
+// to.
+//
+// The rule itself is the settings package's, and is called rather than
+// restated: the form that accepts this value and the flow that acts on it
+// have to agree, and the way to be sure they do is for there to be one of
+// them. What is enforced is stricter than "parses as a URL" because this
+// value decides where a client secret is sent and whose signature is believed
+// for an identity.
+func validIssuer(s string) bool {
+	return settings.ValidateIssuerURL(s) == nil
 }
 
 // validTenant reports whether a tenant names one directory.
@@ -117,6 +141,22 @@ func Label(p users.Provider) string {
 		return "Microsoft"
 	}
 	return string(p)
+}
+
+// LabelFor is Label for a provider whose name this build may not know.
+//
+// A self-hosted provider is called whatever its operator calls it, and
+// "Continue with oidc" is a button nobody recognises. The configured label
+// wins where there is one; the fallback is deliberately generic rather than a
+// guess at a product name.
+func LabelFor(c Config) string {
+	if c.Provider == users.ProviderOIDC {
+		if l := strings.TrimSpace(c.Label); l != "" {
+			return l
+		}
+		return "Single sign-on"
+	}
+	return Label(c.Provider)
 }
 
 // Identity is what a completed flow establishes.

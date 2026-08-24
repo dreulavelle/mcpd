@@ -69,6 +69,18 @@ func issuerBase(c Config) (string, error) {
 				ErrNotConfigured)
 		}
 		return "https://login.microsoftonline.com/" + url.PathEscape(c.TenantID) + "/v2.0", nil
+	case users.ProviderOIDC:
+		// Trailing slash removed rather than tolerated: discovery appends a
+		// path to this and the result is also the cache key, so "…/realms/x"
+		// and "…/realms/x/" would otherwise be two providers with one
+		// configuration between them.
+		if !validIssuer(c.IssuerURL) {
+			return "", fmt.Errorf(
+				"%w: the issuer must be an https address with no query or fragment, "+
+					"like https://auth.example.com/application/o/mcpd",
+				ErrNotConfigured)
+		}
+		return strings.TrimSuffix(strings.TrimSpace(c.IssuerURL), "/"), nil
 	}
 	return "", fmt.Errorf("%w: %s is not an OpenID provider", ErrNotConfigured, c.Provider)
 }

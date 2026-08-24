@@ -14,7 +14,14 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 
-const CONSOLES: Record<ProviderName, { href: string; label: string }> = {
+/**
+ * Where to register a redirect address, per provider.
+ *
+ * Partial on purpose: a provider the operator runs themselves has no console
+ * at a fixed address, and a link guessed from the issuer would be a link to
+ * somewhere that may not exist.
+ */
+const CONSOLES: Partial<Record<ProviderName, { href: string; label: string }>> = {
   google: {
     href: "https://console.cloud.google.com/apis/credentials",
     label: "Google Cloud credentials",
@@ -27,6 +34,14 @@ const CONSOLES: Record<ProviderName, { href: string; label: string }> = {
     href: "https://entra.microsoft.com/",
     label: "Microsoft Entra admin centre",
   },
+};
+
+/** What each provider is called in a table, where "oidc" would mean nothing. */
+const PROVIDER_NAMES: Partial<Record<ProviderName, string>> = {
+  google: "Google",
+  github: "GitHub",
+  entra: "Microsoft Entra",
+  oidc: "Your own provider",
 };
 
 /**
@@ -77,9 +92,8 @@ function RedirectURIs() {
       <Notice tone="attention">
         <strong>Nobody can be redirected back here yet.</strong> A provider
         sends people back to an address you register with it, and mcpd does not
-        know its own. Set the dashboard's public URL in the startup file
-        (<code className="font-mono">server.frontend_public_url</code>) and
-        restart, and the exact addresses to paste will appear here.
+        know its own. Set <strong>Dashboard address</strong> under Settings, and
+        the exact addresses to paste will appear here.
       </Notice>
     );
   }
@@ -108,14 +122,18 @@ function RedirectURIs() {
             <TableBody>
               {entries.map(([provider, uri]) => (
                 <TableRow key={provider}>
-                  <TableCell className="capitalize">{provider}</TableCell>
+                  <TableCell>{PROVIDER_NAMES[provider] ?? provider}</TableCell>
                   <TableCell>
                     <code className="font-mono text-xs break-all">{uri}</code>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-sm">
-                    <Out href={CONSOLES[provider].href}>
-                      {CONSOLES[provider].label}
-                    </Out>
+                    {CONSOLES[provider]
+                      ? (
+                        <Out href={CONSOLES[provider].href}>
+                          {CONSOLES[provider].label}
+                        </Out>
+                      )
+                      : <span className="text-muted-foreground">Your provider</span>}
                   </TableCell>
                 </TableRow>
               ))}

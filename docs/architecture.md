@@ -34,7 +34,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/plugins` | Plugin registry, tool attachment, approval tools |
 | `internal/auth` | Principals, roles, capabilities, static tokens |
 | `internal/auth/users` | Accounts, passwords, browser sessions, registration |
-| `internal/auth/sso` | Signing in through Google, GitHub or Entra |
+| `internal/auth/sso` | Signing in through Google, GitHub, Entra, or the operator's own provider |
 | `internal/auth/groups` | Groups, membership, and the one union that decides reach |
 | `internal/auth/apikeys` | Bearer credentials this host issued, and the verifier over them |
 | `internal/storage/sqlite` | Schema, migrations, every transaction |
@@ -340,8 +340,32 @@ of the write refusing a name that is another account's address.
 
 ## Signing in with somebody else's identity provider
 
-Google, GitHub and Microsoft Entra can sign a person in. `internal/auth/sso`
-runs the flow; `internal/auth/users` decides what it means.
+Google, GitHub, Microsoft Entra and whatever OpenID Connect provider the
+operator runs themselves can sign a person in. `internal/auth/sso` runs the
+flow; `internal/auth/users` decides what it means.
+
+The fourth of those is one provider, not a family. `auth.oidc.issuer` names a
+single address; an identity is a subject at that issuer, and pointing the
+setting somewhere else is therefore not a reconfiguration but a different set
+of people. Only the issuer differs from Google in code — the same discovery,
+the same PKCE, nonce, single-use state and pinned redirect — because the parts
+that must not vary by provider are the parts kept in one copy.
+
+**The issuer is checked by one rule, in `settings`.** It decides where a client
+secret is sent and whose signature is believed for an identity, so it is
+refused unless it is https (or loopback), carries no query or fragment, and is
+not the `.well-known` address somebody pasted by mistake. The sign-in flow
+calls the same function the settings form does: a rule written twice is a rule
+that becomes two rules.
+
+**A self-hosted provider is held to `email_verified` like Google, not excused
+like Entra.** Entra's exemption is bought by the tenant — this host refuses to
+run it without one directory, so the address in a token it accepts was assigned
+by an administrator. An arbitrary issuer buys nothing equivalent: it may have
+open self-registration, in which case an unverified address is an
+account-takeover path into an existing mcpd account with the same address. An
+operator whose provider reports everyone as unverified should turn on email
+verification there rather than have mcpd stop looking.
 
 **An unlinked provider identity is not an account, whatever address it
 carries.** This is the decision the whole feature is shaped around. A Google

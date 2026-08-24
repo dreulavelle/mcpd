@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type PendingRegistration } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
@@ -101,8 +101,10 @@ describe("the authentication page", () => {
     stub({ waiting: [pendingUser({ has_password: false, providers: ["Google"] })] });
     mount();
 
-    await screen.findByText("Waiting for you");
-    expect(screen.getByText("Google")).toBeInTheDocument();
+    const queue = (await screen.findByText("Waiting for you")).closest("div[data-slot=card]");
+    // Scoped to the queue: the redirect-address table on the same page also
+    // names Google, and an unscoped match would pass for the wrong reason.
+    expect(within(queue as HTMLElement).getByText("Google")).toBeInTheDocument();
     expect(screen.queryByText("A password — unchecked")).toBeNull();
   });
 

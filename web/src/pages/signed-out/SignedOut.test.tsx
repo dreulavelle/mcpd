@@ -63,6 +63,28 @@ describe("the sign-in screen", () => {
     expect(screen.getByRole("button", { name: "Continue with GitHub" })).toBeInTheDocument();
   });
 
+  // A provider the operator runs is called whatever they call it. The server
+  // decides that name and sends it here; this page must not substitute one of
+  // its own, or a button would say something the Authentication page does not.
+  it("calls the operator's own provider what they named it", async () => {
+    const start = vi.spyOn(api, "ssoStart")
+      .mockResolvedValue({ authorization_url: "https://auth.example.com/authorize" });
+
+    render(<SignIn
+      meta={META}
+      auth={{ providers: [{ provider: "oidc", label: "Authentik" }], registration: false }}
+      onDone={() => undefined}
+    />);
+
+    const button = screen.getByRole("button", { name: "Continue with Authentik" });
+    expect(button).toBeInTheDocument();
+
+    await userEvent.click(button);
+    // Named by what it is, not by what it is called: two hosts both labelled
+    // "Authentik" would start the same flow, and the label is not the address.
+    expect(start).toHaveBeenCalledWith("oidc");
+  });
+
   // The password form always waits, whatever the host's approval setting says,
   // and it says so before somebody fills it in rather than afterwards.
   //

@@ -112,7 +112,7 @@ export interface Session {
 export type AccountStatus = "active" | "pending";
 
 /** An identity provider mcpd will sign somebody in through. */
-export type ProviderName = "google" | "github" | "entra";
+export type ProviderName = "google" | "github" | "entra" | "oidc";
 
 export interface ProviderDescriptor {
   provider: ProviderName;
