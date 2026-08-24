@@ -584,7 +584,16 @@ describe("prefetching the next page", () => {
     });
     vi.stubGlobal("cancelIdleCallback", () => {});
     return {
-      run: () => { pending.splice(0).forEach((fn) => fn()); },
+      // Waits for the page to have asked for idle time before granting it.
+      // Running whatever happens to be pending at the moment of the call is a
+      // race: the effect that registers the callback runs after the render
+      // that `findByText` waits for, usually within the same tick and not
+      // always -- which is a test that passes on a quiet machine and fails on
+      // a loaded CI runner.
+      run: async () => {
+        await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+        pending.splice(0).forEach((fn) => fn());
+      },
       get count() { return pending.length; },
     };
   }
@@ -598,7 +607,7 @@ describe("prefetching the next page", () => {
     await render({ load });
 
     await screen.findByText("Weather");
-    idle.run();
+    await idle.run();
     await waitFor(() =>
       expect(load).toHaveBeenCalledWith(expect.objectContaining({ cursor: "page-2" })));
     expect(load).toHaveBeenCalledTimes(2);
@@ -618,7 +627,7 @@ describe("prefetching the next page", () => {
     await render({ load });
 
     await screen.findByText("Weather");
-    idle.run();
+    await idle.run();
     await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
 
     await userEvent.type(screen.getByLabelText("Search the catalogue"), "tickets");
