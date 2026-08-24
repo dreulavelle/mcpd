@@ -1,7 +1,7 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { LogOut, Menu, X } from "lucide-react";
 import type { Capability } from "@/lib/capabilities";
-import { covers, visibleNav, type NavItem } from "@/lib/nav";
+import { entryFor, visibleNav, type NavItem } from "@/lib/nav";
 import { Link, useRouter } from "@/lib/router";
 import { signedInAs, useCan, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -14,7 +14,9 @@ function NavLink({ item, badge, onNavigate }: {
   onNavigate?: () => void;
 }) {
   const { path } = useRouter();
-  const current = covers(item.path, path);
+  // The entry this path belongs to, not merely one that covers it. /settings
+  // covers /settings/users, and both are in the sidebar.
+  const current = entryFor(path)?.path === item.path;
   const Icon = item.icon;
 
   return (
@@ -40,30 +42,10 @@ function NavLink({ item, badge, onNavigate }: {
   );
 }
 
-/** Exact, not prefix: /settings would otherwise light on every page beneath it. */
-function ChildLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
-  const { path } = useRouter();
-  const current = path === item.path;
-  return (
-    <Link
-      to={item.path}
-      onClick={onNavigate}
-      current={current}
-      className={cn(
-        "block rounded-md px-2.5 py-1 text-sm transition-colors",
-        current ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {item.label}
-    </Link>
-  );
-}
-
 function Sidebar({ badges, onNavigate }: {
   badges: Record<string, number>;
   onNavigate?: () => void;
 }) {
-  const { path } = useRouter();
   // Up front, not inside the filter: `useCan` is a hook and the predicate may
   // not run.
   const held: Record<Capability, boolean> = {
@@ -87,17 +69,10 @@ function Sidebar({ badges, onNavigate }: {
             </h2>
           )}
           {group.items.map((item) => (
-            <div key={item.path}>
-              <NavLink item={item} badge={badges[item.path]} onNavigate={onNavigate} />
-              {/* Children only while their parent is open. */}
-              {item.children && covers(item.path, path) && (
-                <div className="mt-1 ml-4 space-y-1 border-l pl-2">
-                  {item.children.map((child) => (
-                    <ChildLink key={child.path} item={child} onNavigate={onNavigate} />
-                  ))}
-                </div>
-              )}
-            </div>
+            <NavLink
+              key={item.path} item={item}
+              badge={badges[item.path]} onNavigate={onNavigate}
+            />
           ))}
         </div>
       ))}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { capabilitiesOf, roleCan, type Capability } from "./capabilities";
 import {
-  capabilityFor, covers, NAV, redirectFor, visibleNav, type Requirement,
+  capabilityFor, covers, entryFor, NAV, redirectFor, visibleNav, type Requirement,
 } from "./nav";
 
 /** A `can` predicate for a fixed set of capabilities. */
@@ -44,27 +44,43 @@ describe("navigation gating", () => {
     expect(labels).toContain("Marketplace");
   });
 
-  // Settings is how the *host* is configured. Your own account moved to
-  // /profile, reached by clicking your name, so Account is no longer a child
-  // here -- and Settings stopped meaning two different things.
   // The approval policy is readable by anyone who may read, for the same
-  // reason General is: what this host will do without asking anybody is part
+  // reason Settings is: what this host will do without asking anybody is part
   // of understanding the deployment, and the people the rules are written
   // about are exactly who should be able to read them. Changing it is admin,
   // which the page enforces by rendering read-only.
-  it("keeps Settings and the approval policy for a user but drops Users", () => {
-    const settings = visibleNav(holding("read"))
-      .flatMap((g) => g.items)
-      .find((i) => i.path === "/settings");
-    expect(settings).toBeDefined();
-    expect(settings?.children?.map((c) => c.label))
-      .toEqual(["General", "Approval policy"]);
-    expect(settings?.children?.map((c) => c.label)).not.toContain("Users");
+  it("keeps Settings and the approval policy for a user but drops the rest", () => {
+    const labels = visibleNav(holding("read")).flatMap((g) => g.items.map((i) => i.label));
+    expect(labels).toContain("Settings");
+    expect(labels).toContain("Approval policy");
+    expect(labels).not.toContain("Users");
     // Who may sign in, and who is waiting to be let in, is the same kind of
     // decision as who has an account -- and is gated the same way.
-    expect(settings?.children?.map((c) => c.label)).not.toContain("Authentication");
-    expect(settings?.children?.map((c) => c.label)).not.toContain("Groups");
-    expect(settings?.children?.map((c) => c.label)).not.toContain("API Keys");
+    expect(labels).not.toContain("Authentication");
+    expect(labels).not.toContain("Groups");
+    expect(labels).not.toContain("API Keys");
+  });
+
+  // The six of them are siblings, not a section that opens. A destination
+  // nobody can see until they click something else is one most people never
+  // find.
+  it("lists every administrative page beside Settings rather than inside it", () => {
+    const administer = visibleNav(holding("read", "propose", "approve", "admin"))
+      .find((g) => g.title === "Administer");
+    expect(administer?.items.map((i) => i.label)).toEqual([
+      "Settings", "Approval policy", "Authentication", "Users", "Groups", "API Keys",
+    ]);
+  });
+
+  // /settings covers /settings/users, and both are in the sidebar now. An
+  // entry that merely covers the path is not the entry somebody is on, and
+  // highlighting every one that does would light up most of the section.
+  it("marks one entry current, the deepest that matches", () => {
+    expect(entryFor("/settings/users")?.path).toBe("/settings/users");
+    expect(entryFor("/settings")?.path).toBe("/settings");
+    // A page beneath an entry still belongs to it.
+    expect(entryFor("/plugins/echo")?.path).toBe("/plugins");
+    expect(entryFor("/nowhere")).toBeNull();
   });
 
   // It is in the map because the router judges every path against the map.
@@ -77,9 +93,7 @@ describe("navigation gating", () => {
     expect(capabilityFor("/profile")).toBe("signed-in");
   });
 
-  // A parent left standing over nothing is a dead end: it looks like a section
-  // and opens onto an empty list.
-  it("drops a parent whose children are all hidden", () => {
+  it("shows nothing to a principal holding nothing", () => {
     const items = visibleNav(() => false).flatMap((g) => g.items);
     expect(items).toEqual([]);
   });
@@ -98,9 +112,6 @@ describe("navigation gating", () => {
     for (const group of NAV) {
       for (const item of group.items) {
         expect(known).toContain(item.capability);
-        for (const child of item.children ?? []) {
-          expect(known).toContain(child.capability);
-        }
       }
     }
   });
@@ -214,9 +225,6 @@ describe("the capability a path requires", () => {
     for (const group of NAV) {
       for (const item of group.items) {
         expect(capabilityFor(item.path)).not.toBeNull();
-        for (const child of item.children ?? []) {
-          expect(capabilityFor(child.path)).not.toBeNull();
-        }
       }
     }
   });
