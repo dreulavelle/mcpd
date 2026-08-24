@@ -251,8 +251,6 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 			"risk", op.Risk, "reason", decision.Reason)
 		return op
 	}
-	rule := *decision.Rule
-
 	now := s.now()
 	// The same guard every approval passes. A standing rule decides who
 	// authorises, not what may be authorised: an expired proposal is still
@@ -263,8 +261,8 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 	// an administrator's rule, and the proposer's own right to approve is
 	// beside the point. What bounds the proposer is CapPropose, checked above.
 	if err := Validate(op, StateApproved, TriggerApprove, s.guardContext(PolicyActor, now)); err != nil {
-		s.log.Warn("a rule covers this change but it cannot be approved",
-			"operation_id", op.ID, "rule", rule.ID, "error", err)
+		s.log.Warn("this change is authorised but cannot be approved",
+			"operation_id", op.ID, "authority", decision.Authority(), "error", err)
 		return op
 	}
 
@@ -282,27 +280,10 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 			ApprovedBy:        PolicyActor,
 			ApprovedAt:        now,
 			ApprovalExpiresAt: approvalExpiry,
-			AuthorizedByRule:  rule.ID,
+			AuthorizedByRule:  decision.Authority(),
 		},
 		Audit: s.audit("operation.approved", op, PolicyActor, StatePendingApproval, StateApproved,
-			map[string]any{
-				"reason":     decision.Reason,
-				"execute_by": approvalExpiry,
-				// "policy" rather than "dashboard" or "inline": the trail has
-				// to distinguish a decision somebody made from one nobody was
-				// asked to make.
-				"channel": "policy",
-				"rule":    rule.ID,
-				// The rule is recorded in full, not only by id. A rule can be
-				// edited or deleted, and an entry naming an identifier whose
-				// meaning has since changed would describe an authorisation
-				// that never happened. This entry stays true on its own.
-				"rule_scope":     rule.Scope(),
-				"rule_max_risk":  rule.MaxRisk.String(),
-				"rule_note":      rule.Note,
-				"proposed_by":    op.RequestedBy,
-				"asked_a_person": false,
-			}),
+			policyAudit(decision, op, approvalExpiry)),
 		Event: s.event(subjectFor(StateApproved), op),
 	})
 	if err != nil {
@@ -311,8 +292,8 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 		// says what happened -- so re-read it rather than handing back the
 		// copy from before the race, which would report pending_approval for
 		// an operation that is by now approved, expired or running.
-		s.log.Warn("a rule covers this change but the approval did not land",
-			"operation_id", op.ID, "rule", rule.ID, "error", err)
+		s.log.Warn("this change is authorised but the approval did not land",
+			"operation_id", op.ID, "authority", decision.Authority(), "error", err)
 		if fresh, readErr := s.repo.Get(ctx, op.ID); readErr == nil {
 			return fresh
 		}
@@ -320,9 +301,9 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 	}
 
 	s.notify()
-	s.log.Info("mutation approved by standing rule",
+	s.log.Info("mutation approved without being asked about",
 		"operation_id", stored.ID, "plugin", stored.Plugin, "action", stored.Action,
-		"risk", stored.Risk, "rule", rule.ID, "rule_scope", rule.Scope(),
+		"risk", stored.Risk, "authority", decision.Authority(), "reason", decision.Reason,
 		"requester", stored.RequestedBy, "execute_by", approvalExpiry)
 	return stored
 }
@@ -597,3 +578,30 @@ func (s *Service) event(subject string, op *Operation) OutboxEvent {
 // PolicyForTest exposes the current policy so tests can assert it is read
 // live rather than captured at construction.
 func (s *Service) PolicyForTest() Policy { return s.policyFn() }
+
+// policyAudit describes an approval nobody was asked to make.
+//
+// What authorised it is recorded in full rather than only by name, whether
+// that was a rule or this host's own default. Both can be edited or deleted,
+// and an entry naming something whose meaning has since changed would describe
+// an authorisation that never happened. This entry stays true on its own.
+func policyAudit(d AutoApprovalDecision, op *Operation, executeBy time.Time) map[string]any {
+	detail := map[string]any{
+		"reason":     d.Reason,
+		"execute_by": executeBy,
+		// "policy" rather than "dashboard" or "inline": the trail has to
+		// distinguish a decision somebody made from one nobody was asked to
+		// make.
+		"channel":        "policy",
+		"authority":      d.Authority(),
+		"proposed_by":    op.RequestedBy,
+		"asked_a_person": false,
+	}
+	if d.Rule != nil {
+		detail["rule"] = d.Rule.ID
+		detail["rule_scope"] = d.Rule.Scope()
+		detail["rule_max_risk"] = d.Rule.MaxRisk.String()
+		detail["rule_note"] = d.Rule.Note
+	}
+	return detail
+}

@@ -22,7 +22,7 @@ function policy(overrides: Partial<Policy> = {}): Policy {
     rules: [ALLOW, ALWAYS_ASK],
     wildcard: "*",
     ceilings: ["low", "medium", "high"],
-    default: "Every change is put to a person unless a rule authorises it.",
+    default: "Every change is put to a person unless a rule authorises it.", unmatched: "none",
     ...overrides,
   };
 }
@@ -396,5 +396,41 @@ describe("asking whether a change would be authorised", () => {
     await userEvent.type(within(rows()[0]!).getByLabelText("Proposed by"), "svc:chatgpt");
 
     expect(screen.getByText(/aren't included/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The page used to assert "anything no rule covers goes to a person" in its
+ * own words, which stopped being true the moment that became a setting. A page
+ * that describes a policy the host is not running is worse than one that says
+ * nothing, because nobody has reason to doubt it.
+ */
+describe("what happens when no rule covers a change", () => {
+  it("says what this host actually does", async () => {
+    mount(policy({
+      rules: [],
+      default: "A change no rule covers goes ahead, on the understanding that "
+        + "the assistant asked.",
+      unmatched: "high",
+    }));
+
+    expect(await screen.findByText(/goes ahead, on the understanding/)).toBeInTheDocument();
+    expect(screen.queryByText(/Anything no rule covers goes to a person/)).toBeNull();
+  });
+
+  it("offers the choice where the rules are", async () => {
+    mount(policy({ rules: [], unmatched: "high" }));
+
+    const choice = await screen.findByLabelText("When no rule covers a change");
+    expect((choice as HTMLSelectElement).value).toBe("high");
+  });
+
+  it("saves the choice", async () => {
+    const save = vi.spyOn(api, "saveSettings").mockResolvedValue({ applied: [] } as never);
+    mount(policy({ rules: [], unmatched: "high" }));
+
+    await userEvent.selectOptions(
+      await screen.findByLabelText("When no rule covers a change"), "none");
+    expect(save).toHaveBeenCalledWith({ "approval.unmatched": "none" });
   });
 });

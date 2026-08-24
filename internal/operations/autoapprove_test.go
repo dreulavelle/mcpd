@@ -790,3 +790,94 @@ func TestDecodeRules_TreatsAnEmptyValueAsNoRules(t *testing.T) {
 		}
 	}
 }
+
+// What a change meets when no rule covers it.
+//
+// This is the setting that decides whether an assistant's write runs or waits,
+// and it is the lowest-precedence thing in the model: an exclusion still wins
+// outright, a matching grant still decides, and a change that cannot be undone
+// is still held whatever it says.
+func TestEvaluate_WhenNoRuleCovers(t *testing.T) {
+	change := AutoApprovalRequest{
+		Plugin: "echo", Action: "set_label", Principal: "svc:chatgpt",
+		Risk: RiskMedium, Reversible: true,
+	}
+
+	for _, tc := range []struct {
+		name      string
+		unmatched RiskLevel
+		policy    []AutoApprovalRule
+		want      bool
+	}{
+		{name: "nothing set asks, as it always did", want: false},
+		{name: "a ceiling below the change asks", unmatched: RiskLow, want: false},
+		{name: "a ceiling at the change authorises", unmatched: RiskMedium, want: true},
+		{name: "a ceiling above the change authorises", unmatched: RiskHigh, want: true},
+		{
+			// The whole point of keeping exclusions above this: a carve-out
+			// written for one dangerous action has to keep working when the
+			// default is opened up, or opening it up quietly deletes it.
+			name:      "an exclusion beats the default outright",
+			unmatched: RiskHigh,
+			policy: []AutoApprovalRule{{
+				ID: "never-relabel", Plugin: "echo", Action: "set_label",
+				Principal: RuleAny, MaxRisk: "",
+			}},
+			want: false,
+		},
+		{
+			// A grant is more specific than "everything else", so its ceiling
+			// is the one that applies -- including when it is lower.
+			name:      "a matching grant decides instead",
+			unmatched: RiskHigh,
+			policy: []AutoApprovalRule{{
+				ID: "reads-only", Plugin: "echo", Action: "set_label",
+				Principal: RuleAny, MaxRisk: RiskLow,
+			}},
+			want: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := AutoApprovalPolicy{Rules: tc.policy, Unmatched: tc.unmatched}
+			got := p.Evaluate(change)
+			if got.AutoApprove != tc.want {
+				t.Errorf("AutoApprove = %v, want %v (%s)", got.AutoApprove, tc.want, got.Reason)
+			}
+			if got.Reason == "" {
+				t.Error("a decision with no reason cannot be explained to anybody")
+			}
+		})
+	}
+}
+
+// A change with no way back is put to a person however open the default is.
+// That floor is a property of the change, not of the configuration.
+func TestEvaluate_TheDefaultDoesNotReachAnIrreversibleChange(t *testing.T) {
+	p := AutoApprovalPolicy{Unmatched: RiskHigh}
+	got := p.Evaluate(AutoApprovalRequest{
+		Plugin: "echo", Action: "delete", Principal: "svc:chatgpt",
+		Risk: RiskLow, Reversible: false,
+	})
+	if got.AutoApprove {
+		t.Error("a change that cannot be undone was authorised in advance")
+	}
+}
+
+// "No rule authorised this" and "the host's own default did" are different
+// answers to why a change ran unasked, and the trail has to tell them apart.
+func TestAuthority_NamesTheDefaultWhenNoRuleDecided(t *testing.T) {
+	p := AutoApprovalPolicy{Unmatched: RiskHigh}
+	got := p.Evaluate(AutoApprovalRequest{
+		Plugin: "echo", Action: "set_label", Principal: "svc:chatgpt",
+		Risk: RiskLow, Reversible: true,
+	})
+	if !got.AutoApprove {
+		t.Fatalf("expected the default to authorise: %s", got.Reason)
+	}
+	if got.RuleID() != "" {
+		t.Errorf("RuleID = %q; no rule decided this", got.RuleID())
+	}
+	if got.Authority() != DefaultAuthority {
+		t.Errorf("Authority = %q, want %q", got.Authority(), DefaultAuthority)
+	}
+}

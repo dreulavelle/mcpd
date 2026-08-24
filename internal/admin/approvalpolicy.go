@@ -37,6 +37,9 @@ type approvalPolicyResponse struct {
 	// Default states what happens where no rule matches, so the page can say
 	// it rather than leaving an empty list to imply it.
 	Default string `json:"default"`
+	// Unmatched is the same fact as a value the page can put in a control:
+	// the ceiling authorised when nothing else decides, or "none".
+	Unmatched string `json:"unmatched"`
 	// Warnings names rules that match nothing this host currently serves.
 	//
 	// Never a refusal. A rule may legitimately name a plugin an operator is
@@ -48,7 +51,7 @@ type approvalPolicyResponse struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-func (s *Server) approvalPolicyView(rules []operations.AutoApprovalRule) approvalPolicyResponse {
+func (s *Server) approvalPolicyView(rules []operations.AutoApprovalRule, unmatched string) approvalPolicyResponse {
 	ceilings := operations.RuleCeilings()
 	out := make([]string, len(ceilings))
 	for i, c := range ceilings {
@@ -58,11 +61,12 @@ func (s *Server) approvalPolicyView(rules []operations.AutoApprovalRule) approva
 		rules = []operations.AutoApprovalRule{}
 	}
 	return approvalPolicyResponse{
-		Rules:    rules,
-		Wildcard: operations.RuleAny,
-		Ceilings: out,
-		Default:  "Every change is put to a person unless a rule authorises it.",
-		Warnings: s.unmatchedRules(rules),
+		Rules:     rules,
+		Wildcard:  operations.RuleAny,
+		Ceilings:  out,
+		Default:   defaultSentence(unmatched),
+		Unmatched: unmatched,
+		Warnings:  s.unmatchedRules(rules),
 	}
 }
 
@@ -136,6 +140,24 @@ func anyPluginHas(actions map[string]map[string]bool, plugin, action string) boo
 // page needs to know the difference between "no rules" and "the rules are
 // unreadable", because the host is asking about everything in both cases and
 // only one of them is what they configured.
+// unmatchedDefault reads the ceiling that applies when no rule matches.
+//
+// Unreadable settings report the strict answer rather than the permissive one:
+// a page that says changes are being held while they are going ahead is the
+// one mistake this sentence must not make.
+func (s *Server) unmatchedDefault(r *http.Request) string {
+	raw, ok, err := s.opts.Settings.Get(r.Context(), settings.KeyApprovalUnmatched)
+	if err != nil || !ok {
+		if f, found := settings.FieldFor(settings.KeyApprovalUnmatched); found && err == nil {
+			if d, isString := f.Default.(string); isString {
+				return d
+			}
+		}
+		return settings.RiskNone
+	}
+	return raw
+}
+
 func (s *Server) storedRules(r *http.Request) ([]operations.AutoApprovalRule, error) {
 	raw, ok, err := s.opts.Settings.Get(r.Context(), settings.KeyApprovalAutoRules)
 	if err != nil || !ok {
@@ -161,7 +183,7 @@ func (s *Server) handleGetApprovalPolicy(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, s.approvalPolicyView(rules))
+	s.writeJSON(w, r, http.StatusOK, s.approvalPolicyView(rules, s.unmatchedDefault(r)))
 }
 
 type putApprovalPolicyRequest struct {
@@ -223,7 +245,7 @@ func (s *Server) handlePutApprovalPolicy(w http.ResponseWriter, r *http.Request)
 	}
 
 	s.opts.Log.Info("approval rules changed", "actor", actor, "rules", len(rules))
-	s.writeJSON(w, r, http.StatusOK, s.approvalPolicyView(rules))
+	s.writeJSON(w, r, http.StatusOK, s.approvalPolicyView(rules, s.unmatchedDefault(r)))
 }
 
 // evaluateRequest asks what the policy would do with a change.
@@ -288,4 +310,24 @@ func (s *Server) handleEvaluateApprovalPolicy(w http.ResponseWriter, r *http.Req
 		Rule:        decision.Rule,
 		Reason:      decision.Reason,
 	})
+}
+
+// defaultSentence says what a change meets when no rule covers it.
+//
+// Read from the setting rather than stated as a constant. The page describes
+// the policy this host is running; a sentence that describes the policy it
+// used to run is worse than no sentence, because an operator has no reason to
+// doubt it.
+func defaultSentence(unmatched string) string {
+	switch unmatched {
+	case "", settings.RiskNone:
+		return "Every change is put to a person here unless a rule authorises it."
+	case "high":
+		return "A change no rule covers goes ahead, on the understanding that the " +
+			"assistant asked. A change that cannot be undone is still put to a person."
+	default:
+		return "A change no rule covers goes ahead up to " + unmatched +
+			" risk, on the understanding that the assistant asked. Anything higher, " +
+			"and anything that cannot be undone, is put to a person."
+	}
 }

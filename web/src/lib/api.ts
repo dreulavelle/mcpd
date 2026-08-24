@@ -529,6 +529,8 @@ export interface ApprovalPolicy {
   ceilings: string[];
   /** What happens where no rule matches, in the server's own words. */
   default: string;
+  /** The ceiling authorised when no rule matches; "none" holds everything. */
+  unmatched: string;
   /** Rules naming a plugin or action this host does not serve. Advisory. */
   warnings?: string[];
 }
