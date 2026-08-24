@@ -260,11 +260,22 @@ func RedirectRefusal(p users.Provider, redirect string) string {
 		if loopback {
 			return ""
 		}
+		// The address before the scheme, and deliberately in that order. An
+		// address on http breaks both rules, and reporting the scheme first
+		// sends somebody to arrange a certificate for a host name Google will
+		// refuse anyway. Naming the error it answers with makes the two
+		// recognisable as the same problem when they meet it.
+		if net.ParseIP(u.Hostname()) != nil {
+			also := ""
+			if u.Scheme != "https" {
+				also = " It requires https as well, so a name on its own is not enough."
+			}
+			return "Google will not accept an IP address here, only a host name — " +
+				"it answers with \"device_id and device_name are required for " +
+				"private IP\"." + also
+		}
 		if u.Scheme != "https" {
 			return "Google accepts only https here, except on localhost."
-		}
-		if net.ParseIP(u.Hostname()) != nil {
-			return "Google will not accept an IP address here, only a host name."
 		}
 	case users.ProviderEntra:
 		if !loopback && u.Scheme != "https" {

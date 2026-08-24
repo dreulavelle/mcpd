@@ -4,6 +4,7 @@ import {
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Copyable, Loading, Notice, PageHeader } from "@/components/chrome";
+import { ReachPicker } from "@/components/ReachPicker";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -202,8 +203,7 @@ function AddKey({ groups, onClose, onAdded }: {
 }) {
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("user");
-  const [everything, setEverything] = useState(false);
-  const [plugins, setPlugins] = useState("");
+  const [reach, setReach] = useState<string[]>([]);
   const [joined, setJoined] = useState<string[]>([]);
   const [expires, setExpires] = useState("");
   const [error, setError] = useState("");
@@ -219,13 +219,11 @@ function AddKey({ groups, onClose, onAdded }: {
     setBusy(true);
     setError("");
     try {
-      const granted = everything
-        ? ["*"]
-        : plugins.split(",").map((p) => p.trim()).filter(Boolean);
+
       const { secret } = await api.createKey({
         name: name.trim(),
         role,
-        plugins: granted,
+        plugins: reach,
         groups: joined,
         // A date input gives a day; the key dies at the start of it, in UTC.
         ...(expires ? { expires_at: new Date(`${expires}T00:00:00Z`).toISOString() } : {}),
@@ -272,21 +270,10 @@ function AddKey({ groups, onClose, onAdded }: {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="key-reach">Can reach</Label>
-            <NativeSelect
-              id="key-reach" value={everything ? "all" : "some"}
-              onChange={(e) => setEverything(e.target.value === "all")}
-            >
-              <option value="some">Only the systems I list</option>
-              <option value="all">Every system on this host</option>
-            </NativeSelect>
-            {!everything && (
-              <Input
-                value={plugins} onChange={(e) => setPlugins(e.target.value)}
-                placeholder="cnmaestro, netbox"
-                aria-label="Systems this key can reach"
-              />
-            )}
+            <ReachPicker
+              id="key-reach" value={reach} onChange={setReach}
+              subject="this key"
+            />
           </div>
 
           {groups.length > 0 && (

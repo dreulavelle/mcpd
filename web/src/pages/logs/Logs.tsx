@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Notice, PageHeader } from "@/components/chrome";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -35,13 +35,39 @@ type Level = (typeof LEVELS)[number];
 /** Ranked so a filter means "this and worse", which is how people read one. */
 const RANK: Record<string, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
 
-function toneOf(level: string): string {
+/**
+ * How a line is coloured, by level.
+ *
+ * The wash is what makes a problem findable while scrolling past hundreds of
+ * lines -- a coloured word is easy to miss at this size, a tinted row is not.
+ * It is only on the two levels worth interrupting for: tinting every line
+ * would be the same as tinting none.
+ */
+function toneOf(level: string): { word: string; row: string } {
   switch (level) {
-    case "ERROR": return "text-problem";
-    case "WARN": return "text-attention";
-    case "DEBUG": return "text-muted-foreground";
-    default: return "text-muted-foreground";
+    case "ERROR": return { word: "text-problem font-semibold", row: "bg-problem-soft" };
+    case "WARN": return { word: "text-attention font-semibold", row: "bg-attention-soft" };
+    case "DEBUG": return { word: "text-muted-foreground", row: "" };
+    default: return { word: "text-info", row: "" };
   }
+}
+
+/**
+ * Which attribute names a line's source rather than describing what happened.
+ *
+ * Drawn as a chip in front of the message, because "which part of the host is
+ * talking" is the question being asked while scanning, and answering it from
+ * a `component=tunnel` pair somewhere among the others means reading the whole
+ * line to find out whether it is worth reading.
+ */
+const SOURCE_KEYS = ["component", "plugin", "tunnel", "endpoint"] as const;
+
+function sourceOf(rest: Record<string, unknown>): { key: string; label: string } | null {
+  for (const key of SOURCE_KEYS) {
+    const v = rest[key];
+    if (typeof v === "string" && v !== "") return { key, label: v };
+  }
+  return null;
 }
 
 /**
@@ -214,7 +240,7 @@ function LogView({ lines, paused }: { lines: Line[]; paused: boolean }) {
 
   if (lines.length === 0) {
     return (
-      <div className="grid h-96 place-items-center rounded-md border text-sm text-muted-foreground">
+      <div className="grid h-[calc(100vh-24rem)] min-h-96 place-items-center rounded-md border text-sm text-muted-foreground">
         {paused ? "Paused." : "Nothing yet."}
       </div>
     );
@@ -223,7 +249,7 @@ function LogView({ lines, paused }: { lines: Line[]; paused: boolean }) {
   return (
     <div
       ref={box} onScroll={onScroll}
-      className="h-96 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs"
+      className="h-[calc(100vh-24rem)] min-h-96 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs"
     >
       {lines.map((line) => (
         <LogLine key={line.key} line={line} />
@@ -232,7 +258,7 @@ function LogView({ lines, paused }: { lines: Line[]; paused: boolean }) {
   );
 }
 
-function LogLine({ line }: { line: Line }) {
+const LogLine = memo(function LogLine({ line }: { line: Line }) {
   if (line.gap !== undefined) {
     return (
       <div className="my-1 text-attention">
@@ -242,22 +268,44 @@ function LogLine({ line }: { line: Line }) {
     );
   }
 
-  const attrs = Object.entries(line.rest);
+  const tone = toneOf(line.level);
+  const source = sourceOf(line.rest);
+  // `line` is the embedded tunnel client logging through this host: a whole
+  // record of its own inside an attribute. Shown beneath rather than inline,
+  // where it would push everything after it off the screen.
+  const nested = typeof line.rest.line === "string" ? line.rest.line : "";
+  // The chip's own key is not repeated among the attributes; every other one
+  // is, including a second source key, which is information rather than noise
+  // -- "the tunnel component, for the echo tunnel" is two facts.
+  const attrs = Object.entries(line.rest).filter(
+    ([k]) => k !== "line" && k !== source?.key,
+  );
+
   return (
-    <div className="flex gap-2 py-px break-words">
-      <span className="shrink-0 text-muted-foreground">{clock(line.time)}</span>
-      <span className={cn("w-12 shrink-0", toneOf(line.level))}>{line.level}</span>
-      <span className="min-w-0 flex-1">
-        {line.msg}
+    <div className={cn("flex gap-2 rounded-sm px-1 py-px hover:bg-accent/60", tone.row)}>
+      <span className="shrink-0 text-muted-foreground tabular-nums">{clock(line.time)}</span>
+      <span className={cn("w-12 shrink-0", tone.word)}>{line.level}</span>
+      {source && (
+        <span className="shrink-0 rounded bg-accent px-1 text-accent-foreground">
+          {source.label}
+        </span>
+      )}
+      <span className="min-w-0 flex-1 break-words">
+        <span className="text-foreground">{line.msg}</span>
         {attrs.map(([k, v]) => (
-          <span key={k} className="ml-2 text-muted-foreground">
+          <span key={k} className="ml-2 whitespace-nowrap text-muted-foreground">
             {k}=<span className="text-foreground">{render(v)}</span>
           </span>
         ))}
+        {nested && (
+          <span className="mt-px block border-l-2 border-border pl-2 text-muted-foreground">
+            {nested}
+          </span>
+        )}
       </span>
     </div>
   );
-}
+});
 
 /** Just the time. The date is the same for every line anybody is watching. */
 function clock(stamp: string): string {
