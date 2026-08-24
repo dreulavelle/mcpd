@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -278,6 +279,15 @@ const (
 	KeyEntraClientID = "auth.entra.client_id"
 	KeyEntraSecret   = "auth.entra.client_secret"
 	KeyEntraTenant   = "auth.entra.tenant_id"
+
+	// A provider the operator runs themselves. The issuer is the extra thing
+	// here and the important one: it decides where the client secret is sent
+	// and whose signature is believed for an identity.
+	KeyOIDCEnabled  = "auth.oidc.enabled"
+	KeyOIDCLabel    = "auth.oidc.label"
+	KeyOIDCIssuer   = "auth.oidc.issuer"
+	KeyOIDCClientID = "auth.oidc.client_id"
+	KeyOIDCSecret   = "auth.oidc.client_secret"
 )
 
 func intPtr(i int) *int { return &i }
@@ -699,6 +709,48 @@ func schema() []Group {
 				},
 			},
 		},
+		{
+			Name:      "oidc",
+			Title:     "Your own provider",
+			Section:   SectionAuthentication,
+			EnabledBy: KeyOIDCEnabled,
+			Help: "Any OpenID Connect provider you run: Keycloak, Authentik, " +
+				"Authelia, Zitadel, Okta. mcpd reads the rest from the issuer, " +
+				"so the address is the only thing it has to be told.",
+			Fields: []Field{
+				{
+					Key: KeyOIDCEnabled, Label: "Offer your provider", Kind: KindBool,
+					Group: "oidc", Apply: ApplyLive, Default: false,
+				},
+				{
+					Key: KeyOIDCLabel, Label: "Button text", Kind: KindString,
+					Group: "oidc", Apply: ApplyLive,
+					Placeholder: "Authentik",
+					Help:        "What the sign-in button says. Empty says Single sign-on.",
+				},
+				{
+					Key: KeyOIDCIssuer, Label: "Issuer URL", Kind: KindString,
+					Group: "oidc", Apply: ApplyLive, Required: true,
+					Placeholder: "https://auth.example.com/application/o/mcpd",
+					// The address without the well-known path, because that is
+					// what the provider's own screen calls the issuer and
+					// pasting the discovery URL is the mistake to head off.
+					Help: "The issuer itself, not its .well-known address — mcpd " +
+						"adds that. https, unless the provider is on this machine.",
+				},
+				{
+					Key: KeyOIDCClientID, Label: "Client ID", Kind: KindString,
+					Group: "oidc", Apply: ApplyLive, Required: true,
+				},
+				{
+					Key: KeyOIDCSecret, Label: "Client secret", Kind: KindSecret,
+					Group: "oidc", Apply: ApplyLive, Required: true,
+					Help: "Stored encrypted, and never shown again. mcpd is a " +
+						"confidential client: a provider set up as public has no " +
+						"secret to paste here and should be changed.",
+				},
+			},
+		},
 	}
 }
 
@@ -780,6 +832,11 @@ func validateAgainst(f Field, key, value string) error {
 				return err
 			}
 		}
+		if key == KeyOIDCIssuer && strings.TrimSpace(value) != "" {
+			if err := ValidateIssuerURL(value); err != nil {
+				return fmt.Errorf("settings: %s %w", f.Label, err)
+			}
+		}
 		if key == KeyTunnelDiagnostics && strings.TrimSpace(value) != "" {
 			if _, _, err := net.SplitHostPort(strings.TrimSpace(value)); err != nil {
 				return fmt.Errorf(
@@ -810,6 +867,42 @@ func validPublicURL(label, value string) error {
 		return fmt.Errorf("settings: %s has no host", label)
 	}
 	return nil
+}
+
+// ValidateIssuerURL checks an address this host will send a client secret to
+// and believe signatures from.
+//
+// Stricter than the public-URL check above, and for a different reason. Those
+// two addresses are places this host tells other people to go; this one is a
+// place this host itself goes, carrying a credential. A query or a fragment is
+// refused rather than trimmed because discovery appends a path, and quietly
+// dropping half of what an operator pasted would send the secret somewhere
+// other than where they believe it goes -- which is exactly the mistake that
+// pasting a .well-known URL makes.
+//
+// Exported because the sign-in flow enforces the same rule before it runs, and
+// a rule spelled out twice is a rule that will eventually be two rules.
+func ValidateIssuerURL(value string) error {
+	value = strings.TrimSpace(value)
+	u, err := url.Parse(value)
+	switch {
+	case err != nil || u.Host == "":
+		return errors.New("must be a full address, like https://auth.example.com/application/o/mcpd")
+	case u.User != nil:
+		return errors.New("must not carry a username or password")
+	case u.RawQuery != "" || u.Fragment != "":
+		return errors.New("must be the issuer itself, with no ? or # after it")
+	case strings.HasSuffix(strings.TrimSuffix(u.Path, "/"), "/.well-known/openid-configuration"):
+		return errors.New("should be the issuer, not its .well-known address — mcpd adds that")
+	case u.Scheme == "https":
+		return nil
+	case u.Scheme == "http":
+		if h := u.Hostname(); h == "localhost" || h == "127.0.0.1" || h == "::1" {
+			return nil
+		}
+		return errors.New("must be https unless the provider is on this machine")
+	}
+	return errors.New("must start with https://")
 }
 
 func validTunnelID(id string) bool {

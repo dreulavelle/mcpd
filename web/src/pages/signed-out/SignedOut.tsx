@@ -10,8 +10,31 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { ProviderMark } from "@/components/provider-mark";
 
-/** The frame both signed-out screens sit in. */
+/**
+ * What this host is, for somebody who has arrived at it and is deciding
+ * whether they are in the right place.
+ *
+ * Three statements rather than a description, and each one is a thing mcpd
+ * actually does — the sign-in page is the first screen anybody sees, and it
+ * should not be the one place that oversells.
+ */
+const FACTS = [
+  "One address your assistants reach every system through.",
+  "Reads run. Changes are held, or approved by a rule you wrote.",
+  "Every call is on an append-only record that notices tampering.",
+];
+
+/**
+ * The frame every signed-out screen sits in.
+ *
+ * Two columns on a wide window and one on a narrow. The left is decoration
+ * with a job: a card alone in the middle of a 27-inch display reads as an
+ * unfinished page, and the person arriving here often has not been told what
+ * mcpd is. It is plain CSS — a gradient and a grid — because nothing on the
+ * sign-in path should wait on a script to finish before it can be read.
+ */
 function SignedOutCard({ meta, error, title, children }: {
   meta: Meta | null;
   error?: string;
@@ -19,23 +42,75 @@ function SignedOutCard({ meta, error, title, children }: {
   children: ReactNode;
 }) {
   return (
-    <div className="grid min-h-screen place-items-center px-4 py-12">
-      <div className="w-full max-w-sm space-y-5">
-        <div className="flex justify-center">
-          <Brand compact />
+    <div className="min-h-screen lg:grid lg:grid-cols-2">
+      <aside
+        className="relative hidden overflow-hidden bg-primary p-10 text-primary-foreground lg:flex lg:flex-col lg:justify-between"
+      >
+        {/* A grid that fades out, drawn in the foreground colour so it holds
+            up in both themes without a second definition. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-[0.07]"
+          style={{
+            backgroundImage:
+              "linear-gradient(currentColor 1px, transparent 1px), linear-gradient(90deg, currentColor 1px, transparent 1px)",
+            backgroundSize: "44px 44px",
+            maskImage: "radial-gradient(ellipse at 30% 20%, #000 0%, transparent 75%)",
+            WebkitMaskImage: "radial-gradient(ellipse at 30% 20%, #000 0%, transparent 75%)",
+          }}
+        />
+
+        <div className="relative flex items-center gap-2">
+          <span
+            aria-hidden="true"
+            className="grid size-7 place-items-center rounded-md bg-primary-foreground font-mono text-sm font-bold text-primary"
+          >
+            m
+          </span>
+          <span className="text-lg font-semibold tracking-tight">mcpd</span>
         </div>
 
-        <Card>
-          <CardContent className="space-y-4">
-            {title && <h1 className="text-base font-semibold">{title}</h1>}
-            {error && <Notice tone="problem">{error}</Notice>}
-            {children}
-          </CardContent>
-        </Card>
+        <div className="relative max-w-md space-y-6">
+          <h2 className="text-2xl font-semibold leading-snug tracking-tight">
+            A control plane for the systems your assistants can reach.
+          </h2>
+          <ul className="space-y-3 text-sm/relaxed opacity-90">
+            {FACTS.map((fact) => (
+              <li key={fact} className="flex gap-3">
+                <span aria-hidden="true" className="mt-2 size-1.5 shrink-0 rounded-full bg-current" />
+                {fact}
+              </li>
+            ))}
+          </ul>
+        </div>
 
-        {meta && (
-          <p className="text-center text-xs text-muted-foreground">mcpd {meta.version}</p>
-        )}
+        <p className="relative text-xs opacity-70">
+          {meta ? `mcpd ${meta.version}` : "mcpd"}
+        </p>
+      </aside>
+
+      <div className="grid place-items-center px-4 py-12">
+        <div className="w-full max-w-sm space-y-5">
+          {/* The mark belongs on every window narrow enough to have lost the
+              panel that carries it. */}
+          <div className="flex justify-center lg:hidden">
+            <Brand compact />
+          </div>
+
+          <Card>
+            <CardContent className="space-y-4">
+              {title && <h1 className="text-base font-semibold">{title}</h1>}
+              {error && <Notice tone="problem">{error}</Notice>}
+              {children}
+            </CardContent>
+          </Card>
+
+          {meta && (
+            <p className="text-center text-xs text-muted-foreground lg:hidden">
+              mcpd {meta.version}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -71,21 +146,30 @@ function ProviderButtons({ providers, onProblem }: {
     <div className="space-y-2">
       {providers.map((p) => (
         <Button
-          key={p.provider} variant="outline" className="w-full"
+          key={p.provider} variant="outline"
+          className="w-full justify-start gap-3"
           disabled={busy !== ""} onClick={() => go(p.provider)}
         >
-          {busy === p.provider ? "Taking you there…" : `Continue with ${p.label}`}
+          <ProviderMark provider={p.provider} />
+          {/* The label is centred within what the mark leaves, rather than
+              running from it, so a column of buttons has one text edge. */}
+          <span className="flex-1 text-center">
+            {busy === p.provider ? "Taking you there…" : `Continue with ${p.label}`}
+          </span>
+          {/* Balances the mark so the centring above is true. */}
+          <span aria-hidden="true" className="size-4 shrink-0" />
         </Button>
       ))}
     </div>
   );
 }
 
-function Or() {
+/** The line between the providers and the form, which says what is below it. */
+function Or({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-3">
       <Separator className="flex-1" />
-      <span className="text-xs text-muted-foreground">or</span>
+      <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
       <Separator className="flex-1" />
     </div>
   );
@@ -136,11 +220,11 @@ export function SignIn({ meta, auth, notice, onDone }: {
   const providers = auth?.providers ?? [];
 
   return (
-    <SignedOutCard meta={meta} error={error}>
+    <SignedOutCard meta={meta} error={error} title="Sign in">
       {providers.length > 0 && (
         <>
           <ProviderButtons providers={providers} onProblem={setError} />
-          <Or />
+          <Or label="or continue with email" />
         </>
       )}
 
@@ -313,8 +397,8 @@ export function FirstRun({ meta, onDone }: {
     <SignedOutCard meta={meta} error={error} title="Create the first account">
       <p className="text-sm text-muted-foreground">
         Nobody has claimed this host yet. This account will be an administrator;
-        you can add others, and turn on sign-in with Google, GitHub or Microsoft,
-        once you are in.
+        you can add others, and turn on sign-in with Google, GitHub, Microsoft
+        or your own provider, once you are in.
       </p>
 
       <form className="space-y-4" onSubmit={submit}>

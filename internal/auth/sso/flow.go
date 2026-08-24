@@ -92,7 +92,7 @@ func (s *Service) Available(ctx context.Context) []Descriptor {
 	out := []Descriptor{}
 	for _, c := range s.providers(ctx) {
 		if c.Ready() {
-			out = append(out, Descriptor{Provider: string(c.Provider), Label: Label(c.Provider)})
+			out = append(out, Descriptor{Provider: string(c.Provider), Label: LabelFor(c)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })

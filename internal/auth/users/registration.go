@@ -39,12 +39,19 @@ const (
 	ProviderGoogle Provider = "google"
 	ProviderGitHub Provider = "github"
 	ProviderEntra  Provider = "entra"
+	// ProviderOIDC is whatever OpenID Connect provider the operator runs
+	// themselves -- Keycloak, Authentik, Authelia, Okta, Zitadel. One of them,
+	// not a family: the issuer is a single configured address, and an identity
+	// is a subject at that issuer. Pointing this at a different issuer is
+	// therefore not a reconfiguration, it is a different set of people, which
+	// is why the settings say so where an operator will read it.
+	ProviderOIDC Provider = "oidc"
 )
 
 // Valid reports whether p is a provider this build knows.
 func (p Provider) Valid() bool {
 	switch p {
-	case ProviderGoogle, ProviderGitHub, ProviderEntra:
+	case ProviderGoogle, ProviderGitHub, ProviderEntra, ProviderOIDC:
 		return true
 	}
 	return false
