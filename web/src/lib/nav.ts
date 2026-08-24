@@ -20,7 +20,6 @@ export interface NavItem {
   capability: Requirement;
   /** Whether the sidebar lists it. Defaults to true; a hidden entry is still routed. */
   inSidebar?: boolean;
-  children?: NavItem[];
 }
 
 export interface NavGroup {
@@ -91,6 +90,11 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
+    // Flat, not a section that opens. Six destinations behind one word is a
+    // menu that hides most of itself: nothing under Administer is reachable
+    // until Settings is clicked, and the sidebar spends that space on nothing.
+    // The paths are unchanged -- a label is not an address, and bookmarks and
+    // links already point at these.
     title: "Administer",
     items: [
       {
@@ -99,51 +103,42 @@ export const NAV: NavGroup[] = [
         lede: "How this host is configured.",
         icon: Cog,
         capability: "read",
-        children: [
-          {
-            path: "/settings",
-            label: "General",
-            lede: "How this host is configured.",
-            icon: Cog,
-            capability: "read",
-          },
-          {
-            // Read to see, admin to change, as with General beside it.
-            path: "/settings/policy",
-            label: "Approval policy",
-            lede: "Which changes can run without asking anyone.",
-            icon: ShieldCheck,
-            capability: "read",
-          },
-          {
-            path: "/settings/authentication",
-            label: "Authentication",
-            lede: "How people sign in, and who is allowed to.",
-            icon: KeyRound,
-            capability: "admin",
-          },
-          {
-            path: "/settings/users",
-            label: "Users",
-            lede: "Who can sign in, what they may do, and what they can reach.",
-            icon: Users,
-            capability: "admin",
-          },
-          {
-            path: "/settings/groups",
-            label: "Groups",
-            lede: "A group hands its systems to everyone in it.",
-            icon: UsersRound,
-            capability: "admin",
-          },
-          {
-            path: "/settings/keys",
-            label: "API Keys",
-            lede: "Credentials for scripts and agents. Each one acts as itself.",
-            icon: Ticket,
-            capability: "admin",
-          },
-        ],
+      },
+      {
+        // Read to see, admin to change, as with Settings above it.
+        path: "/settings/policy",
+        label: "Approval policy",
+        lede: "Which changes can run without asking anyone.",
+        icon: ShieldCheck,
+        capability: "read",
+      },
+      {
+        path: "/settings/authentication",
+        label: "Authentication",
+        lede: "How people sign in, and who is allowed to.",
+        icon: KeyRound,
+        capability: "admin",
+      },
+      {
+        path: "/settings/users",
+        label: "Users",
+        lede: "Who can sign in, what they may do, and what they can reach.",
+        icon: Users,
+        capability: "admin",
+      },
+      {
+        path: "/settings/groups",
+        label: "Groups",
+        lede: "A group hands its systems to everyone in it.",
+        icon: UsersRound,
+        capability: "admin",
+      },
+      {
+        path: "/settings/keys",
+        label: "API Keys",
+        lede: "Credentials for scripts and agents. Each one acts as itself.",
+        icon: Ticket,
+        capability: "admin",
       },
     ],
   },
@@ -175,26 +170,19 @@ export function redirectFor(path: string): string | null {
 }
 
 /**
- * The navigation a principal may see. A parent whose children are all hidden
- * goes with them, and an empty group disappears rather than heading nothing.
+ * The navigation a principal may see. An empty group disappears rather than
+ * heading nothing.
  */
 export function visibleNav(
   can: (capability: Capability) => boolean,
 ): NavGroup[] {
-  const keep = (item: NavItem): NavItem | null => {
-    if (item.inSidebar === false) return null;
-    if (item.capability !== "signed-in" && !can(item.capability)) return null;
-    if (!item.children) return item;
-    const children = item.children.map(keep).filter((c): c is NavItem => c !== null);
-    if (children.length === 0) return null;
-    return { ...item, children };
+  const keep = (item: NavItem): boolean => {
+    if (item.inSidebar === false) return false;
+    return item.capability === "signed-in" || can(item.capability);
   };
 
   return NAV
-    .map((group) => ({
-      ...group,
-      items: group.items.map(keep).filter((i): i is NavItem => i !== null),
-    }))
+    .map((group) => ({ ...group, items: group.items.filter(keep) }))
     .filter((group) => group.items.length > 0);
 }
 
@@ -212,17 +200,26 @@ export function covers(entryPath: string, path: string): boolean {
  * Null means "nothing here to render", never "anyone may".
  */
 export function capabilityFor(path: string): Requirement | null {
-  let matched: Requirement | null = null;
-  let matchedLength = -1;
+  return entryFor(path)?.capability ?? null;
+}
 
-  const consider = (item: NavItem) => {
-    if (covers(item.path, path) && item.path.length > matchedLength) {
-      matched = item.capability;
-      matchedLength = item.path.length;
+/**
+ * Which sidebar entry a path belongs to, or null for a path in no section.
+ *
+ * The longest match, not the first. /settings and /settings/users are siblings
+ * now, and the first covers the second -- so an entry that merely covers the
+ * path is not the entry the person is on, and highlighting every one that does
+ * would light up half the menu.
+ */
+export function entryFor(path: string): NavItem | null {
+  let matched: NavItem | null = null;
+
+  for (const group of NAV) {
+    for (const item of group.items) {
+      if (covers(item.path, path) && item.path.length > (matched?.path.length ?? -1)) {
+        matched = item;
+      }
     }
-    for (const child of item.children ?? []) consider(child);
-  };
-
-  for (const group of NAV) for (const item of group.items) consider(item);
+  }
   return matched;
 }

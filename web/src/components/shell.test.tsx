@@ -36,27 +36,42 @@ describe("the sidebar", () => {
     }
   });
 
-  it("hides Users inside Settings from a user, and keeps the rest", () => {
+  it("hides the administrative pages from a user, and keeps the rest", () => {
     mount("user", "/settings");
-    expect(screen.getByRole("link", { name: "General" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Approval policy" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
   });
 
   // Settings is how the host is configured. Your own account is not, and is
   // reached by clicking your name rather than by a second entry here.
-  it("does not offer an Account page inside Settings", () => {
+  it("does not offer an Account page", () => {
     mount("admin", "/settings");
     expect(screen.queryByRole("link", { name: "Account" })).not.toBeInTheDocument();
   });
 
-  it("shows Users inside Settings to an administrator", () => {
+  it("shows Users to an administrator", () => {
     mount("admin", "/settings");
     expect(screen.getByRole("link", { name: "Users" })).toBeInTheDocument();
   });
 
-  it("only expands the section that is open", () => {
+  // Every administrative page is in the sidebar from anywhere, not only once
+  // Settings has been opened. That is the whole point of flattening them.
+  it("lists the administrative pages from a page in another section", () => {
     mount("admin", "/approvals");
-    expect(screen.queryByRole("link", { name: "General" })).not.toBeInTheDocument();
+    for (const label of ["Settings", "Approval policy", "Users", "Groups", "API Keys"]) {
+      expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
+    }
+  });
+
+  // /settings covers /settings/users, so both entries match the path. Only the
+  // one somebody is actually on may be marked current.
+  it("marks only the deepest matching entry as current", () => {
+    mount("admin", "/settings/users");
+    expect(screen.getByRole("link", { name: "Users" }))
+      .toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Settings" }))
+      .not.toHaveAttribute("aria-current");
   });
 
   it("marks the open section for assistive technology", () => {
