@@ -277,13 +277,42 @@ func (d AutoApprovalDecision) RuleID() string {
 	return d.Rule.ID
 }
 
-// AutoApprovalPolicy is the configured rule set.
+// Authority names what authorised a change that is going ahead unasked.
 //
-// The zero value asks about everything. That is not a placeholder: nothing
-// about an upgrade may loosen a running deployment, so a host that has never
-// been configured must behave exactly as it did before this existed.
+// A rule where one decided, and the host's default where none did. Never
+// empty for an approval: a change recorded as authorised by nothing is a
+// change the trail cannot explain.
+func (d AutoApprovalDecision) Authority() string {
+	if d.Rule != nil {
+		return d.Rule.ID
+	}
+	return DefaultAuthority
+}
+
+// DefaultAuthority is recorded as the authority when a change was authorised
+// by the host's own default rather than by a rule somebody wrote.
+//
+// A separate value rather than an empty one, because empty already means
+// something here: nobody authorised this in advance. The audit trail has to be
+// able to say which of the two happened, and "no rule" and "the default" are
+// different answers to "why did this run without being asked about".
+const DefaultAuthority = "policy:default"
+
+// AutoApprovalPolicy is the configured rule set, and what happens to a change
+// no rule covers.
 type AutoApprovalPolicy struct {
 	Rules []AutoApprovalRule
+
+	// Unmatched is the highest risk authorised when no rule matches.
+	//
+	// Empty asks about everything, which is what this host did before the
+	// field existed and what the zero value must keep meaning: nothing about
+	// an upgrade may loosen a running deployment.
+	//
+	// It is the lowest-precedence thing in the model. An exclusion still wins
+	// outright, and a matching grant still decides, so a carve-out written for
+	// one dangerous action keeps working whatever this is set to.
+	Unmatched RiskLevel
 }
 
 // authorisesNothing reports a rule that cannot grant anything, and is
@@ -341,8 +370,24 @@ func (p AutoApprovalPolicy) Evaluate(req AutoApprovalRequest) AutoApprovalDecisi
 		}
 	}
 	if grant == nil {
-		return AutoApprovalDecision{
-			Reason: "no rule covers this change, so it is put to a person",
+		switch {
+		case !p.Unmatched.Valid() || p.Unmatched == RiskCritical:
+			return AutoApprovalDecision{
+				Reason: "no rule covers this change, so it is put to a person",
+			}
+		case !p.Unmatched.AtLeast(req.Risk):
+			return AutoApprovalDecision{
+				Reason: fmt.Sprintf(
+					"no rule covers this change, and this host authorises up to %s "+
+						"by default while this change is %s", p.Unmatched, req.Risk),
+			}
+		default:
+			return AutoApprovalDecision{
+				AutoApprove: true,
+				Reason: fmt.Sprintf(
+					"no rule covers this change, and this host authorises %s changes "+
+						"up to %s by default", req.Risk, p.Unmatched),
+			}
 		}
 	}
 	if !grant.MaxRisk.AtLeast(req.Risk) {

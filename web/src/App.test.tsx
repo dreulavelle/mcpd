@@ -102,7 +102,7 @@ function stubApi(role: "user" | "admin" = "admin") {
   vi.spyOn(api, "users").mockResolvedValue({ users: [], count: 0 });
   vi.spyOn(api, "approvalPolicy").mockResolvedValue({
     rules: [], wildcard: "*", ceilings: ["low", "medium", "high"],
-    default: "Every change is put to a person unless a rule authorises it.",
+    default: "Every change is put to a person unless a rule authorises it.", unmatched: "none",
   });
   vi.spyOn(api, "mcpServerTools").mockResolvedValue({ tools: [], count: 0 });
   // A host with no providers and no sign-ups, which is what an upgrade
