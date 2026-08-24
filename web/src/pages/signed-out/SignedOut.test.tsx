@@ -29,7 +29,7 @@ const SESSION: Session = {
  */
 describe("the sign-in screen", () => {
   it("shows only the password form on a host with nothing else turned on", () => {
-    render(<SignIn meta={META} auth={{ providers: [], registration: false }}
+    render(<SignIn auth={{ providers: [], registration: false }}
       onDone={() => undefined} />);
 
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
@@ -40,7 +40,7 @@ describe("the sign-in screen", () => {
   // Null is what a host that could not be asked looks like. Drawing the
   // password form is the honest fallback; guessing at buttons is not.
   it("shows only the password form when this host could not be asked", () => {
-    render(<SignIn meta={META} auth={null} onDone={() => undefined} />);
+    render(<SignIn auth={null} onDone={() => undefined} />);
 
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Continue with/ })).toBeNull();
@@ -48,7 +48,6 @@ describe("the sign-in screen", () => {
 
   it("offers the providers this host has", () => {
     render(<SignIn
-      meta={META}
       auth={{
         providers: [
           { provider: "google", label: "Google" },
@@ -71,7 +70,6 @@ describe("the sign-in screen", () => {
       .mockResolvedValue({ authorization_url: "https://auth.example.com/authorize" });
 
     render(<SignIn
-      meta={META}
       auth={{ providers: [{ provider: "oidc", label: "Authentik" }], registration: false }}
       onDone={() => undefined}
     />);
@@ -95,7 +93,6 @@ describe("the sign-in screen", () => {
   // something that is not true.
   it("says an account will wait for an administrator", async () => {
     render(<SignIn
-      meta={META}
       auth={{ providers: [], registration: true }}
       onDone={() => undefined}
     />);
@@ -117,7 +114,7 @@ describe("the sign-in screen", () => {
     resetSSOOutcome();
     window.history.replaceState(null, "", "/?sso_error=address_taken");
 
-    render(<SignIn meta={META} auth={null} onDone={() => undefined} />);
+    render(<SignIn auth={null} onDone={() => undefined} />);
     expect(screen.getByText(/already uses that email address/i)).toBeInTheDocument();
 
     expect(consumeSSOOutcome()).toBe("");
@@ -128,7 +125,7 @@ describe("the sign-in screen", () => {
   // way to attach the provider to it is to sign in and link it.
   it("carries the reason a provider round trip was refused", () => {
     render(<SignIn
-      meta={META} auth={null} onDone={() => undefined}
+      auth={null} onDone={() => undefined}
       notice="An account here already uses that email address."
     />);
 
@@ -152,7 +149,7 @@ describe("an account waiting for approval", () => {
 
   it("says who it is signed in as and offers a way out", async () => {
     const onSignOut = vi.fn();
-    render(<AwaitingApproval meta={META} email="newcomer@example.com" onSignOut={onSignOut} />);
+    render(<AwaitingApproval email="newcomer@example.com" onSignOut={onSignOut} />);
 
     expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
     expect(screen.getByText("newcomer@example.com")).toBeInTheDocument();

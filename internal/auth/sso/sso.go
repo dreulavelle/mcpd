@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 
@@ -227,4 +228,48 @@ func (s *Service) configFor(ctx context.Context, p users.Provider) (Config, erro
 		return Config{}, fmt.Errorf("%w: %s", ErrNotConfigured, p)
 	}
 	return c, nil
+}
+
+// RedirectRefusal reports why a provider will not accept the redirect address
+// this host would build, or "" when it will.
+//
+// The address is registered by hand at the provider, so a rule broken here
+// surfaces as a refusal on somebody else's screen, in their words, after the
+// operator has already left the dashboard believing they were done. Saying it
+// where the address is shown is the difference between a five-minute fix and
+// an afternoon.
+//
+// Only the two rules that are documented, stable, and commonly hit are
+// encoded. GitHub accepts plain http and raw addresses, so it has nothing
+// here; a provider the operator runs is theirs, and this host has no business
+// guessing at its policy.
+func RedirectRefusal(p users.Provider, redirect string) string {
+	u, err := url.Parse(strings.TrimSpace(redirect))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	loopback := false
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		loopback = true
+	}
+
+	switch p {
+	case users.ProviderGoogle:
+		// Both rules exempt localhost, and only localhost.
+		if loopback {
+			return ""
+		}
+		if u.Scheme != "https" {
+			return "Google accepts only https here, except on localhost."
+		}
+		if net.ParseIP(u.Hostname()) != nil {
+			return "Google will not accept an IP address here, only a host name."
+		}
+	case users.ProviderEntra:
+		if !loopback && u.Scheme != "https" {
+			return "Microsoft accepts only https here, except on localhost."
+		}
+	}
+	return ""
 }

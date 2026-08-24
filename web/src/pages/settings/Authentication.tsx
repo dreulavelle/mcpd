@@ -125,6 +125,13 @@ function RedirectURIs() {
                   <TableCell>{PROVIDER_NAMES[provider] ?? provider}</TableCell>
                   <TableCell>
                     <code className="font-mono text-xs break-all">{uri}</code>
+                    {/* Said here rather than left to surface as a refusal on
+                        the provider's own screen, after the operator has gone. */}
+                    {data.refusals?.[provider] && (
+                      <p className="mt-1 text-xs text-attention">
+                        {data.refusals[provider]}
+                      </p>
+                    )}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-sm">
                     {CONSOLES[provider]
