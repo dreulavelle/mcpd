@@ -1,6 +1,6 @@
 import {
   Boxes, ClipboardCheck, Cog, Gauge, KeyRound, ScrollText, ShieldCheck, Store,
-  Ticket, UserRound, Users, UsersRound, Waypoints, type LucideIcon,
+  Terminal, Ticket, UserRound, Users, UsersRound, Waypoints, type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
 
@@ -138,6 +138,16 @@ export const NAV: NavGroup[] = [
         label: "API Keys",
         lede: "Credentials for scripts and agents. Each one acts as itself.",
         icon: Ticket,
+        capability: "admin",
+      },
+      {
+        // Not read: the log carries every request this host served, which
+        // systems were called and by whom. That is a wider view than any one
+        // account's own work.
+        path: "/logs",
+        label: "Logs",
+        lede: "What this host is doing, as it does it.",
+        icon: Terminal,
         capability: "admin",
       },
     ],

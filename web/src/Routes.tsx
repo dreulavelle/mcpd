@@ -6,6 +6,7 @@ import { Notice, PageHeader } from "@/components/chrome";
 import { ApprovalsList } from "@/pages/approvals/ApprovalsList";
 import { OperationDetail } from "@/pages/approvals/OperationDetail";
 import { Audit } from "@/pages/audit/Audit";
+import { Logs } from "@/pages/logs/Logs";
 import { MarketplaceList } from "@/pages/marketplace/MarketplaceList";
 import { Overview } from "@/pages/overview/Overview";
 import { PluginDetail } from "@/pages/plugins/PluginDetail";
@@ -56,6 +57,9 @@ export function Routes() {
 
       case "tunnels":
         return <Tunnels />;
+
+      case "logs":
+        return <Logs />;
 
       case "profile":
         return <Profile />;

@@ -34,6 +34,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/plugins` | Plugin registry, tool attachment, approval tools |
 | `internal/auth` | Principals, roles, capabilities, static tokens |
 | `internal/auth/users` | Accounts, passwords, browser sessions, registration |
+| `internal/observability` | Logging, redaction, health, metrics, and the copy of the log the dashboard streams |
 | `internal/auth/sso` | Signing in through Google, GitHub, Entra, or the operator's own provider |
 | `internal/auth/groups` | Groups, membership, and the one union that decides reach |
 | `internal/auth/apikeys` | Bearer credentials this host issued, and the verifier over them |
@@ -1659,3 +1660,40 @@ forgotten deliberately.
 Adding an instance records intent; it does not mount. A plugin is built once,
 at startup, from the settings it had then, so the dashboard says a restart is
 needed rather than showing an instance whose tools never appear.
+
+
+## Watching the log
+
+The Logs page shows what the host is doing as it does it. `internal/observability`
+keeps a bounded ring of recent lines and fans new ones out to whoever is
+watching; `internal/admin` serves them.
+
+**The copy is taken through a handler of its own, not off the destination's
+bytes.** Two things follow from that and neither is incidental. The dashboard
+gets JSON whatever format an operator has chosen for the file — those are
+different audiences and only one of them can be asked to cope with a change.
+And a handler built from the same options carries the same level filtering and
+the same redaction, so a value withheld from the file cannot reach a browser by
+this route. The cost is that a streamed line is rendered twice, which is why
+the tap is nil unless a host asks for it.
+
+**A watcher is dropped, never waited for.** The alternative is a goroutine
+blocked inside `Handle` holding the writer's lock, with every other goroutine
+that wants to log queued behind a browser on a slow connection. What a watcher
+missed is counted and sent to them, because a gap in a log with nothing marking
+it reads as "nothing happened".
+
+**Server-sent events, not a WebSocket.** Nothing travels upwards. A socket
+would buy a direction that is not used, at the price of a dependency this build
+does not otherwise have, and `EventSource` reconnects on its own — which is
+most of what a hand-written client would have to get right.
+
+**Admin, not read.** The log carries every request this host served, which
+systems were called and by whom. That is a wider view than any one account's
+own work.
+
+Redaction is by attribute key — `api_key`, `token`, `password` and the rest of
+`redactedKeys`, matched on a normalised form so `API-Key` and `apiKey` are the
+same key. A secret written into the *text* of a message rather than given a key
+of its own is not caught, which is why credentials are logged by fingerprint.
+The page says so rather than implying a guarantee it does not have.

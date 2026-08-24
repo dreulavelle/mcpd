@@ -54,6 +54,27 @@ func NewLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
 // between them per record, so the moment the settings are read the change
 // takes effect, with nothing to restart and nothing pretending it did.
 func NewSwitchableLogger(w io.Writer, level slog.Level, format string) (*slog.Logger, *LogControl) {
+	log, ctl, _ := NewStreamingLogger(w, level, format, false)
+	return log, ctl
+}
+
+// NewStreamingLogger is NewSwitchableLogger with an optional copy of the log
+// kept for the dashboard to show.
+//
+// The copy is rendered by a handler of its own rather than taken from the
+// destination's bytes, for two reasons. The dashboard needs JSON whatever
+// format an operator has chosen for the file -- those are different audiences,
+// and only one of them can be asked to cope with a change. And a handler built
+// from the same options carries the same level filtering and the same
+// redaction, so a value withheld from the file cannot reach a browser by this
+// route.
+//
+// It is opt-in because it is not free: a line that is streamed is formatted
+// twice. A host with nobody watching should not pay for the page nobody opened,
+// which is why the tap is nil unless asked for.
+func NewStreamingLogger(w io.Writer, level slog.Level, format string, stream bool) (
+	*slog.Logger, *LogControl, *LogStream,
+) {
 	ctl := &LogControl{}
 	ctl.level.Set(level)
 	ctl.text.Store(strings.EqualFold(format, "text"))
@@ -67,11 +88,21 @@ func NewSwitchableLogger(w io.Writer, level slog.Level, format string) (*slog.Lo
 	// lock at all. The shared one below is what makes a record that is still
 	// being written as JSON and one starting as text take turns.
 	dst := &syncWriter{w: w}
-	return slog.New(switchHandler{
+	h := switchHandler{
 		json: slog.NewJSONHandler(dst, opts),
 		text: slog.NewTextHandler(dst, opts),
 		ctl:  ctl,
-	}), ctl
+	}
+
+	var ls *LogStream
+	if stream {
+		ls = NewLogStream()
+		// Its own writer, and its own lock. The stream never shares the
+		// destination's, so a slow disk and a watching browser cannot wait on
+		// each other.
+		h.tap = slog.NewJSONHandler(ls, opts)
+	}
+	return slog.New(h), ctl, ls
 }
 
 // syncWriter serialises the writes of every handler that shares it.
@@ -117,7 +148,10 @@ func (c *LogControl) Set(level slog.Level, format string) {
 type switchHandler struct {
 	json slog.Handler
 	text slog.Handler
-	ctl  *LogControl
+	// tap receives every record the destination does, for the dashboard. Nil
+	// on a host where nobody asked for it.
+	tap slog.Handler
+	ctl *LogControl
 }
 
 func (h switchHandler) pick() slog.Handler {
@@ -132,15 +166,37 @@ func (h switchHandler) Enabled(ctx context.Context, l slog.Level) bool {
 }
 
 func (h switchHandler) Handle(ctx context.Context, r slog.Record) error {
-	return h.pick().Handle(ctx, r)
+	err := h.pick().Handle(ctx, r)
+	if h.tap != nil {
+		// After the destination, and its failure is not the caller's problem:
+		// the log that matters is the one that leaves the process, and a page
+		// nobody may even have open must not turn a logged line into an error
+		// somewhere up the stack.
+		_ = h.tap.Handle(ctx, r)
+	}
+	return err
 }
 
 func (h switchHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return switchHandler{json: h.json.WithAttrs(attrs), text: h.text.WithAttrs(attrs), ctl: h.ctl}
+	out := switchHandler{
+		json: h.json.WithAttrs(attrs), text: h.text.WithAttrs(attrs), ctl: h.ctl,
+	}
+	if h.tap != nil {
+		// Derived alongside the others, or a component given attributes when
+		// it was wired would appear on the dashboard without them.
+		out.tap = h.tap.WithAttrs(attrs)
+	}
+	return out
 }
 
 func (h switchHandler) WithGroup(name string) slog.Handler {
-	return switchHandler{json: h.json.WithGroup(name), text: h.text.WithGroup(name), ctl: h.ctl}
+	out := switchHandler{
+		json: h.json.WithGroup(name), text: h.text.WithGroup(name), ctl: h.ctl,
+	}
+	if h.tap != nil {
+		out.tap = h.tap.WithGroup(name)
+	}
+	return out
 }
 
 // redactAttr is the ReplaceAttr hook that censors sensitive values.
