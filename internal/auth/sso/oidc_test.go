@@ -400,4 +400,39 @@ func TestDiscoveryValidate(t *testing.T) {
 	if err := plain.validate(base); err == nil {
 		t.Error("a plain-http token endpoint was accepted; the client secret goes down it")
 	}
+
+	// The downgrade this rule exists to stop: a provider reached over https
+	// naming an endpoint on the operator's own machine, which would have this
+	// host post the client secret to whatever happens to be listening there.
+	downgraded := good
+	downgraded.TokenEndpoint = "http://127.0.0.1:8899/realms/x/token"
+	if err := downgraded.validate(base); err == nil {
+		t.Error("an https issuer was allowed to name a loopback http endpoint")
+	}
+}
+
+// A provider on the operator's own machine is what somebody setting Keycloak
+// or Authentik up for the first time has, and it publishes http endpoints
+// because there is no network for them to cross. The settings form accepts
+// such an issuer, so the flow has to as well: a configuration one half takes
+// and the other refuses leaves an operator with nothing to fix.
+func TestDiscoveryValidate_AProviderOnThisMachine(t *testing.T) {
+	base := "http://127.0.0.1:8899/realms/master"
+	local := discovery{
+		Issuer:                base,
+		AuthorizationEndpoint: "http://127.0.0.1:8899/realms/master/protocol/openid-connect/auth",
+		TokenEndpoint:         "http://127.0.0.1:8899/realms/master/protocol/openid-connect/token",
+		JWKSURI:               "http://127.0.0.1:8899/realms/master/protocol/openid-connect/certs",
+	}
+	if err := local.validate(base); err != nil {
+		t.Fatalf("a provider on this machine was refused: %v", err)
+	}
+
+	// Loopback is loopback by address, not by anything the document says about
+	// itself.
+	elsewhere := local
+	elsewhere.TokenEndpoint = "http://auth.example.com/token"
+	if err := elsewhere.validate(base); err == nil {
+		t.Error("a loopback issuer was allowed to name a plain-http endpoint elsewhere")
+	}
 }
