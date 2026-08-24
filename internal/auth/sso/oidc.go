@@ -133,7 +133,9 @@ func (d *discovery) validate(base string) error {
 			ErrNotConfigured, base, d.Issuer)
 	case strings.TrimRight(d.Issuer, "/") != strings.TrimRight(base, "/"):
 		return fmt.Errorf("%w: metadata at %s declares issuer %q", ErrProvider, base, d.Issuer)
-	case !isHTTPS(d.AuthorizationEndpoint) || !isHTTPS(d.TokenEndpoint) || !isHTTPS(d.JWKSURI):
+	case !encrypted(d.AuthorizationEndpoint, base) ||
+		!encrypted(d.TokenEndpoint, base) ||
+		!encrypted(d.JWKSURI, base):
 		// A provider that offers a plain-http endpoint is either
 		// misconfigured or being impersonated; either way the client secret
 		// is not going down it.
@@ -142,9 +144,44 @@ func (d *discovery) validate(base string) error {
 	return nil
 }
 
-func isHTTPS(raw string) bool {
+// encrypted reports whether an endpoint may be used, given the issuer that
+// named it.
+//
+// https always. Plain http only when the issuer is itself on this machine,
+// which is what somebody developing against a local Keycloak or Authentik has
+// -- there is no network for a secret to cross, and the settings form accepts
+// exactly the same addresses. The two rules have to agree: a configuration the
+// form takes and the flow then refuses is worse than one refused outright,
+// because the operator has no way to tell what is wrong.
+//
+// The permission comes from the issuer rather than from the endpoint alone,
+// and that is the whole point. Were it read off the endpoint, a provider
+// reached over https could name an http endpoint on the operator's own
+// loopback and this host would post the client secret to whatever answered
+// there. An issuer that is already loopback can direct traffic to loopback and
+// has learned nothing by doing it.
+func encrypted(raw, issuer string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && u.Scheme == "https" && u.Host != ""
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	return u.Scheme == "http" && isLoopback(u) && isLoopbackIssuer(issuer)
+}
+
+func isLoopbackIssuer(issuer string) bool {
+	u, err := url.Parse(issuer)
+	return err == nil && u.Scheme == "http" && isLoopback(u)
+}
+
+func isLoopback(u *url.URL) bool {
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // --- signing keys ----------------------------------------------------------
