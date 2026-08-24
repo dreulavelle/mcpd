@@ -58,6 +58,15 @@ func (a *App) ssoProviders(ctx context.Context) []sso.Config {
 			ClientSecret: a.settings.Secret(ctx, settings.KeyGitHubSecret, ""),
 		})
 	}
+	if a.settings.Bool(ctx, settings.KeyOIDCEnabled, false) {
+		out = append(out, sso.Config{
+			Provider:     users.ProviderOIDC,
+			ClientID:     a.settings.String(ctx, settings.KeyOIDCClientID, ""),
+			ClientSecret: a.settings.Secret(ctx, settings.KeyOIDCSecret, ""),
+			IssuerURL:    a.settings.String(ctx, settings.KeyOIDCIssuer, ""),
+			Label:        a.settings.String(ctx, settings.KeyOIDCLabel, ""),
+		})
+	}
 	if a.settings.Bool(ctx, settings.KeyEntraEnabled, false) {
 		out = append(out, sso.Config{
 			Provider:     users.ProviderEntra,

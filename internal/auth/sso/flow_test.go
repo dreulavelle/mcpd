@@ -208,3 +208,80 @@ func TestAvailable_SaysNothingWithoutAnAddressToComeBackTo(t *testing.T) {
 		t.Errorf("Available() = %+v; want one Google entry", got)
 	}
 }
+
+// A provider the operator runs is configured by its issuer, so the issuer is
+// what decides whether there is anything to offer. The cases here are the
+// mistakes an operator actually makes: pasting the discovery URL, leaving the
+// scheme off, and pointing at plain http across a network.
+func TestConfigReady_YourOwnProvider(t *testing.T) {
+	base := Config{Provider: users.ProviderOIDC, ClientID: "id", ClientSecret: "secret"}
+	with := func(issuer string) Config { c := base; c.IssuerURL = issuer; return c }
+
+	for _, tc := range []struct {
+		name string
+		c    Config
+		want bool
+	}{
+		{name: "no issuer", c: base},
+		{name: "https", c: with("https://auth.example.com/application/o/mcpd"), want: true},
+		{name: "trailing slash", c: with("https://auth.example.com/realms/mcpd/"), want: true},
+		{name: "loopback over http", c: with("http://localhost:9000/realms/mcpd"), want: true},
+		{name: "http across a network", c: with("http://auth.example.com/realms/mcpd")},
+		{name: "the discovery address", c: with(
+			"https://auth.example.com/realms/mcpd/.well-known/openid-configuration")},
+		{name: "a query the appended path would strand", c: with(
+			"https://auth.example.com/realms/mcpd?realm=x")},
+		{name: "credentials in the address", c: with("https://u:p@auth.example.com/realms/mcpd")},
+		{name: "no scheme", c: with("auth.example.com/realms/mcpd")},
+		{name: "issuer but no secret", c: Config{
+			Provider: users.ProviderOIDC, ClientID: "id",
+			IssuerURL: "https://auth.example.com/realms/mcpd"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.c.Ready(); got != tc.want {
+				t.Errorf("Ready() = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// "Continue with oidc" is a button nobody recognises, so the operator names
+// their own provider and the page says what they said.
+func TestLabelFor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		c    Config
+		want string
+	}{
+		{"a name the operator chose", Config{Provider: users.ProviderOIDC, Label: "Authentik"}, "Authentik"},
+		{"whitespace is not a name", Config{Provider: users.ProviderOIDC, Label: "  "}, "Single sign-on"},
+		{"no name at all", Config{Provider: users.ProviderOIDC}, "Single sign-on"},
+		{"a provider this build knows", Config{Provider: users.ProviderGoogle, Label: "ignored"}, "Google"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LabelFor(tc.c); got != tc.want {
+				t.Errorf("LabelFor() = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Discovery appends a path to the issuer and the issuer is also the cache key,
+// so a trailing slash has to be gone before either happens -- otherwise one
+// provider is two, with one configuration between them.
+func TestIssuerBase_YourOwnProvider(t *testing.T) {
+	got, err := issuerBase(Config{
+		Provider:  users.ProviderOIDC,
+		IssuerURL: "  https://auth.example.com/realms/mcpd/  ",
+	})
+	if err != nil {
+		t.Fatalf("issuerBase: %v", err)
+	}
+	if want := "https://auth.example.com/realms/mcpd"; got != want {
+		t.Errorf("issuerBase = %q; want %q", got, want)
+	}
+
+	if _, err := issuerBase(Config{Provider: users.ProviderOIDC}); err == nil {
+		t.Error("an issuer nobody set should not resolve to an address")
+	}
+}
