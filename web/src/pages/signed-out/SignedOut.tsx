@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import {
-  api, ApiError, type AuthOptions, type Meta, type ProviderName, type Session,
+  api, ApiError, type AuthOptions, type ProviderName, type Session,
 } from "@/lib/api";
 import { consumeSSOOutcome } from "@/lib/sso";
 import { Notice } from "@/components/chrome";
@@ -35,8 +35,7 @@ const FACTS = [
  * mcpd is. It is plain CSS — a gradient and a grid — because nothing on the
  * sign-in path should wait on a script to finish before it can be read.
  */
-function SignedOutCard({ meta, error, title, children }: {
-  meta: Meta | null;
+function SignedOutCard({ error, title, children }: {
   error?: string;
   title?: string;
   children: ReactNode;
@@ -44,7 +43,7 @@ function SignedOutCard({ meta, error, title, children }: {
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-2">
       <aside
-        className="relative hidden overflow-hidden bg-primary p-10 text-primary-foreground lg:flex lg:flex-col lg:justify-between"
+        className="relative hidden overflow-hidden bg-primary p-10 text-primary-foreground lg:flex lg:flex-col lg:justify-center"
       >
         {/* A grid that fades out, drawn in the foreground colour so it holds
             up in both themes without a second definition. */}
@@ -60,7 +59,7 @@ function SignedOutCard({ meta, error, title, children }: {
           }}
         />
 
-        <div className="relative flex items-center gap-2">
+        <div className="absolute top-10 left-10 flex items-center gap-2">
           <span
             aria-hidden="true"
             className="grid size-7 place-items-center rounded-md bg-primary-foreground font-mono text-sm font-bold text-primary"
@@ -83,10 +82,6 @@ function SignedOutCard({ meta, error, title, children }: {
             ))}
           </ul>
         </div>
-
-        <p className="relative text-xs opacity-70">
-          {meta ? `mcpd ${meta.version}` : "mcpd"}
-        </p>
       </aside>
 
       <div className="grid place-items-center px-4 py-12">
@@ -104,12 +99,6 @@ function SignedOutCard({ meta, error, title, children }: {
               {children}
             </CardContent>
           </Card>
-
-          {meta && (
-            <p className="text-center text-xs text-muted-foreground lg:hidden">
-              mcpd {meta.version}
-            </p>
-          )}
         </div>
       </div>
     </div>
@@ -175,8 +164,7 @@ function Or({ label }: { label: string }) {
   );
 }
 
-export function SignIn({ meta, auth, notice, onDone }: {
-  meta: Meta | null;
+export function SignIn({ auth, notice, onDone }: {
   /** What this host offers. Null while it is still being asked. */
   auth: AuthOptions | null;
   /**
@@ -214,13 +202,13 @@ export function SignIn({ meta, auth, notice, onDone }: {
   }
 
   if (signingUp) {
-    return <SignUp meta={meta} onDone={onDone} onCancel={() => setSigningUp(false)} />;
+    return <SignUp onDone={onDone} onCancel={() => setSigningUp(false)} />;
   }
 
   const providers = auth?.providers ?? [];
 
   return (
-    <SignedOutCard meta={meta} error={error} title="Sign in">
+    <SignedOutCard error={error} title="Sign in">
       {providers.length > 0 && (
         <>
           <ProviderButtons providers={providers} onProblem={setError} />
@@ -277,8 +265,7 @@ export function SignIn({ meta, auth, notice, onDone }: {
  * address they typed — which is the difference between this and the provider
  * buttons above it, and the reason the setting cannot switch this off.
  */
-function SignUp({ meta, onDone, onCancel }: {
-  meta: Meta | null;
+function SignUp({ onDone, onCancel }: {
   onDone: (s: Session) => void;
   onCancel: () => void;
 }) {
@@ -305,7 +292,7 @@ function SignUp({ meta, onDone, onCancel }: {
   }
 
   return (
-    <SignedOutCard meta={meta} error={error} title="Ask for an account">
+    <SignedOutCard error={error} title="Ask for an account">
       <p className="text-sm text-muted-foreground">
         An administrator has to say yes before you can do anything here.
       </p>
@@ -361,8 +348,7 @@ function SignUp({ meta, onDone, onCancel }: {
  * this host, and a provider round trip is not a claim mcpd can honour: whoever
  * held an account at Google would own any fresh host they could reach.
  */
-export function FirstRun({ meta, onDone }: {
-  meta: Meta | null;
+export function FirstRun({ onDone }: {
   onDone: (s: Session) => void;
 }) {
   const [email, setEmail] = useState("");
@@ -394,7 +380,7 @@ export function FirstRun({ meta, onDone }: {
   }
 
   return (
-    <SignedOutCard meta={meta} error={error} title="Create the first account">
+    <SignedOutCard error={error} title="Create the first account">
       <p className="text-sm text-muted-foreground">
         Nobody has claimed this host yet. This account will be an administrator;
         you can add others, and turn on sign-in with Google, GitHub, Microsoft
@@ -446,13 +432,12 @@ export function FirstRun({ meta, onDone }: {
  * enforces that: the server refuses every call such an account makes, and this
  * screen only exists so the refusals are not what the person meets.
  */
-export function AwaitingApproval({ meta, email, onSignOut }: {
-  meta: Meta | null;
+export function AwaitingApproval({ email, onSignOut }: {
   email: string;
   onSignOut: () => void;
 }) {
   return (
-    <SignedOutCard meta={meta} title="Waiting for approval">
+    <SignedOutCard title="Waiting for approval">
       <p className="text-sm text-muted-foreground">
         You are signed in as <span className="font-medium">{email}</span>. An
         administrator has to approve the account before you can use mcpd.

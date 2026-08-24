@@ -343,10 +343,18 @@ func schema() []Group {
 					Key: KeyServerFrontendPublicURL, Label: "Address this page is on",
 					Kind: KindString, Group: "server", Apply: ApplyLive,
 					Placeholder: "https://mcpd.example.net",
-					Help: "Only when something in front of mcpd terminates TLS for " +
-						"the dashboard. Empty lets the connection decide, which is " +
-						"right when you reach mcpd directly. It also has to be right " +
-						"for signing in with Google, GitHub or Microsoft to work.",
+					// Led with the consequence. This field used to open by
+					// saying it was only for a TLS-terminating proxy, and to
+					// call empty the right answer for reaching mcpd directly --
+					// which is true of the thing it was named for and false of
+					// the thing it now decides. An operator who read it, left
+					// it empty and turned on a provider got a button that never
+					// appeared and no message saying why.
+					Help: "Required for signing in with a provider: the address " +
+						"they send people back to is built from this, and while it " +
+						"is empty no provider is offered at all. Otherwise needed " +
+						"only when something in front of mcpd terminates TLS for " +
+						"the dashboard.",
 				},
 				{
 					Key: KeyServerTLSMode, Label: "Certificate for the MCP endpoint",

@@ -136,12 +136,16 @@ type redirectURIResponse struct {
 	// URIs maps a provider to the exact address to register, and is empty
 	// when Base is.
 	URIs map[string]string `json:"redirect_uris"`
+	// Refusals names the providers that will not accept the address above,
+	// and says why. Empty is the ordinary case.
+	Refusals map[string]string `json:"refusals,omitempty"`
 }
 
 func (s *Server) handleAuthRedirectURIs(w http.ResponseWriter, r *http.Request) {
 	resp := redirectURIResponse{
-		Base: s.frontendPublicURL(r.Context()),
-		URIs: map[string]string{},
+		Base:     s.frontendPublicURL(r.Context()),
+		URIs:     map[string]string{},
+		Refusals: map[string]string{},
 	}
 	for _, p := range []users.Provider{
 		users.ProviderGoogle, users.ProviderGitHub, users.ProviderEntra,
@@ -149,6 +153,9 @@ func (s *Server) handleAuthRedirectURIs(w http.ResponseWriter, r *http.Request) 
 	} {
 		if uri, err := sso.RedirectURI(resp.Base, p); err == nil {
 			resp.URIs[string(p)] = uri
+			if why := sso.RedirectRefusal(p, uri); why != "" {
+				resp.Refusals[string(p)] = why
+			}
 		}
 	}
 	s.writeJSON(w, r, http.StatusOK, resp)
