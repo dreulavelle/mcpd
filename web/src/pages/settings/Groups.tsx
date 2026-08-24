@@ -2,13 +2,13 @@ import { useCallback, useState, type FormEvent } from "react";
 import { api, ApiError, type Group, type GroupMember } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
+import { ReachPicker } from "@/components/ReachPicker";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -17,12 +17,6 @@ import {
 export function reachLabel(plugins: string[]): string {
   if (plugins.includes("*")) return "Everything";
   return plugins.join(", ") || "Nothing";
-}
-
-/** Splits a typed list of system names into the grant to send. */
-function parseReach(everything: boolean, typed: string): string[] {
-  if (everything) return ["*"];
-  return typed.split(",").map((p) => p.trim()).filter(Boolean);
 }
 
 /** A group hands its systems to everyone in it. */
@@ -169,10 +163,7 @@ function GroupDetail({ group, notify, onChanged }: {
   onChanged: () => void;
 }) {
   const [members, setMembers] = useState<GroupMember[] | null>(null);
-  const [everything, setEverything] = useState(group.plugins.includes("*"));
-  const [typed, setTyped] = useState(
-    group.plugins.includes("*") ? "" : group.plugins.join(", "),
-  );
+  const [reach, setReach] = useState<string[]>(group.plugins);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -187,7 +178,7 @@ function GroupDetail({ group, notify, onChanged }: {
     setBusy(true);
     setError("");
     try {
-      await api.updateGroup(group.id, { plugins: parseReach(everything, typed) });
+      await api.updateGroup(group.id, { plugins: reach });
       onChanged();
       notify("good", "Saved.");
     } catch (e) {
@@ -217,21 +208,10 @@ function GroupDetail({ group, notify, onChanged }: {
       {error && <Notice tone="problem">{error}</Notice>}
 
       <div className="space-y-1.5">
-        <Label htmlFor={`reach-${group.id}`}>Can reach</Label>
-        <NativeSelect
-          id={`reach-${group.id}`} value={everything ? "all" : "some"}
-          onChange={(e) => setEverything(e.target.value === "all")}
-        >
-          <option value="all">Every system on this host</option>
-          <option value="some">Only the systems I list</option>
-        </NativeSelect>
-        {!everything && (
-          <Input
-            value={typed} onChange={(e) => setTyped(e.target.value)}
-            placeholder="cnmaestro, netbox"
-            aria-label="Systems this group can reach"
-          />
-        )}
+        <ReachPicker
+          id={`reach-${group.id}`} value={reach} onChange={setReach}
+          subject="everyone in this group"
+        />
         <div className="pt-1">
           <Button size="sm" disabled={busy} onClick={saveReach}>Save</Button>
         </div>
@@ -269,8 +249,7 @@ function AddGroup({ onClose, onAdded }: {
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [everything, setEverything] = useState(false);
-  const [typed, setTyped] = useState("");
+  const [reach, setReach] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -282,7 +261,7 @@ function AddGroup({ onClose, onAdded }: {
       await api.createGroup({
         name: name.trim(),
         description: description.trim(),
-        plugins: parseReach(everything, typed),
+        plugins: reach,
       });
       onAdded(name.trim());
     } catch (err) {
@@ -317,23 +296,10 @@ function AddGroup({ onClose, onAdded }: {
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="group-reach">Can reach</Label>
-            <NativeSelect
-              id="group-reach" value={everything ? "all" : "some"}
-              onChange={(e) => setEverything(e.target.value === "all")}
-            >
-              <option value="some">Only the systems I list</option>
-              <option value="all">Every system on this host</option>
-            </NativeSelect>
-            {!everything && (
-              <Input
-                value={typed} onChange={(e) => setTyped(e.target.value)}
-                placeholder="cnmaestro, netbox"
-                aria-label="Systems this group can reach"
-              />
-            )}
-          </div>
+          <ReachPicker
+            id="group-reach" value={reach} onChange={setReach}
+            subject="everyone in this group"
+          />
 
           <div className="flex items-center gap-2">
             <Button type="submit" disabled={busy || !name.trim()}>

@@ -12,6 +12,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { ReachPicker } from "@/components/ReachPicker";
 import { reachLabel } from "./Groups";
 
 const ROLES: [Role, string][] = [
@@ -238,8 +239,7 @@ function AddUser({ groups, onClose, onAdded }: {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>("user");
-  const [everything, setEverything] = useState(false);
-  const [plugins, setPlugins] = useState("");
+  const [reach, setReach] = useState<string[]>([]);
   const [joined, setJoined] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -249,11 +249,8 @@ function AddUser({ groups, onClose, onAdded }: {
     setBusy(true);
     setError("");
     try {
-      const granted = everything
-        ? ["*"]
-        : plugins.split(",").map((p) => p.trim()).filter(Boolean);
       await api.createUser({
-        email: email.trim(), password, role, plugins: granted, groups: joined,
+        email: email.trim(), password, role, plugins: reach, groups: joined,
       });
       onAdded(email.trim());
     } catch (err) {
@@ -292,18 +289,10 @@ function AddUser({ groups, onClose, onAdded }: {
             </NativeSelect>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="new-scope">Can reach</Label>
-            <NativeSelect id="new-scope" value={everything ? "all" : "some"}
-                          onChange={(e) => setEverything(e.target.value === "all")}>
-              <option value="some">Only the systems I list</option>
-              <option value="all">Every system on this host</option>
-            </NativeSelect>
-            {!everything && (
-              <Input value={plugins} onChange={(e) => setPlugins(e.target.value)}
-                     placeholder="cnmaestro, netbox" />
-            )}
-          </div>
+          <ReachPicker
+            id="new-scope" value={reach} onChange={setReach}
+            subject="this account"
+          />
 
           {groups.length > 0 && (
             <fieldset className="space-y-1.5">
