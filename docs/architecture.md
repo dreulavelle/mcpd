@@ -1574,9 +1574,17 @@ caller's.
 ## Plugins are not architecture
 
 What an integration does belongs with the integration. Each has its own
-document when it needs one — see [cnmaestro.md](cnmaestro.md) — because the
-API a plugin talks to changes on someone else's schedule, and mixing that into
-the host's design makes both harder to read.
+document when it needs one — see [cnmaestro.md](cnmaestro.md) and
+[observium.md](observium.md) — because the API a plugin talks to changes on
+someone else's schedule, and mixing that into the host's design makes both
+harder to read.
+
+Those two documents are worth reading as a pair before writing a third
+integration. They record the same *kinds* of surprise in different vendors:
+where pagination hides, what an empty result is spelled as, which status code
+means two things, and what the API will not give you at all. A plugin author
+who expects those categories finds them faster than one discovering that such
+categories exist.
 
 What is architectural is the contract every plugin meets.
 
