@@ -220,7 +220,12 @@ func TestApproval_RequiresAnExistingOperation(t *testing.T) {
 }
 
 // The propose tool must advertise itself honestly.
-func TestProposeTool_IsAdvertisedAsNonDestructive(t *testing.T) {
+//
+// Its description used to promise that the call "leaves the system untouched".
+// A standing rule can approve and execute the change before the call returns,
+// so that promise was false in exactly the case where believing it matters: a
+// model told nothing happened does not report what did.
+func TestProposeTool_DescribesBothOutcomes(t *testing.T) {
 	a := newApprovalApp(t)
 	w := mcpRequest(t, a.Handler(), "/mcp/echo", approverToken, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": map[string]any{},
@@ -238,8 +243,17 @@ func TestProposeTool_IsAdvertisedAsNonDestructive(t *testing.T) {
 			t.Errorf("tools/list omits %s", want)
 		}
 	}
-	if !strings.Contains(body, "Nothing changes until a human") {
-		t.Error("the propose tool description must say that nothing changes until approval")
+	for _, want := range []string{
+		// Approval is still required for anything to reach upstream.
+		"until the proposal is approved",
+		// And a standing rule is one of the things that can supply it, in
+		// which case the change lands inside this call.
+		"standing rule",
+		"applied before this call returns",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the propose tool description omits %q", want)
+		}
 	}
 }
 

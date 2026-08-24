@@ -326,29 +326,49 @@ func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S])
 
 // attachProposeTool registers the tool that proposes a mutation.
 //
-// It is emphatically not the tool that performs one. The description says so,
-// the annotations say so, and the returned operation says so in a note field,
-// because a model that reads only a state string can still mistake "proposed"
-// for "done".
+// It is not the tool that decides one. Whether the change is applied depends
+// on what happens next -- a person answering, or a standing rule that already
+// authorised it -- and the returned operation says which in a note field,
+// because a model that reads only a state string can mistake "proposed" for
+// "done" and, under a rule, "done" for "proposed".
 func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec MutationSpec, adapter *handlerAdapter, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy, limiter *mutationLimiter, obs ToolObserver) {
-	mutating := false
+	destructive, reachesUpstream := !spec.Reversible, true
 	description := spec.Description + "\n\n" +
-		"IMPORTANT: this only records a proposal. Nothing changes until a human " +
-		"approves it with " + plugin + "_approve_operation. This call returns an " +
-		"operation_id and leaves the system untouched."
+		"IMPORTANT: this proposes the change; it does not decide it. Nothing " +
+		"reaches " + plugin + " until the proposal is approved -- by the person " +
+		"in this conversation, or by a standing rule an administrator wrote in " +
+		"advance. Where a rule already authorises it, the change is applied " +
+		"before this call returns and the outcome is in this response. Read the " +
+		"state and note that come back rather than assuming nothing happened."
 
 	tool := &mcp.Tool{
 		Name:        qualified,
 		Description: description,
 		Annotations: &mcp.ToolAnnotations{
 			Title: spec.Title,
-			// Proposing genuinely changes nothing upstream, but it is not a
-			// read either: it creates a durable record a human must act on.
-			// Marking it non-destructive and non-idempotent is the honest
-			// reading.
-			ReadOnlyHint:    false,
-			DestructiveHint: &mutating,
+			// These decide how a client frames the call, which decides whether
+			// a person is shown the change. They enforce nothing -- the
+			// approval row does that -- so the job here is to be accurate
+			// about what this call can do, not about what it usually does.
+			//
+			// It used to be annotated on the premise that proposing "changes
+			// nothing upstream". That stopped being true when standing rules
+			// arrived: where a rule matches, this call is approved and
+			// executed before it returns. A hint chosen for the case where a
+			// human is always asked is wrong in exactly the case where nobody
+			// is.
+			ReadOnlyHint: false,
+			// Follows the mutation's own declaration rather than a constant. A
+			// change that can be undone is not destructive whatever else it
+			// is; one that declares no way back is precisely what a client
+			// should put in front of a person. Hardcoding false told every
+			// client not to bother confirming a delete.
+			DestructiveHint: &destructive,
 			IdempotentHint:  false,
+			// A mutation exists to reach the integration. Read tools already
+			// say this; the tool that writes had it missing, and ChatGPT asks
+			// for all three before it will frame a call at all.
+			OpenWorldHint: &reachesUpstream,
 		},
 	}
 	if len(spec.InputSchema) > 0 {
@@ -444,7 +464,9 @@ func resolveApproval(ctx context.Context, req *mcp.CallToolRequest, svc Approval
 				"enough that a yes/no prompt is not sufficient: show the person " +
 				"exactly what will change, in full, and only if they explicitly " +
 				"tell you to go ahead, call approve_operation with this " +
-				"operation_id. Never call it on your own judgement. " + view.Note
+				"operation_id. Never call it on your own judgement. Do this here, " +
+				"in the conversation -- do not tell them to open a dashboard or " +
+				"go anywhere else to approve it. " + view.Note
 		}
 		return view
 	}

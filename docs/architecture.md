@@ -133,21 +133,64 @@ lost the race. That is what makes execution at-most-once.
 
 ## Approval, and where the human is
 
-Leaving the conversation to approve every routine change is friction that gets
-worked around. So mcpd asks in the conversation when it can: the MCP
-specification's elicitation lets a server put a question to the user through
-the client, and the answer returns as a real user action rather than a model
-decision. `internal/plugins/elicit.go` raises it; `ApproveInline` records it.
+**Nobody is ever sent to the dashboard to approve a tool call.** Every path
+ends in the conversation the change was asked for in. An approval that costs a
+context switch is one people arrange not to need, and the arrangement they
+reach for is a rule broader than the one they meant to write. The dashboard is
+where history is read, rules are written and the audit trail lives; it is not a
+step in this flow.
 
-The inline ceiling, `approval.inline_max_risk`, is a setting. Above it the
-shortcut is withheld, not the decision — the assistant has to show the change in full and be told
-explicitly, then call the approve tool.
+So mcpd asks in the conversation: the MCP specification's elicitation lets a
+server put a question to the user through the client, and the answer returns as
+a real user action rather than a model decision. `internal/plugins/elicit.go`
+raises it; `ApproveInline` records it. What that question carries is the point
+of it — impact prose, the field-level diff, and what *cannot* be proved — where
+a client's own dialog can only show the tool name and the argument JSON it was
+called with.
+
+The inline ceiling, `approval.inline_max_risk`, is a setting, and it is a
+ceiling on the *shortcut* rather than on where the decision happens. Above it
+the yes/no prompt is withheld and the assistant must show the change in full
+and be told explicitly before calling the approve tool. Still in the
+conversation; just no longer settled by one word.
 
 Enforcement is the same row either way. A client that cannot elicit gets the
 two-step flow rather than an unguarded write; there is no path that skips it.
-Tool annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`) tell a
-client how to frame the call, which decides whether a person is *shown* a
-change — never whether it may happen.
+
+### What the client decides, and what it cannot
+
+Tool annotations — `readOnlyHint`, `destructiveHint`, `openWorldHint` — tell a
+client how to frame the call. That decides whether a person is *shown* a
+change; it never decides whether the change may happen. ChatGPT confirms write
+actions by default and shows the raw argument JSON with a Confirm/Deny, Codex
+takes four modes (`auto`, `prompt`, `writes`, `approve`), and the Responses API
+has `require_approval` with `mcp_approval_request`/`mcp_approval_response`
+items. All of it is client-side framing: there is no protocol slot a server can
+fill with a rendered diff, no callback saying a user was asked, and nothing
+that survives into a record. A server that trusted "the client probably
+prompted" would be recording a decision it has no evidence anyone made.
+
+Because the hints are the only lever, they must be accurate about what the call
+*can* do rather than what it usually does. `destructiveHint` follows
+`MutationSpec.Reversible`: a change that can be undone is not destructive, one
+that declares no way back is exactly what a client should put in front of
+somebody. It was hardcoded false on the premise that proposing "changes nothing
+upstream" — true until standing rules arrived, and wrong from then on in
+precisely the case where nobody is asked.
+
+### One prompt, or two
+
+A propose call under a matching standing rule is approved and executed before
+it returns, and the response carries the outcome. The user sees exactly one
+dialog: their client's own. That is the intended shape for routine work, and
+the operation still records the diff, the drift check, the verification and the
+rule that authorised it.
+
+Without a rule the user answers twice — once to let the call through, once to
+decide the change — and the second dialog is the one carrying anything worth
+reading. That is the price of a change nobody authorised in advance, and it is
+the right price. The way to stop paying it is a rule scoped as narrowly as the
+job allows, not a hint that says less than the truth.
 
 ## Asking about everything is the same mistake
 
@@ -170,15 +213,21 @@ ceiling, and a note.
 | `principal` | whose proposals, or `*` |
 | `max_risk` | the highest risk it authorises; **empty authorises nothing** |
 
-**Most specific wins, and only one rule decides.** Plugin outranks action
-because an action name means nothing without the plugin it belongs to, and both
-outrank principal — a rule carving an action out is a statement about the
-change itself, "rebooting a device is never automatic", and must not be
-defeated by a broad grant to whoever happens to be asking. Two rules on one
-scope are refused when the set is stored, because picking between them would be
-right only by accident. An empty ceiling is not a disabled rule: it authorises
-nothing, and because a more specific rule wins outright it is how one action is
-carved out of a permissive plugin-wide rule.
+**Any matching exclusion wins; otherwise the most specific grant does, and only
+one rule ever decides.** An exclusion is a rule that authorises nothing — an
+empty ceiling — and it is checked before specificity is consulted at all.
+Grants are then scored, plugin `+4`, action `+2`, principal `+1`, and the
+highest takes it. Two rules on one scope are refused when the set is stored,
+because picking between them would be right only by accident.
+
+Exclusion-wins is not the same as most-specific-wins, and it replaced it. An
+exclusion is naturally narrow and a grant naturally broad, so scoring the two
+together handed the argument to the grant: `never-reboot` on `*/device.reboot`
+scores 2 and a `cnmaestro/*` grant scores 4, and a cnmaestro device reboot
+auto-approved. It does not now. The cost is that an exclusion cannot be granted
+an exception — "nobody but Alice may auto-approve this" is the narrow grant
+alone, because the absence of a grant already means ask.
+[`approval-policy.md`](approval-policy.md) is the reference.
 
 **The default is to ask about everything.** The zero value of the policy is no
 rules, and no rules means every mutation goes to a person exactly as it did
