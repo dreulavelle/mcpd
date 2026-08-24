@@ -47,6 +47,9 @@ type Options struct {
 	// endpoint is switched off. MetricsPublic serves it unauthenticated.
 	Metrics       http.Handler
 	MetricsPublic bool
+	// Logs is the copy of this host's log kept for the dashboard, or nil when
+	// the host is not keeping one.
+	Logs *observability.LogStream
 	// Audit reads the append-only trail.
 	Audit AuditReader
 
@@ -375,6 +378,11 @@ func (s *Server) routes() {
 	api("POST /api/tunnels", s.handleCreateTunnel, auth.CapAdmin)
 	api("POST /api/tunnels/{id}/assign", s.handleAssignTunnel, auth.CapAdmin)
 	api("DELETE /api/tunnels/{id}", s.handleDeleteTunnel, auth.CapAdmin)
+	// Admin, not read: the log carries every request this host served, which
+	// systems were called and by whom. That is a wider view than any one
+	// account's own work, and it is the same right that reads the audit
+	// trail's verification.
+	api("GET /api/logs/stream", s.handleLogStream, auth.CapAdmin)
 	api("GET /api/audit", s.handleAudit, auth.CapRead)
 	api("GET /api/audit/verify", s.handleVerifyAudit, auth.CapAdmin)
 	// Clearing the record is administrative, and is itself recorded.

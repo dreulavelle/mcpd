@@ -69,6 +69,7 @@ describe("navigation gating", () => {
       .find((g) => g.title === "Administer");
     expect(administer?.items.map((i) => i.label)).toEqual([
       "Settings", "Approval policy", "Authentication", "Users", "Groups", "API Keys",
+      "Logs",
     ]);
   });
 

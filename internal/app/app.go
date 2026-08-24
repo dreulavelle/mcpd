@@ -55,6 +55,7 @@ type App struct {
 	accounts      *users.Store
 	groups        *groups.Store
 	keys          *apikeys.Store
+	logStream     *observability.LogStream
 	sso           *sso.Service
 	ssoStates     *sso.StateStore
 	types         *plugins.Catalog
@@ -115,7 +116,10 @@ type App struct {
 // Option adjusts how the application is built.
 type Option func(*options)
 
-type options struct{ logControl *observability.LogControl }
+type options struct {
+	logControl *observability.LogControl
+	logStream  *observability.LogStream
+}
 
 // WithLogControl hands New the control that changes the running logger.
 //
@@ -124,6 +128,13 @@ type options struct{ logControl *observability.LogControl }
 // stored values reach a logger that was already built.
 func WithLogControl(ctl *observability.LogControl) Option {
 	return func(o *options) { o.logControl = ctl }
+}
+
+// WithLogStream hands the dashboard the copy of the log it shows. Absent, the
+// Logs page says the host is not keeping one rather than showing an empty
+// screen that looks like silence.
+func WithLogStream(s *observability.LogStream) Option {
+	return func(o *options) { o.logStream = s }
 }
 
 // New builds the application graph. It opens the database, applies migrations,
@@ -216,6 +227,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		db.Close()
 		return nil, err
 	}
+	a.logStream = built.logStream
 	a.applyLogSettings(ctx, built.logControl)
 	// Not on the start that did the importing. On that one the store holds
 	// what the file supplied because it was just put there, so there is
@@ -406,6 +418,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			Health:     a.health,
 			Version:    Version,
 			Audit:      a.audit,
+			Logs:       a.logStream,
 			Metrics: func() http.Handler {
 				if a.metrics == nil {
 					return nil
