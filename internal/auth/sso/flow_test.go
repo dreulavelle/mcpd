@@ -2,6 +2,7 @@ package sso
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/spoked/mcpd/internal/auth/users"
@@ -333,5 +334,34 @@ func TestRedirectRefusal(t *testing.T) {
 				t.Errorf("a usable address was flagged: %s", why)
 			}
 		})
+	}
+}
+
+// An address on plain http breaks both of Google's rules, and which one is
+// reported decides what somebody does next. Naming the scheme sends them to
+// arrange a certificate for a host Google will refuse anyway -- a wasted
+// afternoon that ends at the same error.
+func TestRedirectRefusal_NamesTheBlockerThatNeedsTheBiggerChange(t *testing.T) {
+	why := RedirectRefusal(users.ProviderGoogle,
+		"http://192.168.50.125:9090/api/auth/sso/google/callback")
+
+	if !strings.Contains(why, "host name") {
+		t.Errorf("the address, which is the blocker a certificate does not fix, went unmentioned: %s", why)
+	}
+	// The scheme is still wrong and still has to be said, or somebody fixes
+	// the name and comes back for the other half.
+	if !strings.Contains(why, "https") {
+		t.Errorf("https went unmentioned, so fixing the name would not be enough: %s", why)
+	}
+	// Recognisable as the same problem when they meet it at Google.
+	if !strings.Contains(why, "device_id") {
+		t.Errorf("the error Google actually answers with went unmentioned: %s", why)
+	}
+
+	// With a name, only the scheme is left, and saying more would be noise.
+	onlyScheme := RedirectRefusal(users.ProviderGoogle,
+		"http://mcpd.example.net/api/auth/sso/google/callback")
+	if strings.Contains(onlyScheme, "host name") {
+		t.Errorf("a perfectly good host name was reported as a problem: %s", onlyScheme)
 	}
 }
