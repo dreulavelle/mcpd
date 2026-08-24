@@ -72,7 +72,12 @@ func run() error {
 	// to report a failure. How much it says and in what shape are settings, so
 	// it starts on the defaults and the control below hands it the stored
 	// values the moment they can be read.
-	log, logControl := observability.NewSwitchableLogger(os.Stdout, slog.LevelInfo, "json")
+	// The third value is the copy the dashboard's Logs page reads. Kept
+	// always rather than behind a setting: the cost is one more render of a
+	// line already being rendered, and a setting whose only effect is that a
+	// page is empty is a setting that gets diagnosed as a bug.
+	log, logControl, logStream := observability.NewStreamingLogger(
+		os.Stdout, slog.LevelInfo, "json", true)
 
 	if *checkOnly {
 		for _, w := range cfg.Warnings() {
@@ -107,7 +112,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	application, err := app.New(ctx, cfg, log, app.WithLogControl(logControl))
+	application, err := app.New(ctx, cfg, log, app.WithLogControl(logControl), app.WithLogStream(logStream))
 	if err != nil {
 		return err
 	}
