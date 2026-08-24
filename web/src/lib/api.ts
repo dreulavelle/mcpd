@@ -832,8 +832,12 @@ export const api = {
 
   /** The exact addresses to paste into each provider's console. */
   redirectURIs: () =>
-    request<{ base: string; redirect_uris: Partial<Record<ProviderName, string>> }>(
-      "/api/auth/redirect-uris"),
+    request<{
+      base: string;
+      redirect_uris: Partial<Record<ProviderName, string>>;
+      /** Providers that will refuse the address above, and why. */
+      refusals?: Partial<Record<ProviderName, string>>;
+    }>("/api/auth/redirect-uris"),
 
   registrations: () =>
     request<{ registrations: PendingRegistration[]; count: number }>("/api/registrations"),

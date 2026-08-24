@@ -285,3 +285,53 @@ func TestIssuerBase_YourOwnProvider(t *testing.T) {
 		t.Error("an issuer nobody set should not resolve to an address")
 	}
 }
+
+// The redirect address is registered by hand at the provider, so a rule broken
+// here surfaces as a refusal in somebody else's words, long after the operator
+// has left the dashboard believing they were finished.
+func TestRedirectRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider users.Provider
+		redirect string
+		refused  bool
+	}{
+		{"google over https", users.ProviderGoogle,
+			"https://mcpd.example.net/api/auth/sso/google/callback", false},
+		{"google on a LAN address", users.ProviderGoogle,
+			"http://192.168.50.125:9090/api/auth/sso/google/callback", true},
+		{"google on an https LAN address is still an address", users.ProviderGoogle,
+			"https://192.168.50.125:9090/api/auth/sso/google/callback", true},
+		{"google on localhost", users.ProviderGoogle,
+			"http://localhost:9090/api/auth/sso/google/callback", false},
+		{"google on the loopback address", users.ProviderGoogle,
+			"http://127.0.0.1:9090/api/auth/sso/google/callback", false},
+
+		{"entra over https", users.ProviderEntra,
+			"https://mcpd.example.net/api/auth/sso/entra/callback", false},
+		{"entra over plain http", users.ProviderEntra,
+			"http://mcpd.example.net/api/auth/sso/entra/callback", true},
+		// Microsoft has no objection to an address, only to the scheme.
+		{"entra on an https LAN address", users.ProviderEntra,
+			"https://192.168.50.125:9090/api/auth/sso/entra/callback", false},
+
+		// GitHub takes plain http and raw addresses, so there is nothing to
+		// warn about and a warning would be wrong.
+		{"github on a LAN address", users.ProviderGitHub,
+			"http://192.168.50.125:9090/api/auth/sso/github/callback", false},
+		// A provider the operator runs is theirs; this host has no business
+		// guessing at its policy.
+		{"the operator's own provider", users.ProviderOIDC,
+			"http://192.168.50.125:9090/api/auth/sso/oidc/callback", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			why := RedirectRefusal(tc.provider, tc.redirect)
+			if tc.refused && why == "" {
+				t.Error("an address the provider will refuse was passed without a word")
+			}
+			if !tc.refused && why != "" {
+				t.Errorf("a usable address was flagged: %s", why)
+			}
+		})
+	}
+}

@@ -51,15 +51,15 @@ export default function App() {
 
   if (!checked || !meta) return null;
   // Nothing to sign in with yet on an unclaimed instance.
-  if (!session && meta.needs_setup) return <FirstRun meta={meta} onDone={adopt} />;
+  if (!session && meta.needs_setup) return <FirstRun onDone={adopt} />;
   if (!session) {
-    return <SignIn meta={meta} auth={auth} notice={SSO_NOTICE} onDone={adopt} />;
+    return <SignIn auth={auth} notice={SSO_NOTICE} onDone={adopt} />;
   }
   // Signed in, and holding nothing until somebody says so. The server refuses
   // every call this account makes; this is only so the refusals are not what
   // the person meets.
   if (session.status === "pending") {
-    return <AwaitingApproval meta={meta} email={session.email} onSignOut={signOut} />;
+    return <AwaitingApproval email={session.email} onSignOut={signOut} />;
   }
 
   return (
