@@ -326,9 +326,9 @@ func (c Config) validateDatabase() error {
 	if c.DBPort < 1 || c.DBPort > 65535 {
 		return fmt.Errorf("observium: database port %d is not a port", c.DBPort)
 	}
-	if c.PageSize < 1 {
-		return fmt.Errorf("observium: page_size must be at least 1, got %d", c.PageSize)
-	}
+	// PageSize is deliberately not checked. It bounds one API request and the
+	// database backend never reads it, so refusing a configuration over a
+	// value this backend ignores would be refusing it for no reason.
 	if c.MaxItems < 1 {
 		return fmt.Errorf("observium: max_items must be at least 1, got %d", c.MaxItems)
 	}
