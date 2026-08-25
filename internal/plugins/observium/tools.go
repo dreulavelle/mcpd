@@ -200,13 +200,13 @@ type portsArgs struct {
 type sensorsArgs struct {
 	DeviceID int    `json:"device_id,omitempty" jsonschema:"only sensors on this device"`
 	Class    string `json:"class,omitempty" jsonschema:"sensor class: temperature, voltage, fanspeed, power, current, humidity"`
-	Event    string `json:"event,omitempty" jsonschema:"filter by state: ok, alert, warn, or ignore"`
+	Event    string `json:"event,omitempty" jsonschema:"filter by state: ok, warning, alert, or ignore"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"most sensors to return"`
 }
 
 type alertsArgs struct {
 	DeviceID int    `json:"device_id,omitempty" jsonschema:"only alerts for this device"`
-	Status   string `json:"status,omitempty" jsonschema:"failed, ok, delayed, suppressed, or all; default failed"`
+	Status   string `json:"status,omitempty" jsonschema:"failed, ok, or all; default failed"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"most alerts to return"`
 }
 
