@@ -90,6 +90,19 @@ function stub(overrides: Partial<SettingsPayload> = {}) {
   vi.spyOn(api, "settings").mockResolvedValue(payload(overrides));
 }
 
+
+/**
+ * Whether a section's settings are on the page.
+ *
+ * Its name appears twice when it is: once on the button that filters to it,
+ * which is always there, and once as the title of its card, which is only
+ * there when the section is shown. Only the second answers the question, so
+ * this looks for an occurrence that is not inside a button.
+ */
+function sectionShown(title: string): boolean {
+  return screen.queryAllByText(title).some((el) => el.closest("button") === null);
+}
+
 describe("the settings page, after the config file shrank", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -102,8 +115,38 @@ describe("the settings page, after the config file shrank", () => {
     expect(await screen.findByLabelText(/Address assistants use/)).toHaveValue(
       "https://mcp.example.net",
     );
-    expect(screen.getByText("Timeouts")).toBeInTheDocument();
-    expect(screen.getByText("Approvals")).toBeInTheDocument();
+    expect(sectionShown("Timeouts")).toBe(true);
+    expect(sectionShown("Approvals")).toBe(true);
+  });
+
+  // The point of the filter: a hundred and thirty settings in one column is a
+  // scroll, and somebody who remembers a word from a label should not have to
+  // do the scrolling.
+  it("narrows to what a search matches", async () => {
+    const user = userEvent.setup();
+    renderWith(<General />, { session: sessionFor("admin") });
+    await screen.findByLabelText(/Address assistants use/);
+
+    await user.type(screen.getByLabelText("Search settings"), "timeout");
+
+    // On the fields rather than the section names: filtering to a single
+    // group makes SettingsForm drop the card title, since a page showing one
+    // group has nothing to tell apart. What matters is which settings are
+    // reachable, and that is what this asserts.
+    expect(screen.getByLabelText(/Wait for the whole request/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Address assistants use/)).not.toBeInTheDocument();
+  });
+
+  it("shows one section when its name is clicked, and all of them again after", async () => {
+    const user = userEvent.setup();
+    renderWith(<General />, { session: sessionFor("admin") });
+    await screen.findByLabelText(/Address assistants use/);
+
+    await user.click(screen.getByRole("button", { name: "Timeouts" }));
+    expect(sectionShown("Approvals")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(sectionShown("Approvals")).toBe(true);
   });
 
   // The chip existed and nothing declared ApplyRestart, so it had never

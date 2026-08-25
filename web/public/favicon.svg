@@ -1,0 +1,26 @@
+<!--
+  One host, three things served through it. The shape is the thing mcpd
+  actually is: a hub that everything reaches its systems through, rather than
+  a letter that would only read as a letter at 16px.
+
+  currentColor is deliberate. The mark is drawn on a transparent ground and
+  inherits the tab's own colour scheme, so it stays legible in a light and a
+  dark browser chrome without shipping two files that can drift apart.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <style>
+    :root { color: #0f172a; }
+    @media (prefers-color-scheme: dark) { :root { color: #e2e8f0; } }
+  </style>
+  <g stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+    <path d="M16 16 L7 7" />
+    <path d="M16 16 L25 10" />
+    <path d="M16 16 L16 26" />
+  </g>
+  <circle cx="16" cy="16" r="5" fill="currentColor" />
+  <g fill="currentColor">
+    <circle cx="7" cy="7" r="3" />
+    <circle cx="25" cy="10" r="3" />
+    <circle cx="16" cy="26" r="3" />
+  </g>
+</svg>
