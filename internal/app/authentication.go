@@ -126,7 +126,7 @@ func (a *App) purgeSSOStates(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			if err := a.ssoStates.Purge(ctx); err != nil {
-				a.log.Warn("could not purge expired sign-in states", "error", err)
+				a.log.WarnContext(ctx, "could not purge expired sign-in states", "error", err)
 			}
 		}
 	}

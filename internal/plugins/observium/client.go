@@ -320,6 +320,13 @@ func (c *Client) do(ctx context.Context, path string, params url.Values) (envelo
 	}
 
 	c.observe("ok", elapsed)
+	// The upstream half of a tool call. Off by default and the first thing to
+	// turn on when an assistant reports an answer that does not match what
+	// somebody sees in Observium: it says what was asked and how much came
+	// back, without the body, which is where the estate is.
+	c.log.DebugContext(ctx, "observium API call",
+		"path", path, "status", status, "count", env.Count,
+		"page", env.PageNo, "took", elapsed)
 	return env, body, nil
 }
 

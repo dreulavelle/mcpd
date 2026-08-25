@@ -380,6 +380,12 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec Mu
 			obs.MutationProposal(plugin, spec.Action, observability.OutcomeDenied)
 			return nil, operationView{}, err
 		}
+		// What was asked for, before anything is decided about it. A proposal
+		// that never appears in the operations list left a trace here, which
+		// is the difference between "the assistant never asked" and "mcpd
+		// refused and nobody noticed".
+		observability.Logger(ctx).DebugContext(ctx, "mutation proposed",
+			"plugin", plugin, "action", spec.Action)
 
 		// Before the plan and before the record. A refused proposal must cost
 		// nothing that a retry would then find already spent: no upstream

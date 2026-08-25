@@ -718,6 +718,11 @@ func (r *mysqlReader) selectFrom(ctx context.Context, q entityQuery, filters url
 		return Page{}, fmt.Errorf("observium: reading %s: %w", q.table, err)
 	}
 	r.observe("ok", elapsed)
+	// The statement, never the arguments: the SQL says which code path ran and
+	// the arguments are the customer's device names.
+	r.log.DebugContext(ctx, "observium database query",
+		"table", q.table, "rows", len(page.Items),
+		"truncated", page.Truncated, "filters", len(where), "took", elapsed)
 
 	// Counted separately only when it would tell the caller something. A page
 	// that was not truncated already knows its own total.

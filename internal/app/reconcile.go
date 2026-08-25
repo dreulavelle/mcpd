@@ -192,7 +192,7 @@ func (a *App) reconcileInstance(ctx context.Context, name string) (err error) {
 			if len(missing) > 0 {
 				why = "missing " + strings.Join(missing, ", ")
 			}
-			a.log.Info("unmounting a plugin that is no longer serving",
+			a.log.InfoContext(ctx, "unmounting a plugin that is no longer serving",
 				"plugin", name, "reason", why)
 			return a.manager.Unmount(ctx, name)
 		}

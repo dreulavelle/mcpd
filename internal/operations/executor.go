@@ -146,7 +146,7 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 		return fmt.Errorf("operations: recompute payload hash: %w", err)
 	}
 	if recomputed != op.PayloadHash {
-		e.log.Error("stored payload does not match its hash; refusing to execute",
+		e.log.ErrorContext(ctx, "stored payload does not match its hash; refusing to execute",
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action)
 		return e.settleFailure(ctx, op, "", CodePayloadMismatch,
 			"the stored mutation payload does not match the hash recorded at approval")
@@ -157,7 +157,7 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 	//    approver read now reports what the target actually looks like.
 	plan, err := e.runner.Plan(ctx, op.Plugin, op.Action, op.Params)
 	if err != nil {
-		e.log.Warn("could not re-plan before execution",
+		e.log.WarnContext(ctx, "could not re-plan before execution",
 			"operation_id", op.ID, "error", err)
 		return e.settleFailure(ctx, op, "", CodeUpstreamFailed,
 			"the target could not be read before execution")
@@ -165,7 +165,7 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 	drift := CheckDrift(op.Preconditions, plan.Preconditions)
 	switch drift {
 	case DriftDetected:
-		e.log.Warn("target changed since the operation was proposed; refusing to execute",
+		e.log.WarnContext(ctx, "target changed since the operation was proposed; refusing to execute",
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action)
 		return e.settleFailure(ctx, op, "", CodePreconditionChanged,
 			"the target changed after this operation was approved, so applying it "+
@@ -174,7 +174,7 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 		// Said out loud rather than passed over. A mutation that declared no
 		// preconditions has not survived a drift check, it has skipped one,
 		// and the audit entry below records which of the two happened.
-		e.log.Warn("this mutation declares no preconditions, so drift could not be checked",
+		e.log.WarnContext(ctx, "this mutation declares no preconditions, so drift could not be checked",
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action)
 	}
 
@@ -188,7 +188,7 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 	//     risk is what the policy sees the second time and a person is asked.
 	if op.AutoApproved() && plan.RiskOverride != nil {
 		if raised := MaxRisk(op.Risk, *plan.RiskOverride); raised != op.Risk {
-			e.log.Warn("re-planning raised the risk of a change nobody was asked about; refusing to execute",
+			e.log.WarnContext(ctx, "re-planning raised the risk of a change nobody was asked about; refusing to execute",
 				"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 				"authorized_risk", op.Risk, "current_risk", raised, "rule", op.AuthorizedByRule)
 			return e.settleFailure(ctx, op, "", CodeRiskRaised, fmt.Sprintf(
@@ -221,7 +221,7 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 		Event: eventFor(e.ids.EventID(), subjectFor(StateExecuting), op),
 	})
 	if errors.Is(err, ErrClaimLost) {
-		e.log.Debug("another worker claimed the operation first", "operation_id", op.ID)
+		e.log.DebugContext(ctx, "another worker claimed the operation first", "operation_id", op.ID)
 		return nil
 	}
 	if err != nil {
@@ -234,7 +234,7 @@ func (e *Executor) Execute(ctx context.Context, operationID string) error {
 
 // apply performs the upstream write and settles the outcome.
 func (e *Executor) apply(ctx context.Context, op *Operation, attemptID string, plan PlanResult) error {
-	e.log.Info("executing mutation",
+	e.log.InfoContext(ctx, "executing mutation",
 		"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 		"risk", op.Risk, "approved_by", op.ApprovedBy, "attempt", op.AttemptCount)
 
@@ -244,7 +244,7 @@ func (e *Executor) apply(ctx context.Context, op *Operation, attemptID string, p
 	case errors.Is(err, ErrIndeterminate):
 		// The write may or may not have landed. Recording this as a failure
 		// would invite a retry that double-applies it.
-		e.log.Error("upstream outcome is indeterminate; manual reconciliation required",
+		e.log.ErrorContext(ctx, "upstream outcome is indeterminate; manual reconciliation required",
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 			"upstream_ref", outcome.UpstreamRef, "error", err)
 		return e.settle(ctx, op, attemptID, StateIndeterminate, nil, nil,
@@ -260,7 +260,7 @@ func (e *Executor) apply(ctx context.Context, op *Operation, attemptID string, p
 		// about the write, so nothing is read and nothing is claimed. The
 		// verified column stays null: false would say a check ran and
 		// disagreed, true would say one ran and agreed, and neither happened.
-		e.log.Info("mutation applied; this action cannot be confirmed by re-reading the target",
+		e.log.InfoContext(ctx, "mutation applied; this action cannot be confirmed by re-reading the target",
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 			"upstream_ref", outcome.UpstreamRef)
 		return e.settle(ctx, op, attemptID, StateSucceeded, nil, nil,
@@ -274,13 +274,13 @@ func (e *Executor) apply(ctx context.Context, op *Operation, attemptID string, p
 		if vErr != nil {
 			detail = redact(vErr.Error())
 		}
-		e.log.Warn("mutation applied but could not be verified",
+		e.log.WarnContext(ctx, "mutation applied but could not be verified",
 			"operation_id", op.ID, "error", vErr)
 		return e.settle(ctx, op, attemptID, StateIndeterminate, observed, boolPtr(false),
 			outcome.UpstreamRef, CodeVerificationFailed, detail)
 	}
 
-	e.log.Info("mutation applied and verified",
+	e.log.InfoContext(ctx, "mutation applied and verified",
 		"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 		"upstream_ref", outcome.UpstreamRef)
 	return e.settle(ctx, op, attemptID, StateSucceeded, observed, boolPtr(true),
