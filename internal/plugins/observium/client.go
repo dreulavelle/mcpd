@@ -90,12 +90,39 @@ func NewClient(hc *http.Client, cfg Config, token, user, pass string,
 // endpoint -- "devices", "ports", "sensors" -- so it is captured as the
 // remaining raw JSON and resolved by name at the call site.
 type envelope struct {
-	Status    string `json:"status"`
-	Message   string `json:"message"`
-	Count     int    `json:"count"`
-	PageSize  int    `json:"pagesize"`
-	PageNo    int    `json:"pageno"`
-	CountPage int    `json:"countpage"`
+	// Raw rather than a string, because one endpoint collides with it.
+	//
+	// The envelope is built in PHP as $out['status'] = 'ok' followed by
+	// $out[$entity] = $rows -- and for /status/ the entity *is* "status", so
+	// the collection overwrites the field. The response then carries an object
+	// where every other endpoint carries "ok", and decoding this as a string
+	// would fail every call to the one endpoint whose name is unlucky.
+	//
+	// So it is interpreted rather than parsed: a string is the envelope's own
+	// verdict, and anything else means the collection landed on top of it,
+	// which only happens on a response that had one to put there.
+	Status    json.RawMessage `json:"status"`
+	Message   string          `json:"message"`
+	Count     int             `json:"count"`
+	PageSize  int             `json:"pagesize"`
+	PageNo    int             `json:"pageno"`
+	CountPage int             `json:"countpage"`
+}
+
+// verdict returns the envelope's own status, and whether there was one.
+//
+// Absent means the field was overwritten by a collection of the same name --
+// see the comment on Status. That is not a failure and must not be read as
+// one: a response with a collection in it is a response that worked.
+func (e envelope) verdict() (string, bool) {
+	if len(e.Status) == 0 {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal(e.Status, &s); err != nil {
+		return "", false
+	}
+	return s, true
 }
 
 // Page is one tool call's worth of entities, plus what the caller needs to
@@ -314,7 +341,7 @@ func (c *Client) do(ctx context.Context, path string, params url.Values) (envelo
 	// A 200 that says it failed. Checked because treating it as success hands
 	// the model an empty collection, which reads as "there are none" rather
 	// than "the question was refused".
-	if env.Status != "" && !strings.EqualFold(env.Status, "ok") {
+	if verdict, ok := env.verdict(); ok && !strings.EqualFold(verdict, "ok") {
 		c.observe("error", elapsed)
 		return envelope{}, nil, explainEnvelopeFailure(path, env.Message)
 	}
@@ -387,30 +414,56 @@ const (
 	EntityNeighbours Entity = "neighbours"
 	EntityAddresses  Entity = "addresses"
 	EntityVLANs      Entity = "vlans"
+	// Status entries are a device's enumerated conditions -- a power supply
+	// that is present or absent, a fan that is ok or failed. Sensors carry the
+	// readings that are numbers; these carry the ones that are states, and a
+	// health question wants both.
+	EntityStatus Entity = "status"
+	// Maintenance windows explain why an estate with something visibly wrong
+	// is reporting no alerts.
+	EntityMaintenance Entity = "maintenance"
+	// Groups are how an operator has organised the estate, and several filters
+	// take a group name -- which is unusable without a way to learn them.
+	EntityGroups Entity = "groups"
+	// Alert checks are what is being watched, which is the question behind
+	// "why did nobody get told".
+	EntityAlertChecks Entity = "alert_checks"
 )
 
 // Filter names are the API's own, named here so a typo is a compile error
 // rather than a filter that silently matches everything.
 const (
-	FilterDeviceID = "device_id"
-	FilterHostname = "hostname"
-	FilterStatus   = "status"
-	FilterOS       = "os"
-	FilterLocation = "location"
-	FilterHardware = "hardware"
-	FilterVendor   = "vendor"
-	FilterGroup    = "group"
-	FilterState    = "state"
-	FilterErrors   = "errors"
-	FilterAlerted  = "alerted"
-	FilterIfAlias  = "ifAlias"
-	FilterMetric   = "metric"
-	FilterEvent    = "event"
-	FilterMessage  = "message"
-	FilterFrom     = "timestamp_from"
-	FilterTo       = "timestamp_to"
-	FilterModel    = "entPhysicalModelName"
-	FilterSerial   = "entPhysicalSerialNum"
+	FilterDeviceID   = "device_id"
+	FilterHostname   = "hostname"
+	FilterStatus     = "status"
+	FilterOS         = "os"
+	FilterLocation   = "location"
+	FilterHardware   = "hardware"
+	FilterVendor     = "vendor"
+	FilterGroup      = "group"
+	FilterState      = "state"
+	FilterErrors     = "errors"
+	FilterAlerted    = "alerted"
+	FilterIfAlias    = "ifAlias"
+	FilterMetric     = "metric"
+	FilterEvent      = "event"
+	FilterMessage    = "message"
+	FilterFrom       = "timestamp_from"
+	FilterTo         = "timestamp_to"
+	FilterModel      = "entPhysicalModelName"
+	FilterSerial     = "entPhysicalSerialNum"
+	FilterType       = "type"
+	FilterGroupID    = "group_id"
+	FilterDeviceGrp  = "device_group"
+	FilterIfDescr    = "ifDescr"
+	FilterSensorType = "sensor_type"
+	FilterEntityType = "entity_type"
+	FilterEntityID   = "entity_id"
+	FilterClass      = "class"
+	FilterAF         = "af"
+	FilterActive     = "active"
+	FilterUpcoming   = "upcoming"
+	FilterMembers    = "include_members"
 	// FilterID selects one entity by its own primary key. The API expresses
 	// this as a path segment rather than a query parameter, which is why it is
 	// named here rather than being one of the filters above.
@@ -435,6 +488,12 @@ var apiPaths = map[Entity]struct{ path, key string }{
 	EntityNeighbours: {"/neighbours", "neighbours"},
 	EntityAddresses:  {"/address", "addresses"},
 	EntityVLANs:      {"/vlans", "vlans"},
+	EntityStatus:     {"/status", "status"},
+	// Both of these answer under a key that is not the endpoint's own name,
+	// which is why the pair is recorded rather than one derived from the other.
+	EntityMaintenance: {"/maintenance", "maintenance"},
+	EntityGroups:      {"/groups", "groups"},
+	EntityAlertChecks: {"/alert_checks", "alert_checks"},
 }
 
 // Read fetches one entity collection.

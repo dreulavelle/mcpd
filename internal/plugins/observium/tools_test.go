@@ -210,3 +210,113 @@ func TestFetch_UnconfiguredSaysWhatIsMissing(t *testing.T) {
 		t.Fatalf("want a not-configured error, got %v", err)
 	}
 }
+
+// Maintenance windows need a level 8 account. A refusal is a permission
+// answer, not a failure -- and reporting "no windows" would be the wrong
+// answer to "why is nothing alerting", which is the question this tool exists
+// to settle.
+func TestMaintenance_RefusalIsNotAnAbsence(t *testing.T) {
+	p := toolPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"status":"failed","message":"insufficient level"}`)
+	})
+
+	got, err := p.listMaintenance(context.Background(), maintenanceArgs{})
+	if err != nil {
+		t.Fatalf("a permission refusal must not fail the call: %v", err)
+	}
+	if !strings.Contains(got.Note, "not a statement that there are none") {
+		t.Errorf("the note must not be read as an empty answer: %q", got.Note)
+	}
+	if got.Count != 0 {
+		t.Error("a refusal produced items")
+	}
+}
+
+// An empty maintenance list is a real answer and worth saying out loud,
+// because the assistant is usually here to rule suppression out.
+func TestMaintenance_EmptyRulesOutSuppression(t *testing.T) {
+	p := toolPlugin(t, jsonAPI("maintenance", map[string]any{}, 0))
+
+	got, err := p.listMaintenance(context.Background(), maintenanceArgs{})
+	if err != nil {
+		t.Fatalf("listMaintenance: %v", err)
+	}
+	if !strings.Contains(got.Note, "suppression is not the reason") {
+		t.Errorf("an empty result should rule suppression out explicitly: %q", got.Note)
+	}
+}
+
+// A sensor carries a number judged against a threshold; a status entry carries
+// a state from a fixed set. Concatenating them would invite a model to compare
+// a temperature with "present".
+func TestSensors_KeepsTheTwoKindsOfReadingApart(t *testing.T) {
+	p := toolPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/status") {
+			fmt.Fprint(w, `{"status":"ok","count":1,"status":{"1":{"status_id":"1","status_event":"ok"}}}`)
+			return
+		}
+		fmt.Fprint(w, `{"status":"ok","count":1,"sensors":{"1":{"sensor_id":"1","sensor_value":"41.5"}}}`)
+	})
+
+	got, err := p.listSensors(context.Background(), sensorsArgs{DeviceID: 1})
+	if err != nil {
+		t.Fatalf("listSensors: %v", err)
+	}
+	if got.Sensors.Count != 1 {
+		t.Errorf("sensors = %d, want 1", got.Sensors.Count)
+	}
+	if got.Status.Count != 1 {
+		t.Errorf("state indicators = %d, want 1", got.Status.Count)
+	}
+}
+
+// Status is the smaller half of the answer, so an installation that cannot
+// serve it should still answer most of the question.
+func TestSensors_StatusFailureKeepsTheSensors(t *testing.T) {
+	p := toolPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/status") {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"status":"failed","message":"nope"}`)
+			return
+		}
+		fmt.Fprint(w, `{"status":"ok","count":1,"sensors":{"1":{"sensor_id":"1"}}}`)
+	})
+
+	got, err := p.listSensors(context.Background(), sensorsArgs{})
+	if err != nil {
+		t.Fatalf("a status refusal must not fail the call: %v", err)
+	}
+	if got.Sensors.Count != 1 {
+		t.Error("the sensors were lost")
+	}
+	if !strings.Contains(got.Status.Note, "could not be read") {
+		t.Errorf("the failure should be reported in place: %q", got.Status.Note)
+	}
+}
+
+// Several filters take a group name, and guessing one returns an empty result
+// that reads like an empty estate. The discovery tool is what makes them
+// usable.
+func TestGroups_IsReachable(t *testing.T) {
+	var gotPath string
+	p := toolPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"ok","count":1,"groups":{"3":{"group_id":"3","group_name":"core"}}}`)
+	})
+
+	got, err := p.listGroups(context.Background(), groupsArgs{})
+	if err != nil {
+		t.Fatalf("listGroups: %v", err)
+	}
+	if got.Count != 1 {
+		t.Fatalf("count = %d, want 1", got.Count)
+	}
+	if !strings.HasSuffix(gotPath, "/groups") {
+		t.Errorf("called %q, want the groups endpoint", gotPath)
+	}
+}

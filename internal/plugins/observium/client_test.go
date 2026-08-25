@@ -214,3 +214,45 @@ func TestClient_SendsBearerToken(t *testing.T) {
 		t.Errorf("the token must not reach the query string: %q", gotQuery)
 	}
 }
+
+// The /status/ endpoint's collection key collides with the envelope's own
+// status field. Observium builds the response in PHP as $out['status'] = 'ok'
+// followed by $out[$entity] = $rows, so for this one endpoint the collection
+// lands on top of the verdict.
+//
+// Decoding status as a string would therefore fail every call to /status/ --
+// an endpoint that works, reported as a malformed response.
+func TestEnvelope_StatusKeyCollision(t *testing.T) {
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// No "ok" anywhere: the collection overwrote it, which is exactly what
+		// a real response from this endpoint looks like.
+		fmt.Fprint(w, `{"count":2,"status":{
+			"1":{"status_id":"1","status_event":"ok","status_descr":"PSU 1"},
+			"2":{"status_id":"2","status_event":"alert","status_descr":"PSU 2"}}}`)
+	})
+
+	page, err := c.walk(context.Background(), "/status", "status", url.Values{})
+	if err != nil {
+		t.Fatalf("a status response must not be read as malformed: %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("got %d entries, want 2", len(page.Items))
+	}
+	if page.Items[1]["status_event"] != "alert" {
+		t.Errorf("the entries decoded wrongly: %v", page.Items)
+	}
+}
+
+// The tolerance must not swallow a real refusal on every other endpoint, where
+// status is a string and means what it says.
+func TestEnvelope_StillCatchesAFailedVerdict(t *testing.T) {
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"failed","message":"insufficient privileges"}`)
+	})
+
+	if _, err := c.walk(context.Background(), "/vlans", "vlans", url.Values{}); err == nil {
+		t.Fatal("a failed verdict was accepted as success")
+	}
+}
