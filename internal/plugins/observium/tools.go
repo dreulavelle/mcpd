@@ -476,7 +476,7 @@ func (p *Plugin) fetch(ctx context.Context, entity Entity, q url.Values, limit i
 	if limit <= 0 || limit > p.cfg.MaxItems {
 		limit = p.cfg.MaxItems
 	}
-	page, err := p.reader.Read(ctx, entity, q, limit)
+	page, err := p.client.Read(ctx, entity, q, limit)
 	p.note(err)
 	return page, err
 }

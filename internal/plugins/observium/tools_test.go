@@ -31,7 +31,6 @@ func toolPlugin(t *testing.T, h http.HandlerFunc) *Plugin {
 		},
 		cfg:        c.cfg,
 		client:     c,
-		reader:     c,
 		configured: true,
 	}
 }

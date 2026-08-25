@@ -4,7 +4,6 @@ go 1.26.2
 
 require (
 	github.com/getsentry/sentry-go v0.48.0
-	github.com/go-sql-driver/mysql v1.10.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/openai/tunnel-client v0.0.12
 	github.com/prometheus/client_golang v1.23.2
@@ -15,7 +14,6 @@ require (
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect

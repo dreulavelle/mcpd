@@ -20,7 +20,7 @@ func testClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Serv
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	cfg := Config{Backend: BackendAPI, BaseURL: srv.URL, Token: "t"}
+	cfg := Config{BaseURL: srv.URL, Token: "t"}
 	cfg.withDefaults()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("test config invalid: %v", err)
