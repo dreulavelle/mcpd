@@ -119,6 +119,18 @@ func TestIntegration_EveryToolRuns(t *testing.T) {
 	for name, run := range map[string]func() (int, error){
 		"sensors": func() (int, error) {
 			r, err := p.listSensors(ctx, sensorsArgs{DeviceID: id})
+			return r.Sensors.Count, err
+		},
+		"state indicators": func() (int, error) {
+			r, err := p.listSensors(ctx, sensorsArgs{DeviceID: id})
+			return r.Status.Count, err
+		},
+		"maintenance": func() (int, error) {
+			r, err := p.listMaintenance(ctx, maintenanceArgs{})
+			return r.Count, err
+		},
+		"groups": func() (int, error) {
+			r, err := p.listGroups(ctx, groupsArgs{})
 			return r.Count, err
 		},
 		"alerts": func() (int, error) {
@@ -226,7 +238,8 @@ func TestIntegration_FiltersActuallyMatch(t *testing.T) {
 			t.Errorf("sensors event=%s: %v", event, err)
 			continue
 		}
-		t.Logf("sensors event=%s: %d", event, got.Count)
+		t.Logf("sensors event=%s: %d sensors, %d state indicators",
+			event, got.Sensors.Count, got.Status.Count)
 	}
 
 	recent, err := p.alertHistory(ctx, alertHistoryArgs{

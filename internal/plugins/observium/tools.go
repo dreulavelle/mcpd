@@ -54,12 +54,14 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "sensors",
-		Title: "List sensors",
-		Description: "Lists environmental and electrical sensors with their " +
-			"current reading and the thresholds Observium judges them against: " +
-			"temperature, voltage, fan speed, power, humidity and current. " +
-			"Filter by device, sensor class, or event state to find only what " +
-			"is outside its limits.",
+		Title: "Sensors and state indicators",
+		Description: "Everything Observium measures or watches on a device. " +
+			"Sensors are the readings that are numbers — temperature, voltage, " +
+			"fan speed, power, humidity, current — with the thresholds they " +
+			"are judged against. Status entries are the ones that are states: " +
+			"a power supply present or absent, a fan ok or failed. Ask for " +
+			"both when the question is whether a device is healthy; filter by " +
+			"event to see only what is outside its limits.",
 		Idempotent: true,
 	}, p.listSensors)
 
@@ -114,6 +116,28 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, p.listInventory)
 
 	plugins.Tool(r, plugins.ToolSpec{
+		Name:  "maintenance",
+		Title: "Scheduled maintenance windows",
+		Description: "Planned windows during which alerting is suppressed. " +
+			"This is the first thing to check when an estate has something " +
+			"visibly wrong and no alerts to show for it — the answer is often " +
+			"that somebody scheduled the work. Needs a level 8 Observium " +
+			"account; below that it reports that it could not read them rather " +
+			"than reporting none.",
+		Idempotent: true,
+	}, p.listMaintenance)
+
+	plugins.Tool(r, plugins.ToolSpec{
+		Name:  "groups",
+		Title: "List groups",
+		Description: "The groups an operator has organised the estate into. " +
+			"Several filters take a group name, and this is the only way to " +
+			"learn what they are — guessing one returns an empty result that " +
+			"reads like an empty estate.",
+		Idempotent: true,
+	}, p.listGroups)
+
+	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "graphs",
 		Title: "Graph image links",
 		Description: "Links to Observium's rendered graphs for one entity over " +
@@ -139,7 +163,12 @@ type listResult struct {
 	Count     int              `json:"count"`
 	Total     int              `json:"total_matching,omitempty"`
 	Truncated bool             `json:"truncated"`
-	Note      string           `json:"note,omitempty"`
+	// Checks is the alerting configuration, present only when a caller asked
+	// for it. It answers "why did nothing tell me", which is a different
+	// question from "what is wrong" and shares a tool because it shares a
+	// domain.
+	Checks []map[string]any `json:"alert_checkers,omitempty"`
+	Note   string           `json:"note,omitempty"`
 }
 
 // resultOf renders a page, saying plainly when it is not the whole answer.
@@ -178,7 +207,9 @@ type devicesArgs struct {
 	Location string `json:"location,omitempty" jsonschema:"filter by configured location"`
 	Hardware string `json:"hardware,omitempty" jsonschema:"filter by hardware model"`
 	Vendor   string `json:"vendor,omitempty" jsonschema:"filter by vendor"`
-	Group    string `json:"group,omitempty" jsonschema:"filter by device group name"`
+	Type     string `json:"type,omitempty" jsonschema:"filter by device type, e.g. network, server, firewall"`
+	Group    string `json:"group,omitempty" jsonschema:"filter by group name; observium_groups lists them"`
+	Version  string `json:"version,omitempty" jsonschema:"filter by software version"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"most devices to return"`
 }
 
@@ -194,20 +225,27 @@ type portsArgs struct {
 	ErrorsSet bool   `json:"errors_only,omitempty" jsonschema:"only interfaces currently reporting errors"`
 	Alerted   bool   `json:"alerted_only,omitempty" jsonschema:"only interfaces in an alerting state"`
 	IfAlias   string `json:"description,omitempty" jsonschema:"filter by interface description or alias"`
+	IfDescr   string `json:"name,omitempty" jsonschema:"filter by the interface's own name, e.g. GigabitEthernet0/1"`
+	Group     string `json:"device_group,omitempty" jsonschema:"only interfaces on devices in this group"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"most interfaces to return"`
 }
 
 type sensorsArgs struct {
-	DeviceID int    `json:"device_id,omitempty" jsonschema:"only sensors on this device"`
+	DeviceID int    `json:"device_id,omitempty" jsonschema:"only readings on this device"`
 	Class    string `json:"class,omitempty" jsonschema:"sensor class: temperature, voltage, fanspeed, power, current, humidity"`
 	Event    string `json:"event,omitempty" jsonschema:"filter by state: ok, warning, alert, or ignore"`
-	Limit    int    `json:"limit,omitempty" jsonschema:"most sensors to return"`
+	Group    string `json:"group,omitempty" jsonschema:"only readings on devices in this group"`
+	NoStatus bool   `json:"sensors_only,omitempty" jsonschema:"leave out the state indicators and return only numeric sensors"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"most entries to return per kind"`
 }
 
 type alertsArgs struct {
-	DeviceID int    `json:"device_id,omitempty" jsonschema:"only alerts for this device"`
-	Status   string `json:"status,omitempty" jsonschema:"failed, ok, or all; default failed"`
-	Limit    int    `json:"limit,omitempty" jsonschema:"most alerts to return"`
+	DeviceID   int    `json:"device_id,omitempty" jsonschema:"only alerts for this device"`
+	Status     string `json:"status,omitempty" jsonschema:"failed, ok, or all; default failed"`
+	EntityType string `json:"entity_type,omitempty" jsonschema:"only alerts about this kind of thing: device, port, sensor, storage"`
+	EntityID   int    `json:"entity_id,omitempty" jsonschema:"only alerts about this entity, with entity_type"`
+	Checks     bool   `json:"include_checks,omitempty" jsonschema:"also return the alert checkers that exist, which answers why something is not alerting"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"most alerts to return"`
 }
 
 type alertHistoryArgs struct {
@@ -224,13 +262,27 @@ type capacityArgs struct {
 }
 
 type topologyArgs struct {
-	DeviceID int  `json:"device_id,omitempty" jsonschema:"only this device"`
-	Limit    int  `json:"limit,omitempty" jsonschema:"most entries per category"`
-	VLANs    bool `json:"include_vlans,omitempty" jsonschema:"include VLANs, which need a level 7 account"`
+	DeviceID int    `json:"device_id,omitempty" jsonschema:"only this device"`
+	AF       string `json:"address_family,omitempty" jsonschema:"limit addresses to ipv4 or ipv6"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"most entries per category"`
+	VLANs    bool   `json:"include_vlans,omitempty" jsonschema:"include VLANs, which need a level 7 account"`
+}
+
+type maintenanceArgs struct {
+	Active   bool `json:"active_only,omitempty" jsonschema:"only windows in effect right now"`
+	Upcoming bool `json:"upcoming_only,omitempty" jsonschema:"only windows scheduled for the future"`
+	Limit    int  `json:"limit,omitempty" jsonschema:"most windows to return"`
+}
+
+type groupsArgs struct {
+	EntityType string `json:"entity_type,omitempty" jsonschema:"only groups of this kind of thing: device, port, sensor"`
+	Members    bool   `json:"include_members,omitempty" jsonschema:"also list what is in each group"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"most groups to return"`
 }
 
 type inventoryArgs struct {
 	DeviceID int    `json:"device_id,omitempty" jsonschema:"only hardware in this device"`
+	OS       string `json:"os,omitempty" jsonschema:"only hardware in devices running this operating system"`
 	Model    string `json:"model,omitempty" jsonschema:"filter by physical model name"`
 	Serial   string `json:"serial,omitempty" jsonschema:"filter by serial number"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"most entries to return"`
@@ -246,6 +298,8 @@ func (p *Plugin) listDevices(ctx context.Context, in devicesArgs) (listResult, e
 	setIf(q, "location", in.Location)
 	setIf(q, "hardware", in.Hardware)
 	setIf(q, "vendor", in.Vendor)
+	setIf(q, FilterType, in.Type)
+	setIf(q, "version", in.Version)
 	setIf(q, "group", in.Group)
 
 	page, err := p.fetch(ctx, EntityDevices, q, in.Limit)
@@ -285,7 +339,9 @@ func (p *Plugin) listPorts(ctx context.Context, in portsArgs) (listResult, error
 	setIDIf(q, "device_id", in.DeviceID)
 	setIf(q, "hostname", in.Hostname)
 	setIf(q, "state", in.State)
-	setIf(q, "ifAlias", in.IfAlias)
+	setIf(q, FilterIfAlias, in.IfAlias)
+	setIf(q, FilterIfDescr, in.IfDescr)
+	setIf(q, FilterDeviceGrp, in.Group)
 	if in.ErrorsSet {
 		q.Set("errors", "1")
 	}
@@ -305,17 +361,48 @@ func (p *Plugin) listPorts(ctx context.Context, in portsArgs) (listResult, error
 	return out, nil
 }
 
-func (p *Plugin) listSensors(ctx context.Context, in sensorsArgs) (listResult, error) {
-	q := url.Values{}
-	setIDIf(q, "device_id", in.DeviceID)
-	setIf(q, "metric", in.Class)
-	setIf(q, "event", in.Event)
+// sensorResult keeps the two kinds of reading apart.
+//
+// A sensor carries a number judged against a threshold; a status entry carries
+// a state from a fixed set. Concatenating them would invite a model to compare
+// a temperature with "present", so they travel together and stay distinct.
+type sensorResult struct {
+	Sensors listResult `json:"sensors"`
+	Status  listResult `json:"state_indicators"`
+	Note    string     `json:"note,omitempty"`
+}
 
-	page, err := p.fetch(ctx, EntitySensors, q, in.Limit)
+func (p *Plugin) listSensors(ctx context.Context, in sensorsArgs) (sensorResult, error) {
+	q := url.Values{}
+	setIDIf(q, FilterDeviceID, in.DeviceID)
+	setIf(q, FilterMetric, in.Class)
+	setIf(q, FilterEvent, in.Event)
+	setIf(q, "group", in.Group)
+
+	sensors, err := p.fetch(ctx, EntitySensors, q, in.Limit)
 	if err != nil {
-		return listResult{}, err
+		return sensorResult{}, err
 	}
-	return resultOf(page, "sensors"), nil
+	out := sensorResult{
+		Sensors: resultOf(sensors, "sensors"),
+		Status:  listResult{Items: []map[string]any{}},
+	}
+
+	if in.NoStatus {
+		out.Status.Note = "Not requested."
+		return out, nil
+	}
+
+	// A refusal here does not lose the sensors already fetched. Status is the
+	// smaller half of the answer and an installation that cannot serve it can
+	// still answer most of the question.
+	status, err := p.fetch(ctx, EntityStatus, q, in.Limit)
+	if err != nil {
+		out.Status.Note = "State indicators could not be read: " + err.Error()
+		return out, nil
+	}
+	out.Status = resultOf(status, "state indicators")
+	return out, nil
 }
 
 func (p *Plugin) listAlerts(ctx context.Context, in alertsArgs) (listResult, error) {
@@ -337,9 +424,66 @@ func (p *Plugin) listAlerts(ctx context.Context, in alertsArgs) (listResult, err
 	out := resultOf(page, "alerts")
 	if len(out.Items) == 0 && status == "failed" {
 		out.Note = "Nothing is currently in a failed state. This is a live " +
-			"read, not a cached one."
+			"read, not a cached one. If something is visibly wrong and nothing " +
+			"is alerting, check observium_maintenance for a window that is " +
+			"suppressing it."
+	}
+	if in.Checks {
+		checks, err := p.fetch(ctx, EntityAlertChecks, url.Values{}, in.Limit)
+		switch {
+		case err != nil:
+			out.Note = strings.TrimSpace(out.Note +
+				" The alert checkers could not be read: " + err.Error())
+		default:
+			out.Checks = resultOf(checks, "alert checkers").Items
+		}
 	}
 	return out, nil
+}
+
+func (p *Plugin) listMaintenance(ctx context.Context, in maintenanceArgs) (listResult, error) {
+	q := url.Values{}
+	if in.Active {
+		q.Set(FilterActive, "1")
+	}
+	if in.Upcoming {
+		q.Set(FilterUpcoming, "1")
+	}
+	// Without the associations a window says a time and a name, and the
+	// question being asked is which equipment it covers.
+	q.Set("include_associations", "1")
+
+	page, err := p.fetch(ctx, EntityMaintenance, q, in.Limit)
+	if err != nil {
+		// Level 8 gates this endpoint, so a refusal is a permission answer
+		// rather than a failure -- and reporting "no windows" would be the
+		// wrong answer to "why is nothing alerting".
+		return listResult{
+			Items: []map[string]any{},
+			Note: "Maintenance windows could not be read, so this is not a " +
+				"statement that there are none: " + err.Error(),
+		}, nil
+	}
+	out := resultOf(page, "maintenance windows")
+	if len(out.Items) == 0 {
+		out.Note = "No maintenance window matches, so suppression is not the " +
+			"reason anything is quiet."
+	}
+	return out, nil
+}
+
+func (p *Plugin) listGroups(ctx context.Context, in groupsArgs) (listResult, error) {
+	q := url.Values{}
+	setIf(q, FilterEntityType, in.EntityType)
+	if in.Members {
+		q.Set(FilterMembers, "1")
+	}
+
+	page, err := p.fetch(ctx, EntityGroups, q, in.Limit)
+	if err != nil {
+		return listResult{}, err
+	}
+	return resultOf(page, "groups"), nil
 }
 
 func (p *Plugin) alertHistory(ctx context.Context, in alertHistoryArgs) (listResult, error) {
@@ -418,7 +562,12 @@ func (p *Plugin) topology(ctx context.Context, in topologyArgs) (topologyResult,
 	if err != nil {
 		return topologyResult{}, err
 	}
-	addresses, err := p.fetch(ctx, EntityAddresses, q, in.Limit)
+	addrQuery := url.Values{}
+	for k, v := range q {
+		addrQuery[k] = v
+	}
+	setIf(addrQuery, FilterAF, in.AF)
+	addresses, err := p.fetch(ctx, EntityAddresses, addrQuery, in.Limit)
 	if err != nil {
 		return topologyResult{}, err
 	}
@@ -451,6 +600,7 @@ func (p *Plugin) topology(ctx context.Context, in topologyArgs) (topologyResult,
 func (p *Plugin) listInventory(ctx context.Context, in inventoryArgs) (listResult, error) {
 	q := url.Values{}
 	setIDIf(q, "device_id", in.DeviceID)
+	setIf(q, "os", in.OS)
 	setIf(q, "entPhysicalModelName", in.Model)
 	setIf(q, "entPhysicalSerialNum", in.Serial)
 
