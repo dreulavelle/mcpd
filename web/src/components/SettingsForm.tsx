@@ -105,6 +105,12 @@ export function SettingsForm({ groups, settings, links, onSaved, readOnly = fals
               )}
               {group.fields.map((f) => {
                 if (group.enabled_by && f.key !== group.enabled_by && !on) return null;
+                // Presentation only. The value is still in the draft and is
+                // still submitted, so hiding a field must never be how a
+                // configuration is made valid -- the server decides that.
+                if (f.show_when && !f.show_when.equals.includes(valueOf(f.show_when.field))) {
+                  return null;
+                }
                 return (
                   <Field
                     key={f.key} field={f} value={valueOf(f.key)}

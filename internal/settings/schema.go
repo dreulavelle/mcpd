@@ -98,6 +98,36 @@ type Field struct {
 	Required bool `json:"required,omitempty"`
 	// Placeholder is example text for the input.
 	Placeholder string `json:"placeholder,omitempty"`
+	// ShowWhen hides this field unless another field in the same form holds
+	// one of the named values. Nil means always shown.
+	//
+	// It exists for the setting that selects between two ways of doing the
+	// same job -- an integration that can read its upstream over an API or
+	// straight from its database -- where a single flat form would show every
+	// field for both and leave the operator to work out which half applies.
+	ShowWhen *ShowWhen `json:"show_when,omitempty"`
+}
+
+// ShowWhen makes a field's visibility depend on another field's value.
+//
+// **It is presentation, not enforcement.** A hidden field keeps whatever value
+// it already had, that value is still submitted, and it is still stored. So
+// nothing downstream may treat "hidden" as "unset": validation belongs in the
+// plugin's own Validate, which sees the whole configuration and is the only
+// thing positioned to say that a database password is required *because* the
+// backend is a database. A form that hides a field is helping somebody find
+// the right box, not deciding what a valid configuration is.
+//
+// Required interacts with this the same way. A field that is required but
+// hidden is not one the operator can fill in, so the form does not block on
+// it and the plugin decides.
+type ShowWhen struct {
+	// Field is the key of the field this one depends on, in the same form.
+	Field string `json:"field"`
+	// Equals lists the values of that field which reveal this one. Empty
+	// reveals nothing, which is refused at declaration rather than shipped as
+	// a field nobody can see.
+	Equals []string `json:"equals"`
 }
 
 // Group is a related set of fields.
