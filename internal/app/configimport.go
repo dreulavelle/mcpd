@@ -190,7 +190,7 @@ func (a *App) importLegacyConfig(ctx context.Context) (imported bool, err error)
 			continue
 		}
 		if err := validateMoved(m); err != nil {
-			a.log.Warn("a value in the startup file is not one this host will accept, "+
+			a.log.WarnContext(ctx, "a value in the startup file is not one this host will accept, "+
 				"so it was not imported",
 				"key", m.file, "detail", err.Error())
 			record.Refused = append(record.Refused, m.key)
@@ -216,7 +216,7 @@ func (a *App) importLegacyConfig(ctx context.Context) (imported bool, err error)
 	if ref := strings.TrimSpace(deref(legacy.Tunnel.APIKeyRef)); ref != "" {
 		switch key, err := a.resolveTunnelKey(ctx, ref); {
 		case err != nil:
-			a.log.Warn("the tunnel's API key could not be read from the reference in "+
+			a.log.WarnContext(ctx, "the tunnel's API key could not be read from the reference in "+
 				"the startup file, so it was not imported",
 				"reference", ref, "error", err)
 			record.Refused = append(record.Refused, settings.KeyTunnelAPIKey)
@@ -226,8 +226,8 @@ func (a *App) importLegacyConfig(ctx context.Context) (imported bool, err error)
 			// Refusing to write it in the clear is the only correct answer,
 			// and so is refusing to record the import as finished: the moment
 			// a key is configured, the next start picks this up.
-			a.log.Warn("the startup file names a tunnel API key but this host has no " +
-				"encryption key, so the key could not be moved into the database and " +
+			a.log.WarnContext(ctx, "the startup file names a tunnel API key but this host has no "+
+				"encryption key, so the key could not be moved into the database and "+
 				"the tunnel will not connect. Set secret_key_ref and restart.")
 			deferred = true
 		default:
@@ -266,7 +266,7 @@ func (a *App) importLegacyConfig(ctx context.Context) (imported bool, err error)
 		attrs = append(attrs, "note",
 			"these keys are no longer read from the startup file; "+
 				"change them on the Settings page, and delete them from the file")
-		a.log.Info("settings from the startup file were imported into the database, "+
+		a.log.InfoContext(ctx, "settings from the startup file were imported into the database, "+
 			"which is where they live now", attrs...)
 	}
 	// An unfinished import is not one to stay quiet about: the warnings are

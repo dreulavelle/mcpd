@@ -102,7 +102,10 @@ func NewStreamingLogger(w io.Writer, level slog.Level, format string, stream boo
 		// each other.
 		h.tap = slog.NewJSONHandler(ls, opts)
 	}
-	return slog.New(h), ctl, ls
+	// Wrapped so that a record written with a context carries the correlation
+	// ID the caller was handed. Outermost, so it sees the record before any
+	// handler that might drop attributes.
+	return slog.New(contextHandler{Handler: h}), ctl, ls
 }
 
 // syncWriter serialises the writes of every handler that shares it.

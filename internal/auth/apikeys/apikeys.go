@@ -581,7 +581,7 @@ func (v *Verifier) Verify(ctx context.Context, token string, r *http.Request) (*
 	p, err := v.store.Verify(ctx, token)
 	switch {
 	case errors.Is(err, ErrRevoked), errors.Is(err, ErrExpired):
-		v.log.Warn("an API key was refused",
+		v.log.WarnContext(ctx, "an API key was refused",
 			"reason", err.Error(), "token_fingerprint", auth.Fingerprint(token))
 		return nil, auth.ErrUnauthenticated
 	case err != nil:

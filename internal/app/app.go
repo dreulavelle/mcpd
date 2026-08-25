@@ -152,7 +152,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	}
 
 	for _, w := range cfg.Warnings() {
-		log.Warn("configuration warning", "detail", w)
+		log.WarnContext(ctx, "configuration warning", "detail", w)
 	}
 
 	if err := os.MkdirAll(cfg.StorageDir(), 0o750); err != nil {
@@ -170,7 +170,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		return nil, err
 	}
 	version, _ := sqlite.SchemaVersion(ctx, db)
-	log.Info("database ready",
+	log.InfoContext(ctx, "database ready",
 		"path", db.Path(), "schema_version", version, "migrations_applied", applied)
 
 	// Built before the graph, because several components take an observer and
@@ -218,8 +218,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			return nil, err
 		}
 	} else {
-		log.Warn("no settings encryption key is configured; " +
-			"secrets cannot be set from the dashboard. " +
+		log.WarnContext(ctx, "no settings encryption key is configured; "+
+			"secrets cannot be set from the dashboard. "+
 			"Generate one with: openssl rand -base64 32")
 	}
 	a.settings = settings.NewStore(db, cipher, time.Now)
@@ -247,9 +247,16 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		// Not fatal. Crash reporting is a convenience for whoever ships this,
 		// and refusing to start a customer's monitoring host over a bad
 		// reporting DSN would be serving our interest at their expense.
-		log.Error("crash reporting is configured but could not start; "+
+		log.ErrorContext(ctx, "crash reporting is configured but could not start; "+
 			"continuing without it", "error", err)
 		a.errors = nil
+	}
+	// Warnings and errors become breadcrumbs, so a crash report says what led
+	// up to the crash rather than only where it landed. Returns the logger
+	// unchanged when reporting is off, which is the normal case.
+	if a.errors != nil {
+		log = observability.AttachBreadcrumbs(log, a.errors)
+		a.log = log
 	}
 	// Not on the start that did the importing. On that one the store holds
 	// what the file supplied because it was just put there, so there is
@@ -258,7 +265,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	// still names that differs is worth hearing about every time.
 	if !imported {
 		for _, w := range a.staleConfigWarnings(ctx) {
-			log.Warn("a setting is being read from the database, "+
+			log.WarnContext(ctx, "a setting is being read from the database, "+
 				"not from where it is written", "detail", w)
 		}
 	}
@@ -274,7 +281,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		RelaxedDurability: boot.relaxedDurability,
 		TLSSelfSigned:     boot.tlsSelfSigned,
 	}).Warnings() {
-		log.Warn("configuration warning", "detail", w)
+		log.WarnContext(ctx, "configuration warning", "detail", w)
 	}
 
 	// Loaded before anything asks what is configured: a remote server is an
@@ -395,7 +402,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			return nil, err
 		}
 		a.tls = materials
-		log.Info("serving https with mcpd's own certificate",
+		log.InfoContext(ctx, "serving https with mcpd's own certificate",
 			"hosts", materials.Hosts,
 			"expires", materials.NotAfter.Format(time.RFC3339),
 			"issued_now", materials.Issued,
@@ -605,11 +612,19 @@ func (a *App) toolGate(az *auth.Authorizer) plugins.ToolMiddleware {
 		principal := auth.FromContext(ctx)
 		plugin, _, _ := splitToolName(tool)
 		if d := az.AuthorizeTool(principal, plugin, required); !d.Allowed {
-			observability.Logger(ctx).Warn("tool call denied",
+			observability.Logger(ctx).WarnContext(ctx, "tool call denied",
 				"tool", tool, "principal", principal.ID,
 				"code", d.Code, "reason", d.Reason)
 			return d.Error()
 		}
+		// Every tool call that got through, at debug. This is the line that
+		// answers "did the assistant even ask for that", which is where a
+		// support call about a missing answer usually starts -- and it is
+		// exactly what a bounded set of breadcrumbs should carry into a crash
+		// report.
+		observability.Logger(ctx).DebugContext(ctx, "tool call",
+			"tool", tool, "plugin", plugin, "principal", principal.ID,
+			"capability", string(required))
 		return nil
 	}
 }
@@ -862,7 +877,7 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 			// ChatGPT with an endpoint that has nothing behind it. Skipped, but
 			// said out loud: silently ignoring it is how an assignment that
 			// looks made comes to do nothing.
-			a.log.Warn("a tunnel is assigned to a plugin that is not running, "+
+			a.log.WarnContext(ctx, "a tunnel is assigned to a plugin that is not running, "+
 				"so it is not being started",
 				"plugin", name, "tunnel_id", id)
 			continue
@@ -870,7 +885,7 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 		if id == base.TunnelID {
 			// One tunnel cannot serve two endpoints, and running two clients
 			// against the same id has them competing for the same commands.
-			a.log.Warn("ignoring a per-plugin tunnel that reuses the main tunnel's id",
+			a.log.WarnContext(ctx, "ignoring a per-plugin tunnel that reuses the main tunnel's id",
 				"plugin", name)
 			continue
 		}
@@ -1060,7 +1075,7 @@ func inlineCeiling(stored string) operations.RiskLevel {
 func (a *App) autoApprovalRules(ctx context.Context) []operations.AutoApprovalRule {
 	raw, ok, err := a.settings.Get(ctx, settings.KeyApprovalAutoRules)
 	if err != nil {
-		a.log.Error("the stored approval rules could not be read; "+
+		a.log.ErrorContext(ctx, "the stored approval rules could not be read; "+
 			"every change will be put to a person", "error", err)
 		return nil
 	}
@@ -1073,7 +1088,7 @@ func (a *App) autoApprovalRules(ctx context.Context) []operations.AutoApprovalRu
 	// deciding who gets interrupted.
 	rules, err := operations.DecodeRules([]byte(raw))
 	if err != nil {
-		a.log.Error("the stored approval rules are not valid; "+
+		a.log.ErrorContext(ctx, "the stored approval rules are not valid; "+
 			"every change will be put to a person", "error", err)
 		return nil
 	}

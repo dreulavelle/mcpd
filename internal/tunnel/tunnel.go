@@ -276,7 +276,7 @@ func (m *Manager) Start(ctx context.Context) error {
 				stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer stopCancel()
 				if err := m.Stop(stopCtx); err != nil {
-					m.log.Warn("tunnel did not stop cleanly after a rejected key", "error", err)
+					m.log.WarnContext(ctx, "tunnel did not stop cleanly after a rejected key", "error", err)
 				}
 				// Stop resets the state to stopped, which would erase the
 				// explanation the operator needs.
@@ -305,7 +305,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
 		if err := client.Stop(stopCtx); err != nil {
-			m.log.Warn("tunnel did not stop cleanly", "error", err)
+			m.log.WarnContext(ctx, "tunnel did not stop cleanly", "error", err)
 		}
 	}()
 
@@ -333,7 +333,7 @@ func (m *Manager) Start(ctx context.Context) error {
 				m.message = ""
 			}
 			m.mu.Unlock()
-			m.log.Info("tunnel connected",
+			m.log.InfoContext(ctx, "tunnel connected",
 				"tunnel_id", m.cfg.TunnelID,
 				"principal", m.cfg.Principal.ID,
 				"plugins", m.cfg.Principal.Plugins)
@@ -345,7 +345,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.cancel = cancel
 	m.mu.Unlock()
 
-	m.log.Info("tunnel started; waiting for the first control-plane poll",
+	m.log.InfoContext(ctx, "tunnel started; waiting for the first control-plane poll",
 		"tunnel_id", m.cfg.TunnelID,
 		"principal", m.cfg.Principal.ID,
 		"plugins", m.cfg.Principal.Plugins)
@@ -388,7 +388,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 // so a changed key or id never keeps serving under the old one.
 func (m *Manager) Reconfigure(ctx context.Context, cfg Config) error {
 	if err := m.Stop(ctx); err != nil {
-		m.log.Warn("previous tunnel did not stop cleanly before reconfiguring", "error", err)
+		m.log.WarnContext(ctx, "previous tunnel did not stop cleanly before reconfiguring", "error", err)
 	}
 
 	m.mu.Lock()

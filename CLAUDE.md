@@ -94,6 +94,14 @@ it. A standing rule means a propose call can execute before it returns, so a
 hint chosen for the case where a human is always asked is wrong in the case
 where nobody is.
 
+**Log with the context when you have one.** `ErrorContext(ctx, ...)` rather
+than `Error(...)`, because slog hands a handler `context.Background()` for the
+plain form and no handler can recover a correlation ID that was never passed.
+That ID is what the caller was given in a header and an error body, and it is
+the only thing somebody on a machine you cannot reach can quote back. Debug is
+for what a support call turns on: what was asked, what was decided, what the
+upstream said — never a response body or a query's arguments.
+
 **Nothing leaves the customer's machine that they did not ask to send.** mcpd
 runs on somebody else's hardware. Crash reporting is off until a DSN is set,
 the DSN is a setting rather than a constant, and everything is scrubbed at one

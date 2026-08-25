@@ -64,7 +64,7 @@ func (r *Reaper) Sweep(ctx context.Context) {
 	due, err := r.repo.DueForExpiry(ctx, r.now(), r.batch)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			r.log.Error("reaper could not read expiring operations", "error", err)
+			r.log.ErrorContext(ctx, "reaper could not read expiring operations", "error", err)
 		}
 		return
 	}
@@ -93,7 +93,7 @@ func (r *Reaper) reap(ctx context.Context, op *Operation) {
 		// it died mid-execution. Whether the upstream write landed is
 		// genuinely unknown, so this must not be recorded as a failure: a
 		// failure invites a retry, and a retry would double-apply.
-		r.log.Error("execution lease expired without settlement; outcome unknown",
+		r.log.ErrorContext(ctx, "execution lease expired without settlement; outcome unknown",
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 			"lease_owner", op.LeaseOwner, "attempts", op.AttemptCount)
 
@@ -111,7 +111,7 @@ func (r *Reaper) reap(ctx context.Context, op *Operation) {
 			Event: eventFor(r.ids.EventID(), subjectFor(StateIndeterminate), op),
 		})
 		if err != nil && !errors.Is(err, ErrStateConflict) {
-			r.log.Error("failed to record an expired lease", "operation_id", op.ID, "error", err)
+			r.log.ErrorContext(ctx, "failed to record an expired lease", "operation_id", op.ID, "error", err)
 			return
 		}
 		r.notify()
@@ -140,10 +140,10 @@ func (r *Reaper) expire(ctx context.Context, op *Operation, reason string) {
 		return
 	}
 	if err != nil {
-		r.log.Error("failed to expire an operation", "operation_id", op.ID, "error", err)
+		r.log.ErrorContext(ctx, "failed to expire an operation", "operation_id", op.ID, "error", err)
 		return
 	}
-	r.log.Info("operation expired",
+	r.log.InfoContext(ctx, "operation expired",
 		"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 		"previous_state", op.State)
 	r.notify()

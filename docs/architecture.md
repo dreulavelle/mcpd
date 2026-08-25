@@ -1571,6 +1571,45 @@ can know the session cookie needs `Secure`. `X-Forwarded-Proto` deliberately doe
 whoever is talking to this process, and nothing here can tell a proxy's from a
 caller's.
 
+## Logs somebody can use from a support call
+
+The hard case is a machine nobody here can reach, running a version nobody here
+can reproduce against. Two things follow from that.
+
+**The correlation ID has to actually appear.** `Correlate` puts a tagged logger
+in the context and returns the ID to the caller in a header and in every error
+body, so it is the one thing a person can quote back — and it found nothing in
+the logs, because the request-scoped logger was used at five call sites out of
+several hundred. `contextHandler` now reads the ID off the context and puts it
+on any record written with one, and the log calls that had a `ctx` in scope
+were converted to the `*Context` forms.
+
+That conversion is the whole fix rather than half of it: slog hands a handler
+`context.Background()` for the plain `Error(...)` form, so no handler can
+recover what was not passed. Which is why the convention in
+[CLAUDE.md](../CLAUDE.md) is a convention rather than something the
+infrastructure can enforce.
+
+**Debug is for the questions a support call asks.** There were six debug lines
+in the whole project, so telling a customer to raise the level bought them
+almost nothing. The ones that matter are what was asked for, what was decided
+and what the upstream said: a tool call and its capability, a mutation being
+proposed, one Observium API call with its status and count, one database query
+with its table and row count. Never a response body, never a query's arguments
+— those are the customer's estate, and the point of the line is the code path.
+
+**Warnings and errors become Sentry breadcrumbs.** A stack trace says where a
+panic landed; the run-up says what it was doing. Breadcrumbs rather than events
+is deliberate: this project logs an error when an upstream is unreachable or a
+proposal is refused, which are things a working system does, and sending each
+as an event would fill a collector with normal behaviour. As breadcrumbs they
+cost nothing until something actually panics. Their attributes are an
+allow-list — the keys that identify a code path, not the ones that name
+equipment — and they are scrubbed like everything else.
+
+None of this needs a collector. The logs are the record that always exists;
+breadcrumbs are what a collector gets to see if an operator configured one.
+
 ## Crash reporting, and whose machine this is
 
 mcpd is deployed onto a customer's network, manages their equipment and holds

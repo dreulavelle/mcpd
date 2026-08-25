@@ -83,13 +83,13 @@ func CheckLatest(ctx context.Context, client *http.Client, releaseURL string, lo
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Debug("could not check for a newer tunnel client", "error", err)
+		log.DebugContext(ctx, "could not check for a newer tunnel client", "error", err)
 		return info
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Debug("tunnel client release check returned an unexpected status",
+		log.DebugContext(ctx, "tunnel client release check returned an unexpected status",
 			"status", resp.StatusCode)
 		return info
 	}
@@ -186,7 +186,7 @@ func (c *Checker) check(ctx context.Context) {
 	c.mu.Unlock()
 
 	if info.UpdateAvailable {
-		c.log.Info("a newer tunnel client is available",
+		c.log.InfoContext(ctx, "a newer tunnel client is available",
 			"embedded", info.Embedded, "latest", info.Latest,
 			"action", "rebuild mcpd to pick it up")
 	}

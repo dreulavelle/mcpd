@@ -1420,7 +1420,7 @@ func (s *Server) displayNames(ctx context.Context) map[string]string {
 	if err != nil {
 		// A name is a convenience. Failing the whole page because one could
 		// not be looked up would trade the operation list for a nicety.
-		s.opts.Log.Warn("could not resolve display names", "error", err)
+		s.opts.Log.WarnContext(ctx, "could not resolve display names", "error", err)
 		return nil
 	}
 	out := make(map[string]string, len(list))
