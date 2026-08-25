@@ -246,6 +246,43 @@ wildcard would hand them to a model; a wildcard makes a schema change silently
 alter what a tool returns; and naming them is what makes the startup check
 possible at all.
 
+### The API's words are not the schema's values
+
+This is the part that cannot be got right by reading documentation, and every
+line of it was wrong until the queries were run against a real installation.
+The failure mode is identical in each case: a query that runs, matches nothing,
+and returns an empty result which reads as an answer.
+
+| The API says | The schema holds | |
+|---|---|---|
+| `status=up` on a device | `status` is a `tinyint`, `1` | plus `disabled` as a separate column, so one filter reaches two |
+| `status=down` | `status = 0 AND disabled = 0` | "down" and "disabled" are different states |
+| `event=warn` on a sensor | the enum's value is `warning` | `warn` matches nothing |
+| `status=failed` on an alert | `alert_status = 0` | **zero is the failing state**, confirmed from Observium's own `alerts.inc.php`, which writes `'0'` beside `last_message = 'Checks failed'`. Inverting this reports a healthy estate as broken |
+| `state=up` on a port | `ifOperStatus`, an enum whose values *are* the API's words | the one that needs no translation |
+| `errors=1` on a port | no such column | the rate being non-zero — the cumulative counter is non-zero for any interface that has ever had one |
+| `alerted=1` on a port | no such column | a subquery against `alert_table` |
+| `timestamp_from` | `eventlog.timestamp` is a `timestamp` | the argument is a unix epoch, so `FROM_UNIXTIME` |
+
+Note what the tools return, which is a separate question: `status` comes back as
+`1`, not `"up"`, on **both** backends — the API serves the same row. The filter
+vocabulary is translated; the values are not rewritten, because doing so on one
+backend and not the other would make the same estate look different depending
+on the licence.
+
+### A filter that cannot be applied is refused
+
+Not dropped. The two are opposite mistakes, and the dangerous one looks
+harmless: dropping `status = down` does not narrow the result, it returns every
+device presented as though it had been filtered, and an assistant asked which
+devices are down then names all of them.
+
+**Output options are different and are ignored.** `expand_entities`,
+`humanize`, `fields` and their like shape what comes back rather than narrowing
+what matches, so a backend that cannot honour one has still answered the right
+question. `outputOptions` in `reader.go` is that list, and the distinction is
+the reason it exists.
+
 ### Soft deletes
 
 Observium does not delete rows. A port pulled out of a switch stays in `ports`
@@ -288,6 +325,32 @@ cheap next to a device walk, so there is nothing to buy.
 The classifier is an allow-list: an endpoint it does not recognise is fetched
 every time, so a tool added later cannot quietly start being served from
 memory.
+
+## Testing against a real installation
+
+`integration_test.go` runs the whole backend against a live Observium and
+skips unless one is supplied:
+
+```bash
+OBSERVIUM_TEST_DB_HOST=… OBSERVIUM_TEST_DB_NAME=observium OBSERVIUM_TEST_DB_USER=mcpd_ro OBSERVIUM_TEST_DB_PASSWORD=… go test ./internal/plugins/observium/ -run Integration -v
+```
+
+It is worth keeping because the half of this package a fake cannot reach is the
+half that was wrong. The grant check, the schema check and every filter above
+are claims about somebody else's database; a fake agrees with whatever the code
+believes.
+
+Setting up the account it needs:
+
+```sql
+CREATE USER 'mcpd_ro'@'<mcpd host>' IDENTIFIED BY '…';
+GRANT SELECT ON observium.* TO 'mcpd_ro'@'<mcpd host>';
+```
+
+If MariaDB is bound to `127.0.0.1` — the Debian default — and mcpd is on
+another machine, it cannot reach it. Either bind to the LAN address and grant
+from the one host, or tunnel; the first is simpler and puts a database on the
+network, so it is a decision rather than a step.
 
 ## Discovering the rest of the API
 
