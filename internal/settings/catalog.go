@@ -100,6 +100,22 @@ func PluginGroup(instance, title string, fields []Field) Group {
 	for _, f := range fields {
 		f.Key = PluginSettingKey(instance, f.Key)
 		f.Group = out.Name
+		// A visibility rule names the field it depends on, and that name is
+		// namespaced here along with every other key -- so the rule has to be
+		// namespaced too or it points at a key this form does not contain. The
+		// dashboard then reads an empty value, matches nothing, and hides the
+		// field permanently: an integration whose credentials cannot be
+		// entered at all.
+		//
+		// Copied rather than rewritten in place. A plugin declares one rule
+		// value and shares it across every field it gates, and the same
+		// declaration is used again for a second instance -- so mutating the
+		// original would rewrite it for all of them and namespace it twice.
+		if f.ShowWhen != nil {
+			w := *f.ShowWhen
+			w.Field = PluginSettingKey(instance, w.Field)
+			f.ShowWhen = &w
+		}
 		if f.Apply == "" {
 			// A plugin holds whatever it was constructed with, so a change
 			// means building it again -- which the host does on the spot.

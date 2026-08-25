@@ -71,6 +71,7 @@ func Type() plugins.Type {
 			{
 				Key: "page_size", Label: "Items per request", Kind: settings.KindInt,
 				Default: defaultPageSize, Min: intPtr(1), Max: intPtr(50000),
+				ShowWhen: apiOnly,
 				Help: "How many entities one request asks Observium for. " +
 					"Without pagination Observium builds the whole answer " +
 					"first, which on a big estate is a slow query rather than " +
@@ -80,10 +81,11 @@ func Type() plugins.Type {
 			{
 				Key: "requests_per_second", Label: "Requests per second", Kind: settings.KindInt,
 				Default: int(defaultRPS), Min: intPtr(1), Max: intPtr(100),
-				Help: "Listing walks pages in a loop, which is the shape most " +
-					"likely to overrun the upstream. Observium is usually one " +
-					"PHP application over one database on somebody's own " +
-					"hardware, so this is deliberately modest.",
+				Help: "Bounds how hard mcpd leans on Observium — pages fetched " +
+					"over the API, or queries put to the database. Either way it " +
+					"is usually one PHP application and one MySQL server on " +
+					"somebody's own hardware, and the poller matters more than " +
+					"we do, so this is deliberately modest.",
 			},
 			{
 				Key: "db_host", Label: "Database host", Kind: settings.KindString,

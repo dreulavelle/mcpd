@@ -271,3 +271,71 @@ func testPlugin(t *testing.T, base string) *Plugin {
 	}
 	return p
 }
+
+// Every setting belongs to a backend or to both, and the form has to say
+// which. A credential field that is not gated is one an operator is asked to
+// fill in for a backend that will never read it; a shared field that *is*
+// gated disappears for half the installations that need it.
+//
+// Listed explicitly rather than derived, so that adding a setting is a
+// decision somebody makes here rather than a default they inherit.
+func TestSettings_EveryFieldIsGatedToTheBackendThatReadsIt(t *testing.T) {
+	shared := map[string]bool{
+		// The control itself, and the four that both backends read.
+		"backend": true, "max_items": true, "requests_per_second": true,
+		"state_cache_seconds": true, "inventory_cache_seconds": true,
+	}
+	wantAPI := map[string]bool{
+		"base_url": true, "token": true, "username": true, "password": true,
+		// page_size bounds one API request; the database backend uses LIMIT
+		// against max_items and never reads it.
+		"page_size": true,
+	}
+	wantDB := map[string]bool{
+		"db_host": true, "db_port": true, "db_name": true,
+		"db_user": true, "db_password": true,
+	}
+
+	seen := map[string]bool{}
+	for _, f := range Type().Settings {
+		seen[f.Key] = true
+		switch {
+		case shared[f.Key]:
+			if f.ShowWhen != nil {
+				t.Errorf("%q is read by both backends but is hidden for one", f.Key)
+			}
+		case wantAPI[f.Key]:
+			if f.ShowWhen != apiOnly {
+				t.Errorf("%q is only read by the API backend and must be gated to it", f.Key)
+			}
+		case wantDB[f.Key]:
+			if f.ShowWhen != databaseOnly {
+				t.Errorf("%q is only read by the database backend and must be gated to it", f.Key)
+			}
+		default:
+			t.Errorf("%q is a new setting that no backend has claimed; add it "+
+				"to shared, wantAPI or wantDB here so the choice is deliberate", f.Key)
+		}
+	}
+	for _, want := range []map[string]bool{shared, wantAPI, wantDB} {
+		for key := range want {
+			if !seen[key] {
+				t.Errorf("setting %q is expected but no longer declared", key)
+			}
+		}
+	}
+}
+
+// The control field must never be conditional itself, or nothing it gates can
+// ever be revealed. The host refuses this at startup; this checks the
+// declaration mcpd actually ships.
+func TestSettings_TheBackendSelectorIsAlwaysVisible(t *testing.T) {
+	if err := Type().Validate(); err != nil {
+		t.Fatalf("the declaration is refused by the host: %v", err)
+	}
+	for _, f := range Type().Settings {
+		if f.Key == "backend" && f.ShowWhen != nil {
+			t.Fatal("the backend selector is itself hidden")
+		}
+	}
+}
