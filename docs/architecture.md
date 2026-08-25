@@ -1571,6 +1571,55 @@ can know the session cookie needs `Secure`. `X-Forwarded-Proto` deliberately doe
 whoever is talking to this process, and nothing here can tell a proxy's from a
 caller's.
 
+## Crash reporting, and whose machine this is
+
+mcpd is deployed onto a customer's network, manages their equipment and holds
+their credentials. A crash report is therefore the only thing this process
+sends anywhere the operator did not choose, and that shapes every decision in
+`internal/observability/errors.go`.
+
+**Off unless somebody turns it on.** No DSN means no client, no goroutine and
+no network calls — not a client pointed at nowhere. `NewErrorReporter` returns
+`nil, nil`, and the nil reporter is valid: every method on it is safe. That
+matters more here than for metrics, because the call sites are panic handlers
+and a forgotten check in one would turn a recovered panic into a second.
+
+**One gate, not many call sites.** Everything is scrubbed in `BeforeSend`,
+which is the single point every event passes through however it was raised and
+whichever SDK integration added it. Scrubbing at the call sites would mean
+every future caller remembering.
+
+**Nothing identifies the machine unless asked.** Sentry fills `ServerName` with
+`os.Hostname()`, which on a customer deployment is the customer. It is replaced
+by a label an operator types — empty by default — and the empty case sends a
+single space, because an empty string is read by the SDK as "not configured"
+and it substitutes the hostname. `scrubEvent` forces the value from
+configuration rather than reading what is on the event: a gate that trusts its
+input is not a gate.
+
+**Messages are a separate decision from crashes.** A Go stack trace carries
+function names and line numbers and *not* argument values, so it is
+structurally incapable of naming a device. The error sentences are where a
+customer's estate lives — this project writes them to name upstreams, hosts and
+tables, which is right for a log on their own machine. So `errors.include_messages`
+is off by default: the trace and the error type travel, the sentence does not.
+
+Absolute paths go entirely. `abs_path` is the layout of whatever machine
+compiled the binary, so it carries a build user's home directory and says
+nothing the repository-relative filename does not.
+
+**The DSN is a setting, never a build-time constant.** It lives in the database
+with everything else, so an operator can see where their crashes go and stop
+them, and so a customer can point mcpd at their own collector rather than ours.
+The cost is that a crash before the settings store opens is not reported; the
+alternative is a second authority for one key and a file that could switch on
+sending data off the machine without the dashboard showing it.
+
+`Scrub` in `scrub.go` redacts addresses, credentials, tokens, MACs, emails and
+hostnames while deliberately protecting Go import paths and file names — a
+report with its own identifiers removed is one nobody can act on, and an import
+path and a domain name are the same shape.
+
 ## Plugins are not architecture
 
 What an integration does belongs with the integration. Each has its own

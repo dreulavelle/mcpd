@@ -279,6 +279,17 @@ func (a *App) Shutdown() error {
 	}
 	a.log.Info("database closed")
 
+	// 5. Let queued crash reports finish going out.
+	//
+	// After everything else and bounded tightly. The report worth having is
+	// the one about the panic that caused this shutdown, and it is sitting in
+	// a queue that dies with the process -- but an operator killing mcpd
+	// should not wait on a collector that is unreachable, so five seconds is
+	// the whole budget and missing the window is a warning rather than an
+	// error. Nothing here has anything to do with the customer's own data
+	// being safe; that was step 4.
+	a.errors.Flush(5 * time.Second)
+
 	return errors.Join(errs...)
 }
 

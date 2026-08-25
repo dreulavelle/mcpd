@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -41,7 +42,11 @@ type Options struct {
 	Repo       operations.Repository
 	Manager    *plugins.Manager
 	Health     *observability.HealthRegistry
-	Version    string
+	// Errors reports panics off the machine when an operator has configured
+	// somewhere to send them. Nil means off, and every method on it is safe on
+	// nil so no call site branches.
+	Errors  *observability.ErrorReporter
+	Version string
 
 	// Metrics serves the Prometheus exposition format, or is nil when the
 	// endpoint is switched off. MetricsPublic serves it unauthenticated.
@@ -484,7 +489,43 @@ func (s *Server) routes() {
 
 // Handler returns the fully wrapped dashboard handler.
 func (s *Server) Handler() http.Handler {
-	return observability.Correlate(s.opts.Log, s.securityHeaders(s.mux))
+	return observability.Correlate(s.opts.Log, s.recoverPanics(s.securityHeaders(s.mux)))
+}
+
+// recoverPanics turns a panic in a dashboard handler into a 500.
+//
+// net/http already stops one taking the process down: it logs to the standard
+// logger and drops the connection. What it does not do is any of the things
+// this host is careful about elsewhere -- the operator gets a connection reset
+// with no status, no correlation ID to quote, and a line in a log stream that
+// is not the structured one they read. The MCP endpoint has had this from the
+// start and the dashboard did not, which was an omission rather than a
+// decision.
+//
+// Inside Correlate so the log line and the response carry the same correlation
+// ID, and outside securityHeaders so a panic while setting a header is still
+// caught.
+func (s *Server) recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			v := recover()
+			if v == nil {
+				return
+			}
+			// ErrAbortHandler is net/http's own signal that a handler gave up
+			// deliberately -- ReverseProxy raises it on a client disconnect.
+			// It is not a bug and must not be reported as one.
+			if v == http.ErrAbortHandler {
+				panic(v)
+			}
+			stack := debug.Stack()
+			observability.Logger(r.Context()).Error("panic serving the dashboard",
+				"path", r.URL.Path, "panic", fmt.Sprint(v))
+			s.opts.Errors.CapturePanic(v, stack, "admin.request")
+			s.writeError(w, r, http.StatusInternalServerError, "internal error")
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // securityHeaders applies the policy the dashboard needs.

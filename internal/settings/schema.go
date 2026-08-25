@@ -266,6 +266,12 @@ const (
 	// prompt for everything, which is the strictest setting rather than a
 	// disabled one -- the decision still happens, it just cannot be made in
 	// one tap.
+	KeyErrorsDSN         = "errors.dsn"
+	KeyErrorsEnvironment = "errors.environment"
+	KeyErrorsLabel       = "errors.instance_label"
+	KeyErrorsMessages    = "errors.include_messages"
+	KeyErrorsTraceRate   = "errors.traces_sample_rate"
+
 	KeyApprovalInlineMaxRisk = "approval.inline_max_risk"
 
 	// KeyApprovalAutoRules holds the standing rules that decide which changes
@@ -503,6 +509,63 @@ func schema() []Group {
 					Default: 7, Min: intPtr(0), Max: intPtr(3650),
 					Help: "Days. Older entries are removed once a day, and the removal " +
 						"is itself recorded. Zero keeps everything.",
+				},
+			},
+		},
+		{
+			Name:    "errors",
+			Title:   "Crash reporting",
+			Section: SectionSettings,
+			Help: "Off unless you fill in an address below. mcpd runs on your " +
+				"network and manages your equipment, so nothing about a crash " +
+				"leaves this machine until you say where to send it.",
+			Fields: []Field{
+				{
+					Key: KeyErrorsDSN, Label: "Where to send crashes",
+					Kind: KindSecret, Group: "errors", Apply: ApplyRestart,
+					Placeholder: "https://…@sentry.example.com/1",
+					Help: "A Sentry or GlitchTip DSN. Empty is off, and off " +
+						"means no client is built and nothing is sent — not a " +
+						"client pointed at nowhere. Needs a restart.",
+				},
+				{
+					Key: KeyErrorsEnvironment, Label: "Environment",
+					Kind: KindString, Group: "errors", Apply: ApplyRestart,
+					Default: "production", Placeholder: "production",
+					Help: "Separates a test deployment from a real one in " +
+						"whatever you are sending to.",
+				},
+				{
+					Key: KeyErrorsLabel, Label: "Name this installation",
+					Kind: KindString, Group: "errors", Apply: ApplyRestart,
+					Placeholder: "nothing identifying is sent",
+					Help: "Empty sends nothing that says which machine this is. " +
+						"Sentry would otherwise use the hostname, which on a " +
+						"deployment like this one names the site. Fill it in " +
+						"only if whoever receives the crashes needs to tell " +
+						"installations apart, and choose a label rather than a " +
+						"real name.",
+				},
+				{
+					Key: KeyErrorsMessages, Label: "Send error messages",
+					Kind: KindBool, Group: "errors", Apply: ApplyRestart,
+					Default: false,
+					Help: "Off, the report carries the stack trace and the error " +
+						"type — enough to find the code path, and structurally " +
+						"unable to name a device, because Go does not put " +
+						"argument values in a stack trace. On, the sentences go " +
+						"too. They are scrubbed of addresses, credentials and " +
+						"hostnames either way, but they are written to describe " +
+						"your equipment, so sending them is its own decision.",
+				},
+				{
+					Key: KeyErrorsTraceRate, Label: "Sample performance traces",
+					Kind: KindInt, Group: "errors", Apply: ApplyRestart,
+					Default: 0, Min: intPtr(0), Max: intPtr(100),
+					Help: "Percent of requests to time and report. Zero is off " +
+						"and is the right answer unless somebody is chasing a " +
+						"specific slowness: a trace says more about what your " +
+						"assistants are doing than about whether mcpd is broken.",
 				},
 			},
 		},
