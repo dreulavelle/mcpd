@@ -19,41 +19,22 @@ func Type() plugins.Type {
 		Name:  "observium",
 		Title: "Observium",
 		Description: "Reads an Observium network monitoring estate: devices, " +
-			"interfaces, sensors, capacity, topology and alerts. Read-only.",
+			"interfaces, sensors, capacity, topology and alerts. Read-only. " +
+			"Needs Observium's REST API, which is a subscription feature.",
 		Settings: []settings.Field{
 			{
-				Key: "backend", Label: "Which Observium is this", Kind: settings.KindEnum,
-				Options: []string{string(BackendDatabase), string(BackendAPI)},
-				// The value records what changes -- which of two ways in this
-				// instance uses -- and the label asks the question an operator
-				// can actually answer. Nobody knows offhand whether they want
-				// the API or the database; everybody knows which licence they
-				// bought, and on Community Edition there is no choice to make.
-				OptionLabels: map[string]string{
-					string(BackendDatabase): "Community Edition",
-					string(BackendAPI):      "Subscription",
-				},
-				Default: string(BackendDatabase),
-				Help: "Community Edition has no REST API, so mcpd reads " +
-					"Observium's database directly — you will need a MySQL " +
-					"account with SELECT and nothing else. A subscription has " +
-					"the API, which is the better way in where you have it: it " +
-					"is a versioned contract, and its token carries one " +
-					"Observium account's permissions rather than everything in " +
-					"the schema.",
-			},
-			{
 				Key: "base_url", Label: "Address", Kind: settings.KindString,
+				Required:    true,
 				Placeholder: "https://observium.internal.example.com",
-				ShowWhen:    apiOnly,
 				Help: "The web root — the address you type to reach Observium, " +
 					"without /api/v0 on the end. Observium is normally on your " +
 					"own network, so there is no default that could be right.",
 			},
 			{
 				Key: "token", Label: "API token", Kind: settings.KindSecret,
-				ShowWhen: apiOnly,
-				Help: "From Profile > API tokens > Manage. Preferred over a " +
+				Help: "From Profile > API tokens > Manage, and only present on " +
+					"a subscription — Community Edition has no REST API and " +
+					"cannot be read by this integration. Preferred over a " +
 					"username and password: it can be issued read-only, it " +
 					"carries only the permissions of the account that made it, " +
 					"and revoking it does not change anyone's login. Stored " +
@@ -61,15 +42,13 @@ func Type() plugins.Type {
 			},
 			{
 				Key: "username", Label: "Username", Kind: settings.KindString,
-				ShowWhen: apiOnly,
 				Help: "Only for an installation too old for API tokens, where " +
 					"the API takes HTTP basic auth instead. Leave both this and " +
 					"the password empty if you set a token — the token wins.",
 			},
 			{
 				Key: "password", Label: "Password", Kind: settings.KindSecret,
-				ShowWhen: apiOnly,
-				Help:     "The other half of basic auth. Stored encrypted.",
+				Help: "The other half of basic auth. Stored encrypted.",
 			},
 			{
 				Key: "max_items", Label: "Most items per answer", Kind: settings.KindInt,
@@ -81,7 +60,6 @@ func Type() plugins.Type {
 			{
 				Key: "page_size", Label: "Items per request", Kind: settings.KindInt,
 				Default: defaultPageSize, Min: intPtr(1), Max: intPtr(50000),
-				ShowWhen: apiOnly,
 				Help: "How many entities one request asks Observium for. " +
 					"Without pagination Observium builds the whole answer " +
 					"first, which on a big estate is a slow query rather than " +
@@ -96,41 +74,6 @@ func Type() plugins.Type {
 					"is usually one PHP application and one MySQL server on " +
 					"somebody's own hardware, and the poller matters more than " +
 					"we do, so this is deliberately modest.",
-			},
-			{
-				Key: "db_host", Label: "Database host", Kind: settings.KindString,
-				Placeholder: "10.0.0.5", ShowWhen: databaseOnly,
-				Help: "Where Observium's MySQL server is. A hostname or " +
-					"address, not a URL. If mcpd and Observium are on the same " +
-					"machine this is the address the container can reach it on, " +
-					"which is usually not 127.0.0.1.",
-			},
-			{
-				Key: "db_port", Label: "Database port", Kind: settings.KindInt,
-				Default: defaultDBPort, Min: intPtr(1), Max: intPtr(65535),
-				ShowWhen: databaseOnly,
-				Help:     "MySQL's, unless somebody moved it.",
-			},
-			{
-				Key: "db_name", Label: "Database name", Kind: settings.KindString,
-				Placeholder: "observium", ShowWhen: databaseOnly,
-				Help: "The schema Observium writes to. Usually observium.",
-			},
-			{
-				Key: "db_user", Label: "Database username", Kind: settings.KindString,
-				ShowWhen: databaseOnly,
-				Help: "Make it a separate account with SELECT and nothing else. " +
-					"mcpd reads the account's own grants at startup and refuses " +
-					"to connect with one that can write, so this is checked " +
-					"rather than trusted. Narrow it further if you can — " +
-					"GRANT SELECT ON observium.* is simple, but the devices " +
-					"table holds SNMP community strings and the users table " +
-					"holds password hashes, and neither is something this reads.",
-			},
-			{
-				Key: "db_password", Label: "Database password", Kind: settings.KindSecret,
-				ShowWhen: databaseOnly,
-				Help:     "Stored encrypted.",
 			},
 			{
 				Key: "state_cache_seconds", Label: "Reuse readings for",
@@ -166,17 +109,6 @@ func Type() plugins.Type {
 }
 
 func intPtr(i int) *int { return &i }
-
-// Which half of the form belongs to which backend.
-//
-// Hiding is presentation only: a value left behind by a backend somebody
-// switched away from is still stored, and Config.Validate is what decides it
-// does not matter. These exist so an operator sees the five fields their
-// licence actually allows rather than all eleven.
-var (
-	apiOnly      = &settings.ShowWhen{Field: "backend", Equals: []string{string(BackendAPI)}}
-	databaseOnly = &settings.ShowWhen{Field: "backend", Equals: []string{string(BackendDatabase)}}
-)
 
 // decode turns resolved settings into a Config.
 //

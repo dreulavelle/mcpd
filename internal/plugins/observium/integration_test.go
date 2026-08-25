@@ -6,82 +6,74 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
-	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
-// Run against a real Observium. Skipped unless the connection is supplied,
-// so it costs nothing in CI and is there when somebody has an instance:
+// Run against a real Observium. Skipped unless one is supplied, so it costs
+// nothing in CI and is there when somebody has a subscription instance:
 //
-//	OBSERVIUM_TEST_DB_HOST=192.168.50.101 \
-//	OBSERVIUM_TEST_DB_NAME=observium \
-//	OBSERVIUM_TEST_DB_USER=mcpd_ro \
-//	OBSERVIUM_TEST_DB_PASSWORD=… \
+//	OBSERVIUM_TEST_URL=https://observium.example.com \
+//	OBSERVIUM_TEST_TOKEN=… \
 //	go test ./internal/plugins/observium/ -run Integration -v
 //
-// What it defends is the half of this package that unit tests cannot reach.
-// The grant check, the schema check and every column name are claims about
-// somebody else's database, and a fake proves nothing about any of them.
+// This is the half of the package a fake cannot reach, and it is worth more
+// than the rest of the suite put together. The database backend this replaced
+// had every one of its filters broken -- status matched nothing, one was
+// dropped silently, an alert state was inverted -- and all of it looked
+// correct until these ran. Nothing here has been run against a live API.
 func integrationPlugin(t *testing.T) *Plugin {
 	t.Helper()
-	host := os.Getenv("OBSERVIUM_TEST_DB_HOST")
-	if host == "" {
-		t.Skip("set OBSERVIUM_TEST_DB_HOST and friends to run against a real Observium")
-	}
-	port := 3306
-	if p := os.Getenv("OBSERVIUM_TEST_DB_PORT"); p != "" {
-		port, _ = strconv.Atoi(p)
+	base := os.Getenv("OBSERVIUM_TEST_URL")
+	if base == "" {
+		t.Skip("set OBSERVIUM_TEST_URL and OBSERVIUM_TEST_TOKEN to run against a real Observium")
 	}
 
 	cfg := Config{
-		Backend: BackendDatabase,
-		DBHost:  host, DBPort: port,
-		DBName:     os.Getenv("OBSERVIUM_TEST_DB_NAME"),
-		DBUser:     os.Getenv("OBSERVIUM_TEST_DB_USER"),
-		DBPassword: os.Getenv("OBSERVIUM_TEST_DB_PASSWORD"),
+		BaseURL:  base,
+		Token:    os.Getenv("OBSERVIUM_TEST_TOKEN"),
+		Username: os.Getenv("OBSERVIUM_TEST_USER"),
+		Password: os.Getenv("OBSERVIUM_TEST_PASSWORD"),
 	}
-	p, err := New(pluginDepsFor(t), cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	return p
-}
-
-func pluginDepsFor(t *testing.T) plugins.Deps {
-	t.Helper()
-	return plugins.Deps{
+	p, err := New(plugins.Deps{
 		Instance: "observium",
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Now:      time.Now,
+	}, cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
+	return p
 }
 
-// Probe is the whole startup contract: reachable, the account cannot write,
-// and every column these queries name exists. A failure here is the thing an
-// operator would otherwise meet inside their first tool call.
+// Probe is the startup contract: the address resolves, the credential is
+// accepted, and what comes back is the API's JSON rather than a sign-in page.
+//
+// A redirect here is the answer to the most likely misconfiguration there is
+// -- no API at this address, because it is switched off or because this is
+// Community Edition -- and the error says which two things to check.
 func TestIntegration_Probe(t *testing.T) {
 	p := integrationPlugin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := p.reader.Probe(ctx); err != nil {
+	if err := p.client.Probe(ctx); err != nil {
 		t.Fatalf("probe failed against a real Observium: %v", err)
 	}
-	t.Logf("reading %s", p.reader.Describe())
+	t.Logf("reading %s", p.client.Describe())
 }
 
 // Every tool, against real data. Empty is a legitimate answer -- a small
-// estate has no alerts -- so this checks that each one runs and returns the
-// shape it promises rather than that it found something.
+// estate has no alerts -- so this checks each runs and returns the shape it
+// promises rather than that it found something.
 func TestIntegration_EveryToolRuns(t *testing.T) {
 	p := integrationPlugin(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err := p.reader.Probe(ctx); err != nil {
+	if err := p.client.Probe(ctx); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
 
@@ -94,26 +86,24 @@ func TestIntegration_EveryToolRuns(t *testing.T) {
 		t.Skip("this Observium monitors nothing, so the rest proves little")
 	}
 
-	// Every later call is scoped to a real device id, which is how an
-	// assistant would actually use these.
-	id, _ := devices.Items[0]["device_id"].(int64)
+	id := deviceID(t, devices.Items[0])
 	t.Logf("scoping to device_id=%d (%v)", id, devices.Items[0]["hostname"])
 
-	one, err := p.getDevice(ctx, deviceArgs{DeviceID: int(id)})
+	one, err := p.getDevice(ctx, deviceArgs{DeviceID: id})
 	if err != nil {
 		t.Errorf("device: %v", err)
 	} else if one.Count != 1 {
 		t.Errorf("device returned %d rows, want 1", one.Count)
 	}
 
-	ports, err := p.listPorts(ctx, portsArgs{DeviceID: int(id)})
+	ports, err := p.listPorts(ctx, portsArgs{DeviceID: id})
 	if err != nil {
 		t.Errorf("ports: %v", err)
 	} else {
 		t.Logf("ports: %d", ports.Count)
-		// The claim this package corrected: Observium computes per-second
-		// rates on every poll. If they are absent the ports tool is
-		// describing something it does not have.
+		// Observium computes per-second rates on every poll and stores them
+		// beside the counters. The tool's own note promises them, so their
+		// absence would make it describe something it does not have.
 		var withRate int
 		for _, port := range ports.Items {
 			if _, ok := port["ifInOctets_rate"]; ok {
@@ -121,33 +111,38 @@ func TestIntegration_EveryToolRuns(t *testing.T) {
 			}
 		}
 		if ports.Count > 0 && withRate == 0 {
-			t.Error("no interface carried ifInOctets_rate; the rate columns are " +
-				"the reason this backend can answer about throughput")
+			t.Error("no interface carried ifInOctets_rate, which the ports tool " +
+				"tells the model to read for current throughput")
 		}
 	}
 
-	sensors, err := p.listSensors(ctx, sensorsArgs{DeviceID: int(id)})
-	if err != nil {
-		t.Errorf("sensors: %v", err)
-	} else {
-		t.Logf("sensors: %d", sensors.Count)
+	for name, run := range map[string]func() (int, error){
+		"sensors": func() (int, error) {
+			r, err := p.listSensors(ctx, sensorsArgs{DeviceID: id})
+			return r.Count, err
+		},
+		"alerts": func() (int, error) {
+			r, err := p.listAlerts(ctx, alertsArgs{})
+			return r.Count, err
+		},
+		"alert_history": func() (int, error) {
+			r, err := p.alertHistory(ctx, alertHistoryArgs{Limit: 5})
+			return r.Count, err
+		},
+		"inventory": func() (int, error) {
+			r, err := p.listInventory(ctx, inventoryArgs{DeviceID: id})
+			return r.Count, err
+		},
+	} {
+		n, err := run()
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		t.Logf("%s: %d", name, n)
 	}
 
-	alerts, err := p.listAlerts(ctx, alertsArgs{})
-	if err != nil {
-		t.Errorf("alerts: %v", err)
-	} else {
-		t.Logf("alerts: %d (%s)", alerts.Count, alerts.Note)
-	}
-
-	history, err := p.alertHistory(ctx, alertHistoryArgs{Limit: 5})
-	if err != nil {
-		t.Errorf("alert_history: %v", err)
-	} else {
-		t.Logf("alert history: %d", history.Count)
-	}
-
-	capacity, err := p.capacity(ctx, capacityArgs{DeviceID: int(id)})
+	capacity, err := p.capacity(ctx, capacityArgs{DeviceID: id})
 	if err != nil {
 		t.Errorf("capacity: %v", err)
 	} else {
@@ -155,72 +150,29 @@ func TestIntegration_EveryToolRuns(t *testing.T) {
 			capacity.Storage.Count, capacity.Memory.Count, capacity.Processors.Count)
 	}
 
-	topo, err := p.topology(ctx, topologyArgs{DeviceID: int(id), VLANs: true})
+	// VLANs need a level 7 account, so a refusal is reported in place rather
+	// than failing the call -- the neighbours are still most of the answer.
+	topo, err := p.topology(ctx, topologyArgs{DeviceID: id, VLANs: true})
 	if err != nil {
 		t.Errorf("topology: %v", err)
 	} else {
-		t.Logf("topology: neighbours=%d addresses=%d vlans=%d",
-			topo.Neighbours.Count, topo.Addresses.Count, topo.VLANs.Count)
+		t.Logf("topology: neighbours=%d addresses=%d vlans=%d (%s)",
+			topo.Neighbours.Count, topo.Addresses.Count, topo.VLANs.Count, topo.VLANs.Note)
 	}
-
-	inv, err := p.listInventory(ctx, inventoryArgs{DeviceID: int(id)})
-	if err != nil {
-		t.Errorf("inventory: %v", err)
-	} else {
-		t.Logf("inventory: %d", inv.Count)
-	}
-}
-
-// Values have to survive as values. MySQL hands back []byte for almost
-// everything, and a hostname that reaches a model as base64 is a hostname
-// nobody can use.
-func TestIntegration_ValuesAreUsable(t *testing.T) {
-	p := integrationPlugin(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := p.reader.Probe(ctx); err != nil {
-		t.Fatalf("probe: %v", err)
-	}
-
-	page, err := p.reader.Read(ctx, EntityDevices, url.Values{}, 5)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if len(page.Items) == 0 {
-		t.Skip("nothing monitored")
-	}
-	d := page.Items[0]
-
-	if _, ok := d["hostname"].(string); !ok {
-		t.Errorf("hostname is %T, want a string -- a []byte marshals to base64", d["hostname"])
-	}
-	if _, ok := d["device_id"].(int64); !ok {
-		t.Errorf("device_id is %T, want a number a model can compare", d["device_id"])
-	}
-	// A credential must never appear, whatever the schema grows.
-	for key := range d {
-		switch key {
-		case "snmp_community", "snmp_authpass", "snmp_cryptopass":
-			t.Errorf("a device carried %q into the tool result", key)
-		}
-	}
-	t.Logf("device: id=%v hostname=%v os=%v status=%v uptime=%v",
-		d["device_id"], d["hostname"], d["os"], d["status"], d["uptime"])
 }
 
 // The filters, against real data.
 //
-// Every one of these was wrong until it was run against an actual Observium.
-// The API's vocabulary and the schema's values disagree in ways the
-// documentation does not mention: status=up is a tinyint 1, the sensor event
-// the API calls "warn" is stored as "warning", and ports had no state mapping
-// at all. Each failure looked identical from a fake -- a query that runs and
-// matches nothing.
+// This is the test that matters most. Every filter in the backend this
+// replaced was wrong, and each failed the same way: a request that succeeds,
+// matches nothing, and returns an empty result which reads as an answer. The
+// API's documented vocabulary has never been checked against what a live
+// instance actually accepts.
 func TestIntegration_FiltersActuallyMatch(t *testing.T) {
 	p := integrationPlugin(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err := p.reader.Probe(ctx); err != nil {
+	if err := p.client.Probe(ctx); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
 
@@ -228,6 +180,10 @@ func TestIntegration_FiltersActuallyMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("devices: %v", err)
 	}
+	if all.Count == 0 {
+		t.Skip("nothing monitored")
+	}
+
 	up, err := p.listDevices(ctx, devicesArgs{Status: "up"})
 	if err != nil {
 		t.Fatalf("devices status=up: %v", err)
@@ -237,32 +193,34 @@ func TestIntegration_FiltersActuallyMatch(t *testing.T) {
 		t.Fatalf("devices status=down: %v", err)
 	}
 	t.Logf("devices: %d total, %d up, %d down", all.Count, up.Count, down.Count)
-	// The bug this defends: status=up became WHERE status = 'up' against a
-	// tinyint, matched nothing, and reported an estate where no device is up.
-	if all.Count > 0 && up.Count+down.Count == 0 {
+	if up.Count+down.Count == 0 {
 		t.Error("no device matched up or down, so the status filter is not " +
-			"reaching the column the schema actually uses")
+			"reaching anything this Observium understands")
+	}
+	if up.Count > all.Count || down.Count > all.Count {
+		t.Error("filtering returned more than not filtering")
 	}
 
-	upPorts, err := p.listPorts(ctx, portsArgs{State: "up"})
-	if err != nil {
-		t.Fatalf("ports state=up: %v", err)
-	}
 	allPorts, err := p.listPorts(ctx, portsArgs{})
 	if err != nil {
 		t.Fatalf("ports: %v", err)
 	}
+	upPorts, err := p.listPorts(ctx, portsArgs{State: "up"})
+	if err != nil {
+		t.Fatalf("ports state=up: %v", err)
+	}
 	t.Logf("ports: %d total, %d up", allPorts.Count, upPorts.Count)
 	if allPorts.Count > 0 && upPorts.Count == 0 {
-		t.Error("no interface matched state=up; ports had no state mapping at all")
+		t.Error("no interface matched state=up; the filter is being accepted " +
+			"and matching nothing, which reads as an estate with no live ports")
 	}
 	if upPorts.Count > allPorts.Count {
 		t.Error("filtering returned more than not filtering")
 	}
 
-	// "warn" is what the API documents and what this tool used to advertise.
-	// It must reach the enum's "warning" rather than matching nothing.
-	for _, event := range []string{"ok", "warn", "warning", "alert"} {
+	// The API documents these; whether the enum behind them agrees is exactly
+	// the thing that was wrong last time.
+	for _, event := range []string{"ok", "warning", "alert"} {
 		got, err := p.listSensors(ctx, sensorsArgs{Event: event})
 		if err != nil {
 			t.Errorf("sensors event=%s: %v", event, err)
@@ -271,15 +229,6 @@ func TestIntegration_FiltersActuallyMatch(t *testing.T) {
 		t.Logf("sensors event=%s: %d", event, got.Count)
 	}
 
-	// A filter no backend can apply must be an error, never a full result
-	// wearing a filter's name.
-	if _, err := p.listAlerts(ctx, alertsArgs{Status: "suppressed"}); err == nil {
-		t.Error("an unsupported alert status was accepted; answering without " +
-			"the filter would report every alert as suppressed")
-	}
-
-	// Alert history takes a window, which needs a conversion the schema does
-	// not do for us: the argument is a unix timestamp, the column a datetime.
 	recent, err := p.alertHistory(ctx, alertHistoryArgs{
 		From:  time.Now().Add(-90 * 24 * time.Hour).Unix(),
 		Limit: 10,
@@ -288,4 +237,59 @@ func TestIntegration_FiltersActuallyMatch(t *testing.T) {
 		t.Fatalf("alert_history windowed: %v", err)
 	}
 	t.Logf("alert history in the last 90 days: %d", recent.Count)
+}
+
+// Values have to arrive as values. A hostname that reaches a model as a
+// number, or a number as a string, is one it cannot reason about.
+func TestIntegration_ValuesAreUsable(t *testing.T) {
+	p := integrationPlugin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := p.client.Probe(ctx); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+
+	page, err := p.client.Read(ctx, EntityDevices, url.Values{}, 5)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(page.Items) == 0 {
+		t.Skip("nothing monitored")
+	}
+	d := page.Items[0]
+
+	if s, ok := d["hostname"].(string); !ok || strings.TrimSpace(s) == "" {
+		t.Errorf("hostname is %T (%v), want a non-empty string", d["hostname"], d["hostname"])
+	}
+	// A credential must never appear, whatever the API decides to include.
+	for key := range d {
+		switch key {
+		case "snmp_community", "snmp_authpass", "snmp_cryptopass", "snmp_authname":
+			t.Errorf("a device carried %q into the tool result", key)
+		}
+	}
+	t.Logf("device: id=%v hostname=%v os=%v status=%v",
+		d["device_id"], d["hostname"], d["os"], d["status"])
+}
+
+// deviceID copes with the API returning an id as a number or as a string,
+// which it does inconsistently between endpoints.
+func deviceID(t *testing.T, item map[string]any) int {
+	t.Helper()
+	switch v := item["device_id"].(type) {
+	case float64:
+		return int(v)
+	case string:
+		var n int
+		for _, r := range v {
+			if r < '0' || r > '9' {
+				t.Fatalf("device_id %q is not a number", v)
+			}
+			n = n*10 + int(r-'0')
+		}
+		return n
+	default:
+		t.Fatalf("device_id is %T, want a number or a numeric string", v)
+		return 0
+	}
 }

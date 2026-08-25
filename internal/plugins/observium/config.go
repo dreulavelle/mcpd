@@ -61,9 +61,6 @@ const (
 	// *arranged* may be reused. Device lists, hardware inventory and VLANs
 	// change when somebody changes them, not on a poll cycle.
 	defaultInventoryTTL = 10 * time.Minute
-
-	// defaultDBPort is MySQL's.
-	defaultDBPort = 3306
 )
 
 // apiPrefix is the versioned root every call is made under. Observium has had
@@ -71,35 +68,8 @@ const (
 // day there is a second one is an edit in one place.
 const apiPrefix = "/api/v0"
 
-// Backend is how this instance reaches Observium.
-//
-// Two ways to read one product, and which is available is decided by the
-// licence rather than by preference. The REST API is a subscription feature;
-// on Community Edition there is no API at all, and the only way in is the
-// database Observium writes to.
-type Backend string
-
-const (
-	// BackendAPI reads the subscription-only REST API. Read-only is proved by
-	// a transport that refuses every method but GET.
-	BackendAPI Backend = "api"
-	// BackendDatabase reads Observium's MySQL database directly, which is the
-	// only option on Community Edition. Read-only is proved by the account's
-	// own grants, checked at startup.
-	BackendDatabase Backend = "database"
-)
-
-func (b Backend) Valid() bool {
-	return b == BackendAPI || b == BackendDatabase
-}
-
 // Config is the plugin's own configuration, from the `settings` block.
 type Config struct {
-	// Backend selects which of the two ways in this instance uses. It is not a
-	// preference: the API is a subscription feature, so a Community Edition
-	// installation has only one working answer.
-	Backend Backend `yaml:"backend" json:"backend"`
-
 	// BaseURL is the Observium web root -- the address someone types to reach
 	// the UI, without /api/v0. On-premise and typically internal, so unlike a
 	// vendor cloud there is no sensible default to offer.
@@ -152,33 +122,6 @@ type Config struct {
 	// answered from memory. These change when an operator changes them, so
 	// they can be held far longer than anything the poller writes.
 	InventoryCacheSeconds int `yaml:"inventory_cache_seconds" json:"inventory_cache_seconds"`
-
-	// The database backend's connection. Unused when Backend is api, and the
-	// settings form hides them -- but hiding is presentation, so Validate is
-	// what actually decides they are required.
-	DBHost string `yaml:"db_host" json:"db_host"`
-	DBPort int    `yaml:"db_port" json:"db_port"`
-	DBName string `yaml:"db_name" json:"db_name"`
-	DBUser string `yaml:"db_user" json:"db_user"`
-	// DBPassword is resolved like every other credential and, like the others,
-	// is cleared off the Config the plugin retains.
-	DBPassword string `yaml:"db_password" json:"db_password"`
-}
-
-// EffectiveBackend resolves the zero value.
-//
-// It resolves to the database rather than the API, which is the opposite of
-// what the ordering of the constants suggests. The reason is that an empty
-// backend belongs to an instance somebody configured before this setting
-// existed -- and there were none, this shipping together -- or to one where
-// the field was left alone. Defaulting to the API would put the more
-// restrictive licence requirement behind a silent choice, so the default is
-// the one every installation can actually run.
-func (c Config) EffectiveBackend() Backend {
-	if c.Backend == "" {
-		return BackendDatabase
-	}
-	return c.Backend
 }
 
 // withDefaults fills anything the operator left alone.
@@ -195,9 +138,6 @@ func (c *Config) withDefaults() {
 	if c.Timeout <= 0 {
 		c.Timeout = defaultTimeout
 	}
-	if c.DBPort <= 0 {
-		c.DBPort = defaultDBPort
-	}
 	if c.StateCacheSeconds == 0 {
 		c.StateCacheSeconds = int(defaultStateTTL / time.Second)
 	}
@@ -208,17 +148,10 @@ func (c *Config) withDefaults() {
 
 // Configured reports whether enough was supplied to reach Observium.
 //
-// What "enough" means depends on the backend, which is the whole reason this
-// is one question rather than a set of booleans a caller has to combine
-// correctly. A form that hides the fields for the other backend has not
-// changed what is required -- it has only stopped showing it.
+// An address alone is not enough and neither is a credential alone, which is
+// why this is one question rather than two booleans a caller has to combine.
 func (c Config) Configured() bool {
-	switch c.EffectiveBackend() {
-	case BackendDatabase:
-		return c.DBHost != "" && c.DBName != "" && c.DBUser != ""
-	default:
-		return c.BaseURL != "" && (c.Token != "" || (c.Username != "" && c.Password != ""))
-	}
+	return c.BaseURL != "" && (c.Token != "" || (c.Username != "" && c.Password != ""))
 }
 
 // StateTTL and InventoryTTL turn the operator's seconds into durations.
@@ -237,13 +170,6 @@ func (c Config) InventoryTTL() time.Duration {
 // configuration that is present and wrong, because that fails later, further
 // away, and with a worse message.
 func (c Config) Validate() error {
-	if c.Backend != "" && !c.Backend.Valid() {
-		return fmt.Errorf("observium: backend must be %q or %q, got %q",
-			BackendAPI, BackendDatabase, c.Backend)
-	}
-	if c.EffectiveBackend() == BackendDatabase {
-		return c.validateDatabase()
-	}
 	if c.BaseURL == "" {
 		return nil
 	}
@@ -278,57 +204,6 @@ func (c Config) Validate() error {
 	if c.PageSize < 1 || c.PageSize > 50000 {
 		return fmt.Errorf("observium: page_size must be between 1 and 50000, got %d", c.PageSize)
 	}
-	if c.MaxItems < 1 {
-		return fmt.Errorf("observium: max_items must be at least 1, got %d", c.MaxItems)
-	}
-	if c.RequestsPerSecond <= 0 {
-		return fmt.Errorf("observium: requests_per_second must be positive, got %v",
-			c.RequestsPerSecond)
-	}
-	if c.StateCacheSeconds < 0 || c.InventoryCacheSeconds < 0 {
-		return fmt.Errorf("observium: a cache duration cannot be negative")
-	}
-	return nil
-}
-
-// validateDatabase checks what the database backend needs.
-//
-// Separate from the API's checks rather than folded in with them, because the
-// two share almost nothing: an address that is required for one is ignored by
-// the other, and a message about the wrong half is worse than no message. The
-// settings form hides the irrelevant fields, but hiding is presentation -- a
-// value left over from a backend the operator switched away from is still
-// stored, and this is what decides it does not matter.
-func (c Config) validateDatabase() error {
-	// Unconfigured is not an error. The plugin mounts, its settings form has
-	// somewhere to live, and Check says what is missing.
-	if c.DBHost == "" && c.DBName == "" && c.DBUser == "" {
-		return nil
-	}
-	var missing []string
-	if c.DBHost == "" {
-		missing = append(missing, "host")
-	}
-	if c.DBName == "" {
-		missing = append(missing, "database name")
-	}
-	if c.DBUser == "" {
-		missing = append(missing, "username")
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("observium: the database backend needs a %s",
-			strings.Join(missing, ", a "))
-	}
-	if strings.Contains(c.DBHost, "://") {
-		return fmt.Errorf("observium: the database host is a hostname or "+
-			"address, not a URL -- drop the scheme from %q", c.DBHost)
-	}
-	if c.DBPort < 1 || c.DBPort > 65535 {
-		return fmt.Errorf("observium: database port %d is not a port", c.DBPort)
-	}
-	// PageSize is deliberately not checked. It bounds one API request and the
-	// database backend never reads it, so refusing a configuration over a
-	// value this backend ignores would be refusing it for no reason.
 	if c.MaxItems < 1 {
 		return fmt.Errorf("observium: max_items must be at least 1, got %d", c.MaxItems)
 	}

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
-	"github.com/spoked/mcpd/internal/settings"
 )
 
 // The read-only guarantee is enforced at the transport, which is the last
@@ -102,54 +101,28 @@ func TestTransport_ComparesTheDecodedPath(t *testing.T) {
 
 // A configuration that is present and wrong should fail here rather than
 // later, further away, with a worse message.
-//
-// Every case names its backend. An empty one resolves to the database -- the
-// only backend a Community Edition installation can use -- so a test about the
-// API's address that did not say so would be validating the wrong half.
 func TestConfigValidate(t *testing.T) {
-	api := func(c Config) Config { c.Backend = BackendAPI; return c }
-	db := func(c Config) Config {
-		c.Backend = BackendDatabase
+	full := func(c Config) Config {
 		c.PageSize, c.MaxItems, c.RequestsPerSecond = 10, 10, 1
-		if c.DBPort == 0 {
-			c.DBPort = defaultDBPort
-		}
 		return c
 	}
-
 	for _, tc := range []struct {
 		name string
 		cfg  Config
 		want string
 	}{
 		{"unconfigured is not an error", Config{}, ""},
-		{"unknown backend", Config{Backend: "carrier pigeon"}, "backend must be"},
-
-		{"api path in the address", api(Config{BaseURL: "https://o.example.com/api/v0"}), "web root"},
-		{"credentials in the address", api(Config{BaseURL: "https://u:p@o.example.com"}), "not in the address"},
-		{"bad scheme", api(Config{BaseURL: "ftp://o.example.com"}), "http or https"},
-		{"username without password", api(Config{
+		{"api path in the address", Config{BaseURL: "https://o.example.com/api/v0"}, "web root"},
+		{"credentials in the address", Config{BaseURL: "https://u:p@o.example.com"}, "not in the address"},
+		{"bad scheme", Config{BaseURL: "ftp://o.example.com"}, "http or https"},
+		{"username without password", full(Config{
 			BaseURL: "https://o.example.com", Username: "u",
-			PageSize: 10, MaxItems: 10, RequestsPerSecond: 1,
 		}), "needs a password"},
-		{"valid with token", api(Config{
+		{"valid with a token", full(Config{
 			BaseURL: "https://o.example.com", Token: "t",
-			PageSize: 10, MaxItems: 10, RequestsPerSecond: 1,
 		}), ""},
-
-		// The database half. A partly-filled connection is the case worth
-		// catching: it looks configured and cannot connect.
-		{"database unconfigured is not an error", db(Config{}), ""},
-		{"database missing its name", db(Config{DBHost: "10.0.0.5", DBUser: "ro"}), "database name"},
-		{"database missing its user", db(Config{DBHost: "10.0.0.5", DBName: "observium"}), "username"},
-		{"database host given as a URL", db(Config{
-			DBHost: "mysql://10.0.0.5", DBName: "observium", DBUser: "ro",
-		}), "not a URL"},
-		{"database port out of range", db(Config{
-			DBHost: "10.0.0.5", DBName: "observium", DBUser: "ro", DBPort: 99999,
-		}), "not a port"},
-		{"valid database", db(Config{
-			DBHost: "10.0.0.5", DBName: "observium", DBUser: "ro",
+		{"valid with basic auth", full(Config{
+			BaseURL: "https://o.example.com", Username: "u", Password: "p",
 		}), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -256,10 +229,7 @@ func TestGraphURLs_UndocumentedKindRefusesRatherThanGuessing(t *testing.T) {
 
 func testPlugin(t *testing.T, base string) *Plugin {
 	t.Helper()
-	// Explicitly the API backend: an empty backend resolves to the database,
-	// which is the right default for an operator and the wrong one for a test
-	// about graph links.
-	cfg := Config{Backend: BackendAPI, BaseURL: base, Token: "t"}
+	cfg := Config{BaseURL: base, Token: "t"}
 	cfg.withDefaults()
 	p, err := New(plugins.Deps{
 		Instance: "observium",
@@ -271,151 +241,4 @@ func testPlugin(t *testing.T, base string) *Plugin {
 		t.Fatalf("New: %v", err)
 	}
 	return p
-}
-
-// Every setting belongs to a backend or to both, and the form has to say
-// which. A credential field that is not gated is one an operator is asked to
-// fill in for a backend that will never read it; a shared field that *is*
-// gated disappears for half the installations that need it.
-//
-// Listed explicitly rather than derived, so that adding a setting is a
-// decision somebody makes here rather than a default they inherit.
-func TestSettings_EveryFieldIsGatedToTheBackendThatReadsIt(t *testing.T) {
-	shared := map[string]bool{
-		// The control itself, and the four that both backends read.
-		"backend": true, "max_items": true, "requests_per_second": true,
-		"state_cache_seconds": true, "inventory_cache_seconds": true,
-	}
-	wantAPI := map[string]bool{
-		"base_url": true, "token": true, "username": true, "password": true,
-		// page_size bounds one API request; the database backend uses LIMIT
-		// against max_items and never reads it.
-		"page_size": true,
-	}
-	wantDB := map[string]bool{
-		"db_host": true, "db_port": true, "db_name": true,
-		"db_user": true, "db_password": true,
-	}
-
-	seen := map[string]bool{}
-	for _, f := range Type().Settings {
-		seen[f.Key] = true
-		switch {
-		case shared[f.Key]:
-			if f.ShowWhen != nil {
-				t.Errorf("%q is read by both backends but is hidden for one", f.Key)
-			}
-		case wantAPI[f.Key]:
-			if f.ShowWhen != apiOnly {
-				t.Errorf("%q is only read by the API backend and must be gated to it", f.Key)
-			}
-		case wantDB[f.Key]:
-			if f.ShowWhen != databaseOnly {
-				t.Errorf("%q is only read by the database backend and must be gated to it", f.Key)
-			}
-		default:
-			t.Errorf("%q is a new setting that no backend has claimed; add it "+
-				"to shared, wantAPI or wantDB here so the choice is deliberate", f.Key)
-		}
-	}
-	for _, want := range []map[string]bool{shared, wantAPI, wantDB} {
-		for key := range want {
-			if !seen[key] {
-				t.Errorf("setting %q is expected but no longer declared", key)
-			}
-		}
-	}
-}
-
-// The control field must never be conditional itself, or nothing it gates can
-// ever be revealed. The host refuses this at startup; this checks the
-// declaration mcpd actually ships.
-func TestSettings_TheBackendSelectorIsAlwaysVisible(t *testing.T) {
-	if err := Type().Validate(); err != nil {
-		t.Fatalf("the declaration is refused by the host: %v", err)
-	}
-	for _, f := range Type().Settings {
-		if f.Key == "backend" && f.ShowWhen != nil {
-			t.Fatal("the backend selector is itself hidden")
-		}
-	}
-}
-
-// The dropdown asks which licence somebody has, not which mechanism they
-// want. Nobody knows offhand whether they want the API or the database;
-// everybody knows what they bought, and on Community Edition there is no
-// choice to make.
-//
-// The stored values stay "api" and "database" -- configuration should record
-// what changes, and renaming them would break every instance already
-// configured to buy nothing.
-func TestSettings_BackendIsOfferedAsAnEdition(t *testing.T) {
-	var backend settings.Field
-	for _, f := range Type().Settings {
-		if f.Key == "backend" {
-			backend = f
-		}
-	}
-	if backend.Key == "" {
-		t.Fatal("there is no backend setting")
-	}
-	want := map[string]string{
-		string(BackendDatabase): "Community Edition",
-		string(BackendAPI):      "Subscription",
-	}
-	for value, label := range want {
-		if got := backend.OptionLabels[value]; got != label {
-			t.Errorf("option %q is labelled %q, want %q", value, got, label)
-		}
-	}
-	// Every option needs a label. One without falls back to showing "api",
-	// which is the vocabulary this exists to keep out of the form.
-	for _, o := range backend.Options {
-		if backend.OptionLabels[o] == "" {
-			t.Errorf("option %q has no label and would render as itself", o)
-		}
-	}
-	// Community Edition first: it is the only one some installations can use,
-	// and it is the default.
-	if len(backend.Options) == 0 || backend.Options[0] != string(BackendDatabase) {
-		t.Error("Community Edition should be the first option and the default")
-	}
-}
-
-// The API is a subscription feature, so the likeliest way to misconfigure this
-// integration is to pick the API against a Community Edition install. That
-// installation has no /api/v0 and bounces the request to its sign-in page.
-//
-// The client used to follow the bounce, ten times, and report "stopped after
-// 10 redirects" -- a message naming a limit rather than a cause, for the one
-// mistake most people will make.
-func TestRedirect_IsReportedAsTheWrongEdition(t *testing.T) {
-	var hits int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
-		http.Redirect(w, r, "/index.php?redirected=1", http.StatusFound)
-	}))
-	defer srv.Close()
-
-	cfg := Config{Backend: BackendAPI, BaseURL: srv.URL, Token: "t"}
-	cfg.withDefaults()
-	c := NewClient(srv.Client(), cfg, "t", "", "",
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		time.Now, nil, func(string, time.Duration) {})
-
-	_, err := c.walk(context.Background(), "/devices", "devices", url.Values{})
-	if err == nil {
-		t.Fatal("a redirect is not a valid API response")
-	}
-	if !strings.Contains(err.Error(), "Community Edition") {
-		t.Errorf("the error should name the likely cause and the fix: %v", err)
-	}
-	if strings.Contains(err.Error(), "10 redirects") {
-		t.Errorf("the redirect was followed rather than reported: %v", err)
-	}
-	// One request, not ten. Chasing the bounce spends nine more round trips to
-	// learn what the first response already said.
-	if hits != 1 {
-		t.Errorf("made %d requests, want 1 — redirects must not be followed", hits)
-	}
 }
