@@ -3,6 +3,7 @@ module github.com/spoked/mcpd
 go 1.26.2
 
 require (
+	github.com/getsentry/sentry-go v0.48.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/openai/tunnel-client v0.0.12
@@ -58,8 +59,9 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

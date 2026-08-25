@@ -94,6 +94,13 @@ it. A standing rule means a propose call can execute before it returns, so a
 hint chosen for the case where a human is always asked is wrong in the case
 where nobody is.
 
+**Nothing leaves the customer's machine that they did not ask to send.** mcpd
+runs on somebody else's hardware. Crash reporting is off until a DSN is set,
+the DSN is a setting rather than a constant, and everything is scrubbed at one
+gate in `BeforeSend` rather than at call sites. A stack trace carries no
+argument values and is safe; the error sentences name upstreams and hosts, so
+they are a separate opt-in. If you add a field to a report, scrub it there.
+
 **A tunnel carries its own identity**, so it builds its own MCP server rather
 than sharing the cached one. Writing a principal into a shared server lets the
 first caller answer for everyone.

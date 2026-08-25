@@ -51,6 +51,11 @@ type App struct {
 	// metrics is nil when the endpoint is switched off. Every method on it is
 	// nil-safe, so nothing downstream branches on that.
 	metrics *observability.Metrics
+	// errors is nil unless an operator supplied a DSN, which is what crash
+	// reporting being off looks like. Every method on it is nil-safe, which
+	// matters here more than for metrics: the call sites are panic handlers,
+	// and a forgotten check in one would turn a recovered panic into a second.
+	errors *observability.ErrorReporter
 
 	accounts      *users.Store
 	groups        *groups.Store
@@ -229,6 +234,23 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	}
 	a.logStream = built.logStream
 	a.applyLogSettings(ctx, built.logControl)
+
+	// After the settings store and the legacy import, because the DSN is a
+	// setting: a reporter built before this would be built from nothing on
+	// every start.
+	//
+	// The cost is that a crash before this line is not reported. That is the
+	// right trade rather than a gap to close -- the alternative is another
+	// authority for one key, and a file that could switch on sending data off
+	// the machine without the dashboard showing it.
+	if a.errors, err = a.buildErrorReporter(ctx); err != nil {
+		// Not fatal. Crash reporting is a convenience for whoever ships this,
+		// and refusing to start a customer's monitoring host over a bad
+		// reporting DSN would be serving our interest at their expense.
+		log.Error("crash reporting is configured but could not start; "+
+			"continuing without it", "error", err)
+		a.errors = nil
+	}
 	// Not on the start that did the importing. On that one the store holds
 	// what the file supplied because it was just put there, so there is
 	// nothing to disagree about and saying so would read as a complaint about
@@ -394,6 +416,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		Verifier:       verifier,
 		Authorizer:     authorizer,
 		Health:         a.health,
+		Errors:         a.errors,
 		Plugins:        func() []string { return a.manager.Names() },
 		SessionTimeout: cfg.Server.SessionTimeout,
 	})
@@ -416,6 +439,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			Repo:       a.ops,
 			Manager:    a.manager,
 			Health:     a.health,
+			Errors:     a.errors,
 			Version:    Version,
 			Audit:      a.audit,
 			Logs:       a.logStream,
@@ -1063,3 +1087,32 @@ type inlinePolicyFunc func() operations.Policy
 func (f inlinePolicyFunc) AllowsInline(risk operations.RiskLevel) bool {
 	return f().InlineApproval.Allows(risk)
 }
+
+// buildErrorReporter reads the crash-reporting settings.
+//
+// Nil, nil is the ordinary answer: no DSN configured, nothing sent, no client
+// built. See internal/observability/errors.go for why that is not the same as
+// a disabled client.
+func (a *App) buildErrorReporter(ctx context.Context) (*observability.ErrorReporter, error) {
+	dsn := a.settings.Secret(ctx, settings.KeyErrorsDSN, "")
+	if dsn == "" {
+		return nil, nil
+	}
+	// Stored as a percentage because that is what the form asks for, and a
+	// person typing 1 means one in a hundred rather than everything.
+	rate := float64(a.settings.Int(ctx, settings.KeyErrorsTraceRate, 0)) / 100
+
+	return observability.NewErrorReporter(observability.ErrorReporterOptions{
+		DSN:              dsn,
+		Environment:      a.settings.String(ctx, settings.KeyErrorsEnvironment, "production"),
+		Release:          Version,
+		InstanceLabel:    a.settings.String(ctx, settings.KeyErrorsLabel, ""),
+		IncludeMessages:  a.settings.FieldBool(ctx, settings.KeyErrorsMessages),
+		TracesSampleRate: rate,
+		Log:              a.log,
+	})
+}
+
+// Errors exposes the reporter to the components that recover panics. Nil is a
+// valid reporter and every method on it is safe, so no caller branches.
+func (a *App) Errors() *observability.ErrorReporter { return a.errors }
