@@ -203,7 +203,34 @@ func (a *App) reconcileInstance(ctx context.Context, name string) (err error) {
 	if err != nil {
 		return err
 	}
-	return a.manager.Remount(ctx, name, p, a.pluginConfigFor(name).Required)
+	if err := a.manager.Remount(ctx, name, p, a.pluginConfigFor(name).Required); err != nil {
+		return err
+	}
+	// After the remount, never before: a tunnel rebuilt first would capture
+	// the instance it was already serving. A tunnel builds its own MCP server
+	// and that server holds the plugin it was built from, so a plugin replaced
+	// underneath one leaves it serving the old instance -- and an operator who
+	// has just replaced a revoked credential sees the dashboard work while the
+	// connector reports that the credential was rejected.
+	a.rebuildTunnelFor(ctx, name)
+	return nil
+}
+
+// rebuildTunnelFor restarts the tunnel bound to one plugin, if there is one.
+//
+// Failure is logged rather than returned: the remount itself succeeded, and
+// reporting the whole reconcile as failed would suggest the settings did not
+// take when they did. The tunnel records its own status, which is where an
+// operator looks for it.
+func (a *App) rebuildTunnelFor(ctx context.Context, name string) {
+	if a.tunnels == nil || a.tunnelFactory == nil {
+		return
+	}
+	if err := a.tunnels.Rebuild(ctx, name, a.tunnelFactory); err != nil {
+		a.log.WarnContext(ctx, "the tunnel for this plugin did not restart after "+
+			"its settings changed, so a connector may still be using the "+
+			"previous credential", "plugin", name, "error", err)
+	}
 }
 
 // watchPluginSettings remounts an instance when its configuration changes.
