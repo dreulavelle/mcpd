@@ -1,7 +1,29 @@
 # Observium
 
-What the API does that a reader would not expect. The plugin's design follows
-from these; the host's own contract is in [architecture.md](architecture.md).
+The plugin reads one Observium estate two ways, and which one you get is
+decided by the licence rather than by preference.
+
+**The REST API is a subscription feature.** Community Edition does not have
+one — `$config['api']['enable']` is not a switch that turns it on there — so
+on CE the only way in is the database Observium writes to. That is what the
+`backend` setting selects, and it is why there are two of everything below.
+
+| | API backend | Database backend |
+|---|---|---|
+| Needs | Subscription Edition | Any edition |
+| Reaches | `https://…/api/v0` | MySQL, port 3306 |
+| Credential | API token, or basic auth | A MySQL account |
+| Read-only proved by | A transport refusing every method but GET | The account's own grants, read back at startup |
+| Sees | What one Observium account may see | Everything in the schema |
+| Graph links | Yes | No — there is no web address to build them from |
+| Per-second rates | Yes | Yes |
+
+Neither can write. What differs is what each can *prove* about that, which is
+why `Describe` on both says which guarantee is theirs rather than both
+claiming "read-only" and leaving the difference implicit.
+
+What follows is what each does that a reader would not expect. The host's own
+contract is in [architecture.md](architecture.md).
 
 ## A collection is an object, not an array
 
@@ -90,9 +112,15 @@ no JSON endpoint that returns a series. The only way the numbers come out is
 
 This is why:
 
-- The interface tool's traffic and error figures are **cumulative counters**,
-  not rates. A rate needs two readings and this API does not serve the history,
-  so the tool says so in its own description and in every result.
+- The interface tool returns **both**: `ifInOctets` is a cumulative counter and
+  `ifInOctets_rate` is the per-second figure Observium computed at the last
+  poll. `poll_time` and `poll_period` say when that was, which is what lets a
+  rate of zero be told apart from a rate nobody has recomputed lately.
+
+  An earlier version of this document said the interface figures were
+  cumulative counters and nothing else. That was wrong: Observium computes
+  rates on every poll and stores them in the `ports` table, so current
+  throughput never needed RRD. Only *history* does.
 - `observium_graphs` returns links and states plainly that they are images the
   model cannot read. The failure mode otherwise is an assistant describing a
   trend it never saw, which is worse than having no trend tool at all.
@@ -111,19 +139,22 @@ name and anything else is passed through verbatim for a caller who has read one
 off Observium's own UI. Devices are identified with `device=`; everything else
 uses `id=`.
 
-### If we ever want real trend data
+### If we ever want history
 
-It is reachable, but not through this API. `rrdtool fetch` or `rrdtool xport`
-against the RRD files gives real series — which is how
-[kdesch5000/observium-mcp](https://github.com/kdesch5000/observium-mcp) does
-it, reading MySQL directly and shelling out to `rrdtool`.
+Current throughput does not need RRD — the `_rate` columns cover it on both
+backends. What RRD holds that nothing else does is the *past*: what a port was
+doing last Tuesday.
 
-That is a different deployment posture from the one mcpd has: it needs database
-credentials and filesystem access to the Observium host, or an SSH tunnel to
-it. Everything this plugin relies on — the read-only transport, the deny-list,
-one revocable token — assumes an HTTP client talking to an HTTP API. Adopting
-the other shape means giving up those guarantees, so it is a deliberate
-decision rather than an extension, and it has not been made.
+Getting it means `rrdtool fetch` or `rrdtool xport` against the files, which is
+how [kdesch5000/observium-mcp](https://github.com/kdesch5000/observium-mcp)
+does it. The design decision, if we take it, is that the RRD directory is a
+**local filesystem path** — whether that path is a bind mount, an NFS mount or
+sshfs is a deployment concern and not the plugin's, which keeps mcpd out of the
+SSH-subsystem business. An empty path means no trends tool is registered, so
+the capability declares itself rather than being assumed.
+
+Not built. It needs `rrdtool` in the image or an RRD parser, and neither is
+worth adding until somebody wants history badly enough to say so.
 
 ## Authentication
 
@@ -160,6 +191,75 @@ widened:
 
 Widen `transport.go` by naming what is newly permitted, not by inverting the
 default.
+
+## The database backend
+
+### Read-only is proved by MySQL, not by us
+
+The API backend's guarantee is `transport.go` refusing every method but GET —
+structural, and impossible to talk past. There is no HTTP here, so that
+guarantee does not carry over. What replaces it is `checkGrants`, run at
+startup: the account's own grants come back from `SHOW GRANTS FOR
+CURRENT_USER()` and anything beyond `SELECT` refuses the connection.
+
+That is *stronger* in one way — the guarantee rests on the database server, so
+a bug in this package cannot widen it — and weaker in another, which is worth
+being plain about. A read-only API token is scoped to Observium's permission
+model and sees what one Observium account may see. A MySQL account with
+`SELECT` on the schema sees everything, including the SNMP community strings in
+`devices` and the password hashes in `users`, neither of which this reads.
+Least privilege is the operator's job here in a way it is not with a token.
+
+Two details in the check that exist because of specific failures:
+
+- The privilege list ends at `ON`. Everything after is a database name and a
+  host, so a schema called `create_backup` or a host called
+  `insert.example.com` would otherwise refuse a perfectly restricted account —
+  and a false refusal is one nobody can debug from the message.
+- `WITH GRANT OPTION` is checked against the whole line, because it is written
+  *after* the `ON` clause. Truncating first would miss the one privilege that
+  lets an account give itself the others.
+
+If `SHOW GRANTS` is itself refused — some managed MySQL services do this — the
+plugin logs a warning and continues. Refusing to start would be wrong, since
+the account may well be correctly restricted; saying nothing would be worse,
+because the guarantee is then simply absent.
+
+### The schema is not a contract
+
+Observium versions its API. It does not version its schema, and columns move
+between releases with no compatibility promise. So every column these queries
+name is checked against `information_schema` at startup, and a mismatch names
+the column. The alternative is a MySQL error inside the first tool call an
+assistant makes, about a table nobody reading it has heard of.
+
+Columns are named explicitly rather than `SELECT *`, for three reasons in this
+order: `devices` holds SNMP community strings and auth passwords, and a
+wildcard would hand them to a model; a wildcard makes a schema change silently
+alter what a tool returns; and naming them is what makes the startup check
+possible at all.
+
+### Soft deletes
+
+Observium does not delete rows. A port pulled out of a switch stays in `ports`
+with `deleted = 1`, and the same is true of sensors, storage, memory pools and
+inventory. Every query filters on it — without that, the tools report hardware
+that no longer exists as though it were live.
+
+### Two tables, one entity
+
+The API serves IPv4 and IPv6 under one `addresses` key. The database keeps them
+in `ipv4_addresses` and `ipv6_addresses` with column names that differ for a
+reason, so `Read` queries both and concatenates, with the second half bounded
+by whatever headroom the first left. One ceiling, not two.
+
+### What comes back
+
+MySQL hands back `[]byte` for text and for anything it is unsure of, and a
+`[]byte` marshals to base64 — so a hostname would reach the model as
+`cm91dGVyLTEubG9jYWw=` without conversion. Numbers stay numbers, because a
+model asked whether a disk is over 90 per cent should be comparing against a
+number rather than against text. Timestamps become RFC 3339 in UTC.
 
 ## What is cached, and what is never
 

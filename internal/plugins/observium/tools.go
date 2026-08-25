@@ -248,7 +248,7 @@ func (p *Plugin) listDevices(ctx context.Context, in devicesArgs) (listResult, e
 	setIf(q, "vendor", in.Vendor)
 	setIf(q, "group", in.Group)
 
-	page, err := p.fetch(ctx, "/devices", "devices", q, in.Limit)
+	page, err := p.fetch(ctx, EntityDevices, q, in.Limit)
 	if err != nil {
 		return listResult{}, err
 	}
@@ -267,7 +267,9 @@ func (p *Plugin) getDevice(ctx context.Context, in deviceArgs) (listResult, erro
 			"observium: name the device by device_id or hostname")
 	}
 
-	page, err := p.fetch(ctx, "/devices/"+url.PathEscape(key), "devices", url.Values{}, 0)
+	q := url.Values{}
+	q.Set(FilterID, key)
+	page, err := p.fetch(ctx, EntityDevices, q, 0)
 	if err != nil {
 		return listResult{}, err
 	}
@@ -291,14 +293,15 @@ func (p *Plugin) listPorts(ctx context.Context, in portsArgs) (listResult, error
 		q.Set("alerted", "1")
 	}
 
-	page, err := p.fetch(ctx, "/ports", "ports", q, in.Limit)
+	page, err := p.fetch(ctx, EntityPorts, q, in.Limit)
 	if err != nil {
 		return listResult{}, err
 	}
 	out := resultOf(page, "interfaces")
-	out.Note = strings.TrimSpace(out.Note + " Traffic and error figures are " +
-		"cumulative counters, not rates. Two readings are needed for a rate, " +
-		"and this API does not serve the history.")
+	out.Note = strings.TrimSpace(out.Note + " Fields ending _rate are per-second " +
+		"figures Observium computed at the last poll; the bare counters beside " +
+		"them are cumulative totals. poll_time says when that was, so a rate of " +
+		"zero can be told apart from a rate nobody has recomputed lately.")
 	return out, nil
 }
 
@@ -308,7 +311,7 @@ func (p *Plugin) listSensors(ctx context.Context, in sensorsArgs) (listResult, e
 	setIf(q, "metric", in.Class)
 	setIf(q, "event", in.Event)
 
-	page, err := p.fetch(ctx, "/sensors", "sensors", q, in.Limit)
+	page, err := p.fetch(ctx, EntitySensors, q, in.Limit)
 	if err != nil {
 		return listResult{}, err
 	}
@@ -327,7 +330,7 @@ func (p *Plugin) listAlerts(ctx context.Context, in alertsArgs) (listResult, err
 	}
 	q.Set("status", status)
 
-	page, err := p.fetch(ctx, "/alerts", "alerts", q, in.Limit)
+	page, err := p.fetch(ctx, EntityAlerts, q, in.Limit)
 	if err != nil {
 		return listResult{}, err
 	}
@@ -353,7 +356,7 @@ func (p *Plugin) alertHistory(ctx context.Context, in alertHistoryArgs) (listRes
 	// naming "port 4821" is one a person cannot read.
 	q.Set("expand_entities", "1")
 
-	page, err := p.fetch(ctx, "/alert_log", "alert_log", q, in.Limit)
+	page, err := p.fetch(ctx, EntityAlertLog, q, in.Limit)
 	if err != nil {
 		return listResult{}, err
 	}
@@ -374,15 +377,15 @@ func (p *Plugin) capacity(ctx context.Context, in capacityArgs) (capacityResult,
 	q := url.Values{}
 	setIDIf(q, "device_id", in.DeviceID)
 
-	storage, err := p.fetch(ctx, "/storage", "storage", q, in.Limit)
+	storage, err := p.fetch(ctx, EntityStorage, q, in.Limit)
 	if err != nil {
 		return capacityResult{}, err
 	}
-	memory, err := p.fetch(ctx, "/mempools", "mempools", q, in.Limit)
+	memory, err := p.fetch(ctx, EntityMempools, q, in.Limit)
 	if err != nil {
 		return capacityResult{}, err
 	}
-	processors, err := p.fetch(ctx, "/processors", "processors", q, in.Limit)
+	processors, err := p.fetch(ctx, EntityProcessors, q, in.Limit)
 	if err != nil {
 		return capacityResult{}, err
 	}
@@ -411,11 +414,11 @@ func (p *Plugin) topology(ctx context.Context, in topologyArgs) (topologyResult,
 	q := url.Values{}
 	setIDIf(q, "device_id", in.DeviceID)
 
-	neighbours, err := p.fetch(ctx, "/neighbours", "neighbours", q, in.Limit)
+	neighbours, err := p.fetch(ctx, EntityNeighbours, q, in.Limit)
 	if err != nil {
 		return topologyResult{}, err
 	}
-	addresses, err := p.fetch(ctx, "/address", "addresses", q, in.Limit)
+	addresses, err := p.fetch(ctx, EntityAddresses, q, in.Limit)
 	if err != nil {
 		return topologyResult{}, err
 	}
@@ -431,7 +434,7 @@ func (p *Plugin) topology(ctx context.Context, in topologyArgs) (topologyResult,
 		// level 7 account, and a topology answer without them is still the
 		// answer to most of the question -- so it degrades with a note rather
 		// than losing the neighbours that were already fetched.
-		vlans, err := p.fetch(ctx, "/vlans", "vlans", q, in.Limit)
+		vlans, err := p.fetch(ctx, EntityVLANs, q, in.Limit)
 		switch {
 		case err != nil:
 			out.VLANs.Note = "VLANs could not be read: " + err.Error()
@@ -451,7 +454,7 @@ func (p *Plugin) listInventory(ctx context.Context, in inventoryArgs) (listResul
 	setIf(q, "entPhysicalModelName", in.Model)
 	setIf(q, "entPhysicalSerialNum", in.Serial)
 
-	page, err := p.fetch(ctx, "/inventory", "inventory", q, in.Limit)
+	page, err := p.fetch(ctx, EntityInventory, q, in.Limit)
 	if err != nil {
 		return listResult{}, err
 	}
@@ -465,24 +468,15 @@ func (p *Plugin) listInventory(ctx context.Context, in inventoryArgs) (listResul
 // A caller may narrow what they get back but never widen it past what the
 // operator configured: max_items is a bound on what one answer may pull into a
 // conversation, and an argument that could raise it would not be a bound.
-func (p *Plugin) fetch(ctx context.Context, path, key string, q url.Values, limit int) (Page, error) {
+func (p *Plugin) fetch(ctx context.Context, entity Entity, q url.Values, limit int) (Page, error) {
 	if !p.configured {
-		return Page{}, fmt.Errorf("observium: not configured yet — set the " +
-			"address and a credential on the Plugins page")
+		return Page{}, fmt.Errorf("observium: not configured yet — set its " +
+			"connection details on the Plugins page")
 	}
-
-	client := p.client
-	if limit > 0 && limit < p.cfg.MaxItems {
-		// A shallow copy with a tighter ceiling. The cache, limiter and HTTP
-		// client are shared by pointer, so this costs nothing and keeps the
-		// per-call bound out of the client's own state where a concurrent
-		// call would see it.
-		narrowed := *client
-		narrowed.cfg.MaxItems = limit
-		client = &narrowed
+	if limit <= 0 || limit > p.cfg.MaxItems {
+		limit = p.cfg.MaxItems
 	}
-
-	page, err := client.Get(ctx, path, key, q)
+	page, err := p.reader.Read(ctx, entity, q, limit)
 	p.note(err)
 	return page, err
 }
