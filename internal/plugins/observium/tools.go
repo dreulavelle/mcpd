@@ -148,6 +148,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 		Idempotent: true,
 	}, p.graphURLs)
 
+	p.registerReadTools(r)
 	return nil
 }
 
@@ -168,7 +169,12 @@ type listResult struct {
 	// question from "what is wrong" and shares a tool because it shares a
 	// domain.
 	Checks []map[string]any `json:"alert_checkers,omitempty"`
-	Note   string           `json:"note,omitempty"`
+	// Fields names what each item carries, once for the listing rather than
+	// per item. A model that can see the field set can tell a field that is
+	// absent because it was not returned from one that is absent because the
+	// device does not have it.
+	Fields []string `json:"fields,omitempty"`
+	Note   string   `json:"note,omitempty"`
 }
 
 // resultOf renders a page, saying plainly when it is not the whole answer.
@@ -187,6 +193,18 @@ func resultOf(page Page, what string) listResult {
 			"This is the first %d %s, not all of them%s. Narrow the filter "+
 				"rather than reporting this as the whole estate.",
 			len(page.Items), what, totalPhrase(page.Total))
+	}
+	// Said plainly, for the same reason truncation is: a row trimmed to the
+	// fields that answer the question still looks like a whole row.
+	if page.FieldsDropped > 0 {
+		out.Fields = page.Fields
+		out.Note = strings.TrimSpace(fmt.Sprintf(
+			"%s Each %s carries the %d fields listed in \"fields\"; %d more "+
+				"Observium holds were not returned. Ask about one by id for "+
+				"its full record. Credentials are never returned, whichever "+
+				"you ask for.",
+			out.Note, strings.TrimSuffix(what, "s"), len(page.Fields),
+			page.FieldsDropped))
 	}
 	return out
 }
@@ -323,7 +341,7 @@ func (p *Plugin) getDevice(ctx context.Context, in deviceArgs) (listResult, erro
 
 	q := url.Values{}
 	q.Set(FilterID, key)
-	page, err := p.fetch(ctx, EntityDevices, q, 0)
+	page, err := p.fetchFull(ctx, EntityDevices, q, 0)
 	if err != nil {
 		return listResult{}, err
 	}
@@ -487,6 +505,7 @@ func (p *Plugin) listGroups(ctx context.Context, in groupsArgs) (listResult, err
 }
 
 func (p *Plugin) alertHistory(ctx context.Context, in alertHistoryArgs) (listResult, error) {
+
 	q := url.Values{}
 	setIDIf(q, "device_id", in.DeviceID)
 	setIf(q, "message", in.Message)
@@ -618,7 +637,21 @@ func (p *Plugin) listInventory(ctx context.Context, in inventoryArgs) (listResul
 // A caller may narrow what they get back but never widen it past what the
 // operator configured: max_items is a bound on what one answer may pull into a
 // conversation, and an argument that could raise it would not be a bound.
+// fetch reads a listing: the summary view, because a listing is answering a
+// question about many things and the fields that answer it are few.
 func (p *Plugin) fetch(ctx context.Context, entity Entity, q url.Values, limit int) (Page, error) {
+	return p.read(ctx, entity, q, limit, viewSummary)
+}
+
+// fetchFull reads the whole record, for the tools that promise one named
+// thing in full. Credentials are still withheld: "full detail" has never
+// meant the SNMP community string, and a tool that returned it would be
+// handing a model a live credential for a device it was asked to describe.
+func (p *Plugin) fetchFull(ctx context.Context, entity Entity, q url.Values, limit int) (Page, error) {
+	return p.read(ctx, entity, q, limit, viewFull)
+}
+
+func (p *Plugin) read(ctx context.Context, entity Entity, q url.Values, limit int, v view) (Page, error) {
 	if !p.configured {
 		return Page{}, fmt.Errorf("observium: not configured yet — set its " +
 			"connection details on the Plugins page")
@@ -626,7 +659,7 @@ func (p *Plugin) fetch(ctx context.Context, entity Entity, q url.Values, limit i
 	if limit <= 0 || limit > p.cfg.MaxItems {
 		limit = p.cfg.MaxItems
 	}
-	page, err := p.client.Read(ctx, entity, q, limit)
+	page, err := p.client.Read(ctx, entity, q, limit, v)
 	p.note(err)
 	return page, err
 }
