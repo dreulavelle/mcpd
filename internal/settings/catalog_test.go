@@ -133,3 +133,82 @@ func keysOf(c *Catalog) []string {
 	}
 	return out
 }
+
+// A visibility rule names the field it depends on, and PluginGroup namespaces
+// every key in the form. If the rule is not namespaced too it points at a key
+// the form does not contain -- the dashboard reads an empty value, matches
+// nothing, and hides the field forever. The symptom is an integration whose
+// credentials cannot be entered at all, which is worse than not hiding them.
+func TestPluginGroup_NamespacesTheFieldAShowWhenPointsAt(t *testing.T) {
+	gate := &ShowWhen{Field: "backend", Equals: []string{"api"}}
+	group := PluginGroup("observium", "Observium", []Field{
+		{Key: "backend", Label: "Backend", Kind: KindEnum, Options: []string{"api", "database"}},
+		{Key: "token", Label: "Token", Kind: KindSecret, ShowWhen: gate},
+	})
+
+	var token Field
+	for _, f := range group.Fields {
+		if strings.HasSuffix(f.Key, ".token") {
+			token = f
+		}
+	}
+	if token.ShowWhen == nil {
+		t.Fatal("the rule was dropped")
+	}
+	want := PluginSettingKey("observium", "backend")
+	if token.ShowWhen.Field != want {
+		t.Fatalf("ShowWhen.Field = %q, want %q — it must name the key as the "+
+			"form actually holds it", token.ShowWhen.Field, want)
+	}
+	// The controlling field has to be a key that is really in this group,
+	// otherwise the lookup finds nothing whatever it is named.
+	var found bool
+	for _, f := range group.Fields {
+		if f.Key == token.ShowWhen.Field {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no field in the group has key %q", token.ShowWhen.Field)
+	}
+}
+
+// A plugin declares one rule value and shares it across every field it gates,
+// and the same declaration builds the form for a second instance. Rewriting it
+// in place would namespace it twice and corrupt the first instance's form.
+func TestPluginGroup_DoesNotMutateTheDeclaredRule(t *testing.T) {
+	gate := &ShowWhen{Field: "backend", Equals: []string{"api"}}
+	fields := []Field{
+		{Key: "backend", Label: "Backend", Kind: KindEnum, Options: []string{"api"}},
+		{Key: "token", Label: "Token", Kind: KindSecret, ShowWhen: gate},
+		{Key: "base_url", Label: "Address", Kind: KindString, ShowWhen: gate},
+	}
+
+	first := PluginGroup("obs-hq", "HQ", fields)
+	if gate.Field != "backend" {
+		t.Fatalf("the declared rule was rewritten to %q; it is shared across "+
+			"fields and instances and must not be mutated", gate.Field)
+	}
+
+	second := PluginGroup("obs-dc2", "DC2", fields)
+	for _, group := range []Group{first, second} {
+		instance := strings.TrimPrefix(group.Name, "plugin:")
+		want := PluginSettingKey(instance, "backend")
+		for _, f := range group.Fields {
+			if f.ShowWhen != nil && f.ShowWhen.Field != want {
+				t.Errorf("%s: %s points at %q, want %q",
+					instance, f.Key, f.ShowWhen.Field, want)
+			}
+		}
+	}
+}
+
+// A field with no rule is untouched, so the common case cannot regress.
+func TestPluginGroup_LeavesUnconditionalFieldsAlone(t *testing.T) {
+	group := PluginGroup("observium", "Observium", []Field{
+		{Key: "max_items", Label: "Most items", Kind: KindInt},
+	})
+	if group.Fields[0].ShowWhen != nil {
+		t.Fatal("a field with no rule gained one")
+	}
+}
