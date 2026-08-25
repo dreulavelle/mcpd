@@ -451,6 +451,8 @@ export interface SettingField {
   apply: SettingApply;
   default?: unknown;
   options?: string[];
+  /** Human-readable names for those values. A value absent here shows as itself. */
+  option_labels?: Record<string, string>;
   min?: number;
   max?: number;
   /** What a duration counts in. Absent means minutes. */

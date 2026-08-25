@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/settings"
 )
 
 // The read-only guarantee is enforced at the transport, which is the last
@@ -337,5 +338,46 @@ func TestSettings_TheBackendSelectorIsAlwaysVisible(t *testing.T) {
 		if f.Key == "backend" && f.ShowWhen != nil {
 			t.Fatal("the backend selector is itself hidden")
 		}
+	}
+}
+
+// The dropdown asks which licence somebody has, not which mechanism they
+// want. Nobody knows offhand whether they want the API or the database;
+// everybody knows what they bought, and on Community Edition there is no
+// choice to make.
+//
+// The stored values stay "api" and "database" -- configuration should record
+// what changes, and renaming them would break every instance already
+// configured to buy nothing.
+func TestSettings_BackendIsOfferedAsAnEdition(t *testing.T) {
+	var backend settings.Field
+	for _, f := range Type().Settings {
+		if f.Key == "backend" {
+			backend = f
+		}
+	}
+	if backend.Key == "" {
+		t.Fatal("there is no backend setting")
+	}
+	want := map[string]string{
+		string(BackendDatabase): "Community Edition",
+		string(BackendAPI):      "Subscription",
+	}
+	for value, label := range want {
+		if got := backend.OptionLabels[value]; got != label {
+			t.Errorf("option %q is labelled %q, want %q", value, got, label)
+		}
+	}
+	// Every option needs a label. One without falls back to showing "api",
+	// which is the vocabulary this exists to keep out of the form.
+	for _, o := range backend.Options {
+		if backend.OptionLabels[o] == "" {
+			t.Errorf("option %q has no label and would render as itself", o)
+		}
+	}
+	// Community Edition first: it is the only one some installations can use,
+	// and it is the default.
+	if len(backend.Options) == 0 || backend.Options[0] != string(BackendDatabase) {
+		t.Error("Community Edition should be the first option and the default")
 	}
 }

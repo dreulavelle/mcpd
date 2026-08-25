@@ -212,3 +212,46 @@ func TestPluginGroup_LeavesUnconditionalFieldsAlone(t *testing.T) {
 		t.Fatal("a field with no rule gained one")
 	}
 }
+
+// A label for a value that is not an option renders as nothing at all: the
+// dropdown falls back to the raw value, so the mistake looks like a label
+// nobody wrote rather than one that missed.
+func TestValidatePluginField_RefusesALabelForANonOption(t *testing.T) {
+	err := ValidatePluginField(Field{
+		Key: "backend", Label: "Backend", Kind: KindEnum,
+		Options:      []string{"api", "database"},
+		OptionLabels: map[string]string{"databse": "Community Edition"},
+	})
+	if err == nil {
+		t.Fatal("a label for a value that is not an option must be refused")
+	}
+	if !strings.Contains(err.Error(), "not one of its options") {
+		t.Fatalf("error %q should name the problem", err)
+	}
+}
+
+// Labelling only some values is fine -- the rest show as themselves.
+func TestValidatePluginField_AcceptsPartialLabels(t *testing.T) {
+	err := ValidatePluginField(Field{
+		Key: "backend", Label: "Backend", Kind: KindEnum,
+		Options:      []string{"api", "database"},
+		OptionLabels: map[string]string{"database": "Community Edition"},
+	})
+	if err != nil {
+		t.Fatalf("partial labelling was refused: %v", err)
+	}
+}
+
+// The labels travel with the field through namespacing, or a plugin's words
+// are lost between declaring them and rendering them.
+func TestPluginGroup_KeepsOptionLabels(t *testing.T) {
+	group := PluginGroup("observium", "Observium", []Field{{
+		Key: "backend", Label: "Backend", Kind: KindEnum,
+		Options:      []string{"api", "database"},
+		OptionLabels: map[string]string{"database": "Community Edition", "api": "Subscription"},
+	}})
+	got := group.Fields[0].OptionLabels
+	if got["database"] != "Community Edition" || got["api"] != "Subscription" {
+		t.Fatalf("labels did not survive namespacing: %v", got)
+	}
+}

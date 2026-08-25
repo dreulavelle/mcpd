@@ -29,6 +29,45 @@ function renderForm(values: Record<string, unknown>) {
   );
 }
 
+// A dropdown should ask the question the operator can answer. The stored
+// value says what changes; the label says what they know they have.
+describe("option labels", () => {
+  it("shows a field's own labels rather than the stored values", () => {
+    render(
+      <SettingsForm
+        groups={[{ name: "g", title: "Observium", section: "plugins", fields: [
+          field({
+            key: "backend", label: "Which Observium is this", kind: "enum",
+            options: ["database", "api"],
+            option_labels: { database: "Community Edition", api: "Subscription" },
+          }),
+        ] }]}
+        settings={{ groups: [], values: { backend: "database" }, secrets_set: {},
+          encryption_available: true, bootstrap: [] }}
+        onSaved={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Community Edition" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Subscription" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "database" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to the value when a label is not declared", () => {
+    render(
+      <SettingsForm
+        groups={[{ name: "g", title: "T", section: "plugins", fields: [
+          field({ key: "mode", label: "Mode", kind: "enum", options: ["fast", "slow"] }),
+        ] }]}
+        settings={{ groups: [], values: { mode: "fast" }, secrets_set: {},
+          encryption_available: true, bootstrap: [] }}
+        onSaved={() => {}}
+      />,
+    );
+    expect(screen.getByRole("option", { name: "fast" })).toBeInTheDocument();
+  });
+});
+
 // A flat form showing every field for both backends leaves the operator to
 // work out which half applies, which is how integrations get misconfigured.
 describe("conditional fields", () => {
