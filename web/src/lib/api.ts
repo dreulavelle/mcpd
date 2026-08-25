@@ -457,6 +457,12 @@ export interface SettingField {
   unit?: "seconds" | "minutes" | "hours";
   required?: boolean;
   placeholder?: string;
+  /**
+   * Hides this field unless another field in the same form holds one of the
+   * named values. Presentation only: a hidden field keeps its value, still
+   * submits it, and the server still stores it. Never treat hidden as unset.
+   */
+  show_when?: { field: string; equals: string[] };
 }
 
 export interface SettingGroup {

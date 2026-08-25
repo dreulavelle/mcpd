@@ -58,6 +58,69 @@ func (t Type) Validate() error {
 		}
 		seen[f.Key] = true
 	}
+	// Checked here rather than in ValidatePluginField because it is the only
+	// place that sees the whole set: a reference is only meaningful against
+	// the other fields beside it.
+	if err := checkShowWhen(t.Name, t.Settings); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkShowWhen refuses a visibility rule that cannot fire.
+//
+// Every failure here produces the same symptom -- a field nobody can see, and
+// therefore a setting nobody can fill in -- which is invisible until an
+// operator cannot configure the integration and has no way to tell why. It is
+// a developer's mistake, so it is caught at startup.
+func checkShowWhen(typeName string, fields []settings.Field) error {
+	byKey := make(map[string]settings.Field, len(fields))
+	for _, f := range fields {
+		byKey[f.Key] = f
+	}
+
+	for _, f := range fields {
+		w := f.ShowWhen
+		if w == nil {
+			continue
+		}
+		if w.Field == f.Key {
+			return fmt.Errorf("plugins: type %s: setting %q is shown when its "+
+				"own value matches, which it cannot be until it is visible",
+				typeName, f.Key)
+		}
+		on, ok := byKey[w.Field]
+		if !ok {
+			return fmt.Errorf("plugins: type %s: setting %q is shown when %q "+
+				"matches, and there is no setting %q", typeName, f.Key, w.Field, w.Field)
+		}
+		if len(w.Equals) == 0 {
+			return fmt.Errorf("plugins: type %s: setting %q names no value of "+
+				"%q that would reveal it", typeName, f.Key, w.Field)
+		}
+		// A controlling field that is itself conditional makes visibility
+		// depend on a chain, and a chain is a thing to debug rather than read.
+		if on.ShowWhen != nil {
+			return fmt.Errorf("plugins: type %s: setting %q depends on %q, "+
+				"which is itself conditional; keep the control field always visible",
+				typeName, f.Key, w.Field)
+		}
+		// An enum is the only kind whose values are known in advance, so it is
+		// the only kind where a typo can be caught rather than waited for.
+		if on.Kind == settings.KindEnum {
+			options := make(map[string]bool, len(on.Options))
+			for _, o := range on.Options {
+				options[o] = true
+			}
+			for _, want := range w.Equals {
+				if !options[want] {
+					return fmt.Errorf("plugins: type %s: setting %q is shown when "+
+						"%q is %q, which is not one of its options %v",
+						typeName, f.Key, w.Field, want, on.Options)
+				}
+			}
+		}
+	}
 	return nil
 }
 
