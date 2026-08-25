@@ -22,15 +22,25 @@ func Type() plugins.Type {
 			"interfaces, sensors, capacity, topology and alerts. Read-only.",
 		Settings: []settings.Field{
 			{
-				Key: "backend", Label: "How to read it", Kind: settings.KindEnum,
+				Key: "backend", Label: "Which Observium is this", Kind: settings.KindEnum,
 				Options: []string{string(BackendDatabase), string(BackendAPI)},
+				// The value records what changes -- which of two ways in this
+				// instance uses -- and the label asks the question an operator
+				// can actually answer. Nobody knows offhand whether they want
+				// the API or the database; everybody knows which licence they
+				// bought, and on Community Edition there is no choice to make.
+				OptionLabels: map[string]string{
+					string(BackendDatabase): "Community Edition",
+					string(BackendAPI):      "Subscription",
+				},
 				Default: string(BackendDatabase),
-				Help: "The REST API is a subscription feature — Community " +
-					"Edition does not have one, so reading the database is the " +
-					"only option there. If you are on a subscription, the API " +
-					"is the better choice: it is a versioned contract, and its " +
-					"token carries one Observium account's permissions rather " +
-					"than everything in the schema.",
+				Help: "Community Edition has no REST API, so mcpd reads " +
+					"Observium's database directly — you will need a MySQL " +
+					"account with SELECT and nothing else. A subscription has " +
+					"the API, which is the better way in where you have it: it " +
+					"is a versioned contract, and its token carries one " +
+					"Observium account's permissions rather than everything in " +
+					"the schema.",
 			},
 			{
 				Key: "base_url", Label: "Address", Kind: settings.KindString,

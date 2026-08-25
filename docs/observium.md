@@ -8,6 +8,13 @@ one — `$config['api']['enable']` is not a switch that turns it on there — so
 on CE the only way in is the database Observium writes to. That is what the
 `backend` setting selects, and it is why there are two of everything below.
 
+The dashboard offers that choice as **Community Edition** or **Subscription**,
+because that is the question an operator can answer — nobody knows offhand
+whether they want the API or the database, and everybody knows which licence
+they bought. The stored values stay `database` and `api`: configuration should
+record what actually changes, and the two audiences are different enough that
+one string cannot serve both.
+
 | | API backend | Database backend |
 |---|---|---|
 | Needs | Subscription Edition | Any edition |
