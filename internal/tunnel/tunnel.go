@@ -511,6 +511,15 @@ func diagnose(apiKey, code string) string {
 		"principal has Tunnels Read and Use -- an admin key will not work"
 }
 
+// Config returns the configuration this tunnel is running with, so a caller
+// rebuilding it does not have to resolve the settings again and risk starting
+// the replacement from a different configuration than the one it replaced.
+func (m *Manager) Config() Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cfg
+}
+
 // SameAs reports whether a configuration would produce the same tunnel.
 //
 // Reconfiguring restarts, and restarting drops a connector until it

@@ -4,59 +4,37 @@ services:
   mcpd:
     build:
       context: .
+      args:
+        VERSION: ${MCPD_VERSION:-dev}
     image: ghcr.io/dreulavelle/mcpd:local
     container_name: mcpd
     restart: unless-stopped
 
-    # Everything written to ./data lands owned by this uid, so the host user
-    # can read and edit it without sudo. 1000 is the first login account on
-    # every mainstream distribution; if yours differs, put UID and GID in
-    # .env -- the shell does not export them, so compose cannot read them.
-    #
-    # This rather than an entrypoint chown: chowning a bind mount needs the
-    # container to start as root and hold CAP_CHOWN, CAP_SETUID and
-    # CAP_SETGID, which means giving back three of the capabilities dropped
-    # below to solve a problem that has a solution needing none of them.
+    # Owns ./data. Override in .env if your account is not uid 1000 — the
+    # shell does not export these, so compose cannot work them out.
     user: "${UID:-1000}:${GID:-1000}"
 
     env_file:
       - path: .env
         required: false
+
+    # Bind every interface inside the container; the port mappings below
+    # decide what the host actually exposes.
     environment:
-      # Both listeners bind every interface *inside* the container. mcpd
-      # defaults to loopback, which in a container means the published port
-      # reaches a socket nothing is listening on. What the host exposes is
-      # decided by the port mappings below, not here -- which is also why
-      # these override the generated config.yaml rather than being editable
-      # in it.
       MCPD_LISTEN: ":8080"
       MCPD_FRONTEND_LISTEN: ":8081"
-      # MCPD_PUBLIC_URL is deliberately not set. The address to advertise is a
-      # setting in the database now, managed on the Settings page, and this
-      # variable would only seed it on a first start against an empty volume.
-      # Setting it afterwards changes nothing and earns a warning at startup.
+
     ports:
       - "${MCPD_BIND:-127.0.0.1}:${MCPD_PORT:-8080}:8080"
       - "${MCPD_FRONTEND_BIND:-127.0.0.1}:${MCPD_FRONTEND_PORT:-80}:8081"
-      # The tunnel's diagnostics listener is deliberately not published. It is
-      # off unless tunnel.diagnostics_addr is set, which nothing sets by
-      # default, so the mapping that used to be here reserved a host port for
-      # a listener that was not running -- and failed the whole `up` if
-      # anything else on the host already had 9099. It is unauthenticated, so
-      # publishing it is the wrong direction anyway: reach it from inside,
-      #   docker compose exec mcpd wget -qO- http://127.0.0.1:9099/readyz
+
+    # config.yaml, the database, TLS material and plugins. Generated on first
+    # start if empty.
     volumes:
-      # One mount, and nothing else. config.yaml, the database, TLS material
-      # and out-of-process plugins all live in it, and it is generated on
-      # first start if it is empty. No file bind-mounts: a single-file mount
-      # against a host path that is momentarily wrong fails with "not a
-      # directory" rather than with anything that explains itself.
       - ./data:/var/lib/mcpd
 
-    # This proves the binary runs and the configuration still parses. It is
-    # deliberately not an HTTP probe: with the self-signed certificate on, the
-    # listener speaks HTTPS with mcpd's own CA, and a probe that failed on that
-    # would report a healthy host as unhealthy.
+    # Not an HTTP probe: with self-signed TLS the listener speaks mcpd's own
+    # CA, and a probe failing on that would report a healthy host as sick.
     healthcheck:
       test: ["CMD", "/usr/local/bin/mcpd", "-config", "/var/lib/mcpd/config.yaml", "-check"]
       interval: 30s
@@ -64,9 +42,7 @@ services:
       retries: 3
       start_period: 10s
 
-    # Headroom over the 30s drain budget mcpd defaults to (Settings ->
-    # Timeouts), so a drain that runs to its own deadline is not killed a
-    # moment before it finishes. Raise this if you raise that.
+    # Headroom over the 30s drain budget in Settings -> Timeouts.
     stop_grace_period: 60s
 
     read_only: true
@@ -76,18 +52,12 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
     deploy:
       resources:
         limits:
-          # A backstop against a leak, not a sizing exercise -- an ordinary
-          # deployment sits in the tens of MiB. What can actually grow is the
-          # catalogue cache: 256 entries (registry.DefaultMaxCacheEntries)
-          # against a 2 MiB per-response cap, and 8 MiB for Docker's whole
-          # catalogue. Browsing hard enough to hold 256 large pages at once
-          # would approach this limit; nothing else here comes close, since
-          # SQLite's pages are reclaimable and the per-plugin read caches are
-          # 256 small entries each.
           memory: 1g
+
     logging:
       driver: json-file
       options:

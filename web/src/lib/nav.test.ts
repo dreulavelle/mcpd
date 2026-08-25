@@ -68,8 +68,8 @@ describe("navigation gating", () => {
     const administer = visibleNav(holding("read", "propose", "approve", "admin"))
       .find((g) => g.title === "Administer");
     expect(administer?.items.map((i) => i.label)).toEqual([
-      "Settings", "Approval policy", "Authentication", "Users", "Groups", "API Keys",
-      "Logs",
+      "Settings", "System", "Approval policy", "Authentication", "Users", "Groups",
+      "API Keys", "Logs",
     ]);
   });
 

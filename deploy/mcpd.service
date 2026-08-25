@@ -8,8 +8,11 @@ Wants=network-online.target
 Type=simple
 User=mcpd
 Group=mcpd
-ExecStart=/usr/local/bin/mcpd --config /etc/mcpd/config.yaml
-Restart=on-failure
+ExecStart=/usr/local/bin/mcpd --config /var/lib/mcpd/config.yaml
+# always, not on-failure: a restart requested from the dashboard drains and
+# exits cleanly, and on-failure would treat that as a deliberate stop and
+# leave the host down.
+Restart=always
 RestartSec=5s
 
 # Must exceed the drain budget in Settings -> Timeouts plus the worker wait,
@@ -23,9 +26,16 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 # Secrets by reference, never in the config file.
-LoadCredential=cnmaestro-client-id:/etc/mcpd/credentials/cnmaestro-client-id
-LoadCredential=cnmaestro-client-secret:/etc/mcpd/credentials/cnmaestro-client-secret
-LoadCredential=bootstrap-password:/etc/mcpd/credentials/bootstrap-password
+#
+# Commented out because LoadCredential aborts startup when its source file is
+# missing, and a fresh install has none of these -- which turned a first start
+# into a failure about a credential for a plugin nobody had configured yet.
+# Uncomment the ones you actually place, or prefix with - to make them
+# optional. Plugin credentials are normally typed into the dashboard and
+# encrypted, and need nothing here at all.
+#LoadCredential=cnmaestro-client-id:/etc/mcpd/credentials/cnmaestro-client-id
+#LoadCredential=cnmaestro-client-secret:/etc/mcpd/credentials/cnmaestro-client-secret
+#LoadCredential=bootstrap-password:/etc/mcpd/credentials/bootstrap-password
 
 # --- hardening ---
 NoNewPrivileges=yes

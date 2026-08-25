@@ -90,23 +90,21 @@ func NewClient(hc *http.Client, cfg Config, token, user, pass string,
 // endpoint -- "devices", "ports", "sensors" -- so it is captured as the
 // remaining raw JSON and resolved by name at the call site.
 type envelope struct {
-	// Raw rather than a string, because one endpoint collides with it.
+	// Raw rather than a string, so that a collection landing on this field
+	// cannot fail the decode.
 	//
 	// The envelope is built in PHP as $out['status'] = 'ok' followed by
-	// $out[$entity] = $rows -- and for /status/ the entity *is* "status", so
-	// the collection overwrites the field. The response then carries an object
-	// where every other endpoint carries "ok", and decoding this as a string
-	// would fail every call to the one endpoint whose name is unlucky.
-	//
-	// So it is interpreted rather than parsed: a string is the envelope's own
-	// verdict, and anything else means the collection landed on top of it,
-	// which only happens on a response that had one to put there.
+	// $out[$entity] = $rows, so an endpoint whose entity is literally
+	// "status" would overwrite the verdict. Measured against a live
+	// installation /status does not: it answers with both, "status":"ok"
+	// beside "statuses":{...}. This stays as defence for a version that
+	// does collide, not as a description of one that does.
 	Status    json.RawMessage `json:"status"`
 	Message   string          `json:"message"`
-	Count     int             `json:"count"`
-	PageSize  int             `json:"pagesize"`
-	PageNo    int             `json:"pageno"`
-	CountPage int             `json:"countpage"`
+	Count     flexInt         `json:"count"`
+	PageSize  flexInt         `json:"pagesize"`
+	PageNo    flexInt         `json:"pageno"`
+	CountPage flexInt         `json:"countpage"`
 }
 
 // verdict returns the envelope's own status, and whether there was one.
@@ -125,6 +123,62 @@ func (e envelope) verdict() (string, bool) {
 	return s, true
 }
 
+// flexInt is a number Observium may send quoted.
+//
+// A real /devices answer opens:
+//
+//	{"count":"85","pagesize":250,"pageno":1,"countpage":85,"status":"ok",...}
+//
+// One field quoted and the next not, in the same envelope. Decoding that into
+// an int fails on the quoted one, and the failure surfaces as "answered with
+// something that is not the API's JSON envelope" -- so a correct token against
+// a healthy installation reads as a broken one, which is the least useful
+// place to be wrong. The entity ids have the same inconsistency and the tests
+// already cope with it; the envelope did not.
+//
+// Quoted or bare is not worth distinguishing, so this does not record which
+// arrived: nothing downstream would do anything differently, and a caller that
+// cannot tell cannot come to depend on it.
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(data []byte) error {
+	s := strings.TrimSpace(string(data))
+
+	// Absent, null and "" all mean "not reported". Zero is right for every
+	// one of them: the walk treats a zero count as "no total given" already,
+	// and an error here would reject the whole response over a field that is
+	// optional in the first place.
+	if s == "null" || s == "" {
+		*f = 0
+		return nil
+	}
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		unquoted, err := strconv.Unquote(s)
+		if err != nil {
+			return fmt.Errorf("not a quoted number: %s", s)
+		}
+		s = strings.TrimSpace(unquoted)
+		if s == "" {
+			*f = 0
+			return nil
+		}
+	}
+
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		*f = flexInt(n)
+		return nil
+	}
+	// A count arriving as 85.0 is still a count. Accepted rather than
+	// refused, for the same reason the quoting is: the alternative is
+	// discarding a whole page over the spelling of a number.
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return fmt.Errorf("not a number: %s", s)
+	}
+	*f = flexInt(n)
+	return nil
+}
+
 // Page is one tool call's worth of entities, plus what the caller needs to
 // know about what they are not seeing.
 type Page struct {
@@ -137,19 +191,30 @@ type Page struct {
 	// every tool result rather than logged, because a model shown 500 of 4000
 	// ports and not told so will answer as though it saw the estate.
 	Truncated bool
+	// Fields are the field names that survived the view, sorted.
+	Fields []string
+	// FieldsDropped is how many fields the widest item lost to it. Surfaced
+	// for the same reason Truncated is: a narrowed row that does not say it
+	// was narrowed is one a model will treat as the whole record.
+	FieldsDropped int
 }
 
 // Get fetches a single entity or a collection under one key.
 //
-// The key is the envelope field the entities live under, which Observium names
-// after the endpoint rather than uniformly -- /neighbours/ answers under
-// "neighbours", /alert_log/ under "alert_log". Passing it in is less clever
-// than deriving it from the path and survives the API not being consistent.
+// The key is the envelope field the entities live under, and it is not derived
+// from the path: /devices answers under "devices", /storage under "storages",
+// and /processors, /mempools, /inventory, /neighbours, /vlans and /alert_log
+// all under the generic "entries". Passing it in survives that. Guessing it
+// from the endpoint does not, and did not -- seven of the twelve routes here
+// were named after their path and read nothing for it.
 func (c *Client) Get(ctx context.Context, path, key string, params url.Values) (Page, error) {
 	if c.cache == nil {
 		return c.walk(ctx, path, key, params)
 	}
-	got, err := c.cache.reuse(ctx, path, params, func(ctx context.Context) (any, error) {
+	// c.cfg.MaxItems is the effective ceiling: Read narrows a copy of the
+	// client when a caller asks for fewer, so by here it is this call's own
+	// limit rather than the instance-wide setting.
+	got, err := c.cache.reuse(ctx, path, params, c.cfg.MaxItems, func(ctx context.Context) (any, error) {
 		return c.walk(ctx, path, key, params)
 	})
 	if err != nil {
@@ -186,8 +251,8 @@ func (c *Client) walk(ctx context.Context, path, key string, params url.Values) 
 		if err != nil {
 			return Page{}, err
 		}
-		if env.Count > out.Total {
-			out.Total = env.Count
+		if int(env.Count) > out.Total {
+			out.Total = int(env.Count)
 		}
 
 		items, err := decodeCollection(raw, key)
@@ -199,6 +264,12 @@ func (c *Client) walk(ctx context.Context, path, key string, params url.Values) 
 				out.Truncated = true
 				return out, nil
 			}
+			// Before the item is retained anywhere, including the read cache.
+			// A community string that is never stored cannot be served out of
+			// storage by a later change to how views work.
+			for _, name := range alwaysRemoved {
+				delete(item, name)
+			}
 			out.Items = append(out.Items, item)
 		}
 
@@ -208,14 +279,14 @@ func (c *Client) walk(ctx context.Context, path, key string, params url.Values) 
 		if len(items) < c.cfg.PageSize {
 			return out, nil
 		}
-		if env.CountPage > 0 && pageNo >= env.CountPage {
+		if env.CountPage > 0 && pageNo >= int(env.CountPage) {
 			return out, nil
 		}
 		// A page that is full but reports no total would loop forever if the
 		// endpoint ignores pageno. Bounded by MaxItems above, but an endpoint
 		// returning the same full page each time would spin to that cap
 		// making identical requests, so stop when nothing new can arrive.
-		if env.Count > 0 && len(out.Items) >= env.Count {
+		if env.Count > 0 && len(out.Items) >= int(env.Count) {
 			return out, nil
 		}
 	}
@@ -243,11 +314,21 @@ func decodeCollection(raw json.RawMessage, key string) ([]map[string]any, error)
 
 	entities, ok := body[key]
 	if !ok {
-		// A successful response with no collection means an empty result on
-		// some endpoints and a wrong key on others. Distinguishing them would
-		// need a list of which is which; reporting empty is right for the
-		// common case and the key is a constant at every call site, so a
-		// wrong one is a bug caught the first time the tool is run.
+		// A wrong key used to be indistinguishable from an empty estate: this
+		// returned no items and no error, and the tool above reported that
+		// Observium held nothing. Seven of the twelve routes were wrong and
+		// nobody could tell -- capacity answered "no processors" against a
+		// host with thirty-seven.
+		//
+		// So an absent key is now reported, and the message names what the
+		// response did carry, because that is the fix. An estate that really
+		// is empty answers with the key present and empty, or with no
+		// collection field at all, and both are handled below.
+		if others := collectionKeys(body); len(others) > 0 {
+			return nil, fmt.Errorf(
+				"answered under %s, not %q -- the route table has the wrong "+
+					"envelope key for this endpoint", quoteAll(others), key)
+		}
 		return nil, nil
 	}
 
@@ -288,6 +369,35 @@ func decodeCollection(raw json.RawMessage, key string) ([]map[string]any, error)
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// collectionKeys names the fields of a response that could hold entities --
+// everything that is not part of the envelope itself.
+//
+// entity_cache is envelope furniture rather than a collection: /alert_log
+// returns it beside the entries as a lookup table of names, and offering it as
+// a candidate would point a wrong-key report at the wrong field.
+func collectionKeys(body map[string]json.RawMessage) []string {
+	meta := map[string]bool{
+		"status": true, "count": true, "pagesize": true, "pageno": true,
+		"countpage": true, "message": true, "entity_cache": true,
+	}
+	var out []string
+	for name := range body {
+		if !meta[name] {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func quoteAll(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = strconv.Quote(name)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // sortIDs orders entity ids numerically where they are numbers and
@@ -428,6 +538,15 @@ const (
 	// Alert checks are what is being watched, which is the question behind
 	// "why did nobody get told".
 	EntityAlertChecks Entity = "alert_checks"
+
+	// Metered and per-device readings no other tool reaches: traffic and power
+	// bills with their allowances, arbitrary counters, printer consumables and
+	// response-time probes.
+	EntityBills         Entity = "bills"
+	EntityPowerBills    Entity = "power_bills"
+	EntityCounters      Entity = "counters"
+	EntityProbes        Entity = "probes"
+	EntityPrinterSupply Entity = "printersupplies"
 )
 
 // Filter names are the API's own, named here so a typo is a compile error
@@ -475,44 +594,78 @@ const (
 //
 // Observium names the key after the endpoint rather than uniformly, so both
 // halves are recorded rather than one being derived from the other.
-var apiPaths = map[Entity]struct{ path, key string }{
-	EntityDevices:    {"/devices", "devices"},
-	EntityPorts:      {"/ports", "ports"},
-	EntitySensors:    {"/sensors", "sensors"},
-	EntityAlerts:     {"/alerts", "alerts"},
-	EntityAlertLog:   {"/alert_log", "alert_log"},
-	EntityStorage:    {"/storage", "storage"},
-	EntityMempools:   {"/mempools", "mempools"},
-	EntityProcessors: {"/processors", "processors"},
-	EntityInventory:  {"/inventory", "inventory"},
-	EntityNeighbours: {"/neighbours", "neighbours"},
-	EntityAddresses:  {"/address", "addresses"},
-	EntityVLANs:      {"/vlans", "vlans"},
-	EntityStatus:     {"/status", "status"},
-	// Both of these answer under a key that is not the endpoint's own name,
-	// which is why the pair is recorded rather than one derived from the other.
-	EntityMaintenance: {"/maintenance", "maintenance"},
-	EntityGroups:      {"/groups", "groups"},
-	EntityAlertChecks: {"/alert_checks", "alert_checks"},
+var apiPaths = map[Entity]route{
+	EntityDevices:    {"/devices", "devices", "device"},
+	EntityPorts:      {"/ports", "ports", "port"},
+	EntitySensors:    {"/sensors", "sensors", "sensor"},
+	EntityAlerts:     {"/alerts", "alerts", "alert"},
+	EntityAlertLog:   {"/alert_log/", "entries", "entries"},
+	EntityStorage:    {"/storage", "storages", "storage"},
+	EntityMempools:   {"/mempools", "entries", "mempool"},
+	EntityProcessors: {"/processors", "entries", "processor"},
+	EntityInventory:  {"/inventory", "entries", "inventory"},
+	EntityNeighbours: {"/neighbours", "entries", "neighbour"},
+	EntityAddresses:  {"/address", "addresses", "addresses"},
+	EntityVLANs:      {"/vlans", "entries", "vlan"},
+
+	EntityBills:         {"/bills", "bills", "bill"},
+	EntityPowerBills:    {"/power_bills", "power_bills", "power_bill"},
+	EntityCounters:      {"/counters", "counters", "counter"},
+	EntityGroups:        {"/groups", "groups", "group"},
+	EntityStatus:        {"/status", "statuses", "status_entry"},
+	EntityProbes:        {"/probes", "probes", "probe"},
+	EntityPrinterSupply: {"/printersupplies", "printersupplies", "printersupply"},
+	EntityAlertChecks:   {"/alert_checks", "alert_checks", "alert_check"},
+	EntityMaintenance:   {"/maintenance", "maintenance", "maintenance"},
 }
 
-// Read fetches one entity collection.
-func (c *Client) Read(ctx context.Context, entity Entity, filters url.Values, limit int) (Page, error) {
+// route is how one entity is reached and how its answer is shaped.
+//
+// key and idKey are both needed because Observium answers a collection and a
+// single entity under different names: /devices under "devices" and
+// /devices/491 under "device", /status under "statuses" and /status/12 under
+// "status_entry". Selecting one entity is a path segment rather than a filter,
+// so the same route serves both and has to know both names. Getting this wrong
+// is silent -- it reads as "no such device" -- which is how observium_device
+// came to be broken without anybody noticing.
+type route struct {
+	path  string
+	key   string
+	idKey string
+}
+
+// Read fetches one entity collection, narrowed to the view.
+//
+// The view is applied here rather than inside walk because walk's results are
+// what the read cache holds: narrowing before the cache would let a summary
+// read be served to a caller that asked for full detail. So the cache holds
+// whole rows and each call narrows its own copy -- a copy, because the maps in
+// a cached Page are shared with every later reader of it, and trimming them in
+// place would empty the cache into whichever view happened to be asked for
+// first.
+//
+// Credentials are the exception and are gone before this point: walk removes
+// them as it decodes, so they are never in the cache to be copied out of.
+func (c *Client) Read(ctx context.Context, entity Entity, filters url.Values, limit int, v view) (Page, error) {
 	route, ok := apiPaths[entity]
 	if !ok {
 		return Page{}, fmt.Errorf("observium: no API endpoint for %s", entity)
 	}
 
 	path := route.path
+	key := route.key
 	params := url.Values{}
 	for name, values := range filters {
 		if len(values) == 0 || values[0] == "" {
 			continue
 		}
 		// The API selects one entity by path segment rather than by filter,
-		// which is why FilterID is spelled differently from the rest.
+		// which is why FilterID is spelled differently from the rest -- and
+		// answers it under a different envelope key, which is why the key
+		// changes with it.
 		if name == FilterID {
 			path += "/" + url.PathEscape(values[0])
+			key = route.idKey
 			continue
 		}
 		params.Set(name, values[0])
@@ -520,11 +673,35 @@ func (c *Client) Read(ctx context.Context, entity Entity, filters url.Values, li
 
 	client := c
 	if limit > 0 && limit < c.cfg.MaxItems {
-		narrowed := *c
-		narrowed.cfg.MaxItems = limit
-		client = &narrowed
+		capped := *c
+		capped.cfg.MaxItems = limit
+		client = &capped
 	}
-	return client.Get(ctx, path, route.key, params)
+	page, err := client.Get(ctx, path, key, params)
+	if err != nil {
+		return Page{}, err
+	}
+
+	page.Items = copyItems(page.Items)
+	page.Fields, page.FieldsDropped = narrow(page.Items, entity, v)
+	return page, nil
+}
+
+// copyItems gives the caller maps it may modify.
+//
+// Page.Items from a cache hit are the cache's own maps. Without this, one
+// tool call narrowing its result would narrow the cached entry every later
+// call reads.
+func copyItems(in []map[string]any) []map[string]any {
+	out := make([]map[string]any, len(in))
+	for i, item := range in {
+		dup := make(map[string]any, len(item))
+		for k, v := range item {
+			dup[k] = v
+		}
+		out[i] = dup
+	}
+	return out
 }
 
 // Probe makes the cheapest authenticated call there is: one device, one page.

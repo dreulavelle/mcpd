@@ -227,6 +227,14 @@ const (
 	//
 	// A duration counts whole units of its own Unit rather than carrying a Go
 	// duration string, so the number in the box is the number that was typed.
+	// Updates. mcpd is deployed inside somebody's network, so asking a
+	// public service what the current version is has to be a choice rather
+	// than a default -- the same reasoning the tunnel's own update check
+	// follows.
+	KeyUpdatesEnabled  = "updates.check_enabled"
+	KeyUpdatesInterval = "updates.check_interval_hours"
+	KeyUpdatesRepo     = "updates.repository"
+
 	KeyServerPublicURL         = "server.public_url"
 	KeyServerFrontendPublicURL = "server.frontend_public_url"
 	KeyServerTLSMode           = "server.tls_mode"
@@ -425,6 +433,41 @@ func schema() []Group {
 					Help: "Turning it off leaves the MCP endpoint running and nothing " +
 						"to administer it from until you turn it back on in the " +
 						"database by hand.",
+				},
+			},
+		},
+		{
+			Name:    "updates",
+			Title:   "Updates",
+			Section: SectionSettings,
+			Help: "Whether this host asks GitHub what the current release is. " +
+				"It never installs anything: replacing a running mcpd is a " +
+				"deployment's own job, and a container that could rewrite " +
+				"itself would need privileges this one deliberately drops.",
+			Fields: []Field{
+				{
+					Key: KeyUpdatesEnabled, Label: "Check for updates",
+					Kind: KindBool, Group: "updates", Apply: ApplyLive,
+					Default: false,
+					Help: "Off by default. Turning it on makes this host reach " +
+						"github.com on a timer, which on an isolated network is a " +
+						"connection somebody should agree to rather than discover.",
+				},
+				{
+					Key: KeyUpdatesInterval, Label: "How often to check",
+					Kind: KindInt, Group: "updates", Apply: ApplyLive,
+					Default: 24, Min: intPtr(1), Max: intPtr(720),
+					Unit: "hours",
+					Help: "Releases are not frequent enough for this to be worth " +
+						"doing often, and the answer is cached between checks.",
+				},
+				{
+					Key: KeyUpdatesRepo, Label: "Repository",
+					Kind: KindString, Group: "updates", Apply: ApplyLive,
+					Default:     "dreulavelle/mcpd",
+					Placeholder: "owner/name",
+					Help: "Where releases are published. Change it only if you " +
+						"build mcpd from a fork.",
 				},
 			},
 		},

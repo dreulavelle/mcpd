@@ -3,6 +3,7 @@ package observium
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -132,14 +133,14 @@ func cacheKind(path string) string {
 // what it is told, and "this is what the estate looked like a while ago" is
 // not a safer answer than waiting.
 func (c *readCache) reuse(ctx context.Context, path string, params url.Values,
-	fetch func(context.Context) (any, error)) (any, error) {
+	ceiling int, fetch func(context.Context) (any, error)) (any, error) {
 
 	ttl := c.cfg.cacheTTL(path)
 	if ttl <= 0 {
 		return fetch(ctx)
 	}
 	kind := cacheKind(path)
-	key := cacheKey(kind, path, params)
+	key := cacheKey(kind, path, params, ceiling)
 
 	if hit := c.store.Get(key); hit != nil && hit.State(c.now()) == cachestore.Fresh {
 		c.event(kind, plugins.CacheHit)
@@ -185,6 +186,13 @@ func (c *readCache) event(kind, event string) {
 // url.Values.Encode sorts by key, so two callers who set the same filters in a
 // different order produce the same key -- and two who set different ones never
 // do.
-func cacheKey(kind, path string, params url.Values) string {
-	return kind + "\x00" + path + "\x00" + params.Encode()
+//
+// The ceiling is part of the key because it is part of the answer. A walk
+// stops at it and marks the page truncated, so the entry a limited call stores
+// is a short page that says so. Without this, `devices limit=5` filled the
+// cache with five devices and the next caller asking for the estate was handed
+// them back, told the result was truncated and advised to narrow a filter they
+// had not set -- for as long as the inventory TTL held.
+func cacheKey(kind, path string, params url.Values, ceiling int) string {
+	return kind + "\x00" + path + "\x00" + strconv.Itoa(ceiling) + "\x00" + params.Encode()
 }

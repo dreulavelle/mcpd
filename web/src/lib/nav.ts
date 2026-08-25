@@ -1,5 +1,5 @@
 import {
-  Boxes, ClipboardCheck, Cog, Gauge, KeyRound, ScrollText, ShieldCheck, Store,
+  Activity, Boxes, ClipboardCheck, Cog, Gauge, KeyRound, ScrollText, ShieldCheck, Store,
   Terminal, Ticket, UserRound, Users, UsersRound, Waypoints, type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
@@ -102,6 +102,13 @@ export const NAV: NavGroup[] = [
         label: "Settings",
         lede: "How this host is configured.",
         icon: Cog,
+        capability: "read",
+      },
+      {
+        path: "/system",
+        label: "System",
+        lede: "What this host is running, what it is using, and how to restart it.",
+        icon: Activity,
         capability: "read",
       },
       {

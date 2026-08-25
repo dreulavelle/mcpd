@@ -215,18 +215,19 @@ func TestClient_SendsBearerToken(t *testing.T) {
 	}
 }
 
-// The /status/ endpoint's collection key collides with the envelope's own
-// status field. Observium builds the response in PHP as $out['status'] = 'ok'
-// followed by $out[$entity] = $rows, so for this one endpoint the collection
-// lands on top of the verdict.
+// A collection can land on the envelope's own status field, because Observium
+// builds the response in PHP as $out['status'] = 'ok' followed by
+// $out[$entity] = $rows. Decoding status as a string would then fail a call
+// that worked.
 //
-// Decoding status as a string would therefore fail every call to /status/ --
-// an endpoint that works, reported as a malformed response.
+// Measured against a live installation, /status is not that endpoint: it
+// answers "status":"ok" beside "statuses":{...}, and apiPaths reads the
+// latter. This defends against a version that does collide -- do not read it
+// as a description of one that does.
 func TestEnvelope_StatusKeyCollision(t *testing.T) {
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// No "ok" anywhere: the collection overwrote it, which is exactly what
-		// a real response from this endpoint looks like.
+		// No "ok" anywhere: the collection overwrote it.
 		fmt.Fprint(w, `{"count":2,"status":{
 			"1":{"status_id":"1","status_event":"ok","status_descr":"PSU 1"},
 			"2":{"status_id":"2","status_event":"alert","status_descr":"PSU 2"}}}`)
@@ -254,5 +255,72 @@ func TestEnvelope_StillCatchesAFailedVerdict(t *testing.T) {
 
 	if _, err := c.walk(context.Background(), "/vlans", "vlans", url.Values{}); err == nil {
 		t.Fatal("a failed verdict was accepted as success")
+	}
+}
+
+// Observium quotes some numbers and not others, in the same envelope. A real
+// /devices answer from an installation with 85 devices opens:
+//
+//	{"count":"85","pagesize":250,"pageno":1,"countpage":85,"status":"ok",...}
+//
+// count quoted, pagesize beside it bare. Decoding count into an int failed,
+// and because the failure was reported as "not the API's JSON envelope" a
+// working token against a healthy installation looked like a broken one --
+// the plugin refused to start and said the credentials were rejected, having
+// just been handed 85 devices.
+func TestEnvelope_AcceptsNumbersObserviumQuoted(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"quoted", `{"status":"ok","count":"85","pagesize":250,"pageno":1,"countpage":85}`, 85},
+		{"bare", `{"status":"ok","count":85,"pagesize":250,"pageno":1,"countpage":85}`, 85},
+		{"absent", `{"status":"ok","pagesize":250}`, 0},
+		{"null", `{"status":"ok","count":null}`, 0},
+		{"empty string", `{"status":"ok","count":""}`, 0},
+		{"float", `{"status":"ok","count":85.0}`, 85},
+		{"quoted float", `{"status":"ok","count":"85.0"}`, 85},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var env envelope
+			if err := json.Unmarshal([]byte(tc.body), &env); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if int(env.Count) != tc.want {
+				t.Errorf("count = %d, want %d", int(env.Count), tc.want)
+			}
+		})
+	}
+}
+
+// A count that is not a number at all is still an error: tolerating the
+// spelling of a number is not the same as tolerating anything.
+func TestEnvelope_RejectsCountThatIsNotANumber(t *testing.T) {
+	var env envelope
+	if err := json.Unmarshal([]byte(`{"status":"ok","count":"many"}`), &env); err == nil {
+		t.Fatal("decoded a non-numeric count without error")
+	}
+}
+
+// The whole point of the fix: a quoted count must not stop a page being read.
+func TestWalk_QuotedCountStillReturnsTheDevices(t *testing.T) {
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"ok","count":"2","pagesize":250,"pageno":1,
+			"devices":{"1":{"device_id":"1","hostname":"a"},
+			           "2":{"device_id":"2","hostname":"b"}}}`)
+	})
+
+	page, err := c.walk(context.Background(), "/devices", "devices", url.Values{})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("got %d devices, want 2", len(page.Items))
+	}
+	if page.Total != 2 {
+		t.Errorf("total = %d, want 2 taken from the quoted count", page.Total)
 	}
 }

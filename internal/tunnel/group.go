@@ -131,6 +131,61 @@ func (g *Group) Apply(ctx context.Context, configs []Config, factory ServerFacto
 	return errors.Join(errs...)
 }
 
+// Rebuild restarts the tunnel serving one plugin, so that it picks up a
+// plugin that has been rebuilt underneath it.
+//
+// Apply cannot do this. It compares configurations and skips a tunnel whose
+// own config is unchanged, which is exactly the case here: editing an
+// Observium token changes the plugin's settings and nothing about the tunnel.
+// But a tunnel builds its own MCP server at start, and that server holds the
+// plugin instance it was built from -- so a remounted plugin leaves the tunnel
+// serving the old one, with the old credential.
+//
+// The failure that came from this is worth recording, because it reads as
+// something else entirely: after the operator replaced a revoked API token,
+// the dashboard worked and the connector did not. Same mcpd, same plugin, same
+// moment -- one path had the new credential and the other was still presenting
+// the token that had just been revoked, and the connector reported that
+// Observium had rejected mcpd's credentials, which was true and not the fault
+// of anything the operator could see.
+//
+// A rebuild drops the connector for as long as it takes to reconnect. That is
+// the cost of the credential actually changing, and it is smaller than the
+// alternative of a connector that authenticates with a secret nobody can
+// correct.
+func (g *Group) Rebuild(ctx context.Context, plugin string, factory ServerFactory) error {
+	key := Key(plugin)
+
+	g.mu.RLock()
+	existing, ok := g.managers[key]
+	g.mu.RUnlock()
+	if !ok {
+		// No tunnel serves this plugin. Not an error: most plugins have no
+		// connector of their own.
+		return nil
+	}
+
+	cfg := existing.Config()
+	if err := existing.Stop(ctx); err != nil {
+		return fmt.Errorf("tunnel: stop %s: %w", key, err)
+	}
+
+	m := NewManager(cfg, factory, g.log.With("tunnel", key))
+	g.mu.Lock()
+	g.managers[key] = m
+	g.mu.Unlock()
+
+	if !g.started || !cfg.Enabled || cfg.TunnelID == "" {
+		return nil
+	}
+	if err := m.Start(ctx); err != nil {
+		return fmt.Errorf("tunnel: %s: %w", describe(cfg.Plugin), err)
+	}
+	g.log.InfoContext(ctx, "tunnel rebuilt for a changed plugin",
+		"tunnel", key, "plugin", plugin)
+	return nil
+}
+
 // Status reports every tunnel, in configuration order.
 func (g *Group) Status() []Status {
 	g.mu.RLock()

@@ -196,9 +196,33 @@ func (a *App) Run(ctx context.Context) error {
 			return err
 		}
 		return nil
+	case reason := <-a.restartCh:
+		// The same drain a signal takes. A restart is not a special kind of
+		// stop: this process exits cleanly and something outside it starts
+		// another, so the only thing that makes it a restart rather than a
+		// shutdown is what is supervising -- which is why the dashboard is
+		// told there is no restart when nothing is.
+		a.log.InfoContext(ctx, "restarting", "reason", reason)
+		return a.Shutdown()
 	case <-ctx.Done():
 		a.log.InfoContext(ctx, "shutdown signal received")
 		return a.Shutdown()
+	}
+}
+
+// RequestRestart asks Run to drain and exit, so that the supervisor starts a
+// new process.
+//
+// Buffered by one and non-blocking: two operators pressing the button at the
+// same moment should not have the second wait for a drain that is already
+// under way, and a restart requested before Run reaches its select must not
+// deadlock the request that asked for it.
+func (a *App) RequestRestart(reason string) error {
+	select {
+	case a.restartCh <- reason:
+		return nil
+	default:
+		return errors.New("a restart is already under way")
 	}
 }
 
