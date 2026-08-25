@@ -30,6 +30,7 @@ import (
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/tunnel"
+	"github.com/spoked/mcpd/internal/updates"
 )
 
 // Options configures the dashboard.
@@ -47,6 +48,17 @@ type Options struct {
 	// nil so no call site branches.
 	Errors  *observability.ErrorReporter
 	Version string
+	// StartedAt is when this process began serving, for the uptime the
+	// resources panel reports.
+	StartedAt time.Time
+	// Updates answers what the current release is, or is nil when this build
+	// has no checker wired.
+	Updates *updates.Checker
+	// Restart asks the host to stop cleanly so its supervisor starts it
+	// again. Nil when nothing is supervising, in which case the dashboard is
+	// told the button would not work rather than being offered one that
+	// stops mcpd for good.
+	Restart func(reason string) error
 
 	// Metrics serves the Prometheus exposition format, or is nil when the
 	// endpoint is switched off. MetricsPublic serves it unauthenticated.
@@ -375,6 +387,16 @@ func (s *Server) routes() {
 	api("POST /api/approval-policy/evaluate", s.handleEvaluateApprovalPolicy, auth.CapRead)
 	// Starting and stopping a tunnel changes what an external service can
 	// reach, so it takes administrator rights rather than read.
+	// Version, resources and releases are readable by anyone who may read.
+	// None of it is sensitive and all of it is the first thing asked when
+	// something looks wrong.
+	api("GET /api/resources", s.handleResources, auth.CapRead)
+	api("GET /api/updates", s.handleUpdates, auth.CapRead)
+	// Forcing a check reaches an external service, so it is an admin action
+	// even though what it returns is not privileged.
+	api("POST /api/updates/check", s.handleCheckUpdates, auth.CapAdmin)
+	api("POST /api/restart", s.handleRestart, auth.CapAdmin)
+
 	api("POST /api/tunnel/start", s.handleTunnelStart, auth.CapAdmin)
 	api("POST /api/tunnel/stop", s.handleTunnelStop, auth.CapAdmin)
 	// Managing tunnels reaches outside this deployment: creating one changes
@@ -1713,4 +1735,78 @@ func (s *Server) handleClearAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]int64{"removed": removed})
+}
+
+// handleResources reports what this process is costing the machine.
+//
+// Read rather than admin: an operator diagnosing a slow host should not have
+// to be an administrator to see how much memory it is holding, and none of
+// these numbers say anything about what the host is monitoring.
+func (s *Server) handleResources(w http.ResponseWriter, r *http.Request) {
+	started := s.opts.StartedAt
+	if started.IsZero() {
+		// Better an uptime of zero than a nonsense one measured from the zero
+		// time, which would render as fifty-five years.
+		started = time.Now()
+	}
+	s.writeJSON(w, r, http.StatusOK,
+		observability.Snapshot(s.opts.Version, started, time.Now()))
+}
+
+// handleUpdates reports the running version against what has been published.
+func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Updates == nil {
+		s.writeJSON(w, r, http.StatusOK, updates.Status{
+			Current: s.opts.Version,
+			Error:   "this build has no update checker",
+		})
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, s.opts.Updates.Status(r.Context(), false))
+}
+
+// handleCheckUpdates fetches now rather than when the cache expires.
+func (s *Server) handleCheckUpdates(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Updates == nil {
+		s.writeError(w, r, http.StatusNotImplemented,
+			"this build has no update checker")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, s.opts.Updates.Status(r.Context(), true))
+}
+
+// handleRestart stops this host so that whatever supervises it starts it
+// again.
+//
+// mcpd cannot restart itself in any other sense: it is one process, and the
+// thing that brings it back is Docker's restart policy or the systemd unit.
+// So this exits cleanly and trusts the supervisor -- which is why Restart is
+// nil when nothing is supervising, and why this refuses rather than pretending
+// in that case. Stopping a host that nothing will restart is not a restart.
+func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Restart == nil {
+		s.writeError(w, r, http.StatusNotImplemented,
+			"nothing is supervising this host, so stopping it would not start "+
+				"it again. Restart it the way it was started.")
+		return
+	}
+
+	who := auth.FromContext(r.Context()).ID
+	if who == "" {
+		who = "unknown"
+	}
+	s.opts.Log.WarnContext(r.Context(), "restart requested from the dashboard",
+		"principal", who)
+
+	if err := s.opts.Restart("requested by " + who); err != nil {
+		s.writeError(w, r, http.StatusConflict, err.Error())
+		return
+	}
+	// Answered before the process goes, so the browser gets a reply rather
+	// than a dropped connection it would report as a failure.
+	s.writeJSON(w, r, http.StatusAccepted, map[string]string{
+		"status": "restarting",
+		"note": "mcpd is draining and will be started again by its supervisor. " +
+			"This page will reconnect on its own.",
+	})
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 	"github.com/spoked/mcpd/internal/tunnel"
+	"github.com/spoked/mcpd/internal/updates"
 )
 
 // Version is the host version, overridden at build time via -ldflags.
@@ -113,9 +114,18 @@ type App struct {
 
 	workers     sync.WaitGroup
 	stopWorkers context.CancelFunc
-	server      *http.Server
-	frontend    *http.Server
-	host        *mcphost.Host
+	// restartCh carries a dashboard-requested restart to Run, which drains
+	// and exits so the supervisor starts a new process.
+	restartCh chan string
+	// startedAt is when this process began, for the uptime the resources
+	// panel reports.
+	startedAt time.Time
+	// updates answers what the newest published release is, when the operator
+	// has switched checking on.
+	updates  *updates.Checker
+	server   *http.Server
+	frontend *http.Server
+	host     *mcphost.Host
 }
 
 // Option adjusts how the application is built.
@@ -182,6 +192,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	}
 
 	a := &App{
+		restartCh:  make(chan string, 1),
+		startedAt:  time.Now(),
 		metrics:    metrics,
 		cfg:        cfg,
 		log:        log,
@@ -437,6 +449,16 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	// operators reach the dashboard on an internal interface, and a firewall
 	// rule can only tell them apart if they are separate ports.
 	if boot.frontendEnabled {
+		a.updates = updates.New(Version, func() updates.Config {
+			ctx := context.Background()
+			return updates.Config{
+				Enabled:    a.settings.FieldBool(ctx, settings.KeyUpdatesEnabled),
+				Repository: a.settings.FieldString(ctx, settings.KeyUpdatesRepo),
+				Interval: time.Duration(
+					a.settings.Int(ctx, settings.KeyUpdatesInterval, 24)) * time.Hour,
+			}
+		}, nil, time.Now)
+
 		dashboard := admin.NewServer(admin.Options{
 			Log:        log.With("component", "dashboard"),
 			Verifier:   verifier,
@@ -448,6 +470,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			Health:     a.health,
 			Errors:     a.errors,
 			Version:    Version,
+			StartedAt:  a.startedAt,
+			Updates:    a.updates,
+			Restart:    a.RequestRestart,
 			Audit:      a.audit,
 			Logs:       a.logStream,
 			Metrics: func() http.Handler {
