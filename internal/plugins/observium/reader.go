@@ -60,6 +60,25 @@ const (
 	FilterID = "__id"
 )
 
+// outputOptions shape what comes back rather than narrowing what matches.
+//
+// The distinction matters because the two fail in opposite directions. A
+// backend that cannot apply a *filter* must refuse: silently dropping
+// "status = down" returns every device presented as though it matched, and a
+// model asked which devices are down then names all of them. A backend that
+// cannot honour an *option* has simply given a plainer answer to the right
+// question, and refusing would be refusing over presentation.
+//
+// expand_entities is the API asking Observium to resolve entity ids to names.
+// The database backend does not do it and nothing is wrong with that.
+var outputOptions = map[string]bool{
+	"expand_entities": true,
+	"cache_entities":  true,
+	"humanize":        true,
+	"nokeys":          true,
+	"fields":          true,
+}
+
 // Reader answers one entity query, however it reaches Observium.
 //
 // Both backends read the same estate and neither can write. What differs is

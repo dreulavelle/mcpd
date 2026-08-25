@@ -75,8 +75,20 @@ type entityQuery struct {
 	// query that ignores this reports interfaces that no longer exist.
 	deleted string
 	// filters maps the shared filter vocabulary onto this table's columns.
-	// A filter absent here is ignored for this entity.
+	// A filter absent here cannot be applied, which is refused rather than
+	// dropped -- see selectFrom.
 	filters map[string]string
+	// values translates a filter's API value into what the column actually
+	// holds, for the columns where the two disagree.
+	//
+	// They disagree more often than reading the API documentation suggests.
+	// The API takes status=up for a device; the column is a tinyint holding 1.
+	// The API documents sensor event "warn"; the enum's value is "warning".
+	// Sending the API's word straight to MySQL matches nothing and returns an
+	// empty result, which reads as "no devices are up".
+	values map[string]map[string]string
+	// clauses handle a filter that is not an equality against one column.
+	clauses map[string]func(value string) (string, []any)
 	// joinDevices adds a join to devices, for the entities whose useful
 	// filters -- hostname, location, group -- live on the device rather than
 	// on the row itself.
@@ -102,11 +114,26 @@ var schema = map[Entity]entityQuery{
 		filters: map[string]string{
 			FilterDeviceID: "device_id",
 			FilterHostname: "hostname",
-			FilterStatus:   "status",
 			FilterOS:       "os",
 			FilterLocation: "location",
 			FilterHardware: "hardware",
 			FilterVendor:   "vendor",
+		},
+		clauses: map[string]func(string) (string, []any){
+			// The API spells this up/down/disabled. The schema spells it as a
+			// tinyint status plus a separate disabled column, so one filter
+			// reaches two columns and cannot be a value translation.
+			FilterStatus: func(v string) (string, []any) {
+				switch strings.ToLower(v) {
+				case "up":
+					return "devices.status = 1 AND devices.disabled = 0", nil
+				case "down":
+					return "devices.status = 0 AND devices.disabled = 0", nil
+				case "disabled":
+					return "devices.disabled = 1", nil
+				}
+				return "", nil
+			},
 		},
 	},
 	EntityPorts: {
@@ -133,6 +160,24 @@ var schema = map[Entity]entityQuery{
 			FilterDeviceID: "ports.device_id",
 			FilterIfAlias:  "ports.ifAlias",
 			FilterHostname: "devices.hostname",
+			// ifOperStatus is an enum whose values are the API's words, so
+			// this one needs no translation.
+			FilterState: "ports.ifOperStatus",
+		},
+		clauses: map[string]func(string) (string, []any){
+			// The API has an errors flag; the schema has counters. "Currently
+			// reporting errors" is the rate being non-zero -- the cumulative
+			// counter is non-zero for any interface that has ever had one.
+			FilterErrors: func(string) (string, []any) {
+				return "(ports.ifInErrors_rate > 0 OR ports.ifOutErrors_rate > 0)", nil
+			},
+			// An alerting interface is one alert_table has a failing row for.
+			// There is no column on ports saying so, which is why this is a
+			// subquery rather than a mapping.
+			FilterAlerted: func(string) (string, []any) {
+				return "ports.port_id IN (SELECT entity_id FROM alert_table " +
+					"WHERE entity_type = 'port' AND alert_status = 0)", nil
+			},
 		},
 		joinDevices: true,
 	},
@@ -152,6 +197,12 @@ var schema = map[Entity]entityQuery{
 			FilterMetric:   "sensor_class",
 			FilterEvent:    "sensor_event",
 		},
+		values: map[string]map[string]string{
+			// The enum is ok/warning/alert/ignore. The API documents "warn",
+			// and so did this tool's own schema hint, so the value a model was
+			// told to send was one the column could never hold.
+			FilterEvent: {"warn": "warning"},
+		},
 	},
 	EntityAlerts: {
 		table:    "alert_table",
@@ -163,6 +214,29 @@ var schema = map[Entity]entityQuery{
 			"has_alerted", "state", "count",
 		},
 		filters: map[string]string{FilterDeviceID: "device_id"},
+		clauses: map[string]func(string) (string, []any){
+			// Zero is the failing state, not one. Observium's own alerting
+			// code writes alert_status = '0' beside last_message = 'Checks
+			// failed', which is the only place the meaning is stated -- the
+			// column is a bare tinyint and the API's word for it is "failed".
+			// Getting this inverted would report a healthy estate as broken
+			// and a broken one as fine.
+			FilterStatus: func(v string) (string, []any) {
+				switch strings.ToLower(v) {
+				case "failed":
+					return "alert_table.alert_status = 0", nil
+				case "ok":
+					return "alert_table.alert_status = 1", nil
+				case "all":
+					// A filter that matches everything, so that "all" is a
+					// real answer rather than an unsupported one.
+					return "1 = 1", nil
+				}
+				// delayed and suppressed are API states with no single column
+				// behind them. Refused by name rather than guessed at.
+				return "", nil
+			},
+		},
 	},
 	EntityAlertLog: {
 		// The API calls this alert_log; the table is eventlog. Naming the
@@ -174,6 +248,22 @@ var schema = map[Entity]entityQuery{
 			"entity_type", "entity_id", "severity",
 		},
 		filters: map[string]string{FilterDeviceID: "device_id"},
+		clauses: map[string]func(string) (string, []any){
+			// The tools take unix timestamps, because that is what the API
+			// documents. The column is a MySQL timestamp, so the conversion
+			// happens here rather than asking a model to format a datetime.
+			FilterFrom: func(v string) (string, []any) {
+				return "eventlog.timestamp >= FROM_UNIXTIME(?)", []any{v}
+			},
+			FilterTo: func(v string) (string, []any) {
+				return "eventlog.timestamp <= FROM_UNIXTIME(?)", []any{v}
+			},
+			FilterMessage: func(v string) (string, []any) {
+				// The API filters the log by text in the message, which is a
+				// substring match rather than an equality.
+				return "eventlog.message LIKE ?", []any{"%" + v + "%"}
+			},
+		},
 	},
 	EntityStorage: {
 		table:    "storage",
@@ -549,13 +639,40 @@ func (r *mysqlReader) selectFrom(ctx context.Context, q entityQuery, filters url
 			args = append(args, value)
 			continue
 		}
+		// An option shapes the answer rather than narrowing it, so a backend
+		// that cannot honour one has still answered the right question.
+		if outputOptions[name] {
+			continue
+		}
+
+		// A filter that is not an equality against one column.
+		if clause, ok := q.clauses[name]; ok {
+			sql, extra := clause(value)
+			if sql == "" {
+				return Page{}, fmt.Errorf("observium: %q is not a value %s "+
+					"accepts for %s", value, name, q.table)
+			}
+			where = append(where, sql)
+			args = append(args, extra...)
+			continue
+		}
+
 		column, ok := q.filters[name]
 		if !ok {
-			// Not every filter applies to every entity, and one that does not
-			// is a narrower question this backend cannot narrow -- not a wrong
-			// one. Dropping it silently would overstate the answer, so it is
-			// reported on the page instead.
-			continue
+			// Refused, not dropped.
+			//
+			// This used to continue, on the reasoning that a filter which does
+			// not apply gives a narrower answer rather than a wrong one. That
+			// is backwards. Dropping "status = down" does not narrow anything
+			// -- it returns every device, presented as though it had been
+			// filtered, and a model asked which devices are down then reports
+			// all of them. A filter nobody can apply has to be an error.
+			return Page{}, fmt.Errorf("observium: reading %s from the database "+
+				"cannot filter by %q, and answering without that filter would "+
+				"return everything as though it matched", q.table, name)
+		}
+		if translated, ok := q.values[name][strings.ToLower(value)]; ok {
+			value = translated
 		}
 		if !strings.Contains(column, ".") {
 			column = q.table + "." + column
