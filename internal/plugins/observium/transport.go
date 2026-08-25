@@ -67,9 +67,24 @@ func (t readOnlyTransport) roundTrip(req *http.Request) (*http.Response, error) 
 // write belongs to this plugin rather than to everything using that client.
 func readOnly(c *http.Client) *http.Client {
 	if c == nil {
-		return &http.Client{Transport: readOnlyTransport{}}
+		return &http.Client{Transport: readOnlyTransport{}, CheckRedirect: dontFollow}
 	}
 	clone := *c
 	clone.Transport = readOnlyTransport{base: c.Transport}
+	clone.CheckRedirect = dontFollow
 	return &clone
+}
+
+// dontFollow stops the client chasing redirects, so a redirect arrives as a
+// redirect rather than as whatever it eventually lands on.
+//
+// The API does not redirect. Something that does is not the API: an Observium
+// with no API bounces /api/v0 to its sign-in page, and following that produced
+// "stopped after 10 redirects" -- ten requests to say something the first
+// response already said, and a message naming a limit rather than a cause.
+//
+// Returning ErrUseLastResponse hands the 302 back with its Location intact,
+// which is what lets the error say what actually happened.
+func dontFollow(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }

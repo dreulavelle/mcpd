@@ -381,3 +381,41 @@ func TestSettings_BackendIsOfferedAsAnEdition(t *testing.T) {
 		t.Error("Community Edition should be the first option and the default")
 	}
 }
+
+// The API is a subscription feature, so the likeliest way to misconfigure this
+// integration is to pick the API against a Community Edition install. That
+// installation has no /api/v0 and bounces the request to its sign-in page.
+//
+// The client used to follow the bounce, ten times, and report "stopped after
+// 10 redirects" -- a message naming a limit rather than a cause, for the one
+// mistake most people will make.
+func TestRedirect_IsReportedAsTheWrongEdition(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Redirect(w, r, "/index.php?redirected=1", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	cfg := Config{Backend: BackendAPI, BaseURL: srv.URL, Token: "t"}
+	cfg.withDefaults()
+	c := NewClient(srv.Client(), cfg, "t", "", "",
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		time.Now, nil, func(string, time.Duration) {})
+
+	_, err := c.walk(context.Background(), "/devices", "devices", url.Values{})
+	if err == nil {
+		t.Fatal("a redirect is not a valid API response")
+	}
+	if !strings.Contains(err.Error(), "Community Edition") {
+		t.Errorf("the error should name the likely cause and the fix: %v", err)
+	}
+	if strings.Contains(err.Error(), "10 redirects") {
+		t.Errorf("the redirect was followed rather than reported: %v", err)
+	}
+	// One request, not ten. Chasing the bounce spends nine more round trips to
+	// learn what the first response already said.
+	if hits != 1 {
+		t.Errorf("made %d requests, want 1 — redirects must not be followed", hits)
+	}
+}
