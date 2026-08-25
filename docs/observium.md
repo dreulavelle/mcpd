@@ -1,36 +1,17 @@
 # Observium
 
-The plugin reads one Observium estate two ways, and which one you get is
-decided by the licence rather than by preference.
+**This integration needs Observium's REST API, which is a subscription
+feature.** Community Edition does not have one — `$config['api']['enable']` is
+not a switch that turns it on there — so a CE installation cannot be read at
+all. That is the first thing to check when nothing works.
 
-**The REST API is a subscription feature.** Community Edition does not have
-one — `$config['api']['enable']` is not a switch that turns it on there — so
-on CE the only way in is the database Observium writes to. That is what the
-`backend` setting selects, and it is why there are two of everything below.
+mcpd read CE directly from its MySQL database for a while, and that support was
+removed deliberately: it cost a second code path, a second set of filter
+translations, and a permanent dependency on a schema Observium does not version
+or promise anything about.
 
-The dashboard offers that choice as **Community Edition** or **Subscription**,
-because that is the question an operator can answer — nobody knows offhand
-whether they want the API or the database, and everybody knows which licence
-they bought. The stored values stay `database` and `api`: configuration should
-record what actually changes, and the two audiences are different enough that
-one string cannot serve both.
-
-| | API backend | Database backend |
-|---|---|---|
-| Needs | Subscription Edition | Any edition |
-| Reaches | `https://…/api/v0` | MySQL, port 3306 |
-| Credential | API token, or basic auth | A MySQL account |
-| Read-only proved by | A transport refusing every method but GET | The account's own grants, read back at startup |
-| Sees | What one Observium account may see | Everything in the schema |
-| Graph links | Yes | No — there is no web address to build them from |
-| Per-second rates | Yes | Yes |
-
-Neither can write. What differs is what each can *prove* about that, which is
-why `Describe` on both says which guarantee is theirs rather than both
-claiming "read-only" and leaving the difference implicit.
-
-What follows is what each does that a reader would not expect. The host's own
-contract is in [architecture.md](architecture.md).
+What follows is what the API does that a reader would not expect. The host's
+own contract is in [architecture.md](architecture.md).
 
 ## A collection is an object, not an array
 
@@ -199,112 +180,6 @@ widened:
 Widen `transport.go` by naming what is newly permitted, not by inverting the
 default.
 
-## The database backend
-
-### Read-only is proved by MySQL, not by us
-
-The API backend's guarantee is `transport.go` refusing every method but GET —
-structural, and impossible to talk past. There is no HTTP here, so that
-guarantee does not carry over. What replaces it is `checkGrants`, run at
-startup: the account's own grants come back from `SHOW GRANTS FOR
-CURRENT_USER()` and anything beyond `SELECT` refuses the connection.
-
-That is *stronger* in one way — the guarantee rests on the database server, so
-a bug in this package cannot widen it — and weaker in another, which is worth
-being plain about. A read-only API token is scoped to Observium's permission
-model and sees what one Observium account may see. A MySQL account with
-`SELECT` on the schema sees everything, including the SNMP community strings in
-`devices` and the password hashes in `users`, neither of which this reads.
-Least privilege is the operator's job here in a way it is not with a token.
-
-Two details in the check that exist because of specific failures:
-
-- The privilege list ends at `ON`. Everything after is a database name and a
-  host, so a schema called `create_backup` or a host called
-  `insert.example.com` would otherwise refuse a perfectly restricted account —
-  and a false refusal is one nobody can debug from the message.
-- `WITH GRANT OPTION` is checked against the whole line, because it is written
-  *after* the `ON` clause. Truncating first would miss the one privilege that
-  lets an account give itself the others.
-
-If `SHOW GRANTS` is itself refused — some managed MySQL services do this — the
-plugin logs a warning and continues. Refusing to start would be wrong, since
-the account may well be correctly restricted; saying nothing would be worse,
-because the guarantee is then simply absent.
-
-### The schema is not a contract
-
-Observium versions its API. It does not version its schema, and columns move
-between releases with no compatibility promise. So every column these queries
-name is checked against `information_schema` at startup, and a mismatch names
-the column. The alternative is a MySQL error inside the first tool call an
-assistant makes, about a table nobody reading it has heard of.
-
-Columns are named explicitly rather than `SELECT *`, for three reasons in this
-order: `devices` holds SNMP community strings and auth passwords, and a
-wildcard would hand them to a model; a wildcard makes a schema change silently
-alter what a tool returns; and naming them is what makes the startup check
-possible at all.
-
-### The API's words are not the schema's values
-
-This is the part that cannot be got right by reading documentation, and every
-line of it was wrong until the queries were run against a real installation.
-The failure mode is identical in each case: a query that runs, matches nothing,
-and returns an empty result which reads as an answer.
-
-| The API says | The schema holds | |
-|---|---|---|
-| `status=up` on a device | `status` is a `tinyint`, `1` | plus `disabled` as a separate column, so one filter reaches two |
-| `status=down` | `status = 0 AND disabled = 0` | "down" and "disabled" are different states |
-| `event=warn` on a sensor | the enum's value is `warning` | `warn` matches nothing |
-| `status=failed` on an alert | `alert_status = 0` | **zero is the failing state**, confirmed from Observium's own `alerts.inc.php`, which writes `'0'` beside `last_message = 'Checks failed'`. Inverting this reports a healthy estate as broken |
-| `state=up` on a port | `ifOperStatus`, an enum whose values *are* the API's words | the one that needs no translation |
-| `errors=1` on a port | no such column | the rate being non-zero — the cumulative counter is non-zero for any interface that has ever had one |
-| `alerted=1` on a port | no such column | a subquery against `alert_table` |
-| `timestamp_from` | `eventlog.timestamp` is a `timestamp` | the argument is a unix epoch, so `FROM_UNIXTIME` |
-
-Note what the tools return, which is a separate question: `status` comes back as
-`1`, not `"up"`, on **both** backends — the API serves the same row. The filter
-vocabulary is translated; the values are not rewritten, because doing so on one
-backend and not the other would make the same estate look different depending
-on the licence.
-
-### A filter that cannot be applied is refused
-
-Not dropped. The two are opposite mistakes, and the dangerous one looks
-harmless: dropping `status = down` does not narrow the result, it returns every
-device presented as though it had been filtered, and an assistant asked which
-devices are down then names all of them.
-
-**Output options are different and are ignored.** `expand_entities`,
-`humanize`, `fields` and their like shape what comes back rather than narrowing
-what matches, so a backend that cannot honour one has still answered the right
-question. `outputOptions` in `reader.go` is that list, and the distinction is
-the reason it exists.
-
-### Soft deletes
-
-Observium does not delete rows. A port pulled out of a switch stays in `ports`
-with `deleted = 1`, and the same is true of sensors, storage, memory pools and
-inventory. Every query filters on it — without that, the tools report hardware
-that no longer exists as though it were live.
-
-### Two tables, one entity
-
-The API serves IPv4 and IPv6 under one `addresses` key. The database keeps them
-in `ipv4_addresses` and `ipv6_addresses` with column names that differ for a
-reason, so `Read` queries both and concatenates, with the second half bounded
-by whatever headroom the first left. One ceiling, not two.
-
-### What comes back
-
-MySQL hands back `[]byte` for text and for anything it is unsure of, and a
-`[]byte` marshals to base64 — so a hostname would reach the model as
-`cm91dGVyLTEubG9jYWw=` without conversion. Numbers stay numbers, because a
-model asked whether a disk is over 90 per cent should be comparing against a
-number rather than against text. Timestamps become RFC 3339 in UTC.
-
 ## What is cached, and what is never
 
 The split is between what an operator configures and what the poller writes. A
@@ -328,29 +203,25 @@ memory.
 
 ## Testing against a real installation
 
-`integration_test.go` runs the whole backend against a live Observium and
-skips unless one is supplied:
+`integration_test.go` runs the whole plugin against a live Observium and skips
+unless one is supplied:
 
 ```bash
-OBSERVIUM_TEST_DB_HOST=… OBSERVIUM_TEST_DB_NAME=observium OBSERVIUM_TEST_DB_USER=mcpd_ro OBSERVIUM_TEST_DB_PASSWORD=… go test ./internal/plugins/observium/ -run Integration -v
+OBSERVIUM_TEST_URL=https://observium.example.com \
+OBSERVIUM_TEST_TOKEN=… \
+go test ./internal/plugins/observium/ -run Integration -v
 ```
 
-It is worth keeping because the half of this package a fake cannot reach is the
-half that was wrong. The grant check, the schema check and every filter above
-are claims about somebody else's database; a fake agrees with whatever the code
-believes.
+**It is worth more than the rest of the suite put together, and it has never
+been run.** The database backend this replaced had every one of its filters
+broken — `status=up` matched nothing, `state=up` was accepted and silently
+dropped, an alert state was inverted — and all of it looked correct until these
+tests ran against real data. Each failed the same way: a request that succeeds,
+matches nothing, and returns an empty result which reads as an answer.
 
-Setting up the account it needs:
-
-```sql
-CREATE USER 'mcpd_ro'@'<mcpd host>' IDENTIFIED BY '…';
-GRANT SELECT ON observium.* TO 'mcpd_ro'@'<mcpd host>';
-```
-
-If MariaDB is bound to `127.0.0.1` — the Debian default — and mcpd is on
-another machine, it cannot reach it. Either bind to the LAN address and grant
-from the one host, or tunnel; the first is simpler and puts a database on the
-network, so it is a decision rather than a step.
+The API's documented vocabulary has not been checked against what a live
+instance actually accepts. Run this first against any new deployment, and treat
+a filter that returns zero as a bug until proven otherwise.
 
 ## Discovering the rest of the API
 

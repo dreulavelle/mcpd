@@ -62,7 +62,7 @@ func TestEndToEnd_PanicIsReportedAndScrubbed(t *testing.T) {
 	c := newCollector(t)
 	r, err := NewErrorReporter(ErrorReporterOptions{
 		DSN: c.dsn(), Environment: "test", Release: "v1.2.3",
-		IncludeMessages: true, Log: quietLog(),
+		IncludeMessages: true, Synchronous: true, Log: quietLog(),
 	})
 	if err != nil {
 		t.Fatalf("NewErrorReporter: %v", err)
@@ -109,7 +109,7 @@ github.com/spoked/mcpd/internal/plugins/observium.(*Client).walk(0xc0001)
 func TestEndToEnd_HostnameNeverLeaves(t *testing.T) {
 	c := newCollector(t)
 	r, _ := NewErrorReporter(ErrorReporterOptions{
-		DSN: c.dsn(), IncludeMessages: true, Log: quietLog(),
+		DSN: c.dsn(), IncludeMessages: true, Synchronous: true, Log: quietLog(),
 	})
 	if r == nil {
 		t.Fatal("no reporter")
@@ -143,7 +143,7 @@ func TestEndToEnd_HostnameNeverLeaves(t *testing.T) {
 func TestEndToEnd_ChosenLabelIsSent(t *testing.T) {
 	c := newCollector(t)
 	r, _ := NewErrorReporter(ErrorReporterOptions{
-		DSN: c.dsn(), InstanceLabel: "site-42", Log: quietLog(),
+		DSN: c.dsn(), InstanceLabel: "site-42", Synchronous: true, Log: quietLog(),
 	})
 	if r == nil {
 		t.Fatal("no reporter")
@@ -161,7 +161,7 @@ func TestEndToEnd_ChosenLabelIsSent(t *testing.T) {
 func TestEndToEnd_MessagesWithheld(t *testing.T) {
 	c := newCollector(t)
 	r, _ := NewErrorReporter(ErrorReporterOptions{
-		DSN: c.dsn(), IncludeMessages: false, Log: quietLog(),
+		DSN: c.dsn(), IncludeMessages: false, Synchronous: true, Log: quietLog(),
 	})
 	if r == nil {
 		t.Fatal("no reporter")
@@ -177,5 +177,58 @@ func TestEndToEnd_MessagesWithheld(t *testing.T) {
 	}
 	if !strings.Contains(sent, "mcp.request") {
 		t.Error("the component tag was lost, and it is not estate data")
+	}
+}
+
+// The default transport queues and drops rather than blocking, and Flush
+// reports on the batch rather than on one event -- so the ordinary path can
+// return success having delivered nothing. That is the right trade for a crash
+// nobody is waiting on: a monitoring host must not stall because a collector
+// is slow.
+//
+// It is the wrong trade anywhere an answer has to be trustworthy, which is why
+// these tests and TestEvent ask for synchronous delivery. Before they did, the
+// suite failed roughly one run in a hundred with nothing transmitted and Flush
+// having returned true.
+func TestEndToEnd_SynchronousDeliveryIsDeterministic(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		c := newCollector(t)
+		r, err := NewErrorReporter(ErrorReporterOptions{
+			DSN: c.dsn(), Synchronous: true, Log: quietLog(),
+		})
+		if err != nil || r == nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		r.CapturePanic("boom", nil, "test")
+		if c.transmitted() == "" {
+			t.Fatalf("run %d: nothing was transmitted, and a synchronous send "+
+				"has already returned by the time CapturePanic does", i)
+		}
+	}
+}
+
+// An operator who clicks "send a test event" is owed a real answer, so this
+// path does not use the lossy transport either.
+func TestTestEvent_ActuallyReachesTheCollector(t *testing.T) {
+	c := newCollector(t)
+	r, err := NewErrorReporter(ErrorReporterOptions{DSN: c.dsn(), Log: quietLog()})
+	if err != nil || r == nil {
+		t.Fatalf("NewErrorReporter: %v", err)
+	}
+
+	if err := r.TestEvent(); err != nil {
+		t.Fatalf("TestEvent: %v", err)
+	}
+	if !strings.Contains(c.transmitted(), "test event") {
+		t.Errorf("TestEvent reported success but nothing arrived:\n%s", c.transmitted())
+	}
+}
+
+// Off means off, and saying so beats a silent no-op an operator reads as
+// working.
+func TestTestEvent_SaysSoWhenReportingIsOff(t *testing.T) {
+	var r *ErrorReporter
+	if err := r.TestEvent(); err == nil {
+		t.Fatal("a disabled reporter reported a successful test event")
 	}
 }

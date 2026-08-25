@@ -365,7 +365,57 @@ func (c *Client) send(ctx context.Context, target string) ([]byte, int, error) {
 // building graph URLs.
 func (c *Client) Root() string { return c.root }
 
-// --- Reader ----------------------------------------------------------------
+// Entity is one kind of thing Observium records.
+//
+// A name rather than a path, because the API does not name its endpoints and
+// its response keys the same way -- /address answers under "addresses",
+// /alert_log under "alert_log". One constant per thing, resolved through
+// apiPaths, keeps that irregularity in one table instead of at every call
+// site.
+type Entity string
+
+const (
+	EntityDevices    Entity = "devices"
+	EntityPorts      Entity = "ports"
+	EntitySensors    Entity = "sensors"
+	EntityAlerts     Entity = "alerts"
+	EntityAlertLog   Entity = "alert_log"
+	EntityStorage    Entity = "storage"
+	EntityMempools   Entity = "mempools"
+	EntityProcessors Entity = "processors"
+	EntityInventory  Entity = "inventory"
+	EntityNeighbours Entity = "neighbours"
+	EntityAddresses  Entity = "addresses"
+	EntityVLANs      Entity = "vlans"
+)
+
+// Filter names are the API's own, named here so a typo is a compile error
+// rather than a filter that silently matches everything.
+const (
+	FilterDeviceID = "device_id"
+	FilterHostname = "hostname"
+	FilterStatus   = "status"
+	FilterOS       = "os"
+	FilterLocation = "location"
+	FilterHardware = "hardware"
+	FilterVendor   = "vendor"
+	FilterGroup    = "group"
+	FilterState    = "state"
+	FilterErrors   = "errors"
+	FilterAlerted  = "alerted"
+	FilterIfAlias  = "ifAlias"
+	FilterMetric   = "metric"
+	FilterEvent    = "event"
+	FilterMessage  = "message"
+	FilterFrom     = "timestamp_from"
+	FilterTo       = "timestamp_to"
+	FilterModel    = "entPhysicalModelName"
+	FilterSerial   = "entPhysicalSerialNum"
+	// FilterID selects one entity by its own primary key. The API expresses
+	// this as a path segment rather than a query parameter, which is why it is
+	// named here rather than being one of the filters above.
+	FilterID = "__id"
+)
 
 // apiPaths maps an entity onto the endpoint that serves it and the envelope
 // key its rows arrive under.
@@ -387,7 +437,7 @@ var apiPaths = map[Entity]struct{ path, key string }{
 	EntityVLANs:      {"/vlans", "vlans"},
 }
 
-// Read implements Reader over the REST API.
+// Read fetches one entity collection.
 func (c *Client) Read(ctx context.Context, entity Entity, filters url.Values, limit int) (Page, error) {
 	route, ok := apiPaths[entity]
 	if !ok {
@@ -431,13 +481,9 @@ func (c *Client) Probe(ctx context.Context) error {
 	return err
 }
 
-// Describe says how this backend reaches Observium and what its read-only
-// guarantee rests on.
+// Describe says where this instance reads from and what its read-only
+// guarantee rests on, for the startup log and the health report.
 func (c *Client) Describe() string {
-	return "the subscription API at " + redactURL(c.root) +
+	return "the API at " + redactURL(c.root) +
 		", restricted to reads by a transport that refuses every method but GET"
 }
-
-// Close satisfies Reader. The API backend holds nothing that needs releasing;
-// the HTTP client belongs to the host.
-func (c *Client) Close() error { return nil }

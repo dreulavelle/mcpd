@@ -56,6 +56,16 @@ type ErrorReporterOptions struct {
 	// the default: a trace carries request paths and timings that say more
 	// about what the customer is doing than about whether mcpd is broken.
 	TracesSampleRate float64
+	// Synchronous sends each event on the calling goroutine instead of queuing
+	// it.
+	//
+	// Off in production, and that is not a performance preference. The default
+	// transport drops an event rather than block when its buffer is full,
+	// which is the right trade for crash reporting -- a monitoring host must
+	// not stall because a collector is slow. The cost is that a send is
+	// best-effort and Flush can return true having delivered nothing, so
+	// anywhere the answer has to be trustworthy asks for this instead.
+	Synchronous bool
 	// Log receives what this package decides, so an operator can see reporting
 	// start and stop in their own log.
 	Log *slog.Logger
@@ -87,8 +97,14 @@ func NewErrorReporter(opts ErrorReporterOptions) (*ErrorReporter, error) {
 		return nil, nil
 	}
 
+	var transport sentry.Transport
+	if opts.Synchronous {
+		transport = sentry.NewHTTPSyncTransport()
+	}
+
 	client, err := sentry.NewClient(sentry.ClientOptions{
 		Dsn:         opts.DSN,
+		Transport:   transport,
 		Environment: opts.Environment,
 		Release:     opts.Release,
 		// The label, or nothing. Sentry fills this with os.Hostname() when it
@@ -326,15 +342,42 @@ func (r *ErrorReporter) Enabled() bool { return r != nil }
 //
 // It carries no estate data by construction: a fixed sentence and nothing
 // else.
+//
+// Sent through a transport of its own, synchronously. The reporter's usual one
+// queues and drops rather than blocking, and Flush reports on the batch rather
+// than on this event -- so the ordinary path can return success having
+// delivered nothing. That is the correct trade for a crash nobody is waiting
+// on and the wrong one for a person who clicked a button and is owed a real
+// answer.
 func (r *ErrorReporter) TestEvent() error {
 	if r == nil {
 		return fmt.Errorf("error reporting is off; set a DSN first")
 	}
-	r.hub.CaptureMessage("mcpd test event — error reporting is configured correctly")
-	if !r.hub.Flush(10 * time.Second) {
-		return fmt.Errorf("the event was queued but the collector did not " +
-			"acknowledge it within ten seconds; check the DSN and that this " +
-			"machine can reach it")
+
+	client, err := sentry.NewClient(sentry.ClientOptions{
+		Dsn:         r.opts.DSN,
+		Environment: r.opts.Environment,
+		Release:     r.opts.Release,
+		ServerName:  serverName(r.opts.InstanceLabel),
+		Transport:   sentry.NewHTTPSyncTransport(),
+		// Messages are kept whatever the instance is configured for. The only
+		// event this client will ever send is the constant below, which
+		// carries nothing about anybody's estate -- and withholding it would
+		// deliver an event with no text in it, which is indistinguishable in
+		// a collector from one that did not arrive. The point of the button is
+		// to be recognisable at the other end.
+		BeforeSend: scrubEvent(true, r.opts.InstanceLabel),
+	})
+	if err != nil {
+		return fmt.Errorf("observium: the DSN is not usable: %w", err)
+	}
+	defer client.Close()
+
+	hub := sentry.NewHub(client, sentry.NewScope())
+	hub.CaptureMessage("mcpd test event — error reporting is configured correctly")
+	if !hub.Flush(15 * time.Second) {
+		return fmt.Errorf("the collector did not accept the event within " +
+			"fifteen seconds; check the DSN and that this machine can reach it")
 	}
 	return nil
 }

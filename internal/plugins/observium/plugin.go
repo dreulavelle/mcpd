@@ -10,15 +10,8 @@ import (
 
 // Plugin is the Observium integration.
 type Plugin struct {
-	deps plugins.Deps
-	cfg  Config
-	// reader is whichever backend this instance uses. The tools do not know
-	// which, and must not: an answer from the database and an answer from the
-	// API are the same estate read two ways.
-	reader Reader
-	// client is the API backend when that is the one in use, and nil
-	// otherwise. Held separately only for graph URLs, which are built from the
-	// web root and are therefore an API-backend idea.
+	deps   plugins.Deps
+	cfg    Config
 	client *Client
 
 	// configured reports whether an address and a credential were supplied. A
@@ -38,7 +31,6 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 		return nil, err
 	}
 	token, user, pass := cfg.Token, cfg.Username, cfg.Password
-	dbPass := cfg.DBPassword
 	configured := cfg.Configured()
 
 	httpClient := deps.HTTP
@@ -52,7 +44,7 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 
 	// Credentials are not kept on the config the plugin holds, so a dump of it
 	// -- a log line, an error, the settings page -- cannot carry one.
-	cfg.Token, cfg.Username, cfg.Password, cfg.DBPassword = "", "", "", ""
+	cfg.Token, cfg.Username, cfg.Password = "", "", ""
 
 	now := deps.Now
 	if now == nil {
@@ -75,23 +67,12 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 		}
 	}
 
-	p := &Plugin{deps: deps, cfg: cfg, configured: configured}
-
-	switch cfg.EffectiveBackend() {
-	case BackendDatabase:
-		// Built even when unconfigured, so that every path below has a reader
-		// rather than a nil check. It will fail to connect, which is what
-		// Check reports and what the settings form exists to fix.
-		reader, err := newMySQLReader(cfg, dbPass, deps.Log, now, cache, observe)
-		if err != nil {
-			return nil, err
-		}
-		p.reader = reader
-	default:
-		client := NewClient(httpClient, cfg, token, user, pass, deps.Log, now, cache, observe)
-		p.client, p.reader = client, client
-	}
-	return p, nil
+	return &Plugin{
+		deps:       deps,
+		cfg:        cfg,
+		configured: configured,
+		client:     NewClient(httpClient, cfg, token, user, pass, deps.Log, now, cache, observe),
+	}, nil
 }
 
 // Descriptor implements plugins.Plugin.
@@ -113,40 +94,32 @@ func (p *Plugin) Descriptor() plugins.Descriptor {
 
 // Start implements plugins.Starter.
 //
-// Probing at startup means a wrong credential is a message on the dashboard
-// rather than a confusing failure inside the first tool call an assistant
-// makes. What the probe proves differs by backend -- the API's is one cheap
-// request, the database's also reads back the account's grants and checks the
-// schema -- and each says so in Describe.
+// One device, one page: the cheapest authenticated call there is. It proves
+// the address resolves, TLS works, the credential is accepted and the response
+// is the API's JSON rather than a sign-in page, which are four things a wrong
+// configuration could be. Doing it at startup makes a wrong token a message on
+// the dashboard rather than a confusing failure inside the first tool call an
+// assistant makes.
 func (p *Plugin) Start(ctx context.Context) error {
 	if !p.configured {
 		// Not an error the host should die on. The plugin is mounted, its
 		// settings form is on the Plugins page, and Check says what is
 		// missing -- which is the whole path someone follows to fix it.
-		p.deps.Log.Info("observium is not configured yet; add its connection "+
-			"details on the Plugins page", "backend", p.cfg.EffectiveBackend())
+		p.deps.Log.Info("observium is not configured yet; add its address and " +
+			"an API token on the Plugins page")
 		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
 	defer cancel()
 
-	if err := p.reader.Probe(ctx); err != nil {
+	if err := p.client.Probe(ctx); err != nil {
 		p.note(err)
 		return err
 	}
 	p.note(nil)
-	p.deps.Log.Info("observium ready", "reading", p.reader.Describe())
+	p.deps.Log.Info("observium ready", "reading", p.client.Describe())
 	return nil
-}
-
-// Shutdown implements plugins.Stopper, releasing the database pool when the
-// database backend is the one in use.
-func (p *Plugin) Shutdown(context.Context) error {
-	if p.reader == nil {
-		return nil
-	}
-	return p.reader.Close()
 }
 
 // Check implements plugins.Checker.
@@ -163,10 +136,6 @@ func (p *Plugin) Check(_ context.Context) plugins.Health {
 
 	switch {
 	case !p.configured:
-		if p.cfg.EffectiveBackend() == BackendDatabase {
-			return plugins.Degraded("not configured yet — set the database " +
-				"host, name and username below, then restart")
-		}
 		return plugins.Degraded("not configured yet — set the address and " +
 			"either an API token or a username and password below, then restart")
 	case checked.IsZero():

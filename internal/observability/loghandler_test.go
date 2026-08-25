@@ -84,7 +84,7 @@ func TestContextHandler_KeepsRedactionWorking(t *testing.T) {
 func TestBreadcrumbs_WarningsAndErrorsAreRecorded(t *testing.T) {
 	c := newCollector(t)
 	r, err := NewErrorReporter(ErrorReporterOptions{
-		DSN: c.dsn(), IncludeMessages: true, Log: quietLog(),
+		DSN: c.dsn(), IncludeMessages: true, Synchronous: true, Log: quietLog(),
 	})
 	if err != nil || r == nil {
 		t.Fatalf("NewErrorReporter: %v", err)
@@ -124,7 +124,7 @@ func TestBreadcrumbs_WarningsAndErrorsAreRecorded(t *testing.T) {
 func TestBreadcrumbs_AreScrubbed(t *testing.T) {
 	c := newCollector(t)
 	r, _ := NewErrorReporter(ErrorReporterOptions{
-		DSN: c.dsn(), IncludeMessages: true, Log: quietLog(),
+		DSN: c.dsn(), IncludeMessages: true, Synchronous: true, Log: quietLog(),
 	})
 	if r == nil {
 		t.Fatal("no reporter")
