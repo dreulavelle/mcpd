@@ -357,3 +357,80 @@ func (c *Client) send(ctx context.Context, target string) ([]byte, int, error) {
 // Root reports the configured web root, for the health message and for
 // building graph URLs.
 func (c *Client) Root() string { return c.root }
+
+// --- Reader ----------------------------------------------------------------
+
+// apiPaths maps an entity onto the endpoint that serves it and the envelope
+// key its rows arrive under.
+//
+// Observium names the key after the endpoint rather than uniformly, so both
+// halves are recorded rather than one being derived from the other.
+var apiPaths = map[Entity]struct{ path, key string }{
+	EntityDevices:    {"/devices", "devices"},
+	EntityPorts:      {"/ports", "ports"},
+	EntitySensors:    {"/sensors", "sensors"},
+	EntityAlerts:     {"/alerts", "alerts"},
+	EntityAlertLog:   {"/alert_log", "alert_log"},
+	EntityStorage:    {"/storage", "storage"},
+	EntityMempools:   {"/mempools", "mempools"},
+	EntityProcessors: {"/processors", "processors"},
+	EntityInventory:  {"/inventory", "inventory"},
+	EntityNeighbours: {"/neighbours", "neighbours"},
+	EntityAddresses:  {"/address", "addresses"},
+	EntityVLANs:      {"/vlans", "vlans"},
+}
+
+// Read implements Reader over the REST API.
+func (c *Client) Read(ctx context.Context, entity Entity, filters url.Values, limit int) (Page, error) {
+	route, ok := apiPaths[entity]
+	if !ok {
+		return Page{}, fmt.Errorf("observium: no API endpoint for %s", entity)
+	}
+
+	path := route.path
+	params := url.Values{}
+	for name, values := range filters {
+		if len(values) == 0 || values[0] == "" {
+			continue
+		}
+		// The API selects one entity by path segment rather than by filter,
+		// which is why FilterID is spelled differently from the rest.
+		if name == FilterID {
+			path += "/" + url.PathEscape(values[0])
+			continue
+		}
+		params.Set(name, values[0])
+	}
+
+	client := c
+	if limit > 0 && limit < c.cfg.MaxItems {
+		narrowed := *c
+		narrowed.cfg.MaxItems = limit
+		client = &narrowed
+	}
+	return client.Get(ctx, path, route.key, params)
+}
+
+// Probe makes the cheapest authenticated call there is: one device, one page.
+//
+// It establishes that the address resolves, TLS works, the credential is
+// accepted, and the response is the API's JSON rather than a login page --
+// which is four things a wrong configuration could be, told apart at startup
+// rather than inside the first tool call an assistant makes.
+func (c *Client) Probe(ctx context.Context) error {
+	probe := url.Values{}
+	probe.Set("pagesize", "1")
+	_, err := c.walk(ctx, "/devices", "devices", probe)
+	return err
+}
+
+// Describe says how this backend reaches Observium and what its read-only
+// guarantee rests on.
+func (c *Client) Describe() string {
+	return "the subscription API at " + redactURL(c.root) +
+		", restricted to reads by a transport that refuses every method but GET"
+}
+
+// Close satisfies Reader. The API backend holds nothing that needs releasing;
+// the HTTP client belongs to the host.
+func (c *Client) Close() error { return nil }

@@ -101,24 +101,55 @@ func TestTransport_ComparesTheDecodedPath(t *testing.T) {
 
 // A configuration that is present and wrong should fail here rather than
 // later, further away, with a worse message.
+//
+// Every case names its backend. An empty one resolves to the database -- the
+// only backend a Community Edition installation can use -- so a test about the
+// API's address that did not say so would be validating the wrong half.
 func TestConfigValidate(t *testing.T) {
+	api := func(c Config) Config { c.Backend = BackendAPI; return c }
+	db := func(c Config) Config {
+		c.Backend = BackendDatabase
+		c.PageSize, c.MaxItems, c.RequestsPerSecond = 10, 10, 1
+		if c.DBPort == 0 {
+			c.DBPort = defaultDBPort
+		}
+		return c
+	}
+
 	for _, tc := range []struct {
 		name string
 		cfg  Config
 		want string
 	}{
 		{"unconfigured is not an error", Config{}, ""},
-		{"api path in the address", Config{BaseURL: "https://o.example.com/api/v0"}, "web root"},
-		{"credentials in the address", Config{BaseURL: "https://u:p@o.example.com"}, "not in the address"},
-		{"bad scheme", Config{BaseURL: "ftp://o.example.com"}, "http or https"},
-		{"username without password", Config{
+		{"unknown backend", Config{Backend: "carrier pigeon"}, "backend must be"},
+
+		{"api path in the address", api(Config{BaseURL: "https://o.example.com/api/v0"}), "web root"},
+		{"credentials in the address", api(Config{BaseURL: "https://u:p@o.example.com"}), "not in the address"},
+		{"bad scheme", api(Config{BaseURL: "ftp://o.example.com"}), "http or https"},
+		{"username without password", api(Config{
 			BaseURL: "https://o.example.com", Username: "u",
 			PageSize: 10, MaxItems: 10, RequestsPerSecond: 1,
-		}, "needs a password"},
-		{"valid with token", Config{
+		}), "needs a password"},
+		{"valid with token", api(Config{
 			BaseURL: "https://o.example.com", Token: "t",
 			PageSize: 10, MaxItems: 10, RequestsPerSecond: 1,
-		}, ""},
+		}), ""},
+
+		// The database half. A partly-filled connection is the case worth
+		// catching: it looks configured and cannot connect.
+		{"database unconfigured is not an error", db(Config{}), ""},
+		{"database missing its name", db(Config{DBHost: "10.0.0.5", DBUser: "ro"}), "database name"},
+		{"database missing its user", db(Config{DBHost: "10.0.0.5", DBName: "observium"}), "username"},
+		{"database host given as a URL", db(Config{
+			DBHost: "mysql://10.0.0.5", DBName: "observium", DBUser: "ro",
+		}), "not a URL"},
+		{"database port out of range", db(Config{
+			DBHost: "10.0.0.5", DBName: "observium", DBUser: "ro", DBPort: 99999,
+		}), "not a port"},
+		{"valid database", db(Config{
+			DBHost: "10.0.0.5", DBName: "observium", DBUser: "ro",
+		}), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.cfg.Validate()
@@ -224,7 +255,10 @@ func TestGraphURLs_UndocumentedKindRefusesRatherThanGuessing(t *testing.T) {
 
 func testPlugin(t *testing.T, base string) *Plugin {
 	t.Helper()
-	cfg := Config{BaseURL: base, Token: "t"}
+	// Explicitly the API backend: an empty backend resolves to the database,
+	// which is the right default for an operator and the wrong one for a test
+	// about graph links.
+	cfg := Config{Backend: BackendAPI, BaseURL: base, Token: "t"}
 	cfg.withDefaults()
 	p, err := New(plugins.Deps{
 		Instance: "observium",

@@ -83,7 +83,23 @@ type graphResult struct {
 func (p *Plugin) graphURLs(_ context.Context, in graphArgs) (graphResult, error) {
 	if !p.configured {
 		return graphResult{}, fmt.Errorf("observium: not configured yet — set " +
-			"the address and a credential on the Plugins page")
+			"its connection details on the Plugins page")
+	}
+	// A graph URL is a link to Observium's web interface, and the database
+	// backend is not configured with one -- it knows a MySQL host, which is
+	// not somewhere a browser can render a graph. Saying so beats building a
+	// link to nothing.
+	//
+	// This is the one place the two backends genuinely differ in what they can
+	// offer, and it is worth being plain about the trade: the database backend
+	// gives up these links and gains per-second rates on every interface,
+	// which is the thing the images were being consulted for.
+	if p.client == nil {
+		return graphResult{}, fmt.Errorf(
+			"observium: this instance reads the database directly, so there is " +
+				"no web address to build graph links from. The interface tool's " +
+				"_rate fields carry the current per-second figures those graphs " +
+				"would show")
 	}
 	kind := strings.ToLower(strings.TrimSpace(in.Kind))
 	if kind == "" {
