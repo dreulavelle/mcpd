@@ -295,7 +295,7 @@ dashboard can change, and a secret in it is a reference rather than a value.
 |---|---|---|
 | `echo` | Nothing real — a worked example, including an approval-gated write | Bundled |
 | `cnmaestro` | Cambium cnMaestro: Wi-Fi and fixed-wireless estates | Read-only |
-| `observium` | Observium: SNMP monitoring — devices, interfaces, sensors, capacity, topology, alerts | Read-only |
+| `observium` | Observium: SNMP monitoring — devices, interfaces, sensors, capacity, topology, alerts. Reads the subscription API, or the database directly on Community Edition | Read-only |
 
 A remote MCP server somebody else runs is the third kind. Paste its
 `server.json`, or find it in the dashboard's catalogue of the official MCP

@@ -22,15 +22,27 @@ func Type() plugins.Type {
 			"interfaces, sensors, capacity, topology and alerts. Read-only.",
 		Settings: []settings.Field{
 			{
+				Key: "backend", Label: "How to read it", Kind: settings.KindEnum,
+				Options: []string{string(BackendDatabase), string(BackendAPI)},
+				Default: string(BackendDatabase),
+				Help: "The REST API is a subscription feature — Community " +
+					"Edition does not have one, so reading the database is the " +
+					"only option there. If you are on a subscription, the API " +
+					"is the better choice: it is a versioned contract, and its " +
+					"token carries one Observium account's permissions rather " +
+					"than everything in the schema.",
+			},
+			{
 				Key: "base_url", Label: "Address", Kind: settings.KindString,
-				Required:    true,
 				Placeholder: "https://observium.internal.example.com",
+				ShowWhen:    apiOnly,
 				Help: "The web root — the address you type to reach Observium, " +
 					"without /api/v0 on the end. Observium is normally on your " +
 					"own network, so there is no default that could be right.",
 			},
 			{
 				Key: "token", Label: "API token", Kind: settings.KindSecret,
+				ShowWhen: apiOnly,
 				Help: "From Profile > API tokens > Manage. Preferred over a " +
 					"username and password: it can be issued read-only, it " +
 					"carries only the permissions of the account that made it, " +
@@ -39,13 +51,15 @@ func Type() plugins.Type {
 			},
 			{
 				Key: "username", Label: "Username", Kind: settings.KindString,
+				ShowWhen: apiOnly,
 				Help: "Only for an installation too old for API tokens, where " +
 					"the API takes HTTP basic auth instead. Leave both this and " +
 					"the password empty if you set a token — the token wins.",
 			},
 			{
 				Key: "password", Label: "Password", Kind: settings.KindSecret,
-				Help: "The other half of basic auth. Stored encrypted.",
+				ShowWhen: apiOnly,
+				Help:     "The other half of basic auth. Stored encrypted.",
 			},
 			{
 				Key: "max_items", Label: "Most items per answer", Kind: settings.KindInt,
@@ -70,6 +84,41 @@ func Type() plugins.Type {
 					"likely to overrun the upstream. Observium is usually one " +
 					"PHP application over one database on somebody's own " +
 					"hardware, so this is deliberately modest.",
+			},
+			{
+				Key: "db_host", Label: "Database host", Kind: settings.KindString,
+				Placeholder: "10.0.0.5", ShowWhen: databaseOnly,
+				Help: "Where Observium's MySQL server is. A hostname or " +
+					"address, not a URL. If mcpd and Observium are on the same " +
+					"machine this is the address the container can reach it on, " +
+					"which is usually not 127.0.0.1.",
+			},
+			{
+				Key: "db_port", Label: "Database port", Kind: settings.KindInt,
+				Default: defaultDBPort, Min: intPtr(1), Max: intPtr(65535),
+				ShowWhen: databaseOnly,
+				Help:     "MySQL's, unless somebody moved it.",
+			},
+			{
+				Key: "db_name", Label: "Database name", Kind: settings.KindString,
+				Placeholder: "observium", ShowWhen: databaseOnly,
+				Help: "The schema Observium writes to. Usually observium.",
+			},
+			{
+				Key: "db_user", Label: "Database username", Kind: settings.KindString,
+				ShowWhen: databaseOnly,
+				Help: "Make it a separate account with SELECT and nothing else. " +
+					"mcpd reads the account's own grants at startup and refuses " +
+					"to connect with one that can write, so this is checked " +
+					"rather than trusted. Narrow it further if you can — " +
+					"GRANT SELECT ON observium.* is simple, but the devices " +
+					"table holds SNMP community strings and the users table " +
+					"holds password hashes, and neither is something this reads.",
+			},
+			{
+				Key: "db_password", Label: "Database password", Kind: settings.KindSecret,
+				ShowWhen: databaseOnly,
+				Help:     "Stored encrypted.",
 			},
 			{
 				Key: "state_cache_seconds", Label: "Reuse readings for",
@@ -105,6 +154,17 @@ func Type() plugins.Type {
 }
 
 func intPtr(i int) *int { return &i }
+
+// Which half of the form belongs to which backend.
+//
+// Hiding is presentation only: a value left behind by a backend somebody
+// switched away from is still stored, and Config.Validate is what decides it
+// does not matter. These exist so an operator sees the five fields their
+// licence actually allows rather than all eleven.
+var (
+	apiOnly      = &settings.ShowWhen{Field: "backend", Equals: []string{string(BackendAPI)}}
+	databaseOnly = &settings.ShowWhen{Field: "backend", Equals: []string{string(BackendDatabase)}}
+)
 
 // decode turns resolved settings into a Config.
 //
