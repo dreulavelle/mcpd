@@ -88,6 +88,22 @@ func redactURL(raw string) string {
 // account cannot read is reported as absent rather than forbidden, which is
 // good security and a confusing thing to be told.
 func explainRequestFailure(status int, path string, body []byte) error {
+	// A redirect is the most informative failure this integration gets, and it
+	// has one overwhelmingly likely cause. The API is a subscription feature;
+	// a Community Edition installation has no /api/v0 at all and bounces the
+	// request to its sign-in page. Saying "unexpected status 302" there would
+	// be true and useless -- the operator has picked the wrong edition, and
+	// there is a working setting one dropdown away.
+	if status >= 300 && status < 400 {
+		return fmt.Errorf("observium: %s redirected instead of answering, "+
+			"which is what an Observium with no API does -- it is sending the "+
+			"request to its sign-in page. The REST API is a subscription "+
+			"feature, so if this is Community Edition, change \"Which "+
+			"Observium is this\" to Community Edition and give it the database "+
+			"connection instead. If you do have a subscription, check that "+
+			"$config['api']['enable'] = TRUE is set in config.php", path)
+	}
+
 	switch status {
 	case http.StatusUnauthorized:
 		return fmt.Errorf("observium: the API rejected our credentials. The " +
