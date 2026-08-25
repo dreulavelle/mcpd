@@ -48,6 +48,24 @@ endpoint with no results answers with `"sensors": []` where a populated one
 answers with an object. Both shapes are handled; treating the array case as a
 decode failure would turn "no sensors" into an error.
 
+## One endpoint collides with the envelope
+
+`/status/` answers under the key `status`, and so does the envelope's own
+verdict. Observium builds the response in PHP as
+
+```php
+$output['status'] = 'ok';
+$output[$entity]  = $rows;   // for /status/, $entity is 'status'
+```
+
+so for that one endpoint the collection lands on top of the verdict and the
+response carries no `"ok"` at all. Decoding `status` as a string therefore
+fails every call to an endpoint that worked.
+
+`envelope.Status` is raw JSON and interpreted rather than parsed: a string is
+the envelope's own verdict, and anything else means a collection overwrote it —
+which only happens on a response that had one to put there.
+
 ## A 200 can mean failed
 
 Some errors arrive as HTTP 200 with `"status": "failed"` and a message in the
@@ -222,6 +240,22 @@ matches nothing, and returns an empty result which reads as an answer.
 The API's documented vocabulary has not been checked against what a live
 instance actually accepts. Run this first against any new deployment, and treat
 a filter that returns zero as a bug until proven otherwise.
+
+## What is not implemented, and why
+
+The API documents twenty endpoints and this plugin uses sixteen. The four left
+out, so that adding one later is a decision rather than a discovery:
+
+| | |
+|---|---|
+| `/counters/` | Generic SNMP counters with no shared meaning across devices. A model shown one cannot say what it counts. |
+| `/probes/` | Observium's own poller instrumentation, not the estate's. |
+| `/printersupplies/` | Toner levels. Real, and not what this integration is for. |
+| `/bills/` | Traffic accounting, disabled by default and a paid-for module on top of a paid-for edition. Worth adding when somebody has one. |
+
+`/entity/<type>/<id>/` is also unused: every entity type it can reach already
+has a tool with filters that describe it, and a generic lookup would need the
+model to know Observium's type names.
 
 ## Discovering the rest of the API
 
