@@ -82,8 +82,19 @@ type Field struct {
 	Group   string `json:"group"`
 	Apply   Apply  `json:"apply"`
 	Default any    `json:"default,omitempty"`
-	// Options constrains an enum.
+	// Options constrains an enum. These are the values stored and validated
+	// against, so they are identifiers rather than prose.
 	Options []string `json:"options,omitempty"`
+	// OptionLabels gives those values the words an operator reads. A value
+	// absent here is shown as itself.
+	//
+	// Separate from Options because the two answer to different people. The
+	// value is what configuration records and what code compares against, so
+	// it should say what the setting does -- observium's backend is stored as
+	// "api" or "database" because that is what changes. The label is what
+	// somebody picking from a dropdown needs, and they are not choosing a
+	// mechanism, they are saying which licence they have.
+	OptionLabels map[string]string `json:"option_labels,omitempty"`
 	// Min and Max bound an int or duration, in the unit the field uses.
 	Min *int `json:"min,omitempty"`
 	Max *int `json:"max,omitempty"`

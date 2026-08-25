@@ -197,7 +197,7 @@ function Field({ field, value, link, isSet, clearing, readOnly, onChange, onTogg
           onChange={(e) => onChange(e.target.value)}
         >
           {field.options?.map((o) => (
-            <option key={o} value={o}>{optionLabel(field.key, o)}</option>
+            <option key={o} value={o}>{optionLabel(field, o)}</option>
           ))}
         </NativeSelect>
       ) : field.kind === "secret" ? (
@@ -240,9 +240,18 @@ function Field({ field, value, link, isSet, clearing, readOnly, onChange, onTogg
  * "no inline approval at all" as an absence, and an option reading "none" in a
  * list of risk levels reads as a level rather than as the strictest setting.
  */
-function optionLabel(key: string, option: string): string {
+/**
+ * What a dropdown shows for one stored value.
+ *
+ * A field that names its own labels wins. The cases below are the host's own
+ * settings, which predate fields being able to say -- a plugin cannot reach
+ * this function, so anything it wants named has to declare it.
+ */
+function optionLabel(field: SettingField, option: string): string {
+  const declared = field.option_labels?.[option];
+  if (declared) return declared;
   if (option === "none") return "Nothing";
-  if (!key.endsWith("role")) return option;
+  if (!field.key.endsWith("role")) return option;
   return { user: "User", admin: "Admin" }[option] ?? option;
 }
 

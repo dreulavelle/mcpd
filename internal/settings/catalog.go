@@ -144,6 +144,21 @@ func ValidatePluginField(f Field) error {
 	if !f.Kind.Valid() {
 		return fmt.Errorf("settings: plugin field %q has unknown kind %q", f.Key, f.Kind)
 	}
+	// A label for a value that is not an option renders as nothing at all --
+	// the dropdown falls back to showing the raw value, so a typo here looks
+	// like a label that was never written rather than one that missed.
+	if len(f.OptionLabels) > 0 {
+		options := make(map[string]bool, len(f.Options))
+		for _, o := range f.Options {
+			options[o] = true
+		}
+		for value := range f.OptionLabels {
+			if !options[value] {
+				return fmt.Errorf("settings: plugin field %q labels %q, which is "+
+					"not one of its options %v", f.Key, value, f.Options)
+			}
+		}
+	}
 	return nil
 }
 
