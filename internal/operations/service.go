@@ -113,7 +113,7 @@ type ProposeRequest struct {
 // intent, and the caller is expected to say so plainly to the model.
 func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeRequest) (*Operation, error) {
 	if d := s.authz.AuthorizeTool(p, req.Plugin, auth.CapPropose); !d.Allowed {
-		s.log.Warn("proposal denied", "principal", p.ID, "plugin", req.Plugin,
+		s.log.WarnContext(ctx, "proposal denied", "principal", p.ID, "plugin", req.Plugin,
 			"action", req.Action, "code", d.Code, "reason", d.Reason)
 		return nil, d.Error()
 	}
@@ -211,7 +211,7 @@ func (s *Service) Propose(ctx context.Context, p *auth.Principal, req ProposeReq
 	}
 
 	s.notify()
-	s.log.Info("mutation proposed",
+	s.log.InfoContext(ctx, "mutation proposed",
 		"operation_id", stored.ID, "plugin", stored.Plugin, "action", stored.Action,
 		"risk", stored.Risk, "principal", p.ID, "expires_at", stored.ExpiresAt)
 
@@ -246,7 +246,7 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 		Reversible: reversible,
 	})
 	if !decision.AutoApprove {
-		s.log.Debug("this change is being put to a person",
+		s.log.DebugContext(ctx, "this change is being put to a person",
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 			"risk", op.Risk, "reason", decision.Reason)
 		return op
@@ -261,7 +261,7 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 	// an administrator's rule, and the proposer's own right to approve is
 	// beside the point. What bounds the proposer is CapPropose, checked above.
 	if err := Validate(op, StateApproved, TriggerApprove, s.guardContext(PolicyActor, now)); err != nil {
-		s.log.Warn("this change is authorised but cannot be approved",
+		s.log.WarnContext(ctx, "this change is authorised but cannot be approved",
 			"operation_id", op.ID, "authority", decision.Authority(), "error", err)
 		return op
 	}
@@ -292,7 +292,7 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 		// says what happened -- so re-read it rather than handing back the
 		// copy from before the race, which would report pending_approval for
 		// an operation that is by now approved, expired or running.
-		s.log.Warn("this change is authorised but the approval did not land",
+		s.log.WarnContext(ctx, "this change is authorised but the approval did not land",
 			"operation_id", op.ID, "authority", decision.Authority(), "error", err)
 		if fresh, readErr := s.repo.Get(ctx, op.ID); readErr == nil {
 			return fresh
@@ -301,7 +301,7 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 	}
 
 	s.notify()
-	s.log.Info("mutation approved without being asked about",
+	s.log.InfoContext(ctx, "mutation approved without being asked about",
 		"operation_id", stored.ID, "plugin", stored.Plugin, "action", stored.Action,
 		"risk", stored.Risk, "authority", decision.Authority(), "reason", decision.Reason,
 		"requester", stored.RequestedBy, "execute_by", approvalExpiry)
@@ -356,7 +356,7 @@ func (s *Service) ApproveInline(ctx context.Context, p *auth.Principal, operatio
 // tool.
 func (s *Service) approve(ctx context.Context, p *auth.Principal, op *Operation, reason, channel string) (*Operation, error) {
 	if d := s.authz.AuthorizeApproval(p, op); !d.Allowed {
-		s.log.Warn("approval denied",
+		s.log.WarnContext(ctx, "approval denied",
 			"operation_id", op.ID, "principal", p.ID, "channel", channel,
 			"code", d.Code, "reason", d.Reason)
 		return nil, &GuardError{ErrCode: d.Code, Detail: d.Reason}
@@ -395,7 +395,7 @@ func (s *Service) approve(ctx context.Context, p *auth.Principal, op *Operation,
 	}
 
 	s.notify()
-	s.log.Info("mutation approved",
+	s.log.InfoContext(ctx, "mutation approved",
 		"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 		"risk", op.Risk, "approver", p.ID, "requester", op.RequestedBy,
 		"channel", channel, "execute_by", approvalExpiry)
@@ -468,7 +468,7 @@ func (s *Service) Reject(ctx context.Context, p *auth.Principal, operationID, re
 		return nil, err
 	}
 	s.notify()
-	s.log.Info("mutation rejected",
+	s.log.InfoContext(ctx, "mutation rejected",
 		"operation_id", op.ID, "approver", p.ID, "reason", reason)
 	return stored, nil
 }

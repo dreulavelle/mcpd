@@ -114,10 +114,23 @@ func NewErrorReporter(opts ErrorReporterOptions) (*ErrorReporter, error) {
 				return nil
 			}
 			b.Message = Scrub(b.Message)
-			// Breadcrumb data is arbitrary and unpredictable, and this process
-			// adds none of it. Dropping it outright is cheaper than reasoning
-			// about what an SDK integration might have put there.
-			b.Data = nil
+			// Our own breadcrumbs come from the log handler and carry an
+			// allow-listed set of keys chosen for identifying a code path.
+			// Their values are scrubbed and kept, because a breadcrumb without
+			// them says "something failed" and with them says which plugin,
+			// which tool and under which correlation ID.
+			//
+			// Anything else was added by an SDK integration and has not been
+			// reviewed here, so its data is dropped rather than guessed about.
+			if b.Category == breadcrumbCategory {
+				for k, v := range b.Data {
+					if text, ok := v.(string); ok {
+						b.Data[k] = Scrub(text)
+					}
+				}
+			} else {
+				b.Data = nil
+			}
 			return b
 		},
 	})

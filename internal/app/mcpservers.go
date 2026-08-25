@@ -189,7 +189,7 @@ func (a *App) ImportMCPServer(ctx context.Context, actor, name string, document 
 	if err := a.loadMCPServers(ctx); err != nil {
 		return err
 	}
-	a.log.Info("remote MCP server imported",
+	a.log.InfoContext(ctx, "remote MCP server imported",
 		"server", name, "document_name", doc.Name, "version", doc.Version,
 		"transport", remote.Type, "by", actor)
 	return nil
@@ -228,7 +228,7 @@ func (a *App) RemoveMCPServer(ctx context.Context, actor, name string) error {
 	// about something that did not happen.
 	var changes []settings.Change
 	if _, orphaned, err := a.settings.Get(ctx, instanceKeyPrefix+name); err == nil && orphaned {
-		a.log.Warn("clearing an orphaned plugin instance record for a remote MCP server",
+		a.log.WarnContext(ctx, "clearing an orphaned plugin instance record for a remote MCP server",
 			"server", name)
 		changes = append(changes, settings.Change{Key: instanceKeyPrefix + name, Delete: true})
 	}
@@ -252,17 +252,17 @@ func (a *App) RemoveMCPServer(ctx context.Context, actor, name string) error {
 	}
 	if len(changes) > 0 {
 		if err := a.settings.Apply(ctx, actor, changes); err != nil {
-			a.log.Warn("removed a remote MCP server but could not clear its settings",
+			a.log.WarnContext(ctx, "removed a remote MCP server but could not clear its settings",
 				"server", name, "error", err)
 		}
 	}
 
 	// Unmount whatever the settings change did not already take down.
 	if err := a.reconcileInstance(ctx, name); err != nil {
-		a.log.Warn("removed a remote MCP server but could not unmount it",
+		a.log.WarnContext(ctx, "removed a remote MCP server but could not unmount it",
 			"server", name, "error", err)
 	}
-	a.log.Info("remote MCP server removed", "server", name, "by", actor)
+	a.log.InfoContext(ctx, "remote MCP server removed", "server", name, "by", actor)
 	return nil
 }
 
@@ -277,7 +277,7 @@ func (a *App) SetMCPServerEnabled(ctx context.Context, actor, name string, enabl
 	if err := a.loadMCPServers(ctx); err != nil {
 		return err
 	}
-	a.log.Info("remote MCP server toggled", "server", name, "enabled", enabled, "by", actor)
+	a.log.InfoContext(ctx, "remote MCP server toggled", "server", name, "enabled", enabled, "by", actor)
 	return a.reconcileInstance(ctx, name)
 }
 
@@ -306,7 +306,7 @@ func (a *App) DiscoverMCPServer(ctx context.Context, actor, name string) (mcpser
 	}
 	defer func() {
 		if err := probe.Shutdown(context.WithoutCancel(ctx)); err != nil {
-			a.log.Warn("discovery client did not close cleanly", "server", name, "error", err)
+			a.log.WarnContext(ctx, "discovery client did not close cleanly", "server", name, "error", err)
 		}
 	}()
 
@@ -322,7 +322,7 @@ func (a *App) DiscoverMCPServer(ctx context.Context, actor, name string) (mcpser
 	if err != nil {
 		return mcpservers.Diff{}, err
 	}
-	a.log.Info("remote MCP server discovered",
+	a.log.InfoContext(ctx, "remote MCP server discovered",
 		"server", name, "by", actor, "offered", len(seen),
 		"added", len(diff.Added), "changed", len(diff.Changed), "removed", len(diff.Removed))
 
@@ -330,7 +330,7 @@ func (a *App) DiscoverMCPServer(ctx context.Context, actor, name string) (mcpser
 	// the descriptor under it. Either means what is mounted no longer matches
 	// what is enabled.
 	if err := a.reconcileInstance(ctx, name); err != nil {
-		a.log.Warn("could not remount after discovery", "server", name, "error", err)
+		a.log.WarnContext(ctx, "could not remount after discovery", "server", name, "error", err)
 	}
 	return diff, nil
 }
@@ -362,7 +362,7 @@ func (a *App) ClassifyMCPTool(ctx context.Context, actor, server, tool, hash str
 		}
 		return err
 	}
-	a.log.Info("remote MCP tool classified",
+	a.log.InfoContext(ctx, "remote MCP tool classified",
 		"server", server, "tool", tool, "state", state, "by", actor)
 	return a.reconcileInstance(ctx, server)
 }

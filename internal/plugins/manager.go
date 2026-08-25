@@ -125,7 +125,7 @@ func (m *Manager) Register(ctx context.Context, p Plugin, instance string, requi
 
 	m.invalidateAggregates()
 
-	m.log.Info("plugin registered",
+	m.log.InfoContext(ctx, "plugin registered",
 		"plugin", d.Name,
 		"version", d.Version,
 		"endpoint", d.Endpoint(),
@@ -231,13 +231,13 @@ func (m *Manager) Remount(ctx context.Context, instance string, p Plugin, requir
 	if existing != nil {
 		if stopper, ok := existing.plugin.(Stopper); ok {
 			if err := stopper.Shutdown(ctx); err != nil {
-				m.log.Warn("previous plugin did not shut down cleanly after a remount",
+				m.log.WarnContext(ctx, "previous plugin did not shut down cleanly after a remount",
 					"plugin", instance, "error", err)
 			}
 		}
 	}
 
-	m.log.Info("plugin remounted",
+	m.log.InfoContext(ctx, "plugin remounted",
 		"plugin", instance,
 		"tools", len(rebuilt.Registry.tools),
 		"mutations", len(rebuilt.Registry.mutations))
@@ -265,11 +265,11 @@ func (m *Manager) Unmount(ctx context.Context, instance string) error {
 
 	if stopper, ok := existing.plugin.(Stopper); ok {
 		if err := stopper.Shutdown(ctx); err != nil {
-			m.log.Warn("plugin did not shut down cleanly when unmounted",
+			m.log.WarnContext(ctx, "plugin did not shut down cleanly when unmounted",
 				"plugin", instance, "error", err)
 		}
 	}
-	m.log.Info("plugin unmounted", "plugin", instance)
+	m.log.InfoContext(ctx, "plugin unmounted", "plugin", instance)
 	return nil
 }
 
@@ -290,7 +290,7 @@ func (m *Manager) Start(ctx context.Context) error {
 				return fmt.Errorf("plugins: required plugin %s failed to start: %w", name, err)
 			}
 			mp.setHealth(Unhealthy(fmt.Sprintf("start failed: %v", err)))
-			m.log.Error("optional plugin failed to start; continuing without it",
+			m.log.ErrorContext(ctx, "optional plugin failed to start; continuing without it",
 				"plugin", name, "error", err)
 			continue
 		}

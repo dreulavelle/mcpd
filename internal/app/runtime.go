@@ -114,7 +114,7 @@ func openStorage(ctx context.Context, cfg *config.Config, log *slog.Logger) (*sq
 		return db, nil
 	}
 
-	log.Info("reopening the database with the settings it holds about itself",
+	log.InfoContext(ctx, "reopening the database with the settings it holds about itself",
 		"busy_timeout", busy, "relaxed_durability", relaxed)
 	db.Close()
 	opts.BusyTimeout, opts.RelaxedDurability = busy, relaxed

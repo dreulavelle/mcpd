@@ -92,7 +92,7 @@ func (a *App) instances(ctx context.Context) []Instance {
 		}
 		var rec instanceRecord
 		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
-			a.log.Warn("ignoring an unreadable plugin instance record",
+			a.log.WarnContext(ctx, "ignoring an unreadable plugin instance record",
 				"instance", name, "error", err)
 			continue
 		}

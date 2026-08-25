@@ -30,10 +30,10 @@ func (a *App) startWorker(name string, ctx context.Context, run func(context.Con
 	go func() {
 		defer a.workers.Done()
 		if err := run(ctx); err != nil && ctx.Err() == nil {
-			a.log.Error("background worker stopped unexpectedly", "worker", name, "error", err)
+			a.log.ErrorContext(ctx, "background worker stopped unexpectedly", "worker", name, "error", err)
 			return
 		}
-		a.log.Debug("background worker stopped", "worker", name)
+		a.log.DebugContext(ctx, "background worker stopped", "worker", name)
 	}()
 }
 
@@ -66,13 +66,13 @@ func (a *App) scanClaimable(ctx context.Context) error {
 	if len(pending) == 0 {
 		return nil
 	}
-	a.log.Info("resuming approved operations left from a previous run", "count", len(pending))
+	a.log.InfoContext(ctx, "resuming approved operations left from a previous run", "count", len(pending))
 	for _, op := range pending {
 		if ctx.Err() != nil {
 			return nil
 		}
 		if err := a.executor.Execute(ctx, op.ID); err != nil {
-			a.log.Error("failed to resume an operation", "operation_id", op.ID, "error", err)
+			a.log.ErrorContext(ctx, "failed to resume an operation", "operation_id", op.ID, "error", err)
 		}
 	}
 	return nil
@@ -139,7 +139,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	if a.frontend != nil {
 		go func() {
-			a.log.Info("dashboard listening", "addr", a.frontend.Addr)
+			a.log.InfoContext(ctx, "dashboard listening", "addr", a.frontend.Addr)
 			if err := a.frontend.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				// A privileged port is the likeliest cause, and the message
 				// has to say so: "permission denied" alone sends an operator
@@ -173,7 +173,7 @@ func (a *App) Run(ctx context.Context) error {
 	go a.announceServing(workerCtx, listener.Addr())
 
 	go func() {
-		a.log.Info("http server listening",
+		a.log.InfoContext(ctx, "http server listening",
 			"addr", a.cfg.Server.Listen,
 			"public_url", a.publicURL(workerCtx),
 			"plugins", a.manager.Names())
@@ -197,7 +197,7 @@ func (a *App) Run(ctx context.Context) error {
 		}
 		return nil
 	case <-ctx.Done():
-		a.log.Info("shutdown signal received")
+		a.log.InfoContext(ctx, "shutdown signal received")
 		return a.Shutdown()
 	}
 }
@@ -322,11 +322,11 @@ func (a *App) pruneHistory(ctx context.Context) error {
 		cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 		removed, err := a.audit.Prune(ctx, "system:retention", cutoff, time.Now())
 		if err != nil {
-			a.log.Warn("could not prune history", "error", err)
+			a.log.WarnContext(ctx, "could not prune history", "error", err)
 			continue
 		}
 		if removed > 0 {
-			a.log.Info("pruned history", "removed", removed, "older_than_days", days)
+			a.log.InfoContext(ctx, "pruned history", "removed", removed, "older_than_days", days)
 		}
 	}
 }
@@ -372,6 +372,6 @@ func (a *App) announceServing(ctx context.Context, addr net.Addr) {
 	}
 	// Give up waiting rather than holding the tunnel back for ever: it will
 	// report its own failure, which is more use than silence.
-	a.log.Warn("the MCP listener did not answer; starting tunnels anyway")
+	a.log.WarnContext(ctx, "the MCP listener did not answer; starting tunnels anyway")
 	close(a.serving)
 }

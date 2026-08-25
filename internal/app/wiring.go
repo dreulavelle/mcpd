@@ -120,7 +120,7 @@ func (a *App) registerPlugins(ctx context.Context) error {
 					err := fmt.Errorf("this instance is recorded as type %q, "+
 						"which this build does not have; remove it, or run a "+
 						"build that does", inst.Type)
-					a.log.Error("skipping a plugin instance of an unknown type",
+					a.log.ErrorContext(ctx, "skipping a plugin instance of an unknown type",
 						"plugin", name, "type", inst.Type)
 					a.noteReconcile(name, err)
 					continue
@@ -136,7 +136,7 @@ func (a *App) registerPlugins(ctx context.Context) error {
 		// without a restart. Mounting it now would put tools in front of a
 		// model that fail every call.
 		if ready, missing := a.ready(ctx, inst); !ready {
-			a.log.Info("plugin is waiting to be configured",
+			a.log.InfoContext(ctx, "plugin is waiting to be configured",
 				"plugin", name, "type", inst.Type, "missing", missing)
 			continue
 		}
@@ -152,7 +152,7 @@ func (a *App) registerPlugins(ctx context.Context) error {
 			if pc.Required {
 				return fmt.Errorf("app: plugin %q: %w", name, err)
 			}
-			a.log.Error("plugin could not be built; continuing without it",
+			a.log.ErrorContext(ctx, "plugin could not be built; continuing without it",
 				"plugin", name, "type", inst.Type, "error", err)
 			a.noteReconcile(name, err)
 			continue
@@ -166,7 +166,7 @@ func (a *App) registerPlugins(ctx context.Context) error {
 	}
 
 	if len(a.manager.Names()) == 0 {
-		a.log.Warn("no plugins enabled; the host will serve only operational endpoints")
+		a.log.WarnContext(ctx, "no plugins enabled; the host will serve only operational endpoints")
 	}
 	return nil
 }
@@ -186,13 +186,13 @@ func (a *App) registerExternalPlugins(ctx context.Context) error {
 	if len(manifests) == 0 {
 		return nil
 	}
-	a.log.Info("discovered external plugins", "dir", dir, "count", len(manifests))
+	a.log.InfoContext(ctx, "discovered external plugins", "dir", dir, "count", len(manifests))
 
 	for _, m := range manifests {
 		// A compiled-in plugin of the same name wins. Otherwise a writable
 		// bind mount could shadow an integration the operator reviewed.
 		if a.manager.Lookup(m.Name) != nil {
-			a.log.Warn("ignoring an external plugin that shadows a compiled-in one",
+			a.log.WarnContext(ctx, "ignoring an external plugin that shadows a compiled-in one",
 				"plugin", m.Name)
 			continue
 		}
@@ -202,7 +202,7 @@ func (a *App) registerExternalPlugins(ctx context.Context) error {
 			if m.Required {
 				return fmt.Errorf("app: required external plugin %s: %w", m.Name, err)
 			}
-			a.log.Error("external plugin failed to start; continuing without it",
+			a.log.ErrorContext(ctx, "external plugin failed to start; continuing without it",
 				"plugin", m.Name, "error", err)
 			continue
 		}
@@ -210,7 +210,7 @@ func (a *App) registerExternalPlugins(ctx context.Context) error {
 			if m.Required {
 				return err
 			}
-			a.log.Error("external plugin failed to register; continuing without it",
+			a.log.ErrorContext(ctx, "external plugin failed to register; continuing without it",
 				"plugin", m.Name, "error", err)
 			_ = p.Shutdown(ctx)
 		}

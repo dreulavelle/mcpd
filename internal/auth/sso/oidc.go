@@ -272,7 +272,7 @@ func (s *Service) signingKey(ctx context.Context, d *discovery, kid string) (*rs
 	}
 	// Worth a line: a key set that has fallen behind presents as every sign-in
 	// failing, and this is the only place that says why.
-	s.log.Info("refetching an identity provider's signing keys",
+	s.log.InfoContext(ctx, "refetching an identity provider's signing keys",
 		"issuer", d.Issuer, "unknown_kid", kid)
 	if set, err = s.keySet(ctx, d, true); err != nil {
 		return nil, err
