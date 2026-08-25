@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # ---- dashboard --------------------------------------------------------------
-FROM node:24-alpine AS web
+#
+# Pinned to the build platform: the bundle is the same bytes on any target, so
+# building it once natively avoids emulating this per architecture.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS web
 
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
@@ -11,7 +14,11 @@ COPY web/ ./
 RUN npm run build
 
 # ---- build ------------------------------------------------------------------
-FROM golang:1.26-alpine AS build
+#
+# Cross-compiled from the build platform. Running this under QEMU per target
+# would emulate a Go compiler, which is the slowest part of any multi-arch
+# build -- and Go cross-compiles natively with CGO off.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 
 WORKDIR /src
 
@@ -25,15 +32,25 @@ COPY . .
 COPY --from=web /web/dist ./internal/admin/dist
 
 ARG VERSION=dev
+# Supplied by buildx per target; defaulted for a plain `docker build`.
+ARG TARGETARCH
+ARG TARGETOS=linux
 # CGO_ENABLED=0 is not an optimisation here, it is the point: the SQLite driver
 # is pure Go, so the result is a static binary with no libc to keep patched.
 # Alpine below runs it as-is; nothing links against musl.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -trimpath \
       -ldflags="-s -w -X github.com/spoked/mcpd/internal/app.Version=${VERSION}" \
       -o /out/mcpd ./cmd/mcpd
+
+# ---- artifacts --------------------------------------------------------------
+#
+# Export only: `--target artifacts --output type=local` writes out the same
+# binary the runtime stage below copies in.
+FROM scratch AS artifacts
+COPY --from=build /out/mcpd /mcpd
 
 # ---- runtime --------------------------------------------------------------
 FROM alpine:3.22
