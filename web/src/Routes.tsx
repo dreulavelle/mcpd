@@ -18,6 +18,7 @@ import { General } from "@/pages/settings/General";
 import { Groups } from "@/pages/settings/Groups";
 import { Keys } from "@/pages/settings/Keys";
 import { Users } from "@/pages/settings/Users";
+import { System } from "@/pages/system/System";
 import { Tunnels } from "@/pages/tunnels/Tunnels";
 
 /**
@@ -57,6 +58,9 @@ export function Routes() {
 
       case "tunnels":
         return <Tunnels />;
+
+      case "system":
+        return <System />;
 
       case "logs":
         return <Logs />;

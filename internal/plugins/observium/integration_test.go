@@ -262,7 +262,7 @@ func TestIntegration_ValuesAreUsable(t *testing.T) {
 		t.Fatalf("probe: %v", err)
 	}
 
-	page, err := p.client.Read(ctx, EntityDevices, url.Values{}, 5)
+	page, err := p.client.Read(ctx, EntityDevices, url.Values{}, 5, viewSummary)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -275,11 +275,26 @@ func TestIntegration_ValuesAreUsable(t *testing.T) {
 		t.Errorf("hostname is %T (%v), want a non-empty string", d["hostname"], d["hostname"])
 	}
 	// A credential must never appear, whatever the API decides to include.
-	for key := range d {
-		switch key {
-		case "snmp_community", "snmp_authpass", "snmp_cryptopass", "snmp_authname":
-			t.Errorf("a device carried %q into the tool result", key)
+	// It did: a level 6 token gets snmp_community on every device, and before
+	// the views existed this assertion only ever ran where nobody had one.
+	// Checked against the full view as well, because that is the one that
+	// promises the whole record and so the one where withholding has to be
+	// deliberate rather than a side effect of narrowing.
+	full, err := p.client.Read(ctx, EntityDevices, url.Values{}, 5, viewFull)
+	if err != nil {
+		t.Fatalf("read full: %v", err)
+	}
+	for _, item := range append(page.Items, full.Items...) {
+		for key := range item {
+			switch key {
+			case "snmp_community", "snmp_authpass", "snmp_cryptopass", "snmp_authname":
+				t.Errorf("a device carried %q into the tool result", key)
+			}
 		}
+	}
+	if len(full.Items) > 0 && len(full.Items[0]) <= len(d) {
+		t.Errorf("the full view returned %d fields and the summary %d; full should be wider",
+			len(full.Items[0]), len(d))
 	}
 	t.Logf("device: id=%v hostname=%v os=%v status=%v",
 		d["device_id"], d["hostname"], d["os"], d["status"])

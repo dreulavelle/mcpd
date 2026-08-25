@@ -1,320 +1,173 @@
 # mcpd
 
-An extensible host for Model Context Protocol integrations. One binary serves
-many plugins, each on its own endpoint, with every infrastructure change gated
-behind an approval it can prove.
+Let ChatGPT read and manage your infrastructure, without opening a port and
+without letting it change anything nobody approved.
+
+mcpd runs on your network and serves your systems to an AI assistant over the
+Model Context Protocol. Ask it *"which switches are down?"* or *"why is the
+Porter school's uplink flapping?"* and it answers from your live monitoring —
+because it is talking to your monitoring, not guessing.
 
 ```
                          ChatGPT
                             │  Secure MCP Tunnel (outbound)
               ┌─────────────┼─────────────┐
               ▼             ▼             ▼
-        /mcp/echo      /mcp/…        /mcp/…
+        /mcp/observium  /mcp/cnmaestro  /mcp/…
               └─────────────┼─────────────┘
                             ▼
                           mcpd
-                     (single binary)
                             │
               ┌─────────────┼─────────────┐
               ▼             ▼             ▼
           plugins        SQLite      dashboard
 ```
 
-Nothing has to be publicly reachable. The tunnel dials outward and holds the
-connection open, so ChatGPT reaches mcpd with no inbound port, no public DNS,
-and no NAT rule.
+**Nothing is exposed to the internet.** The tunnel dials outward and holds the
+connection open, so there is no inbound port, no public DNS and no NAT rule.
 
-## Quick start
+**Reads are free; changes are not.** An assistant can look at anything it has
+been granted. To *change* something it must propose the change, and mcpd will
+not execute it without an approval stored in its database — so there is no path
+that skips you. Small changes you confirm in the conversation; consequential
+ones wait in a queue.
+
+**Every connector sees only what you gave it.** A connector scoped to your
+monitoring cannot discover that your Wi-Fi controller is also here.
+
+## Install
 
 ### Docker
 
 ```bash
+git clone https://github.com/dreulavelle/mcpd.git && cd mcpd
 docker compose up -d
 ```
 
-That is the whole of it. There is nothing to fill in first: `./data` starts
-empty, and the container generates a `config.yaml`, a bearer token and the key
-that encrypts stored credentials into it on first start. Everything a
-deployment owns is in that one directory — the configuration, the database, TLS
-material and out-of-process plugins — and it is owned by your own account, so
-you can read and edit it without `sudo`.
+That is the whole of it. `./data` starts empty and the container generates its
+configuration, a bearer token and an encryption key on first start.
 
-The dashboard is on **port 80**; the MCP endpoint is on loopback:8080. Open the
-dashboard and it asks you to create the first account. That account is the
-administrator, and registration stops being offered once it exists.
+The dashboard is on **port 80**. Open it and it asks you to create the first
+account — that account is the administrator, and registration closes once it
+exists.
 
 Copy `.env.example` to `.env` to change the published ports. If your account is
-not uid 1000, put your own in it, or `./data` comes back owned by somebody
-else:
+not uid 1000, add your own or `./data` comes back owned by somebody else:
 
 ```bash
 printf 'UID=%s\nGID=%s\n' "$(id -u)" "$(id -g)" >> .env
 ```
 
-**Keep `data/.env`.** It holds `MCPD_SECRET_KEY`, and every credential saved
-from the dashboard is encrypted with it. Lose it and those credentials cannot
-be read back. mcpd will not replace it: `-init` refuses to overwrite an
-existing config or `.env`, and the container's entrypoint only generates when
-neither is there.
-
-#### Moving an existing deployment
-
-Before this, the container kept its data in `./.data`, its config in
-`./config.yaml`, and its secrets in `./.env`. All three move into `./data`, and
-nothing is regenerated — the point of doing it by hand is that the existing
-`MCPD_SECRET_KEY` comes with you.
+### Debian
 
 ```bash
-docker compose down
+arch=$(dpkg --print-architecture)
+repo=https://github.com/dreulavelle/mcpd
+# The package filename carries its version, so ask which one is current.
+ver=$(curl -fsSL https://api.github.com/repos/dreulavelle/mcpd/releases/latest \
+      | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
 
-# .data was owned by uid 65532, which is the thing this release fixes. This is
-# the last time you need sudo for it.
-sudo chown -R "$(id -u):$(id -g)" .data
-
-mkdir -p data/plugins
-cp -a .data/.   data/               # database, TLS material, plugin binaries
-cp -a config.yaml data/config.yaml  # storage paths inside it are container
-                                    # paths and do not change
-cp -a .env      data/.env           # keeps the existing MCPD_SECRET_KEY
-
-# The root .env is now only the published ports, which is what compose reads.
-printf 'MCPD_PORT=8080\nMCPD_BIND=127.0.0.1\nMCPD_FRONTEND_PORT=80\nMCPD_FRONTEND_BIND=127.0.0.1\n' > .env
-printf 'UID=%s\nGID=%s\n' "$(id -u)" "$(id -g)" >> .env
-
-docker compose up -d --build
+curl -fsSLO "$repo/releases/download/v${ver}/mcpd_${ver}_${arch}.deb"
+sudo apt install "./mcpd_${ver}_${arch}.deb"
 ```
 
-Nothing is deleted, so the old layout is still there if this goes wrong. Check
-`docker compose logs` for `database ready`, then open a plugin's settings: if a
-credential you saved is still there, the key came across. Once it has,
-`rm -rf .data config.yaml` — and note that `mv .data data` is not the move to
-make, because `./data` already exists and you would end up with `data/.data`.
+The package makes the service account, generates the configuration, installs
+the systemd unit and starts it. The dashboard is on port 80.
 
-### From source
+There is nothing else to install — the dashboard and the database are compiled
+into the binary, so there is no runtime and no database server to keep in step.
+Prefer a plain binary? Every release also ships `mcpd-linux-amd64` and
+`mcpd-linux-arm64` with a `SHA256SUMS`.
 
-```bash
-make build
-./bin/mcpd -config configs/example.yaml
-```
+> **Keep `/var/lib/mcpd/.env`** (or `data/.env` under Docker). It holds the key
+> every stored credential is encrypted with. Lose it and those credentials
+> cannot be read back. Back up that directory and you have backed up the
+> deployment.
 
-Check a config without starting anything:
+## Your first connector
 
-```bash
-./bin/mcpd -config /etc/mcpd/config.yaml -check
-```
+One tunnel is one connector in ChatGPT.
 
-## Connecting ChatGPT
+1. **Add the system you want to reach.** On **Plugins**, add an instance of a
+   built-in integration and fill in its address and credentials. They are
+   validated when you save and stored encrypted.
+2. **Create a tunnel.** On **Tunnels**, create one and choose which plugins it
+   may reach. You will need an OpenAI *runtime* API key — an admin key cannot
+   run a tunnel.
+3. **Add it in ChatGPT.** Settings → Connectors → add by tunnel id.
+4. **Ask it something.** *"List the devices that are down."*
 
-Create a tunnel on the **Tunnels** page, then add it as a connector in ChatGPT
-by its tunnel id. Nothing needs to be exposed: the tunnel authenticates itself
-to OpenAI with a runtime API key, and mcpd stays private.
+Give a plugin its own tunnel and that connector reaches that system and nothing
+else. Give the host one tunnel and it reaches everything that tunnel's identity
+is granted.
 
-One tunnel carries one address, so it is one connector. Give a plugin its own
-tunnel and that connector reaches that system and cannot discover any other;
-give the host one tunnel and it reaches everything the tunnel's identity is
-granted. What the connector may do — a display name, a role, the plugins it may
-reach — is set alongside it.
+## Who can do what
 
-## Signing in
-
-People sign in with their own email and password. Administrators manage
+People sign in with their own email and password; administrators manage
 accounts on the **Users** page.
 
-|            | reads | proposes changes | approves them | changes settings |
-|------------|:-----:|:----------------:|:-------------:|:----------------:|
-| **User**   |   ✓   |        ✓         |       ✓       |                  |
-| **Admin**  |   ✓   |        ✓         |       ✓       |        ✓         |
-
-A user sees the settings and how each plugin is reached; they just cannot
-change either. Admins additionally make and assign tunnels, manage accounts,
-and clear history.
+|           | reads | proposes changes | approves them | changes settings |
+|-----------|:-----:|:----------------:|:-------------:|:----------------:|
+| **User**  |   ✓   |        ✓         |       ✓       |                  |
+| **Admin** |   ✓   |        ✓         |       ✓       |        ✓         |
 
 A role says what somebody may *do*. What they may *reach* is a separate
 question, answered by **Groups**: a group lists systems, and everyone in it can
-reach them. A new group lists none, and an account in no group reaches nothing
-until somebody grants it something.
+reach them. An account in no group reaches nothing until somebody grants it
+something.
 
-Scripts and agents that cannot fill in a sign-in form present a bearer token.
-Two kinds work, and they are the same thing in two places: one declared in
-`auth.static_tokens` in the configuration file, and one an administrator
-creates on the **Keys** page. A key made there can be revoked or re-scoped
-without restarting mcpd, can expire, and shows when it was last used — and it
-acts as itself, so the history says which agent did what. Its secret is shown
-once, when it is created.
+Scripts and agents that cannot fill in a sign-in form use an API key from the
+**Keys** page. Each acts as itself, so the history says which agent did what.
 
-## How a change gets made
+## Keeping it running
 
-```
-  echo_set_label                   →  operation_id, state=pending_approval
-       (nothing has changed)
+**System** shows the running version, any releases published since it with
+their notes, what the host is using in memory and CPU, and a restart button.
 
-  echo_approve_operation           →  state=approved
-       (a human decides)
+Update checking is off until you turn it on under Settings → Updates — mcpd
+sits inside your network, and reaching out to github.com on a timer is a
+connection worth agreeing to rather than discovering.
 
-  executor                         →  reload, revalidate, claim, apply, verify
-       (at most once)              →  state=succeeded, verified=true
-```
+See [Upgrading](docs/upgrading.md) for how to apply one.
 
-Between approval and execution mcpd re-plans against live upstream state and
-compares preconditions. If the target changed after approval, the change is
-refused rather than applied over someone else's work.
-
-Most of the time you will not see those as two steps. When the assistant can
-ask you directly it does, and confirming in the conversation is the approval.
-"Approve in the conversation up to", on the Settings page, sets how
-consequential a change may be before it has to be shown in full and approved
-explicitly instead.
-
-Either way the record is the same. mcpd will not execute a change without an
-approval stored in its database, so an assistant has no path that skips it.
-
-## Configuration
-
-Almost all of it is in the dashboard, and the config file is five lines. A
-generated one looks like this in full:
-
-```yaml
-server:
-  listen: "127.0.0.1:9080"
-  frontend_listen: "127.0.0.1:9090"
-
-storage:
-  path: /var/lib/mcpd/mcpd.db
-
-secret_key_ref: env:MCPD_SECRET_KEY
-```
-
-Those four cannot live in the database. `storage.path` is where the database
-is, and it cannot say where it is from inside itself. `secret_key_ref` names
-the key everything secret in the database is encrypted under, and a lock does
-not hold its own key. The two bind addresses are a judgement rather than a
-limit: a bad one stored in the database would lock you out with no page left to
-fix it on, so the file is the way back in.
-
-Everything else — the address to advertise, TLS, timeouts, logging, approval
-policy, sessions, ChatGPT — is a setting on the Settings page. That is not
-tidiness. Editing a file leaves no record of who changed what, or what it was
-before; a settings change records both, and the dashboard can show you.
-
-Upgrading from a version that kept these in the file needs no hand-editing.
-The first start imports what your file sets, once, records it against
-`system:config-import`, and ignores those keys from then on. Any that are left
-behind and disagree with what mcpd is running get named at startup, so the two
-never quietly differ. See [`configs/example.yaml`](configs/example.yaml) for
-what a fuller file can still declare.
-
-### Where the secrets are
-
-There are no plaintext passwords on disk, and there never were. Account
-passwords are bcrypt in the database. Plugin credentials, SSO client secrets
-and the tunnel's API key are encrypted at rest. API keys are stored as digests
-— mcpd cannot read one back, only check one. Static tokens in the file are
-*references* (`env:`, `credential:` for systemd `LoadCredential`, or `file:`),
-resolved at startup, so a config file that never holds a token cannot leak one.
-
-The one secret in the clear is `MCPD_SECRET_KEY`, in `data/.env` at mode 600.
-It is the key everything above is encrypted under, so it is the one thing that
-cannot itself be encrypted by the system it unlocks. Guard that file; a stolen
-copy of the database without it is unreadable.
-
-**Scoping is per credential.** This agent reaches `/mcp/echo` and nothing else
-— every other endpoint returns 404, so it cannot discover what else is
-deployed:
-
-```yaml
-auth:
-  static_tokens:
-    - id: chatgpt-echo
-      secret_ref: env:MCPD_TOKEN_CHATGPT
-      principal: svc:chatgpt
-      role: user
-      plugins: [echo]
-```
-
-## Writing a plugin
-
-A plugin is an ordinary Go program:
-
-```go
-func main() {
-    p := sdk.New("weather", "1.0.0", "Weather", "Reads local weather.")
-
-    sdk.Tool(p, sdk.ToolSpec{
-        Name:        "forecast",
-        Description: "Get the forecast for a city.",
-    }, func(ctx context.Context, in ForecastInput) (Forecast, error) {
-        return lookup(ctx, in.City)
-    })
-
-    sdk.Serve(p)
-}
-```
-
-Build it into the plugins directory with a manifest and restart:
-
-```bash
-go build -o /var/lib/mcpd/plugins/weather/weather ./cmd/weather
-echo '{"name":"weather","exec":"weather"}' > /var/lib/mcpd/plugins/weather/plugin.json
-```
-
-mcpd mounts it at `/mcp/weather`. See [`examples/echo`](examples/echo) for a
-complete plugin including an approval-gated mutation, and the [`sdk`](sdk)
-package docs for the mutation contract.
-
-The rule that matters most: if a mutation's `Apply` cannot establish whether
-its write landed, it must return `sdk.Indeterminate`. Anything else tells the
-host the write did not happen, and permits a retry that applies it twice.
-
-## Deployment
-
-Primary target is a Linux VM with systemd;
-[`deploy/mcpd.service`](deploy/mcpd.service) is a hardened unit. The container
-image is Alpine, non-root, with a read-only root filesystem, every capability
-dropped and `no-new-privileges` set. The shell is what lets it generate a
-config and run as your own uid; the hardening is what makes that a fair
-trade, and none of it is given up.
-
-Terminate TLS at a reverse proxy and bind mcpd to loopback, or let mcpd issue
-its own certificate with `server.tls.mode: self-signed`.
-
-## Managing it
-
-Everything an operator sets lives in the dashboard: accounts, tunnels,
-approval policy, and each plugin's own configuration. A plugin declares the
-settings it needs and the dashboard renders them, validates what is typed, and
-stores secrets encrypted — so credentials never go in a file or an environment
-variable.
-
-The configuration file still works, and is the right place for provisioning a
-host nobody has opened yet. Anything set there is a starting value the
-dashboard can change, and a secret in it is a reference rather than a value.
-
-## Integrations
+## What it can manage
 
 | Plugin | What it manages | State |
 |---|---|---|
-| `echo` | Nothing real — a worked example, including an approval-gated write | Bundled |
+| `observium` | Observium: devices, interfaces, sensors, capacity, alerts. Needs the subscription REST API | Read-only |
 | `cnmaestro` | Cambium cnMaestro: Wi-Fi and fixed-wireless estates | Read-only |
-| `observium` | Observium: SNMP monitoring — devices, interfaces, sensors, capacity, topology, alerts. Needs the subscription REST API | Read-only |
+| `echo` | Nothing real — a worked example, including an approval-gated write | Bundled |
 
-A remote MCP server somebody else runs is the third kind. Paste its
-`server.json`, or find it in the dashboard's catalogue of the official MCP
-registry — either way it is the same import, and nothing it offers is served
-until an administrator has read each tool and enabled it. Servers published
-only as something to run locally are listed but cannot be added; mcpd connects
-to remote servers and does not execute packages.
+You can also add any remote MCP server somebody else runs: paste its
+`server.json` or find it in the dashboard's catalogue. Nothing it offers is
+served until an administrator has read each tool and enabled it.
 
-Anything else is a plugin you write. See below.
+Anything else is a plugin you write — see [Writing a plugin](docs/plugins.md).
+
+## Documentation
+
+| | |
+|---|---|
+| [Configuration](docs/configuration.md) | The five-line config file, and where the secrets are |
+| [How a change gets made](docs/approvals.md) | The approval path, end to end |
+| [Approval policy](docs/approval-policy.md) | Rules that let routine changes through |
+| [Upgrading](docs/upgrading.md) | Applying an update, and moving an older deployment |
+| [Writing a plugin](docs/plugins.md) | The plugin SDK |
+| [Architecture](docs/architecture.md) | How it is put together |
+
+## Deployment notes
+
+The container is Alpine, non-root, with a read-only root filesystem, every
+capability dropped and `no-new-privileges` set.
+[`deploy/mcpd.service`](deploy/mcpd.service) is a hardened systemd unit for
+running it directly.
+
+Terminate TLS at a reverse proxy and bind mcpd to loopback, or let it issue its
+own certificate with `server.tls.mode: self-signed`.
 
 ## Status
 
 Working: the MCP host with per-plugin endpoints and scoping; OpenAI's Secure
 MCP Tunnel, embedded, one per connector; accounts with first-run registration;
-the approval engine end to end, including confirmation raised in the
-conversation; SQLite storage with a hash-chained audit trail; the dashboard;
-and the out-of-process plugin SDK.
-
-## Development
-
-[`docs/architecture.md`](docs/architecture.md) covers how it is put together —
-packages, the state machine, the storage model, and the build.
+the approval engine end to end; SQLite storage with a hash-chained audit trail;
+the dashboard; and the out-of-process plugin SDK.

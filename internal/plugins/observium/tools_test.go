@@ -156,7 +156,9 @@ func TestGetDevice_RequiresAnIdentifier(t *testing.T) {
 // rather than forbidden, so an empty answer here has two causes and the error
 // has to name both.
 func TestGetDevice_EmptyAnswerNamesBothCauses(t *testing.T) {
-	p := toolPlugin(t, jsonAPI("devices", map[string]any{}, 0))
+	// "device", not "devices": selecting one entity is a path segment, and
+	// Observium answers that under the singular key.
+	p := toolPlugin(t, jsonAPI("device", map[string]any{}, 0))
 	_, err := p.getDevice(context.Background(), deviceArgs{DeviceID: 9})
 	if err == nil {
 		t.Fatal("a device that is not there should be an error, not an empty list")
@@ -178,8 +180,13 @@ func TestTopology_VLANFailureDoesNotLoseTheRest(t *testing.T) {
 			fmt.Fprint(w, `{"status":"failed","message":"insufficient level"}`)
 			return
 		}
-		fmt.Fprint(w, `{"status":"ok","count":1,"neighbours":{"1":{"neighbour_id":"1"}},`+
-			`"addresses":{"1":{"address_id":"1"}}}`)
+		// The envelope key differs per endpoint: /neighbours answers under the
+		// generic "entries", /address under "addresses".
+		if strings.Contains(r.URL.Path, "/address") {
+			fmt.Fprint(w, `{"status":"ok","count":1,"addresses":{"1":{"ipv4_address_id":"1"}}}`)
+			return
+		}
+		fmt.Fprint(w, `{"status":"ok","count":1,"entries":{"1":{"neighbour_id":"1"}}}`)
 	})
 
 	got, err := p.topology(context.Background(), topologyArgs{DeviceID: 1, VLANs: true})
@@ -255,7 +262,9 @@ func TestSensors_KeepsTheTwoKindsOfReadingApart(t *testing.T) {
 	p := toolPlugin(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/status") {
-			fmt.Fprint(w, `{"status":"ok","count":1,"status":{"1":{"status_id":"1","status_event":"ok"}}}`)
+			// "statuses" beside the verdict, which is what a live installation
+			// answers -- the collection does not overwrite "status":"ok".
+			fmt.Fprint(w, `{"status":"ok","count":1,"statuses":{"1":{"status_id":"1","status_event":"ok"}}}`)
 			return
 		}
 		fmt.Fprint(w, `{"status":"ok","count":1,"sensors":{"1":{"sensor_id":"1","sensor_value":"41.5"}}}`)

@@ -1,4 +1,6 @@
 /bin/
+# Release staging: binaries and .deb packages built by the release workflow.
+/out/
 /dist/
 *.db
 *.db-wal

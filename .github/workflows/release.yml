@@ -1,0 +1,131 @@
+# release-please keeps a PR open with the next version and its changelog;
+# merging it publishes the release the dashboard's update check reads.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # The image and the binaries come out of one build: the `artifacts` stage
+  # exports the same binary the runtime stage copies in, so what you install
+  # on Debian is what is in the container.
+  release-artifacts:
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: version
+        run: echo "value=${TAG#v}" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ needs.release-please.outputs.tag }}
+
+      - name: Build and push the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.value }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Same args and cache as above, so this exports rather than rebuilds.
+      - name: Export the binaries from that build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          target: artifacts
+          outputs: type=local,dest=exported
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+          cache-from: type=gha
+
+      - name: Collect the release assets
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # A multi-platform local export lands one directory per platform.
+          for dir in exported/linux_*; do
+            arch="${dir##*linux_}"
+            install -m 0755 "$dir/mcpd" "out/mcpd-linux-${arch}"
+          done
+          # So installing on Debian needs no git clone.
+          install -m 0644 deploy/mcpd.service out/mcpd.service
+          install -m 0644 README.md out/README.md
+
+      - name: Build the Debian packages
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          # A packaged binary belongs in /usr/bin; the unit must match.
+          mkdir -p out/stage
+          sed 's|/usr/local/bin/mcpd|/usr/bin/mcpd|' deploy/mcpd.service \
+            > out/stage/mcpd.service
+          for arch in amd64 arm64; do
+            install -m 0755 "out/mcpd-linux-${arch}" out/stage/mcpd
+            docker run --rm -v "$PWD":/w -w /w \
+              -e ARCH="$arch" -e VERSION="$VERSION" \
+              ghcr.io/goreleaser/nfpm:latest package \
+              --config packaging/nfpm.yaml --packager deb --target /w/out/
+          done
+          rm -rf out/stage
+
+      - name: Checksum everything
+        run: cd out && sha256sum mcpd-linux-* *.deb mcpd.service README.md > SHA256SUMS && ls -l
+
+      # An asset that does not run is worse than no asset.
+      - name: Check the exported binary runs and knows its version
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          got="$(./out/mcpd-linux-amd64 -version)"
+          echo "reported: $got"
+          case "$got" in
+            *"$VERSION"*) ;;
+            *) echo "binary reports '$got', expected '$VERSION'" >&2; exit 1 ;;
+          esac
+
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag }}
+        run: gh release upload "$TAG" out/* --clobber

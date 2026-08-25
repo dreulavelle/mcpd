@@ -783,6 +783,52 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+
+/** One published release, as the update check reports it. */
+export interface Release {
+  version: string;
+  name?: string;
+  url?: string;
+  published_at?: string;
+  notes?: string;
+}
+
+export interface UpdateStatus {
+  enabled: boolean;
+  current: string;
+  latest?: string;
+  update_available: boolean;
+  newer?: Release[];
+  checked_at?: string;
+  error?: string;
+  /** False for a build whose version cannot be ordered, such as `dev`. */
+  comparable: boolean;
+}
+
+/** Resource usage, read from the Go runtime and /proc. */
+export interface Resources {
+  version: string;
+  started_at: string;
+  uptime_seconds: number;
+  goroutines: number;
+  os_threads: number;
+  num_cpu: number;
+  gomaxprocs: number;
+  heap_in_use_bytes: number;
+  heap_alloc_bytes: number;
+  stack_in_use_bytes: number;
+  sys_bytes: number;
+  total_alloc_bytes: number;
+  resident_bytes?: number;
+  memory_limit_bytes?: number;
+  gc_cycles: number;
+  gc_pause_total_ms: number;
+  last_gc?: string;
+  gc_cpu_percent: number;
+  cpu_seconds?: number;
+  open_files?: number;
+}
+
 export const api = {
   meta: () => request<Meta>("/api/meta"),
 
@@ -982,6 +1028,23 @@ export const api = {
   tunnel: () => request<TunnelInfo>("/api/tunnel"),
 
   settings: () => request<SettingsPayload>("/api/settings"),
+
+  /** What this process is costing the machine it runs on. */
+  resources: () => request<Resources>("/api/resources"),
+
+  /** The running version against what has been published. */
+  updates: () => request<UpdateStatus>("/api/updates"),
+
+  /** Ask now rather than when the cache expires. */
+  checkUpdates: () =>
+    request<UpdateStatus>("/api/updates/check", { method: "POST" }),
+
+  /**
+   * Drain and exit, so the supervisor starts a new process. The reply comes
+   * back before the process goes; the page reconnects on its own.
+   */
+  restart: () =>
+    request<{ status: string; note: string }>("/api/restart", { method: "POST" }),
 
   saveSettings: (values: Record<string, string>, clearSecrets: string[] = []) =>
     request<SaveResult>("/api/settings", {

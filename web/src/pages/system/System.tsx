@@ -1,0 +1,366 @@
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, RefreshCw, RotateCw } from "lucide-react";
+import { api, ApiError, type Resources, type UpdateStatus } from "@/lib/api";
+import { useLoader } from "@/lib/hooks";
+import { useCan } from "@/lib/session";
+import { Loading, Notice, PageHeader } from "@/components/chrome";
+import { Chip } from "@/components/status";
+import { useNotify } from "@/components/toast";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+/**
+ * The host itself: what it is running, what it is costing, and the two
+ * operations that act on the process rather than on what it serves.
+ *
+ * Separate from Settings because nothing here is a setting. Restarting is not
+ * a configuration change, and resource usage is not something anybody edits —
+ * putting them on a page of forms would make both harder to find.
+ */
+export function System() {
+  const mayAdmin = useCan("admin");
+  return (
+    <>
+      <PageHeader
+        title="System"
+        lede="What this host is running, what it is using, and how to restart it."
+      />
+      <div className="space-y-4">
+        <Version mayAdmin={mayAdmin} />
+        <Usage />
+        {mayAdmin && <Restart />}
+      </div>
+    </>
+  );
+}
+
+/** The running version, and what has been published since. */
+function Version({ mayAdmin }: { mayAdmin: boolean }) {
+  const load = useCallback(() => api.updates(), []);
+  const { data, error, reload } = useLoader(load, "Couldn't check for updates.");
+  const [busy, setBusy] = useState(false);
+  const notify = useNotify();
+
+  async function checkNow() {
+    setBusy(true);
+    try {
+      await api.checkUpdates();
+      reload();
+      notify("good", "Checked.");
+    } catch (e) {
+      notify("problem", e instanceof ApiError ? e.detail : "Couldn't check.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle className="text-base">Version</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            mcpd never installs an update. Replacing a running host is the
+            deployment's job — a container that could rewrite itself would need
+            privileges this one drops on purpose.
+          </p>
+        </div>
+        {mayAdmin && (
+          <Button variant="outline" size="sm" onClick={checkNow} disabled={busy}>
+            <RefreshCw className={busy ? "animate-spin" : undefined} />
+            Check now
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {error && <Notice tone="problem">{error}</Notice>}
+        {!data ? <Loading rows={2} /> : <VersionBody status={data} />}
+      </CardContent>
+    </Card>
+  );
+}
+
+function VersionBody({ status }: { status: UpdateStatus }) {
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm text-muted-foreground">Running</span>
+        <code className="font-mono text-sm">{status.current}</code>
+        {status.update_available && status.latest && (
+          <Chip tone="attention">{status.latest} available</Chip>
+        )}
+        {status.enabled && !status.update_available && status.comparable
+          && status.latest && <Chip tone="good">up to date</Chip>}
+        {!status.comparable && (
+          <Chip tone="neutral">not a released version</Chip>
+        )}
+      </div>
+
+      {!status.enabled && (
+        <Notice tone="neutral">
+          Update checking is off, so nothing is asking what the current release
+          is. Turn it on under Settings → Updates. It reaches github.com on a
+          timer, which is a connection worth agreeing to rather than
+          discovering.
+        </Notice>
+      )}
+
+      {status.error && (
+        <Notice tone="problem">
+          The last check failed: {status.error}
+        </Notice>
+      )}
+
+      {!status.comparable && status.enabled && (
+        <Notice tone="neutral">
+          This build reports <code className="font-mono">{status.current}</code>,
+          which cannot be compared with a release number — so it is not being
+          called out of date. Build with a version to change that: the image
+          takes a <code className="font-mono">VERSION</code> build argument, and
+          releases set it for you.
+        </Notice>
+      )}
+
+      {(status.newer?.length ?? 0) > 0 && (
+        <div className="space-y-3">
+          <p className="text-sm font-medium">
+            {status.newer!.length === 1
+              ? "One release since this one"
+              : `${status.newer!.length} releases since this one`}
+          </p>
+          {status.newer!.map((r) => (
+            <div key={r.version} className="rounded-md border p-3">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <code className="font-mono text-sm font-medium">{r.version}</code>
+                {r.published_at && (
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(r.published_at).toLocaleDateString()}
+                  </span>
+                )}
+                {r.url && (
+                  <a
+                    href={r.url} target="_blank" rel="noreferrer"
+                    className="text-xs underline underline-offset-2"
+                  >
+                    release notes
+                  </a>
+                )}
+              </div>
+              {r.notes && (
+                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+                  {r.notes.trim()}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {status.checked_at && (
+        <p className="text-xs text-muted-foreground">
+          Last checked {new Date(status.checked_at).toLocaleString()}.
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * Resource usage, refreshed on a timer.
+ *
+ * Ten seconds rather than one: this is a page somebody leaves open while
+ * looking at something else, and a per-second poll would be this host's
+ * busiest endpoint by a wide margin.
+ */
+function Usage() {
+  const load = useCallback(() => api.resources(), []);
+  const { data, error, reload } = useLoader(load, "Couldn't read resource usage.");
+
+  useEffect(() => {
+    const id = setInterval(reload, 10_000);
+    return () => clearInterval(id);
+  }, [reload]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Resources</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          What this process is using, read from the Go runtime and{" "}
+          <code className="font-mono">/proc</code>. Refreshes every ten seconds.
+        </p>
+      </CardHeader>
+      <CardContent>
+        {error && <Notice tone="problem">{error}</Notice>}
+        {!data ? <Loading rows={3} /> : <UsageBody r={data} />}
+      </CardContent>
+    </Card>
+  );
+}
+
+function UsageBody({ r }: { r: Resources }) {
+  const memory = r.resident_bytes ?? r.heap_in_use_bytes;
+  const pressure = r.memory_limit_bytes
+    ? Math.min(100, (memory / r.memory_limit_bytes) * 100)
+    : null;
+
+  return (
+    <div className="space-y-5">
+      {pressure !== null && (
+        <div className="space-y-1.5">
+          <div className="flex items-baseline justify-between text-sm">
+            <span className="font-medium">Memory</span>
+            <span className="text-muted-foreground">
+              {bytes(memory)} of {bytes(r.memory_limit_bytes!)} ({pressure.toFixed(0)}%)
+            </span>
+          </div>
+          <div
+            className="h-2 w-full overflow-hidden rounded-full bg-muted"
+            role="progressbar" aria-valuenow={Math.round(pressure)}
+            aria-valuemin={0} aria-valuemax={100}
+            aria-label="Memory used against the container limit"
+          >
+            <div
+              className={pressure > 85 ? "h-full bg-destructive" : "h-full bg-primary"}
+              style={{ width: `${pressure}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
+        <Stat label="Uptime" value={duration(r.uptime_seconds)} />
+        <Stat label="Resident memory" value={r.resident_bytes ? bytes(r.resident_bytes) : "—"} />
+        <Stat label="Heap in use" value={bytes(r.heap_in_use_bytes)} />
+        <Stat
+          label="From the OS" value={bytes(r.sys_bytes)}
+          help="Taken from the kernel and not necessarily given back."
+        />
+        <Stat label="Goroutines" value={String(r.goroutines)} />
+        <Stat label="OS threads" value={r.os_threads ? String(r.os_threads) : "—"} />
+        <Stat
+          label="CPU used"
+          value={r.cpu_seconds ? `${r.cpu_seconds.toFixed(1)}s` : "—"}
+          help="Total since start, not a rate."
+        />
+        <Stat label="Open files" value={r.open_files ? String(r.open_files) : "—"} />
+        <Stat
+          label="GC cycles" value={String(r.gc_cycles)}
+          help={`${r.gc_pause_total_ms.toFixed(0)}ms paused in total, ${r.gc_cpu_percent.toFixed(2)}% of CPU.`}
+        />
+        <Stat label="CPUs" value={`${r.gomaxprocs} of ${r.num_cpu}`} />
+        <Stat label="Allocated ever" value={bytes(r.total_alloc_bytes)} />
+        <Stat label="Stacks" value={bytes(r.stack_in_use_bytes)} />
+      </dl>
+
+      {!r.memory_limit_bytes && (
+        <p className="text-xs text-muted-foreground">
+          No memory limit is set on this host, so there is nothing to measure
+          usage against — the figures above are absolute.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value, help }: { label: string; value: string; help?: string }) {
+  return (
+    <div className="space-y-0.5">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="font-mono text-sm tabular-nums">{value}</dd>
+      {help && <dd className="text-xs text-muted-foreground">{help}</dd>}
+    </div>
+  );
+}
+
+/**
+ * Restarting, behind a confirmation.
+ *
+ * Two steps because the cost is not obvious from the button: every connector
+ * drops and reconnects, and an assistant mid-call gets an error. That is worth
+ * a deliberate second press rather than a misclick.
+ */
+function Restart() {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const notify = useNotify();
+
+  async function restart() {
+    setBusy(true);
+    try {
+      await api.restart();
+      setSent(true);
+      notify("good", "Restarting. This page will reconnect on its own.");
+    } catch (e) {
+      notify("problem", e instanceof ApiError ? e.detail : "Couldn't restart.");
+      setConfirming(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Restart</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          mcpd drains and exits; whatever supervises it starts it again. Some
+          settings say they need this — a credential a connector is using is
+          picked up without one.
+        </p>
+      </CardHeader>
+      <CardContent>
+        {sent ? (
+          <Notice tone="neutral">
+            Draining. Connectors will reconnect once the new process is
+            serving; if this page does not come back within a minute, whatever
+            supervises this host did not start it again.
+          </Notice>
+        ) : confirming ? (
+          <div className="space-y-3">
+            <Notice tone="attention">
+              <AlertTriangle className="mr-1 inline size-4 align-text-bottom" />
+              Every connector drops and reconnects, and a tool call in flight
+              will fail. Approved changes still executing are drained first.
+            </Notice>
+            <div className="flex gap-2">
+              <Button variant="destructive" onClick={restart} disabled={busy}>
+                <RotateCw className={busy ? "animate-spin" : undefined} />
+                Restart now
+              </Button>
+              <Button variant="outline" onClick={() => setConfirming(false)} disabled={busy}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button variant="outline" onClick={() => setConfirming(true)}>
+            <RotateCw />
+            Restart mcpd
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Bytes as a person reads them. Binary units, because a memory limit is. */
+function bytes(n: number): string {
+  if (n <= 0) return "0 B";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  const value = n / 1024 ** i;
+  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+/** Uptime, to the two units that matter at whatever scale it has reached. */
+function duration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60) % 60;
+  const h = Math.floor(seconds / 3600) % 24;
+  const d = Math.floor(seconds / 86400);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}

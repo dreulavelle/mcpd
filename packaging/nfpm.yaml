@@ -1,0 +1,56 @@
+# Attached to the GitHub release rather than served from an apt repository: a
+# repository needs a signing key living in CI, which can leak and does expire.
+# Integrity comes from SHA256SUMS over HTTPS instead.
+name: mcpd
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: dreulavelle <noreply@github.com>
+description: |
+  An extensible host for Model Context Protocol integrations.
+  One binary serves many plugins, each on its own endpoint, with every
+  infrastructure change gated behind an approval it can prove. The dashboard
+  and the database are compiled in, so this package depends on nothing.
+vendor: mcpd
+homepage: https://github.com/dreulavelle/mcpd
+license: MIT
+
+# For the maintainer script, not the binary -- that is static. A minimal
+# Debian 13 image does not ship adduser.
+depends:
+  - adduser
+
+contents:
+  # Staged: nfpm expands env vars in metadata fields but not in content paths.
+  - src: ./out/stage/mcpd
+    dst: /usr/bin/mcpd
+    file_info:
+      mode: 0755
+
+  # deploy/mcpd.service with ExecStart repointed at /usr/bin.
+  - src: ./out/stage/mcpd.service
+    dst: /lib/systemd/system/mcpd.service
+    file_info:
+      mode: 0644
+
+  - src: ./README.md
+    dst: /usr/share/doc/mcpd/README.md
+    file_info:
+      mode: 0644
+
+  # Ownership is set by the maintainer script, which makes the user.
+  - dst: /var/lib/mcpd
+    type: dir
+    file_info:
+      mode: 0750
+
+scripts:
+  postinstall: ./packaging/postinstall.sh
+  preremove: ./packaging/preremove.sh
+  postremove: ./packaging/postremove.sh
+
+deb:
+  fields:
+    Bugs: https://github.com/dreulavelle/mcpd/issues
