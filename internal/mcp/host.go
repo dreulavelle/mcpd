@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -25,6 +26,10 @@ type Options struct {
 	Verifier   auth.TokenVerifier
 	Authorizer *auth.Authorizer
 	Health     *observability.HealthRegistry
+	// Errors reports panics off the machine, when an operator has configured
+	// somewhere to send them. Nil is valid and means reporting is off; every
+	// method on it is safe on nil, so this is never checked at a call site.
+	Errors *observability.ErrorReporter
 
 	// Plugins names the mounted plugins, so an authentication challenge can
 	// say which scopes the endpoint being called actually needs.
@@ -228,8 +233,13 @@ func (h *Host) recover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if v := recover(); v != nil {
+				stack := debug.Stack()
 				observability.Logger(r.Context()).Error("panic serving request",
 					"path", r.URL.Path, "panic", fmt.Sprint(v))
+				// Reported after logging, never instead of it. The operator's
+				// own log is the record that always exists; sending a copy
+				// somewhere else is the part they opted into.
+				h.opts.Errors.CapturePanic(v, stack, "mcp.request")
 				h.writeError(w, r, http.StatusInternalServerError, "internal error")
 			}
 		}()
