@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/getsentry/sentry-go v0.48.0
+	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/openai/tunnel-client v0.0.12
 	github.com/prometheus/client_golang v1.23.2
@@ -22,7 +23,6 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grafana/regexp v0.0.0-20240518133315-a468a5bfb3bc // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect

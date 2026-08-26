@@ -189,7 +189,7 @@ func TestTopology_VLANFailureDoesNotLoseTheRest(t *testing.T) {
 		fmt.Fprint(w, `{"status":"ok","count":1,"entries":{"1":{"neighbour_id":"1"}}}`)
 	})
 
-	got, err := p.topology(context.Background(), topologyArgs{DeviceID: 1, VLANs: true})
+	got, err := p.getTopology(context.Background(), topologyArgs{DeviceID: 1, VLANs: true})
 	if err != nil {
 		t.Fatalf("a VLAN permission failure must not fail the whole call: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestMaintenance_RefusalIsNotAnAbsence(t *testing.T) {
 		fmt.Fprint(w, `{"status":"failed","message":"insufficient level"}`)
 	})
 
-	got, err := p.listMaintenance(context.Background(), maintenanceArgs{})
+	got, err := p.listMaintenanceWindows(context.Background(), maintenanceArgs{})
 	if err != nil {
 		t.Fatalf("a permission refusal must not fail the call: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestMaintenance_RefusalIsNotAnAbsence(t *testing.T) {
 func TestMaintenance_EmptyRulesOutSuppression(t *testing.T) {
 	p := toolPlugin(t, jsonAPI("maintenance", map[string]any{}, 0))
 
-	got, err := p.listMaintenance(context.Background(), maintenanceArgs{})
+	got, err := p.listMaintenanceWindows(context.Background(), maintenanceArgs{})
 	if err != nil {
 		t.Fatalf("listMaintenance: %v", err)
 	}

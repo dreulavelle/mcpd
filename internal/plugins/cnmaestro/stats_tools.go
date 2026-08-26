@@ -20,25 +20,25 @@ var deviceTypes = []string{
 
 func (p *Plugin) registerStatsTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "statistics",
+		Name:  "list_device_statistics",
 		Title: "List device statistics",
 		Description: "Current counters for devices across the estate: throughput, " +
 			"client counts, uptime, radio state. This is the fleet-wide view; " +
-			"for one device use cnmaestro_device_statistics, and for how a " +
-			"device behaved over time use cnmaestro_device_performance.",
+			"for one device use cnmaestro_get_device_statistics, and for how a " +
+			"device behaved over time use cnmaestro_get_device_performance.",
 		Idempotent: true,
-	}, p.listStatistics)
+	}, p.listDeviceStatistics)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "device_statistics",
+		Name:  "get_device_statistics",
 		Title: "Get one device's statistics",
 		Description: "Current counters for a single device by MAC address. Use " +
-			"this after cnmaestro_devices has narrowed to one.",
+			"this after cnmaestro_list_devices has narrowed to one.",
 		Idempotent: true,
 	}, p.getDeviceStatistics)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "device_performance",
+		Name:  "get_device_performance",
 		Title: "Get a device's performance over time",
 		Description: "A time series for one device -- throughput, signal, " +
 			"client counts -- between two timestamps. Both times are required " +
@@ -50,7 +50,7 @@ func (p *Plugin) registerStatsTools(r *plugins.Registry) {
 
 // StatisticsInput filters the fleet-wide statistics listing.
 type StatisticsInput struct {
-	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
+	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_list_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
 	Type    string `json:"type,omitempty" jsonschema:"limit to one device type, such as cnmatrix, epmp, pmp, ptp, wifi-enterprise, cnwave60, or nse"`
 	Network string `json:"network,omitempty" jsonschema:"limit to one network, by name"`
 	Tower   string `json:"tower,omitempty" jsonschema:"limit to one tower, by name"`
@@ -68,7 +68,7 @@ type StatisticsOutput struct {
 	Note       string   `json:"note,omitempty"`
 }
 
-func (p *Plugin) listStatistics(ctx context.Context, in StatisticsInput) (StatisticsOutput, error) {
+func (p *Plugin) listDeviceStatistics(ctx context.Context, in StatisticsInput) (StatisticsOutput, error) {
 	deviceType, err := oneOf("type", in.Type, deviceTypes...)
 	if err != nil {
 		return StatisticsOutput{}, err

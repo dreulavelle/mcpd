@@ -126,7 +126,7 @@ func TestIntegration_EveryToolRuns(t *testing.T) {
 			return r.Status.Count, err
 		},
 		"maintenance": func() (int, error) {
-			r, err := p.listMaintenance(ctx, maintenanceArgs{})
+			r, err := p.listMaintenanceWindows(ctx, maintenanceArgs{})
 			return r.Count, err
 		},
 		"groups": func() (int, error) {
@@ -138,7 +138,7 @@ func TestIntegration_EveryToolRuns(t *testing.T) {
 			return r.Count, err
 		},
 		"alert_history": func() (int, error) {
-			r, err := p.alertHistory(ctx, alertHistoryArgs{Limit: 5})
+			r, err := p.listAlertHistory(ctx, alertHistoryArgs{Limit: 5})
 			return r.Count, err
 		},
 		"inventory": func() (int, error) {
@@ -154,7 +154,7 @@ func TestIntegration_EveryToolRuns(t *testing.T) {
 		t.Logf("%s: %d", name, n)
 	}
 
-	capacity, err := p.capacity(ctx, capacityArgs{DeviceID: id})
+	capacity, err := p.getCapacity(ctx, capacityArgs{DeviceID: id})
 	if err != nil {
 		t.Errorf("capacity: %v", err)
 	} else {
@@ -164,7 +164,7 @@ func TestIntegration_EveryToolRuns(t *testing.T) {
 
 	// VLANs need a level 7 account, so a refusal is reported in place rather
 	// than failing the call -- the neighbours are still most of the answer.
-	topo, err := p.topology(ctx, topologyArgs{DeviceID: id, VLANs: true})
+	topo, err := p.getTopology(ctx, topologyArgs{DeviceID: id, VLANs: true})
 	if err != nil {
 		t.Errorf("topology: %v", err)
 	} else {
@@ -242,7 +242,7 @@ func TestIntegration_FiltersActuallyMatch(t *testing.T) {
 			event, got.Sensors.Count, got.Status.Count)
 	}
 
-	recent, err := p.alertHistory(ctx, alertHistoryArgs{
+	recent, err := p.listAlertHistory(ctx, alertHistoryArgs{
 		From:  time.Now().Add(-90 * 24 * time.Hour).Unix(),
 		Limit: 10,
 	})
@@ -262,7 +262,7 @@ func TestIntegration_ValuesAreUsable(t *testing.T) {
 		t.Fatalf("probe: %v", err)
 	}
 
-	page, err := p.client.Read(ctx, EntityDevices, url.Values{}, 5, viewSummary)
+	page, err := p.client.Read(ctx, EntityDevices, url.Values{}, 5, viewSummary, plugins.MaxResultBytes)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestIntegration_ValuesAreUsable(t *testing.T) {
 	// Checked against the full view as well, because that is the one that
 	// promises the whole record and so the one where withholding has to be
 	// deliberate rather than a side effect of narrowing.
-	full, err := p.client.Read(ctx, EntityDevices, url.Values{}, 5, viewFull)
+	full, err := p.client.Read(ctx, EntityDevices, url.Values{}, 5, viewFull, plugins.MaxResultBytes)
 	if err != nil {
 		t.Fatalf("read full: %v", err)
 	}

@@ -18,17 +18,17 @@ import (
 
 func (p *Plugin) registerAlarmTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "alarms",
+		Name:  "list_alarms",
 		Title: "List active alarms",
 		Description: "What is wrong in the estate right now: alarms that are " +
 			"raised and not yet cleared, newest first. Filter by severity, " +
 			"network, tower or site. For what has already cleared, use " +
-			"cnmaestro_alarm_history instead.",
+			"cnmaestro_list_alarm_history instead.",
 		Idempotent: true,
 	}, p.listAlarms)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "alarm_history",
+		Name:  "list_alarm_history",
 		Title: "List alarm history",
 		Description: "Alarms over a period, including ones that have cleared. " +
 			"Use this to see whether something is recurring rather than new. " +
@@ -38,7 +38,7 @@ func (p *Plugin) registerAlarmTools(r *plugins.Registry) {
 	}, p.listAlarmHistory)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "events",
+		Name:  "list_events",
 		Title: "List events",
 		Description: "The device and system event log: reboots, onboarding, " +
 			"configuration changes, radio events. Alarms say what is wrong; " +
@@ -50,7 +50,7 @@ func (p *Plugin) registerAlarmTools(r *plugins.Registry) {
 
 // AlarmsInput filters the active alarm list.
 type AlarmsInput struct {
-	Account  string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
+	Account  string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_list_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
 	Severity string `json:"severity,omitempty" jsonschema:"critical, major or minor; omit for every severity"`
 	Network  string `json:"network,omitempty" jsonschema:"limit to one network, by name"`
 	Tower    string `json:"tower,omitempty" jsonschema:"limit to one tower, by name"`

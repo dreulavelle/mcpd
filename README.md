@@ -13,7 +13,7 @@ because it is talking to your monitoring, not guessing.
                             │  Secure MCP Tunnel (outbound)
               ┌─────────────┼─────────────┐
               ▼             ▼             ▼
-        /mcp/observium  /mcp/cnmaestro  /mcp/…
+        /mcp/observium  /mcp/graylog  /mcp/…
               └─────────────┼─────────────┘
                             ▼
                           mcpd
@@ -134,6 +134,7 @@ See [Upgrading](docs/upgrading.md) for how to apply one.
 
 | Plugin | What it manages | State |
 |---|---|---|
+| `graylog` | Graylog: log search, aggregations, alerts and alert rules, and the installation's own health | Read-only |
 | `observium` | Observium: devices, interfaces, sensors, capacity, alerts. Needs the subscription REST API | Read-only |
 | `cnmaestro` | Cambium cnMaestro: Wi-Fi and fixed-wireless estates | Read-only |
 | `echo` | Nothing real — a worked example, including an approval-gated write | Bundled |

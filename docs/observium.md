@@ -127,7 +127,7 @@ This is why:
   cumulative counters and nothing else. That was wrong: Observium computes
   rates on every poll and stores them in the `ports` table, so current
   throughput never needed RRD. Only *history* does.
-- `observium_graphs` returns links and states plainly that they are images the
+- `observium_get_graph_urls` returns links and states plainly that they are images the
   model cannot read. The failure mode otherwise is an assistant describing a
   trend it never saw, which is worse than having no trend tool at all.
 

@@ -76,7 +76,7 @@ describe("audit events", () => {
 
 describe("presentation helpers", () => {
   it("drops a tool's plugin prefix, and only its own", () => {
-    expect(unprefixed("cnmaestro_devices", "cnmaestro")).toBe("devices");
+    expect(unprefixed("cnmaestro_list_devices", "cnmaestro")).toBe("list_devices");
     expect(unprefixed("netbox_sites", "cnmaestro")).toBe("netbox_sites");
   });
 

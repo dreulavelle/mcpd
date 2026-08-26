@@ -19,10 +19,10 @@ func testRegistry() *Registry {
 // seeing it is itself the privilege.
 func TestTool_CapabilityDefaultsToReadAndCanBeRaised(t *testing.T) {
 	r := testRegistry()
-	Tool(r, ToolSpec{Name: "plain", Title: "P", Description: "d"},
+	Tool(r, ToolSpec{Name: "get_plain", Title: "P", Description: "d"},
 		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
 	Tool(r, ToolSpec{
-		Name: "sensitive", Title: "S", Description: "d",
+		Name: "get_sensitive", Title: "S", Description: "d",
 		Capability: auth.CapAdmin,
 	}, func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
 
@@ -33,11 +33,11 @@ func TestTool_CapabilityDefaultsToReadAndCanBeRaised(t *testing.T) {
 	for _, tool := range r.tools {
 		got[tool.spec.Name] = tool.capability
 	}
-	if got["plain"] != auth.CapRead {
-		t.Errorf("plain = %q, want read", got["plain"])
+	if got["get_plain"] != auth.CapRead {
+		t.Errorf("get_plain = %q, want read", got["get_plain"])
 	}
-	if got["sensitive"] != auth.CapAdmin {
-		t.Errorf("sensitive = %q, want admin", got["sensitive"])
+	if got["get_sensitive"] != auth.CapAdmin {
+		t.Errorf("get_sensitive = %q, want admin", got["get_sensitive"])
 	}
 }
 

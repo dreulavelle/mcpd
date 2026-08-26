@@ -6,7 +6,7 @@ when a change can skip the queue.
 
 
 ```
-  echo_set_label                   →  operation_id, state=pending_approval
+  echo_label_set                   →  operation_id, state=pending_approval
        (nothing has changed)
 
   echo_approve_operation           →  state=approved

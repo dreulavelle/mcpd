@@ -128,7 +128,7 @@ func TestApprovalLifecycle(t *testing.T) {
 	defer stop()
 	go a.publisher.Run(workerCtx)
 
-	before := callTool(t, h, approverToken, "echo_status", map[string]any{})
+	before := callTool(t, h, approverToken, "echo_get_status", map[string]any{})
 	if before["label"] != "default" {
 		t.Fatalf("initial label = %v, want default", before["label"])
 	}
@@ -149,7 +149,7 @@ func TestApprovalLifecycle(t *testing.T) {
 		t.Fatalf("proposal note should state plainly that nothing changed, got %q", note)
 	}
 
-	stillDefault := callTool(t, h, approverToken, "echo_status", map[string]any{})
+	stillDefault := callTool(t, h, approverToken, "echo_get_status", map[string]any{})
 	if stillDefault["label"] != "default" {
 		t.Fatalf("label changed at proposal time: %v -- a proposal must not mutate anything",
 			stillDefault["label"])
@@ -176,7 +176,7 @@ func TestApprovalLifecycle(t *testing.T) {
 	}
 
 	// 5. And the change is real.
-	after := callTool(t, h, approverToken, "echo_status", map[string]any{})
+	after := callTool(t, h, approverToken, "echo_get_status", map[string]any{})
 	if after["label"] != "production" {
 		t.Fatalf("label = %v after execution, want production", after["label"])
 	}
@@ -197,7 +197,7 @@ func TestApprovalLifecycle_RejectionChangesNothing(t *testing.T) {
 		t.Fatalf("state = %v, want rejected", rejected["state"])
 	}
 
-	status := callTool(t, h, approverToken, "echo_status", map[string]any{})
+	status := callTool(t, h, approverToken, "echo_get_status", map[string]any{})
 	if status["label"] != "default" {
 		t.Fatalf("label = %v after rejection, want it untouched", status["label"])
 	}

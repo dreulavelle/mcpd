@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/spoked/mcpd/internal/operations"
 )
@@ -25,6 +26,35 @@ var (
 	remoteToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 	actionPattern         = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 )
+
+// toolVerbs is the vocabulary a tool name may begin with.
+//
+// The host prefixes every tool with the instance name, so a tool called
+// "devices" reaches a model as "observium_devices" -- a service and a noun,
+// naming a category and no action at all -- and one called "search" reaches it
+// as "graylog_search", which is unambiguous only until the plugin gains a
+// second searchable thing. verb_resource makes the qualified name
+// service_verb_resource, and the answer is in the name.
+//
+// The set is closed on purpose, and small, because the verb carries meaning a
+// model reads before it reads a description:
+//
+//	list       returns a collection; a filter narrows it, a query does not
+//	get        returns one thing, or one composite answer about one thing
+//	search     returns a collection selected by a query the caller writes
+//	aggregate  computes over a collection rather than retrieving from it
+//
+// Adding a fifth is an edit here, in front of this comment, which is the right
+// amount of friction: a vocabulary that grows by accident stops being one.
+//
+// Mutations are deliberately not held to this. Their identifier is
+// MutationSpec.Action, which is matched against actionPattern and is a
+// resource.verb pair -- because its first reader is not a model but the
+// approval policy, where "device.reboot" is what an administrator writes a
+// standing rule against and what the audit trail records. Reordering those
+// words would silently stop stored rules matching, and a rule that quietly
+// stops matching is an *exclusion* that quietly stops excluding.
+var toolVerbs = []string{"aggregate_", "get_", "list_", "search_"}
 
 // maxQualifiedToolName bounds the name a model actually sees, which is the
 // plugin prefix, an underscore, and the tool's own name. The MCP
@@ -49,7 +79,47 @@ func checkToolName(d Descriptor, name string) error {
 		return fmt.Errorf("plugins: %s tool name %q must match %s",
 			d.Name, name, toolNamePattern)
 	}
-	return nil
+	return checkToolVerb(d.Name, name)
+}
+
+// checkToolVerb holds a tool name to the house vocabulary.
+//
+// Checked at registration, which for a compiled-in plugin is startup and for
+// an out-of-process one is the moment it mounts. It is a developer's mistake
+// either way, and the cost of not catching it is not a compile error: it is a
+// model choosing the wrong tool, occasionally, in a way nobody attributes to
+// the name.
+func checkToolVerb(plugin, name string) error {
+	for _, verb := range toolVerbs {
+		// The bare verb is compared without the separator, because that is how
+		// it is actually written: the name is "search", not "search_". Testing
+		// only the prefixed form sent "search" down the no-verb branch and told
+		// its author it had named no verb, which is the one thing it had done.
+		if name == strings.TrimSuffix(verb, "_") {
+			// It reads as service_verb once the host has prefixed it, which
+			// says what the tool does to nothing in particular.
+			return fmt.Errorf("plugins: %s tool name %q is a bare verb; name "+
+				"what it acts on, as in %sthing", plugin, name, verb)
+		}
+		if strings.HasPrefix(name, verb) && len(name) > len(verb) {
+			return nil
+		}
+	}
+	return fmt.Errorf("plugins: %s tool name %q names no verb; it must begin "+
+		"with one of %s and say what it acts on. The host prefixes the "+
+		"instance name, so %q reaches a model as %q -- a service and a noun, "+
+		"naming a category and no action",
+		plugin, name, strings.Join(trimmedVerbs(), ", "), name, plugin+"_"+name)
+}
+
+// trimmedVerbs renders the vocabulary without its trailing separators, for a
+// message somebody reads.
+func trimmedVerbs() []string {
+	out := make([]string, len(toolVerbs))
+	for i, verb := range toolVerbs {
+		out[i] = strings.TrimSuffix(verb, "_")
+	}
+	return out
 }
 
 // Plan is what a mutation handler produces before anything is changed. It is
