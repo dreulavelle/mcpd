@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/spoked/mcpd/internal/plugins"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -112,7 +114,7 @@ func TestRead_DoesNotNarrowTheCachedPage(t *testing.T) {
 	cfg.InventoryCacheSeconds = 60
 	c.cache = newReadCache("observium", cfg, c.now, nil)
 
-	summary, err := c.Read(context.Background(), EntityDevices, url.Values{}, 0, viewSummary)
+	summary, err := c.Read(context.Background(), EntityDevices, url.Values{}, 0, viewSummary, plugins.MaxResultBytes)
 	if err != nil {
 		t.Fatalf("summary read: %v", err)
 	}
@@ -120,7 +122,7 @@ func TestRead_DoesNotNarrowTheCachedPage(t *testing.T) {
 		t.Fatal("summary kept sysDescr")
 	}
 
-	full, err := c.Read(context.Background(), EntityDevices, url.Values{}, 0, viewFull)
+	full, err := c.Read(context.Background(), EntityDevices, url.Values{}, 0, viewFull, plugins.MaxResultBytes)
 	if err != nil {
 		t.Fatalf("full read: %v", err)
 	}
@@ -201,7 +203,7 @@ func TestReadCache_LimitedCallDoesNotPoisonTheEstate(t *testing.T) {
 	cfg.InventoryCacheSeconds = 60
 	c.cache = newReadCache("observium", cfg, c.now, nil)
 
-	small, err := c.Read(context.Background(), EntityDevices, url.Values{}, 1, viewSummary)
+	small, err := c.Read(context.Background(), EntityDevices, url.Values{}, 1, viewSummary, plugins.MaxResultBytes)
 	if err != nil {
 		t.Fatalf("limited read: %v", err)
 	}
@@ -210,7 +212,7 @@ func TestReadCache_LimitedCallDoesNotPoisonTheEstate(t *testing.T) {
 			len(small.Items), small.Truncated)
 	}
 
-	all, err := c.Read(context.Background(), EntityDevices, url.Values{}, 0, viewSummary)
+	all, err := c.Read(context.Background(), EntityDevices, url.Values{}, 0, viewSummary, plugins.MaxResultBytes)
 	if err != nil {
 		t.Fatalf("unlimited read: %v", err)
 	}
@@ -282,5 +284,80 @@ func TestAPIPaths_KeysAreOnesObserviumUses(t *testing.T) {
 			t.Errorf("%s reads %q, which is not a key this API answers under",
 				entity, route.key)
 		}
+	}
+}
+
+// max_items bounds how many things come back; the byte budget bounds how much.
+// They are different questions and an estate can hit either first -- five
+// hundred ports is a lot of rows, and one device's sysDescr banner is a lot of
+// bytes. Before this, only the first was bounded, and this plugin's own
+// projection notes record eighty-five devices at 169KB against a default limit
+// of five hundred.
+func TestRead_CutsByBytesNotOnlyByCount(t *testing.T) {
+	// Rows large enough that the budget bites long before max_items does.
+	devices := map[string]any{}
+	for i := 1; i <= 200; i++ {
+		devices[strconv.Itoa(i)] = map[string]any{
+			"device_id": i,
+			"hostname":  fmt.Sprintf("host-%03d.example", i),
+			"sysName":   strings.Repeat("x", 2000),
+		}
+	}
+	c, _ := testClient(t, jsonAPI("devices", devices, len(devices)))
+
+	page, err := c.Read(context.Background(), EntityDevices, url.Values{}, 0,
+		viewFull, plugins.MaxResultBytes)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !page.Truncated {
+		t.Error("a result past the byte budget did not report itself truncated")
+	}
+	if len(page.Items) >= 200 {
+		t.Fatalf("returned %d items; the byte budget did not bite", len(page.Items))
+	}
+
+	encoded, err := json.Marshal(page.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > plugins.MaxResultBytes {
+		t.Errorf("result is %d bytes, past the %d budget", len(encoded), plugins.MaxResultBytes)
+	}
+}
+
+// An answer of nothing at all, because the one matching row was large, is
+// worse than an answer of one large row -- and somebody who asked for one
+// device by hostname should get it whatever its sysDescr looks like.
+func TestRead_AlwaysKeepsTheFirstItem(t *testing.T) {
+	huge := map[string]any{
+		"1": map[string]any{
+			"device_id": 1,
+			"hostname":  "big.example",
+			"sysDescr":  strings.Repeat("y", plugins.MaxResultBytes*2),
+		},
+	}
+	c, _ := testClient(t, jsonAPI("devices", huge, 1))
+
+	page, err := c.Read(context.Background(), EntityDevices, url.Values{}, 0,
+		viewFull, plugins.MaxResultBytes)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("items = %d, want the one oversized row kept", len(page.Items))
+	}
+}
+
+// A composite answer is one tool result, not three. Three collections each
+// bounded at the whole budget would be a result three times past it.
+func TestResultBudget_DividesForCompositeAnswers(t *testing.T) {
+	whole := plugins.ResultBudget(1)
+	third := plugins.ResultBudget(3)
+	if third*3 > whole {
+		t.Errorf("three collections at %d exceed the whole budget of %d", third, whole)
+	}
+	if plugins.ResultBudget(0) != whole {
+		t.Error("a nonsensical collection count should fall back to the whole budget")
 	}
 }

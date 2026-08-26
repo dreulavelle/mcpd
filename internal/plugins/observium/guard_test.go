@@ -168,7 +168,7 @@ func TestCacheTTL_AlertsAreNeverHeld(t *testing.T) {
 func TestGraphURLs_CarryNoCredential(t *testing.T) {
 	p := testPlugin(t, "https://observium.example.com")
 
-	got, err := p.graphURLs(context.Background(), graphArgs{
+	got, err := p.getGraphURLs(context.Background(), graphArgs{
 		Kind: "port", ID: 42,
 	})
 	if err != nil {
@@ -204,7 +204,7 @@ func TestGraphURLs_CarryNoCredential(t *testing.T) {
 // produces a link that renders an error page.
 func TestGraphURLs_DeviceUsesDeviceParam(t *testing.T) {
 	p := testPlugin(t, "https://observium.example.com")
-	got, err := p.graphURLs(context.Background(), graphArgs{Kind: "device", ID: 7})
+	got, err := p.getGraphURLs(context.Background(), graphArgs{Kind: "device", ID: 7})
 	if err != nil {
 		t.Fatalf("graphURLs: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestGraphURLs_DeviceUsesDeviceParam(t *testing.T) {
 // answer than saying the type is not documented and where to find it.
 func TestGraphURLs_UndocumentedKindRefusesRatherThanGuessing(t *testing.T) {
 	p := testPlugin(t, "https://observium.example.com")
-	_, err := p.graphURLs(context.Background(), graphArgs{Kind: "sensor", ID: 3})
+	_, err := p.getGraphURLs(context.Background(), graphArgs{Kind: "sensor", ID: 3})
 	if err == nil {
 		t.Fatal("an undocumented kind must not be guessed at")
 	}

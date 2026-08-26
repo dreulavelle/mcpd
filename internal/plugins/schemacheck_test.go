@@ -37,7 +37,7 @@ func TestTool_RejectsByteSlicesInSchemaTypes(t *testing.T) {
 		{
 			name: "raw message in output",
 			register: func(r *Registry) {
-				Tool(r, ToolSpec{Name: "raw", Title: "Raw", Description: "d"},
+				Tool(r, ToolSpec{Name: "get_raw", Title: "Raw", Description: "d"},
 					func(context.Context, struct{}) (rawOut, error) { return rawOut{}, nil })
 			},
 			wantErr: "output output.Records",
@@ -45,7 +45,7 @@ func TestTool_RejectsByteSlicesInSchemaTypes(t *testing.T) {
 		{
 			name: "byte slice nested in output",
 			register: func(r *Registry) {
-				Tool(r, ToolSpec{Name: "nested", Title: "Nested", Description: "d"},
+				Tool(r, ToolSpec{Name: "get_nested", Title: "Nested", Description: "d"},
 					func(context.Context, struct{}) (nestedOut, error) { return nestedOut{}, nil })
 			},
 			wantErr: "output output.Inner.Blob",
@@ -53,7 +53,7 @@ func TestTool_RejectsByteSlicesInSchemaTypes(t *testing.T) {
 		{
 			name: "raw message in input",
 			register: func(r *Registry) {
-				Tool(r, ToolSpec{Name: "rawin", Title: "RawIn", Description: "d"},
+				Tool(r, ToolSpec{Name: "get_rawin", Title: "RawIn", Description: "d"},
 					func(context.Context, rawIn) (struct{}, error) { return struct{}{}, nil })
 			},
 			wantErr: "input input.Payload",
@@ -61,7 +61,7 @@ func TestTool_RejectsByteSlicesInSchemaTypes(t *testing.T) {
 		{
 			name: "a map of records is fine",
 			register: func(r *Registry) {
-				Tool(r, ToolSpec{Name: "ok", Title: "OK", Description: "d"},
+				Tool(r, ToolSpec{Name: "get_ok", Title: "OK", Description: "d"},
 					func(context.Context, struct{}) (okOut, error) { return okOut{}, nil })
 			},
 		},

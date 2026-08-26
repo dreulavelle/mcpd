@@ -27,7 +27,7 @@ var macPattern = regexp.MustCompile(`^[0-9A-Fa-f]{2}([:-]?[0-9A-Fa-f]{2}){5}$`)
 // registered here.
 func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "networks",
+		Name:  "list_networks",
 		Title: "List networks",
 		Description: "Lists networks. Start here when you do not know what " +
 			"exists: network names are what most other filters take. Reads " +
@@ -37,18 +37,18 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, p.listNetworks)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "devices",
+		Name:  "list_devices",
 		Title: "List devices",
 		Description: "Lists devices, newest state first. Filter by network, " +
 			"site, tower, type, or whether the device is online, and name an " +
-			"account to read one MSP tenant -- cnmaestro_managed_accounts " +
+			"account to read one MSP tenant -- cnmaestro_list_managed_accounts " +
 			"lists them. Prefer a filter to listing everything: a large estate " +
 			"is truncated, and the result says so when it was.",
 		Idempotent: true,
 	}, p.listDevices)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "managed_accounts",
+		Name:  "list_managed_accounts",
 		Title: "List managed accounts",
 		Description: "Lists the MSP managed accounts (tenants) in this " +
 			"installation, with each one's status. Use this to find the exact " +
@@ -60,10 +60,10 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, p.listManagedAccounts)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "device",
+		Name:  "get_device",
 		Title: "Get one device",
 		Description: "Returns the full record for a single device by MAC " +
-			"address. Use this after cnmaestro_devices has narrowed to one, " +
+			"address. Use this after cnmaestro_list_devices has narrowed to one, " +
 			"since the list omits fields this returns. Name the account the " +
 			"device belongs to if reads are not pinned to one.",
 		Idempotent: true,
@@ -83,7 +83,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 // NetworksInput carries only the account, since networks are the top of the
 // hierarchy and there is nothing above them to filter by.
 type NetworksInput struct {
-	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
+	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_list_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
 }
 
 // NetworksOutput is a list of networks.
@@ -129,7 +129,7 @@ func (p *Plugin) listNetworks(ctx context.Context, in NetworksInput) (NetworksOu
 // model is told to prefer filters because an unfiltered estate is the case
 // that gets truncated.
 type DevicesInput struct {
-	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
+	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_list_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
 	Network string `json:"network,omitempty" jsonschema:"limit to one network, by name"`
 	Site    string `json:"site,omitempty" jsonschema:"limit to one site, by name"`
 	Tower   string `json:"tower,omitempty" jsonschema:"limit to one tower, by name"`

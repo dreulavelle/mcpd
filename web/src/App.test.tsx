@@ -51,7 +51,7 @@ function stubApi(role: "user" | "admin" = "admin") {
       endpoint: "/mcp/echo", connect_url: "http://127.0.0.1:18080/mcp/echo",
       health: "healthy",
       tools: [
-        { name: "echo_echo", kind: "read" },
+        { name: "echo_get_echo", kind: "read" },
         { name: "echo_label_set", kind: "propose" },
       ],
       mutations: ["label.set"], required: false, settings: [],

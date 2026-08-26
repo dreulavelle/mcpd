@@ -19,7 +19,7 @@ func (s *stubPlugin) Descriptor() Descriptor {
 func (s *stubPlugin) Register(_ context.Context, r *Registry) error {
 	s.registered = r.Descriptor().Name
 	Tool(r, ToolSpec{
-		Name: "shares", Title: "List shares", Description: "Lists shares.",
+		Name: "list_shares", Title: "List shares", Description: "Lists shares.",
 	}, func(_ context.Context, _ struct{}) (struct{}, error) { return struct{}{}, nil })
 	return nil
 }

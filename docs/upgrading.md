@@ -24,6 +24,32 @@ other step. Changing a plugin's credentials needs no restart at all: the plugin
 is remounted and its tunnel rebuilt, so a connector picks up the new credential
 on its next call.
 
+## Tools were renamed to verb_resource
+
+Every tool this host serves now begins with a verb. `observium_devices` is
+`observium_list_devices`, `cnmaestro_device` is `cnmaestro_get_device`,
+`echo_status` is `echo_get_status`, and so on for all thirty-odd. The reasoning
+is in [Writing a plugin](plugins.md#naming-tools): the host prefixes the
+instance name, so the old names reached a model as a service and a noun, naming
+a category and no action at all.
+
+Nothing in the database is keyed on a tool name, so there is nothing to
+migrate. What breaks is anything *outside* mcpd that names one:
+
+- **A saved prompt or an agent instruction** that calls a tool by name. Assistants
+  discover tools at connection time, so an ordinary conversation is unaffected;
+  what needs editing is text you wrote that hardcodes a name.
+- **A plugin built with the SDK.** The rule is enforced at mount, so a plugin
+  whose tool is called `greet` now fails registration with a message naming the
+  vocabulary. Rename it — `get_greeting` — and rebuild. If the plugin is marked
+  `required`, the host will not start until you have.
+
+**Approval policy rules are not affected.** They key on
+`MutationSpec.Action` — `device.reboot`, `label.set` — which is deliberately a
+separate namespace and is unchanged. Reordering *those* words would have
+silently stopped a stored exclusion matching, which is the one failure this
+rename was careful not to cause.
+
 ## Moving a deployment from before ./data
 
 

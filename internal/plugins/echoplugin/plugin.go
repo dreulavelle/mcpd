@@ -68,8 +68,8 @@ type StatusOutput struct {
 // Register implements plugins.Plugin.
 func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "echo",
-		Title: "Echo a message",
+		Name:  "get_echo",
+		Title: "Echo a message back",
 		Description: "Returns the supplied message unchanged, with its length. " +
 			"Use this to verify that the connection and credentials work.",
 		Idempotent: true,
@@ -83,7 +83,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	plugins.Mutation(r, plugins.MutationSpec{
 		Action:      "label.set",
 		Title:       "Set the echo label",
-		Description: "Changes the label reported by echo_status.",
+		Description: "Changes the label reported by echo_get_status.",
 		Risk:        operations.RiskLow,
 		Reversible:  true,
 		// Observe reads the same field Apply writes, so comparing it against
@@ -92,8 +92,8 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, &labelHandler{p: p})
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:        "status",
-		Title:       "Plugin status",
+		Name:        "get_status",
+		Title:       "Get plugin status",
 		Description: "Reports this plugin's version and how long it has been running.",
 		Idempotent:  true,
 	}, func(_ context.Context, _ StatusInput) (StatusOutput, error) {
@@ -149,7 +149,7 @@ func (h *labelHandler) Plan(_ context.Context, params SetLabelParams) (plugins.P
 		Changes: []operations.Change{
 			{Field: "label", From: current, To: params.Label},
 		},
-		Impact:   "Changes the label reported by echo_status. Harmless; it exists to exercise the approval path.",
+		Impact:   "Changes the label reported by echo_get_status. Harmless; it exists to exercise the approval path.",
 		Rollback: SetLabelParams{Label: current},
 	}, nil
 }

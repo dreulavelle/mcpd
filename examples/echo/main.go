@@ -31,7 +31,7 @@ func main() {
 	state := &greeting{value: "hello"}
 
 	sdk.Tool(p, sdk.ToolSpec{
-		Name:        "greet",
+		Name:        "get_greeting",
 		Title:       "Greet someone",
 		Description: "Returns the current greeting addressed to a name.",
 		Idempotent:  true,

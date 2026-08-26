@@ -113,6 +113,20 @@ they are a separate opt-in. If you add a field to a report, scrub it there.
 than sharing the cached one. Writing a principal into a shared server lets the
 first caller answer for everyone.
 
+**Tools are named `verb_resource`.** The host prefixes the instance name, so
+`search` reaches a model as `graylog_search` — a service and a verb, saying
+nothing about what is searched, and unambiguous only until the plugin gains a
+second searchable thing. `search_messages` and `search_events` put the answer
+in the name. Verbs are a small set — `list_`, `search_`, `get_`, or a domain
+verb where none of those is honest — because the verb carries meaning a model
+reads before it reads a description. A bare noun (`observium_indicators`) is
+the worse form: it names a category somebody invented and no action at all.
+Enforced at registration by `plugins.checkToolName`, against the closed set in
+`toolVerbs`. Mutations are deliberately outside it: `MutationSpec.Action` stays
+`resource.verb` because the approval policy reads it before a model does, and
+reordering those words would silently stop a stored exclusion matching.
+[`docs/plugins.md`](docs/plugins.md) is the reference.
+
 ## Conventions
 
 Comments explain *why*, and are worth writing where a reader would otherwise

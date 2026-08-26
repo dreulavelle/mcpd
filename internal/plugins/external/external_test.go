@@ -79,7 +79,7 @@ func TestExternalPlugin_EndToEnd(t *testing.T) {
 	}
 
 	// A read tool.
-	out, err := p.callTool(ctx, "greet", json.RawMessage(`{"name":"world"}`))
+	out, err := p.callTool(ctx, "get_greeting", json.RawMessage(`{"name":"world"}`))
 	if err != nil {
 		t.Fatalf("greet: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestExternalPlugin_EndToEnd(t *testing.T) {
 	}
 
 	// Planning must not have changed anything.
-	out, _ = p.callTool(ctx, "greet", json.RawMessage(`{"name":"world"}`))
+	out, _ = p.callTool(ctx, "get_greeting", json.RawMessage(`{"name":"world"}`))
 	if !strings.Contains(string(out), "hello, world") {
 		t.Fatalf("planning changed state: %s", out)
 	}
@@ -141,7 +141,7 @@ func TestExternalPlugin_PropagatesPluginErrors(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
 
-	if _, err := p.callTool(ctx, "greet", json.RawMessage(`{"name":""}`)); err == nil {
+	if _, err := p.callTool(ctx, "get_greeting", json.RawMessage(`{"name":""}`)); err == nil {
 		t.Fatal("the plugin's own validation error must reach the caller")
 	}
 	if _, err := p.callTool(ctx, "nonexistent", json.RawMessage(`{}`)); err == nil {
@@ -173,7 +173,7 @@ func TestShutdown_StopsTheProcess(t *testing.T) {
 		t.Fatal("process should have exited after shutdown")
 	}
 	// A call after shutdown must fail rather than hang.
-	if _, err := p.callTool(ctx, "greet", json.RawMessage(`{"name":"x"}`)); err == nil {
+	if _, err := p.callTool(ctx, "get_greeting", json.RawMessage(`{"name":"x"}`)); err == nil {
 		t.Fatal("calling a stopped plugin must fail")
 	}
 }

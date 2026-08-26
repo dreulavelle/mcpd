@@ -13,39 +13,44 @@ import (
 // first part of it: by the question somebody asks, not by the endpoint that
 // answers it.
 //
-// Five endpoints arrive here as two tools. A tool per endpoint would be nine
-// more entries in a list a model reads in full before every call, most of them
-// never used -- and a tool list is itself a context cost, paid on every
-// conversation rather than only when the tool is called. Billing is one
-// question whether the meter is traffic or power; counters, printer supplies
-// and probes are all "what else is this device reporting", and they are
-// grouped the way capacity groups storage, memory and processors.
+// Five endpoints arrive here as two tools. Billing is one question whether the
+// meter is traffic or power; counters, printer supplies and probes are all
+// "what else is this device reporting", and they are grouped the way capacity
+// groups storage, memory and processors.
+//
+// The reason is that a model asked one question should not have to choose
+// between five tools that answer it. It is *not* that grouping saves context,
+// which is what this comment used to say: measured, it does not. A grouped
+// tool returns a composite result, and the output schema derived from that
+// result grows by about what the extra tool entries would have cost. See
+// TestToolList_StaysWithinItsContextBudget in internal/app, which is where
+// that number lives now.
 
 // registerReadTools adds the second half of the read surface.
 func (p *Plugin) registerReadTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "billing",
+		Name:  "list_bills",
 		Title: "Traffic and power bills",
 		Description: "What the estate is metered for: traffic bills and power " +
 			"bills, each with its current-period usage against its allowance. " +
 			"Ask for one by id to get its closed periods and the ports or " +
 			"power sources it accumulates. Use it for questions about " +
 			"commitment, overage and what a circuit has actually carried this " +
-			"period -- not for live throughput, which is observium_ports.",
+			"period -- not for live throughput, which is observium_list_ports.",
 		Idempotent: true,
-	}, p.billing)
+	}, p.listBills)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "indicators",
+		Name:  "list_counters_supplies_probes",
 		Title: "Status, counters, printer supplies and probes",
 		Description: "The readings no other tool carries: arbitrary counters, " +
 			"printer consumable levels and response-time probes. Pass a " +
 			"device_id -- unfiltered this spans three collections across the " +
 			"whole estate, each truncated independently. Temperature, voltage, " +
 			"fans, power and a device's enumerated conditions are all on " +
-			"observium_sensors.",
+			"observium_list_sensors.",
 		Idempotent: true,
-	}, p.indicators)
+	}, p.listCountersSuppliesProbes)
 
 }
 
@@ -73,7 +78,7 @@ type billingResult struct {
 	Note     string      `json:"note,omitempty"`
 }
 
-func (p *Plugin) billing(ctx context.Context, in billingArgs) (billingResult, error) {
+func (p *Plugin) listBills(ctx context.Context, in billingArgs) (billingResult, error) {
 	kind := strings.ToLower(strings.TrimSpace(in.Kind))
 	if kind != "" && kind != "traffic" && kind != "power" {
 		return billingResult{}, fmt.Errorf(
@@ -94,7 +99,7 @@ func (p *Plugin) billing(ctx context.Context, in billingArgs) (billingResult, er
 		if in.Live {
 			q.Set("live", "1")
 		}
-		page, err := p.fetch(ctx, EntityBills, q, in.Limit)
+		page, err := p.fetchWithin(ctx, EntityBills, q, in.Limit, billCollections(in))
 		if err != nil {
 			return billingResult{}, err
 		}
@@ -107,7 +112,7 @@ func (p *Plugin) billing(ctx context.Context, in billingArgs) (billingResult, er
 		if in.Live {
 			q.Set("live", "1")
 		}
-		page, err := p.fetch(ctx, EntityPowerBills, q, in.Limit)
+		page, err := p.fetchWithin(ctx, EntityPowerBills, q, in.Limit, billCollections(in))
 		if err != nil {
 			return billingResult{}, err
 		}
@@ -176,7 +181,7 @@ type indicatorsResult struct {
 	Note     string     `json:"note,omitempty"`
 }
 
-func (p *Plugin) indicators(ctx context.Context, in indicatorsArgs) (indicatorsResult, error) {
+func (p *Plugin) listCountersSuppliesProbes(ctx context.Context, in indicatorsArgs) (indicatorsResult, error) {
 	only := strings.ToLower(strings.TrimSpace(in.Only))
 	switch only {
 	case "", "counters", "supplies", "probes":
@@ -204,7 +209,7 @@ func (p *Plugin) indicators(ctx context.Context, in indicatorsArgs) (indicatorsR
 		if only != "" && only != c.name {
 			continue
 		}
-		page, err := p.fetch(ctx, c.entity, q, in.Limit)
+		page, err := p.fetchWithin(ctx, c.entity, q, in.Limit, 3)
 		if err != nil {
 			return indicatorsResult{}, err
 		}
@@ -217,6 +222,20 @@ func (p *Plugin) indicators(ctx context.Context, in indicatorsArgs) (indicatorsR
 			"Pass a device_id, or narrow with only."
 	}
 	return out, nil
+}
+
+// billCollections counts what one billing answer carries, so the byte budget
+// is divided by the number of collections that will actually be in it rather
+// than by the most there could ever be.
+func billCollections(in billingArgs) int {
+	n := 2 // both meters, unless one was asked for
+	if kind := strings.ToLower(strings.TrimSpace(in.Kind)); kind != "" {
+		n = 1
+	}
+	if in.Detailed {
+		n += 2 // the named bill's closed periods and metered entities
+	}
+	return n
 }
 
 // readPath reads a sub-collection that belongs to one named entity.
