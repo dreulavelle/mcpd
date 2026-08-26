@@ -626,7 +626,7 @@ var apiPaths = map[Entity]route{
 // /devices/491 under "device", /status under "statuses" and /status/12 under
 // "status_entry". Selecting one entity is a path segment rather than a filter,
 // so the same route serves both and has to know both names. Getting this wrong
-// is silent -- it reads as "no such device" -- which is how observium_device
+// is silent -- it reads as "no such device" -- which is how observium_get_device
 // came to be broken without anybody noticing.
 type route struct {
 	path  string
@@ -646,7 +646,7 @@ type route struct {
 //
 // Credentials are the exception and are gone before this point: walk removes
 // them as it decodes, so they are never in the cache to be copied out of.
-func (c *Client) Read(ctx context.Context, entity Entity, filters url.Values, limit int, v view) (Page, error) {
+func (c *Client) Read(ctx context.Context, entity Entity, filters url.Values, limit int, v view, budget int) (Page, error) {
 	route, ok := apiPaths[entity]
 	if !ok {
 		return Page{}, fmt.Errorf("observium: no API endpoint for %s", entity)
@@ -684,7 +684,54 @@ func (c *Client) Read(ctx context.Context, entity Entity, filters url.Values, li
 
 	page.Items = copyItems(page.Items)
 	page.Fields, page.FieldsDropped = narrow(page.Items, entity, v)
+
+	// The byte ceiling is applied here rather than in walk, and the order
+	// matters. walk's result is what the cache holds, and it holds whole rows
+	// so that a summary read cannot be served to a caller who asked for full
+	// detail. Budgeting there would bound the *unprojected* rows -- so a
+	// summary listing, whose rows are a fifth the size, would be cut to a
+	// fifth of the items it could actually have carried.
+	//
+	// max_items bounds how many things come back; this bounds how much. They
+	// are different questions and an estate can hit either first: five hundred
+	// ports is a lot of rows, and one device's sysDescr banner is a lot of
+	// bytes.
+	if dropped := capBytes(&page.Items, budget); dropped {
+		page.Truncated = true
+	}
 	return page, nil
+}
+
+// capBytes drops items from the end until what remains fits the budget.
+//
+// Measured by marshalling, because that is what the size actually is: a map
+// with ten short keys and one holding a multi-line banner are not the same
+// row, and anything cheaper than encoding them would be guessing.
+//
+// The first item is always kept. An answer of nothing at all, because the one
+// matching row was large, is worse than an answer of one large row -- and a
+// caller who asked for one device by hostname should get it whatever its
+// sysDescr looks like.
+func capBytes(items *[]map[string]any, budget int) bool {
+	if budget <= 0 || len(*items) == 0 {
+		return false
+	}
+	spent := 0
+	for i, item := range *items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			// Unencodable rows are the SDK's problem to report, not this
+			// function's to hide by truncating here.
+			continue
+		}
+		spent += len(encoded)
+		if spent <= budget || i == 0 {
+			continue
+		}
+		*items = (*items)[:i]
+		return true
+	}
+	return false
 }
 
 // copyItems gives the caller maps it may modify.

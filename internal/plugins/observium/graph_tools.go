@@ -80,7 +80,7 @@ type graphResult struct {
 	Note   string      `json:"note"`
 }
 
-func (p *Plugin) graphURLs(_ context.Context, in graphArgs) (graphResult, error) {
+func (p *Plugin) getGraphURLs(_ context.Context, in graphArgs) (graphResult, error) {
 	if !p.configured {
 		return graphResult{}, fmt.Errorf("observium: not configured yet — set " +
 			"its connection details on the Plugins page")

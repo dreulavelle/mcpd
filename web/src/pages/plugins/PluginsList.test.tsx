@@ -121,9 +121,9 @@ describe("tool counts", () => {
     const rows = toRows(
       [plugin("cnmaestro", {
         tools: [
-          { name: "cnmaestro_devices", kind: "read" },
-          { name: "cnmaestro_sites", kind: "read" },
-          { name: "cnmaestro_reboot", kind: "propose" },
+          { name: "cnmaestro_list_devices", kind: "read" },
+          { name: "cnmaestro_list_sites", kind: "read" },
+          { name: "cnmaestro_device_reboot", kind: "propose" },
         ],
       })],
       [instance("cnmaestro")],

@@ -13,15 +13,20 @@ import (
 // Register declares the read surface.
 //
 // The tools are grouped by the question somebody asks rather than by the
-// endpoint that answers it. Observium has around nineteen entity types and a
-// tool per type would be a tool list longer than most conversations need, most
-// of it never called -- so storage, memory and processors arrive together as
-// "capacity", and neighbours, addresses and VLANs as "topology". The grouping
-// is the one a network engineer would use, which is the one a model asked a
-// network question will reach for.
+// endpoint that answers it. Observium has around nineteen entity types, so
+// storage, memory and processors arrive together as "capacity", and
+// neighbours, addresses and VLANs as "topology". The grouping is the one a
+// network engineer would use, which is the one a model asked a network
+// question will reach for.
+//
+// It buys clarity rather than context. The saving it looks like it should make
+// is not there -- a grouped tool's composite result carries an output schema
+// larger by roughly what the extra tool entries would have cost -- and this
+// plugin is the evidence: fourteen tools costing more than cnmaestro's
+// seventeen. TestToolList_StaysWithinItsContextBudget holds the numbers.
 func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "devices",
+		Name:  "list_devices",
 		Title: "List devices",
 		Description: "Lists monitored devices and their current status. Start " +
 			"here when you do not know what exists: nearly every other tool " +
@@ -32,28 +37,28 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, p.listDevices)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "device",
+		Name:  "get_device",
 		Title: "Get one device",
 		Description: "Full detail for one device by id or hostname: hardware, " +
 			"operating system, serial, uptime, location, contact and how it is " +
-			"polled. Use it after observium_devices has named one.",
+			"polled. Use it after observium_list_devices has named one.",
 		Idempotent: true,
 	}, p.getDevice)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "ports",
+		Name:  "list_ports",
 		Title: "List interfaces",
 		Description: "Lists network interfaces with their administrative and " +
 			"operational state, speed, and cumulative traffic and error " +
 			"counters. Filter by device, state, or whether the port has errors. " +
 			"The counters are totals since the counter last reset, not rates -- " +
 			"a rate needs two readings, and Observium does not serve the " +
-			"history as data. Use observium_graphs for the trend.",
+			"history as data. Use observium_get_graph_urls for the trend.",
 		Idempotent: true,
 	}, p.listPorts)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "sensors",
+		Name:  "list_sensors",
 		Title: "Sensors and state indicators",
 		Description: "Everything Observium measures or watches on a device. " +
 			"Sensors are the readings that are numbers — temperature, voltage, " +
@@ -66,7 +71,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, p.listSensors)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "alerts",
+		Name:  "list_alerts",
 		Title: "List current alerts",
 		Description: "What is wrong now. Lists alert entries with their state, " +
 			"the entity they are about, and when they last changed. Never " +
@@ -76,27 +81,27 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, p.listAlerts)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "alert_history",
+		Name:  "list_alert_history",
 		Title: "Alert history",
 		Description: "What went wrong and when, newest first. This is the only " +
 			"history Observium serves as data -- everything else it records is " +
 			"in RRD and comes out as an image. Filter by device, entity, or a " +
 			"time window given as unix timestamps.",
 		Idempotent: true,
-	}, p.alertHistory)
+	}, p.listAlertHistory)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "capacity",
+		Name:  "get_capacity",
 		Title: "Storage, memory and processors",
 		Description: "The three things that fill up: disk and filesystem usage, " +
 			"memory pools, and processor load, each with its current percentage. " +
 			"Ask for one device to see all three together, which is what " +
 			"answering 'is this box healthy' actually needs.",
 		Idempotent: true,
-	}, p.capacity)
+	}, p.getCapacity)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "topology",
+		Name:  "get_topology",
 		Title: "Neighbours, addresses and VLANs",
 		Description: "How devices connect to each other and what they are " +
 			"addressed as: discovered LLDP and CDP neighbours, configured IPv4 " +
@@ -104,10 +109,10 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 			"other end of a port. VLANs need a level 7 account and are omitted " +
 			"with a note when the credential cannot read them.",
 		Idempotent: true,
-	}, p.topology)
+	}, p.getTopology)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "inventory",
+		Name:  "list_inventory",
 		Title: "Hardware inventory",
 		Description: "Physical hardware inside devices: modules, transceivers, " +
 			"power supplies and fans, with model names and serial numbers. " +
@@ -116,7 +121,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, p.listInventory)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "maintenance",
+		Name:  "list_maintenance_windows",
 		Title: "Scheduled maintenance windows",
 		Description: "Planned windows during which alerting is suppressed. " +
 			"This is the first thing to check when an estate has something " +
@@ -125,10 +130,10 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 			"account; below that it reports that it could not read them rather " +
 			"than reporting none.",
 		Idempotent: true,
-	}, p.listMaintenance)
+	}, p.listMaintenanceWindows)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "groups",
+		Name:  "list_groups",
 		Title: "List groups",
 		Description: "The groups an operator has organised the estate into. " +
 			"Several filters take a group name, and this is the only way to " +
@@ -138,7 +143,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	}, p.listGroups)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "graphs",
+		Name:  "get_graph_urls",
 		Title: "Graph image links",
 		Description: "Links to Observium's rendered graphs for one entity over " +
 			"a time window. These are PNG images: you cannot read the values " +
@@ -146,7 +151,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 			"the person to open. This exists because Observium keeps its time " +
 			"series in RRD and has no endpoint that returns them as numbers.",
 		Idempotent: true,
-	}, p.graphURLs)
+	}, p.getGraphURLs)
 
 	p.registerReadTools(r)
 	return nil
@@ -226,7 +231,7 @@ type devicesArgs struct {
 	Hardware string `json:"hardware,omitempty" jsonschema:"filter by hardware model"`
 	Vendor   string `json:"vendor,omitempty" jsonschema:"filter by vendor"`
 	Type     string `json:"type,omitempty" jsonschema:"filter by device type, e.g. network, server, firewall"`
-	Group    string `json:"group,omitempty" jsonschema:"filter by group name; observium_groups lists them"`
+	Group    string `json:"group,omitempty" jsonschema:"filter by group name; observium_list_groups lists them"`
 	Version  string `json:"version,omitempty" jsonschema:"filter by software version"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"most devices to return"`
 }
@@ -397,7 +402,7 @@ func (p *Plugin) listSensors(ctx context.Context, in sensorsArgs) (sensorResult,
 	setIf(q, FilterEvent, in.Event)
 	setIf(q, "group", in.Group)
 
-	sensors, err := p.fetch(ctx, EntitySensors, q, in.Limit)
+	sensors, err := p.fetchWithin(ctx, EntitySensors, q, in.Limit, 2)
 	if err != nil {
 		return sensorResult{}, err
 	}
@@ -414,7 +419,7 @@ func (p *Plugin) listSensors(ctx context.Context, in sensorsArgs) (sensorResult,
 	// A refusal here does not lose the sensors already fetched. Status is the
 	// smaller half of the answer and an installation that cannot serve it can
 	// still answer most of the question.
-	status, err := p.fetch(ctx, EntityStatus, q, in.Limit)
+	status, err := p.fetchWithin(ctx, EntityStatus, q, in.Limit, 2)
 	if err != nil {
 		out.Status.Note = "State indicators could not be read: " + err.Error()
 		return out, nil
@@ -435,7 +440,7 @@ func (p *Plugin) listAlerts(ctx context.Context, in alertsArgs) (listResult, err
 	}
 	q.Set("status", status)
 
-	page, err := p.fetch(ctx, EntityAlerts, q, in.Limit)
+	page, err := p.fetchWithin(ctx, EntityAlerts, q, in.Limit, 2)
 	if err != nil {
 		return listResult{}, err
 	}
@@ -443,11 +448,11 @@ func (p *Plugin) listAlerts(ctx context.Context, in alertsArgs) (listResult, err
 	if len(out.Items) == 0 && status == "failed" {
 		out.Note = "Nothing is currently in a failed state. This is a live " +
 			"read, not a cached one. If something is visibly wrong and nothing " +
-			"is alerting, check observium_maintenance for a window that is " +
+			"is alerting, check observium_list_maintenance_windows for a window that is " +
 			"suppressing it."
 	}
 	if in.Checks {
-		checks, err := p.fetch(ctx, EntityAlertChecks, url.Values{}, in.Limit)
+		checks, err := p.fetchWithin(ctx, EntityAlertChecks, url.Values{}, in.Limit, 2)
 		switch {
 		case err != nil:
 			out.Note = strings.TrimSpace(out.Note +
@@ -459,7 +464,7 @@ func (p *Plugin) listAlerts(ctx context.Context, in alertsArgs) (listResult, err
 	return out, nil
 }
 
-func (p *Plugin) listMaintenance(ctx context.Context, in maintenanceArgs) (listResult, error) {
+func (p *Plugin) listMaintenanceWindows(ctx context.Context, in maintenanceArgs) (listResult, error) {
 	q := url.Values{}
 	if in.Active {
 		q.Set(FilterActive, "1")
@@ -504,7 +509,7 @@ func (p *Plugin) listGroups(ctx context.Context, in groupsArgs) (listResult, err
 	return resultOf(page, "groups"), nil
 }
 
-func (p *Plugin) alertHistory(ctx context.Context, in alertHistoryArgs) (listResult, error) {
+func (p *Plugin) listAlertHistory(ctx context.Context, in alertHistoryArgs) (listResult, error) {
 
 	q := url.Values{}
 	setIDIf(q, "device_id", in.DeviceID)
@@ -536,19 +541,19 @@ type capacityResult struct {
 	Note       string     `json:"note,omitempty"`
 }
 
-func (p *Plugin) capacity(ctx context.Context, in capacityArgs) (capacityResult, error) {
+func (p *Plugin) getCapacity(ctx context.Context, in capacityArgs) (capacityResult, error) {
 	q := url.Values{}
 	setIDIf(q, "device_id", in.DeviceID)
 
-	storage, err := p.fetch(ctx, EntityStorage, q, in.Limit)
+	storage, err := p.fetchWithin(ctx, EntityStorage, q, in.Limit, 3)
 	if err != nil {
 		return capacityResult{}, err
 	}
-	memory, err := p.fetch(ctx, EntityMempools, q, in.Limit)
+	memory, err := p.fetchWithin(ctx, EntityMempools, q, in.Limit, 3)
 	if err != nil {
 		return capacityResult{}, err
 	}
-	processors, err := p.fetch(ctx, EntityProcessors, q, in.Limit)
+	processors, err := p.fetchWithin(ctx, EntityProcessors, q, in.Limit, 3)
 	if err != nil {
 		return capacityResult{}, err
 	}
@@ -573,11 +578,11 @@ type topologyResult struct {
 	Note       string     `json:"note,omitempty"`
 }
 
-func (p *Plugin) topology(ctx context.Context, in topologyArgs) (topologyResult, error) {
+func (p *Plugin) getTopology(ctx context.Context, in topologyArgs) (topologyResult, error) {
 	q := url.Values{}
 	setIDIf(q, "device_id", in.DeviceID)
 
-	neighbours, err := p.fetch(ctx, EntityNeighbours, q, in.Limit)
+	neighbours, err := p.fetchWithin(ctx, EntityNeighbours, q, in.Limit, 3)
 	if err != nil {
 		return topologyResult{}, err
 	}
@@ -586,7 +591,7 @@ func (p *Plugin) topology(ctx context.Context, in topologyArgs) (topologyResult,
 		addrQuery[k] = v
 	}
 	setIf(addrQuery, FilterAF, in.AF)
-	addresses, err := p.fetch(ctx, EntityAddresses, addrQuery, in.Limit)
+	addresses, err := p.fetchWithin(ctx, EntityAddresses, addrQuery, in.Limit, 3)
 	if err != nil {
 		return topologyResult{}, err
 	}
@@ -602,7 +607,7 @@ func (p *Plugin) topology(ctx context.Context, in topologyArgs) (topologyResult,
 		// level 7 account, and a topology answer without them is still the
 		// answer to most of the question -- so it degrades with a note rather
 		// than losing the neighbours that were already fetched.
-		vlans, err := p.fetch(ctx, EntityVLANs, q, in.Limit)
+		vlans, err := p.fetchWithin(ctx, EntityVLANs, q, in.Limit, 3)
 		switch {
 		case err != nil:
 			out.VLANs.Note = "VLANs could not be read: " + err.Error()
@@ -640,7 +645,21 @@ func (p *Plugin) listInventory(ctx context.Context, in inventoryArgs) (listResul
 // fetch reads a listing: the summary view, because a listing is answering a
 // question about many things and the fields that answer it are few.
 func (p *Plugin) fetch(ctx context.Context, entity Entity, q url.Values, limit int) (Page, error) {
-	return p.read(ctx, entity, q, limit, viewSummary)
+	return p.read(ctx, entity, q, limit, viewSummary, plugins.ResultBudget(1))
+}
+
+// fetchWithin is fetch for a tool whose answer carries several collections.
+//
+// The budget is one tool *result*, not one collection, so three collections
+// each bounded at the whole of it is a result three times past it. Composite
+// tools say how many they carry and each gets its share.
+//
+// This is the grouped-tool trade showing up a second time. Grouping is right
+// for the reason it has always been right -- a model asked whether a box is
+// healthy should not choose between three tools -- and the cost is that each
+// part of the answer is shorter than it would be alone.
+func (p *Plugin) fetchWithin(ctx context.Context, entity Entity, q url.Values, limit, collections int) (Page, error) {
+	return p.read(ctx, entity, q, limit, viewSummary, plugins.ResultBudget(collections))
 }
 
 // fetchFull reads the whole record, for the tools that promise one named
@@ -648,10 +667,10 @@ func (p *Plugin) fetch(ctx context.Context, entity Entity, q url.Values, limit i
 // meant the SNMP community string, and a tool that returned it would be
 // handing a model a live credential for a device it was asked to describe.
 func (p *Plugin) fetchFull(ctx context.Context, entity Entity, q url.Values, limit int) (Page, error) {
-	return p.read(ctx, entity, q, limit, viewFull)
+	return p.read(ctx, entity, q, limit, viewFull, plugins.ResultBudget(1))
 }
 
-func (p *Plugin) read(ctx context.Context, entity Entity, q url.Values, limit int, v view) (Page, error) {
+func (p *Plugin) read(ctx context.Context, entity Entity, q url.Values, limit int, v view, budget int) (Page, error) {
 	if !p.configured {
 		return Page{}, fmt.Errorf("observium: not configured yet — set its " +
 			"connection details on the Plugins page")
@@ -659,7 +678,7 @@ func (p *Plugin) read(ctx context.Context, entity Entity, q url.Values, limit in
 	if limit <= 0 || limit > p.cfg.MaxItems {
 		limit = p.cfg.MaxItems
 	}
-	page, err := p.client.Read(ctx, entity, q, limit, v)
+	page, err := p.client.Read(ctx, entity, q, limit, v, budget)
 	p.note(err)
 	return page, err
 }

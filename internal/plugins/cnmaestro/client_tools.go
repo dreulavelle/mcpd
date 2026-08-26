@@ -12,7 +12,7 @@ import (
 
 func (p *Plugin) registerClientTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "clients",
+		Name:  "list_clients",
 		Title: "List connected clients",
 		Description: "Wireless clients currently associated, across the estate " +
 			"or on one access point. Name a device to ask about that AP's " +
@@ -22,16 +22,16 @@ func (p *Plugin) registerClientTools(r *plugins.Registry) {
 	}, p.listClients)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "wired_clients",
+		Name:  "list_wired_clients",
 		Title: "List wired clients",
 		Description: "Clients connected over Ethernet rather than radio, which " +
 			"is what a switch or an NSE reports. Separate from " +
-			"cnmaestro_clients because the API keeps them apart.",
+			"cnmaestro_list_clients because the API keeps them apart.",
 		Idempotent: true,
 	}, p.listWiredClients)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "mesh_peers",
+		Name:  "list_mesh_peers",
 		Title: "List mesh peers",
 		Description: "Mesh links between access points: which node is a base, " +
 			"which is a client, and the state of the link between them. Use " +
@@ -43,7 +43,7 @@ func (p *Plugin) registerClientTools(r *plugins.Registry) {
 
 // ClientsInput selects whose clients to list.
 type ClientsInput struct {
-	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
+	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name from cnmaestro_list_managed_accounts, or Base Infrastructure for the main account; omit to use the configured default"`
 	Device  string `json:"device,omitempty" jsonschema:"MAC address of one access point, to list only its clients; omit for every client the account can see"`
 	Type    string `json:"type,omitempty" jsonschema:"wireless, wired, or all; defaults to wireless"`
 }

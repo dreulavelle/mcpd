@@ -12,30 +12,30 @@ import (
 // Where things are, and how the wireless side is configured.
 //
 // Sites and towers hang off a network in the API's hierarchy, so both take a
-// network name rather than being estate-wide listings. cnmaestro_networks is
+// network name rather than being estate-wide listings. cnmaestro_list_networks is
 // where that name comes from.
 
 func (p *Plugin) registerTopologyTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "sites",
+		Name:  "list_sites",
 		Title: "List sites in a network",
 		Description: "The sites within one network -- buildings, campuses, " +
 			"whatever the estate calls a place. Site names are what the device " +
-			"and alarm filters take. Get the network name from cnmaestro_networks.",
+			"and alarm filters take. Get the network name from cnmaestro_list_networks.",
 		Idempotent: true,
 	}, p.listSites)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "towers",
+		Name:  "list_towers",
 		Title: "List towers in a network",
 		Description: "The towers within one network, for fixed wireless estates " +
 			"where devices are grouped by structure rather than by building. " +
-			"Get the network name from cnmaestro_networks.",
+			"Get the network name from cnmaestro_list_networks.",
 		Idempotent: true,
 	}, p.listTowers)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "wlans",
+		Name:  "list_wlans",
 		Title: "List enterprise WLANs",
 		Description: "The Wi-Fi networks configured for enterprise access points: " +
 			"SSIDs, security, VLAN. This is configuration rather than state, " +
@@ -44,7 +44,7 @@ func (p *Plugin) registerTopologyTools(r *plugins.Registry) {
 	}, p.listWLANs)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "ap_groups",
+		Name:  "list_ap_groups",
 		Title: "List enterprise AP groups",
 		Description: "The AP groups enterprise access points are configured " +
 			"from. A device's behaviour comes from its group, so this is where " +
@@ -55,7 +55,7 @@ func (p *Plugin) registerTopologyTools(r *plugins.Registry) {
 
 // SitesInput names the network to look inside.
 type SitesInput struct {
-	Network string `json:"network" jsonschema:"the network's name, from cnmaestro_networks"`
+	Network string `json:"network" jsonschema:"the network's name, from cnmaestro_list_networks"`
 	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name, or Base Infrastructure for the main account; omit to use the configured default"`
 }
 
@@ -93,7 +93,7 @@ func (p *Plugin) listSites(ctx context.Context, in SitesInput) (SitesOutput, err
 
 // TowersInput names the network to look inside.
 type TowersInput struct {
-	Network string `json:"network" jsonschema:"the network's name, from cnmaestro_networks"`
+	Network string `json:"network" jsonschema:"the network's name, from cnmaestro_list_networks"`
 	Account string `json:"account,omitempty" jsonschema:"which account to read: an MSP tenant name, or Base Infrastructure for the main account; omit to use the configured default"`
 }
 
@@ -192,7 +192,7 @@ func (p *Plugin) listAPGroups(ctx context.Context, in APGroupsInput) (APGroupsOu
 func requiredName(field, value string) (string, error) {
 	v := strings.TrimSpace(value)
 	if v == "" {
-		return "", fmt.Errorf("%s is required; cnmaestro_networks lists the names", field)
+		return "", fmt.Errorf("%s is required; cnmaestro_list_networks lists the names", field)
 	}
 	return v, nil
 }

@@ -236,8 +236,8 @@ parameter most likely to produce a plausible wrong answer rather than an error.
 
 mcpd sends it when a tool call names an account, and otherwise when the
 instance has one configured as its default. The configured value is a default
-rather than a confinement: `cnmaestro_devices`, `cnmaestro_networks` and
-`cnmaestro_device` each take an `account` argument, so one instance answers
+rather than a confinement: `cnmaestro_list_devices`, `cnmaestro_list_networks` and
+`cnmaestro_get_device` each take an `account` argument, so one instance answers
 questions about any tenant its credential can see. Leaving the setting empty is
 the arrangement for an MSP installation -- reads then span every account, and
 the assistant narrows by naming one. Each result reports which account answered.

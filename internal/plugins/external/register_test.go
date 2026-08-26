@@ -98,8 +98,8 @@ func TestExternalPlugin_RegisterMountsToolsAndMutations(t *testing.T) {
 	if mounted == nil {
 		t.Fatal("the plugin did not mount")
 	}
-	if got := mounted.Registry.ToolNames(); !slices.Contains(got, "echo_greet") {
-		t.Fatalf("tools = %v, want echo_greet among them", got)
+	if got := mounted.Registry.ToolNames(); !slices.Contains(got, "echo_get_greeting") {
+		t.Fatalf("tools = %v, want echo_get_greeting among them", got)
 	}
 	if got := mounted.Registry.MutationActions(); !slices.Contains(got, "greeting.set") {
 		t.Fatalf("mutations = %v, want greeting.set among them", got)

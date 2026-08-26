@@ -131,12 +131,12 @@ func explainRequestFailure(status int, path string, body []byte) error {
 				"Clear managed_account, or set it to that", mainAccountName)
 		case http.StatusForbidden:
 			return fmt.Errorf("cnmaestro: that managed account is disabled. " +
-				"cnmaestro_managed_accounts reports each tenant's status; a " +
+				"cnmaestro_list_managed_accounts reports each tenant's status; a " +
 				"disabled tenant can own visible data and still reject every " +
 				"call naming it")
 		case http.StatusNotFound:
 			return fmt.Errorf("cnmaestro: no managed account by that name. "+
-				"Matching is exact and case-sensitive -- cnmaestro_managed_accounts "+
+				"Matching is exact and case-sensitive -- cnmaestro_list_managed_accounts "+
 				"lists the tenants, and the Main Account is %q", mainAccountName)
 		}
 	}

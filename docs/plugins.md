@@ -8,7 +8,7 @@ func main() {
     p := sdk.New("weather", "1.0.0", "Weather", "Reads local weather.")
 
     sdk.Tool(p, sdk.ToolSpec{
-        Name:        "forecast",
+        Name:        "get_forecast",
         Description: "Get the forecast for a city.",
     }, func(ctx context.Context, in ForecastInput) (Forecast, error) {
         return lookup(ctx, in.City)
@@ -29,6 +29,160 @@ mcpd mounts it at `/mcp/weather`. See [`examples/echo`](examples/echo) for a
 complete plugin including an approval-gated mutation, and the [`sdk`](sdk)
 package docs for the mutation contract.
 
-The rule that matters most: if a mutation's `Apply` cannot establish whether
-its write landed, it must return `sdk.Indeterminate`. Anything else tells the
-host the write did not happen, and permits a retry that applies it twice.
+## Naming tools
+
+**`verb_resource`, and never a bare verb or a bare noun.**
+
+The host prefixes every tool with the instance name, so a plugin's `search`
+reaches a model as `graylog_search`. That reads as a service and a verb and
+says nothing about what is searched — and this plugin can search two different
+things. A model choosing between them has only the description to go on, which
+is the part it reads second.
+
+`search_messages` and `search_events` make the qualified names
+`graylog_search_messages` and `graylog_search_events`, and the answer is in the
+name. The [MCP specification](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+says nothing about naming style beyond uniqueness, but every example in it is
+verb-first, and Anthropic's
+[tool-writing guidance](https://www.anthropic.com/engineering/writing-tools-for-agents)
+is that a namespacing scheme should be chosen and then applied consistently.
+This is the scheme.
+
+Keep the verbs to a small set, because the verb carries meaning a model reads
+before it reads a description:
+
+| | |
+|---|---|
+| `list_` | returns a collection; a filter narrows it, a query does not |
+| `search_` | returns a collection selected by a query the caller writes |
+| `get_` | returns one thing, or one composite answer about one thing |
+| a domain verb | when none of the above is honest — `aggregate_messages` computes rather than retrieves |
+
+Two things this rules out, both of which have shipped here before:
+
+- **A bare noun.** `observium_indicators` names a category somebody invented
+  and no action at all. What does it do with them?
+- **A bare verb.** `graylog_search` was that, and it is worse than it looks: it
+  is only unambiguous while the plugin has one searchable thing, so it becomes
+  wrong later, silently, when a second is added.
+
+`Title` is the human-readable display name and should mirror the tool's name
+rather than restate its category — "Search events and alerts", not "Events".
+
+**Mutations are outside this rule.** A mutation is identified by
+`MutationSpec.Action`, which is a `resource.verb` pair — `device.reboot`,
+`label.set` — because its first reader is not a model but the approval policy.
+That is the string an administrator writes a standing rule against and the
+string the audit trail records. Reordering those words would silently stop
+stored rules matching, and a rule that quietly stops matching is an
+*exclusion* that quietly stops excluding.
+
+**It is enforced.** `plugins.checkToolName` refuses a name outside the
+vocabulary at registration — startup for a compiled-in plugin, mount time for
+one built with this SDK. The verbs live in `toolVerbs` in
+`internal/plugins/mutation.go`; if you genuinely need a fifth, add it there, in
+front of the comment explaining why the set is closed.
+
+A remote MCP server is exempt. Its tools are named by whoever wrote it, and
+renaming them would produce names the far end does not answer to — every call
+would fail at the last hop with nothing saying why.
+
+The cost of getting this wrong is not a compile error. It is a model choosing
+the wrong tool, occasionally, in a way nobody attributes to the name.
+
+## The tool list is a budget
+
+Everything a plugin advertises — names, descriptions, input schemas, output
+schemas, annotations — is fetched on connect and enters the model's context
+before a single tool is called. It is charged per *conversation*, not per call,
+and whether the tools are used or not.
+
+`TestToolList_StaysWithinItsContextBudget` in `internal/app` measures it per
+plugin and fails if one grows past its ceiling. The ceilings sit about fifteen
+percent above today's cost: the point is to catch a doubling, not to argue
+about a sentence. Raising one is fine — do it in a diff somebody reads, and say
+why.
+
+Where the cost actually goes, measured across all four integrations:
+
+| | share | |
+|---|---|---|
+| output schemas | ~41% | derived from your handler's Go return type; nobody writes them |
+| input schemas | ~30% | your parameter struct and its `jsonschema` tags |
+| descriptions | ~17% | the only part written by hand |
+| annotations | ~6% | five fields, fixed |
+
+Two things follow that are worth knowing before you design a plugin.
+
+**Your return type is a context cost.** It is the largest line item and the
+least visible one, because no one writes it — a handler returning three nested
+collections carries an output schema three times the size of one returning a
+flat list. If a result can be flatter, it is cheaper twice over: in the schema
+every conversation pays for, and in the result each call returns.
+
+**Grouping endpoints into one tool does not save context.** It reads as though
+it must, and this codebase asserted it in three places. Measured, it is false:
+`observium` serves three *fewer* tools than `cnmaestro` and costs five
+kilobytes *more*, because its grouped tools return composite results whose
+schemas grow by about what the extra tool entries would have saved. Cost tracks
+total surface area, not tool count.
+
+Group anyway — it is how a model asked one question is kept from choosing
+between nine tools that each answer part of it, and that is a good enough
+reason on its own. Just do not claim a saving that is not there.
+
+## What one call may return
+
+A tool result is charged twice, and neither charge is visible from the code
+that builds it.
+
+**It goes over the wire twice.** The specification says a tool returning
+structured content SHOULD also serialize it into a text block, so a client
+predating structured content can still recover the payload — and the Go SDK
+does exactly that. Your result appears in `structuredContent` and again in
+`content[0].text`. That is correct; it is also a 2× multiplier on every size
+decision you make.
+
+**The client has its own ceiling.** Claude Code caps a tool response at 25,000
+tokens by default. Past it, the response is cut *by the client*, mid-JSON, with
+no note saying what went missing — and the model then reasons about a truncated
+object it does not know is truncated.
+
+`plugins.MaxResultBytes` is the arithmetic, done once: 25,000 tokens at roughly
+3.5 characters each is ~87,500 characters, halved for the duplication, rounded
+down to **40,000 bytes** for a plugin to build. Use `plugins.ResultBudget(n)`
+where `n` is how many independent collections your result carries — a composite
+answer is one tool result, and three collections each bounded at the whole
+budget is a result three times past it.
+
+Bound your own results and say so. Truncation will happen on a large estate
+whatever you do; the only question is whether the thing doing it can explain
+itself and tell the caller what to narrow.
+
+Two things this is not. It is not a substitute for an item limit — `max_items`
+bounds how many things come back and this bounds how much, and an estate can
+hit either first. And it is not a setting: an operator raising it would only
+move where the cutting happens.
+
+## Errors are results, not failures
+
+The specification splits failures in two, and the split decides whether a model
+can recover.
+
+A **protocol error** — unknown tool, unparseable arguments — is a JSON-RPC
+error. The call did not happen and there is nothing to reason about.
+
+A **tool execution error** — a bad query, an upstream that refused — is an
+ordinary result carrying `isError: true` with the message as text. The model
+sees it. Returning an ordinary Go `error` from your handler produces exactly
+this, so there is nothing to do but write the message well: say what was wrong
+*and* what to do instead, because the model is about to act on it. "sort order
+is \"sideways\"; it is asc or desc" is a retry; "invalid argument" is a dead end.
+
+`TestToolErrors_ReachTheModelAsRecoverableResults` pins both halves.
+
+## The rule that matters most
+
+If a mutation's `Apply` cannot establish whether its write landed, it must
+return `sdk.Indeterminate`. Anything else tells the host the write did not
+happen, and permits a retry that applies it twice.

@@ -23,7 +23,7 @@ func main() {
 		"Reports the plan state each apply was given.")
 
 	sdk.Tool(p, sdk.ToolSpec{
-		Name:        "ping",
+		Name:        "get_ping",
 		Title:       "Ping",
 		Description: "Returns ok, so the plugin exposes a readable tool.",
 		Idempotent:  true,

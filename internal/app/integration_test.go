@@ -179,7 +179,7 @@ func TestHost_ToolsListAndCall(t *testing.T) {
 		t.Fatalf("tools/list status = %d: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	for _, want := range []string{"echo_echo", "echo_status"} {
+	for _, want := range []string{"echo_get_echo", "echo_get_status"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("tools/list does not advertise %q\nbody: %s", want, body)
 		}
@@ -189,7 +189,7 @@ func TestHost_ToolsListAndCall(t *testing.T) {
 	w = mcpRequest(t, h, "/mcp/echo", tokenScoped, map[string]any{
 		"jsonrpc": "2.0", "id": 2, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "echo_echo",
+			"name":      "echo_get_echo",
 			"arguments": map[string]any{"message": "hello mcpd"},
 		},
 	})
@@ -330,7 +330,7 @@ func TestNew_RefusesUnknownPlugin(t *testing.T) {
 
 func TestSplitToolName(t *testing.T) {
 	tests := []struct{ in, plugin, bare string }{
-		{"echo_echo", "echo", "echo"},
+		{"echo_get_echo", "echo", "get_echo"},
 		{"cnmaestro_list_devices", "cnmaestro", "list_devices"},
 		{"noprefix", "noprefix", ""},
 	}
@@ -359,7 +359,7 @@ func TestHost_AggregateEndpoint(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("aggregate endpoint = %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "echo_echo") {
+	if !strings.Contains(w.Body.String(), "echo_get_echo") {
 		t.Fatalf("the aggregate catalogue is missing echo's tools: %s", w.Body.String())
 	}
 
@@ -367,7 +367,7 @@ func TestHost_AggregateEndpoint(t *testing.T) {
 	w = mcpRequest(t, h, "/mcp", tokenWildcard, map[string]any{
 		"jsonrpc": "2.0", "id": 2, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "echo_echo",
+			"name":      "echo_get_echo",
 			"arguments": map[string]any{"message": "via aggregate"},
 		},
 	})
@@ -391,7 +391,7 @@ func TestHost_AggregateRespectsScoping(t *testing.T) {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "echo_echo") {
+	if !strings.Contains(body, "echo_get_echo") {
 		t.Fatal("a granted plugin should appear in the aggregate catalogue")
 	}
 	// Nothing from a plugin the token does not grant may appear.
