@@ -99,23 +99,21 @@ func TestType_IsValid(t *testing.T) {
 	}
 }
 
-// Credentials are not kept on the config the plugin holds, so a dump of it --
-// a log line, an error, the settings page -- cannot carry one.
+// The credential is not kept on the config the plugin holds, so a dump of it
+// -- a log line, an error, the settings page -- cannot carry one.
 func TestNew_DoesNotRetainCredentials(t *testing.T) {
 	p, err := New(plugins.Deps{
 		Instance: "graylog",
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Now:      time.Now,
 	}, Config{
-		BaseURL:  "https://graylog.example",
-		Token:    "supersecret",
-		Username: "alice",
-		Password: "hunter2",
+		BaseURL: "https://graylog.example",
+		Token:   "supersecret",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if p.cfg.Token != "" || p.cfg.Username != "" || p.cfg.Password != "" {
+	if p.cfg.Token != "" {
 		t.Errorf("the plugin kept a credential on its config: %+v", p.cfg)
 	}
 }

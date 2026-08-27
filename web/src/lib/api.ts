@@ -829,6 +829,46 @@ export interface Resources {
   open_files?: number;
 }
 
+/**
+ * A certificate this host trusts on top of the system roots.
+ *
+ * Public material: the server presents it to everyone who connects, so the PEM
+ * is here in full. It is what lets somebody check that what mcpd trusts is what
+ * the appliance actually serves.
+ */
+export interface Certificate {
+  id: string;
+  name: string;
+  pem: string;
+  subject: string;
+  issuer: string;
+  /** SHA-256 of the certificate, lowercase hex. */
+  fingerprint: string;
+  not_before: string;
+  not_after: string;
+  status: "valid" | "expiring" | "expired" | "not_yet_valid";
+  /** Its own issuer — the ordinary shape of an appliance's certificate. */
+  self_signed: boolean;
+  is_ca: boolean;
+  /**
+   * Whether it can be the root of a chain at all. False means trusting it
+   * cannot fix anything, which is worth saying before somebody waits to find
+   * out.
+   */
+  anchors: boolean;
+  added_by: string;
+  added_at: string;
+}
+
+/** One of the two fields carries the certificate; never both. */
+export interface AddCertificate {
+  name: string;
+  /** Text as pasted, headers and all. */
+  pem?: string;
+  /** A binary file, base64 for the trip. */
+  base64?: string;
+}
+
 export const api = {
   meta: () => request<Meta>("/api/meta"),
 
@@ -965,6 +1005,23 @@ export const api = {
   /** Revokes rather than deletes, so the trail can still name what acted. */
   revokeKey: (id: string) =>
     request<ApiKey>(`/api/keys/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+
+  certificates: () =>
+    request<{ certificates: Certificate[]; count: number }>("/api/certificates"),
+
+  /**
+   * Adds a certificate. The host rebuilds what it trusts and remounts the
+   * plugins on the spot, so nothing here asks for a restart.
+   */
+  addCertificate: (body: AddCertificate) =>
+    request<Certificate>("/api/certificates", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Deleted rather than disabled: trust is a thing to be able to take back. */
+  deleteCertificate: (id: string) =>
+    request<void>(`/api/certificates/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   users: () => request<{ users: User[]; count: number }>("/api/users"),
 

@@ -15,18 +15,30 @@ func TestPluginGroup_NamespacesByInstance(t *testing.T) {
 	a := PluginGroup("nas-primary", "Synology", fields)
 	b := PluginGroup("nas-backup", "Synology", fields)
 
-	if a.Fields[0].Key != "plugins.nas-primary.client_id" {
-		t.Fatalf("key = %q, want it namespaced", a.Fields[0].Key)
+	// Every instance also carries the host's own purpose field, which is the
+	// first of them; the declared fields follow.
+	first := func(g Group) Field { return g.Fields[1] }
+
+	if first(a).Key != "plugins.nas-primary.client_id" {
+		t.Fatalf("key = %q, want it namespaced", first(a).Key)
 	}
-	if a.Fields[0].Key == b.Fields[0].Key {
+	if first(a).Key == first(b).Key {
 		t.Fatal("two instances share a key; one would overwrite the other")
 	}
 	if a.Section != SectionPlugins {
 		t.Errorf("section = %q, want the plugins page", a.Section)
 	}
 	// The plugin is rebuilt on the spot, so nothing has to be restarted.
+	if first(a).Apply != ApplyReconnect {
+		t.Errorf("apply = %q, want reconnect", first(a).Apply)
+	}
+	// The purpose is namespaced and remounts like anything else: it is read
+	// when the plugin is built, so an edit has to rebuild it to be seen.
+	if a.Fields[0].Key != "plugins.nas-primary."+PluginPurposeKey {
+		t.Errorf("first field = %q, want the instance's purpose", a.Fields[0].Key)
+	}
 	if a.Fields[0].Apply != ApplyReconnect {
-		t.Errorf("apply = %q, want reconnect", a.Fields[0].Apply)
+		t.Errorf("purpose apply = %q, want reconnect", a.Fields[0].Apply)
 	}
 }
 
@@ -250,7 +262,15 @@ func TestPluginGroup_KeepsOptionLabels(t *testing.T) {
 		Options:      []string{"api", "database"},
 		OptionLabels: map[string]string{"database": "Community Edition", "api": "Subscription"},
 	}})
-	got := group.Fields[0].OptionLabels
+	// Found by key rather than by position: every instance also carries the
+	// host's own purpose field, and which end of the list it sits at is not
+	// what this test is about.
+	var got map[string]string
+	for _, f := range group.Fields {
+		if f.Key == PluginSettingKey("observium", "backend") {
+			got = f.OptionLabels
+		}
+	}
 	if got["database"] != "Community Edition" || got["api"] != "Subscription" {
 		t.Fatalf("labels did not survive namespacing: %v", got)
 	}

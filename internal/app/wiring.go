@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
@@ -231,7 +233,7 @@ func (a *App) pluginDeps(name string) plugins.Deps {
 		Store:    newPluginStore(a.db, name),
 		Events:   newPluginPublisher(a.db, name),
 		Secrets:  newPluginSecrets(a.cfg, name),
-		HTTP:     newPluginHTTPClient(),
+		HTTP:     a.pluginHTTPClient(),
 		Now:      time.Now,
 		// Both are the metrics surface, handed over through interfaces narrow
 		// enough that a plugin can report its own cache and its own upstream
@@ -269,11 +271,25 @@ func (a *App) upstreamObserver() plugins.UpstreamObserver {
 // so a hung upstream would pin a goroutine and a tool call indefinitely. The
 // connection caps keep one plugin from exhausting file descriptors shared with
 // the rest of the host.
-func newPluginHTTPClient() *http.Client {
+//
+// roots is nil unless an operator has added certificates, and nil is Go's own
+// "use the system store" -- so a deployment that never needed one carries no
+// pool and no branch at handshake time.
+func newPluginHTTPClient(roots *x509.CertPool) *http.Client {
+	var tlsConfig *tls.Config
+	if roots != nil {
+		// Only RootCAs is set. Everything else about the handshake -- the
+		// minimum version, the cipher suites, whether the name is checked --
+		// stays whatever Go's defaults are, because a company certificate is a
+		// reason to trust one more issuer and not a reason to verify anything
+		// less carefully.
+		tlsConfig = &tls.Config{RootCAs: roots}
+	}
 	return &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
+			Proxy:           http.ProxyFromEnvironment,
+			TLSClientConfig: tlsConfig,
 			DialContext: (&net.Dialer{
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,

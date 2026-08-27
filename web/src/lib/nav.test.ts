@@ -69,7 +69,7 @@ describe("navigation gating", () => {
       .find((g) => g.title === "Administer");
     expect(administer?.items.map((i) => i.label)).toEqual([
       "Settings", "System", "Approval policy", "Authentication", "Users", "Groups",
-      "API Keys", "Logs",
+      "Certificates", "API Keys", "Logs",
     ]);
   });
 
@@ -194,6 +194,9 @@ describe("the capability a path requires", () => {
     // as who has an account, and are gated the same way.
     ["/settings/groups", "admin"],
     ["/settings/keys", "admin"],
+    // Adding a certificate decides what every outbound connection this host
+    // makes will accept as proof of identity.
+    ["/settings/certificates", "admin"],
     // Your own profile is not an administrative surface, and gating it on
     // read would be reflex rather than a rule.
     ["/profile", "signed-in"],

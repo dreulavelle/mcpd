@@ -29,13 +29,6 @@ func TestValidate(t *testing.T) {
 
 		{"credentials in the address",
 			Config{BaseURL: "https://alice:pw@graylog.example"}, "not in the address"},
-		{"half a login",
-			Config{BaseURL: "https://graylog.example", Username: "alice"}, "needs a password"},
-
-		// A token beside a half-filled login is fine: the token wins, so the
-		// other half is never consulted.
-		{"a token and a stray username",
-			Config{BaseURL: "https://graylog.example", Token: "t", Username: "alice"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := tc.cfg
@@ -65,10 +58,6 @@ func TestConfigured(t *testing.T) {
 		{"an address alone", Config{BaseURL: "https://g.example"}, false},
 		{"a token alone", Config{Token: "t"}, false},
 		{"an address and a token", Config{BaseURL: "https://g.example", Token: "t"}, true},
-		{"an address and half a login",
-			Config{BaseURL: "https://g.example", Username: "alice"}, false},
-		{"an address and a login",
-			Config{BaseURL: "https://g.example", Username: "alice", Password: "pw"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.cfg.Configured(); got != tc.want {

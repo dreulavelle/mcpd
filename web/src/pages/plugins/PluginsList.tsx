@@ -129,7 +129,14 @@ export function PluginsList() {
   );
   const builtin = rows?.filter((r) => r.runtime === "builtin") ?? [];
   const remote = rows?.filter((r) => r.runtime === "mcp") ?? [];
-  const waiting = instances.filter((i) => i.enabled && !i.mounted);
+  // Two different things to say, so two different notices. An instance nobody
+  // has finished filling in is waiting and will serve on its own; one that
+  // tried and failed is not, and telling somebody it "starts as soon as it has
+  // what it needs" underneath a certificate error reads as the host not having
+  // noticed.
+  const notServing = instances.filter((i) => i.enabled && !i.mounted);
+  const failing = notServing.filter((i) => !i.missing?.length && i.problem);
+  const waiting = notServing.filter((i) => i.missing?.length || !i.problem);
 
   return (
     <>
@@ -147,7 +154,6 @@ export function PluginsList() {
 
       {error && <Notice tone="problem">{error}</Notice>}
 
-      {/* "Waiting" and "broken" are different things to say. */}
       {waiting.length > 0 && (
         <Notice tone="attention">
           <div className="space-y-0.5">
@@ -156,10 +162,29 @@ export function PluginsList() {
                 <strong>{i.name}</strong>
                 {i.missing?.length
                   ? ` needs ${i.missing.join(", ")}.`
-                  : i.problem ? ` ${i.problem}` : " is not running yet."}
+                  : " is not running yet."}
               </p>
             ))}
             <p>It starts serving as soon as it has what it needs — nothing to restart.</p>
+          </div>
+        </Notice>
+      )}
+
+      {failing.length > 0 && (
+        <Notice tone="problem">
+          <div className="space-y-1.5">
+            {failing.map((i) => (
+              <p key={i.name}>
+                {/* The name is here and not in the message: the host stopped
+                    putting it there when this line started reading "graylog
+                    graylog did not start". */}
+                <strong>{i.name}</strong> {i.problem}
+              </p>
+            ))}
+            <p className="text-xs">
+              It keeps serving what it was serving before, and takes up the new
+              settings as soon as they work.
+            </p>
           </div>
         </Notice>
       )}

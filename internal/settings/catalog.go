@@ -97,6 +97,12 @@ func PluginGroup(instance, title string, fields []Field) Group {
 		Section: SectionPlugins,
 		Fields:  make([]Field, 0, len(fields)),
 	}
+	// Every instance gets the purpose field, whatever its type declares. It is
+	// the host's question rather than an integration's -- which of two
+	// Observiums is this -- and asking each plugin to declare it would mean a
+	// plugin that forgot to could not be told apart from its twin.
+	fields = append([]Field{purposeField()}, fields...)
+
 	for _, f := range fields {
 		f.Key = PluginSettingKey(instance, f.Key)
 		f.Group = out.Name
@@ -126,6 +132,34 @@ func PluginGroup(instance, title string, fields []Field) Group {
 		out.Fields = append(out.Fields, f)
 	}
 	return out
+}
+
+// PluginPurposeKey is the field every instance carries: what this one covers,
+// in an operator's words.
+const PluginPurposeKey = "purpose"
+
+// purposeField declares it.
+//
+// Blank by default, and blank composes to nothing. There is no sentence that
+// would be true of an instance nobody has described, and one invented here
+// would be repeated on every tool entry the instance serves -- so the default
+// is the honest one, and the help text says what a useful answer looks like
+// rather than putting words in it.
+//
+// Deliberately not a Required field. A single instance of an integration is
+// already unambiguous, and most deployments have exactly that.
+func purposeField() Field {
+	return Field{
+		Key: PluginPurposeKey, Label: "What this one covers", Kind: KindString,
+		Placeholder: "the Springfield branch network",
+		Help: "Shown to an assistant beside this instance's tools, so it can " +
+			"tell two of the same integration apart — which Observium is the " +
+			"Springfield one. A short phrase rather than a sentence: it is " +
+			"repeated on every tool this instance serves, so “the Springfield " +
+			"branch network” costs less than “This MCP handles communications " +
+			"to Springfield” and says the same thing. Leave it empty if you " +
+			"only have one.",
+	}
 }
 
 // ValidatePluginField checks a field a plugin declares, before it is namespaced.

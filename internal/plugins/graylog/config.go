@@ -119,23 +119,15 @@ type Config struct {
 	// right.
 	BaseURL string `yaml:"base_url" json:"base_url"`
 
-	// Token is a Graylog access token, from the user's own token page.
-	// Preferred over a username and password: it carries only the permissions
-	// of the account that made it, it has a TTL, and revoking it does not
-	// change anybody's login.
+	// Token is a Graylog access token, from the user's own token page, and is
+	// the only credential this integration takes. An account's own username
+	// and password would authenticate too, and are deliberately not offered:
+	// they carry everything that account can do rather than what a token was
+	// issued for, and revoking them changes somebody's login.
 	//
 	// It is presented as the *username* of a basic-auth pair with the literal
 	// password "token". That is Graylog's scheme, not a mistake here.
 	Token string `yaml:"token" json:"token"`
-
-	// Username and Password are ordinary basic auth against a Graylog account.
-	// Supported because a token has a TTL and an integration whose credential
-	// expires in thirty days is one somebody has to remember to feed, but a
-	// token is still the better answer for anything long-lived.
-	//
-	// Token wins when both are set.
-	Username string `yaml:"username" json:"username"`
-	Password string `yaml:"password" json:"password"`
 
 	// MaxMessages caps how many log lines one search returns. Reported in the
 	// result when it bites, so a caller narrows their query rather than
@@ -198,7 +190,7 @@ func (c *Config) withDefaults() {
 // An address alone is not enough and neither is a credential alone, which is
 // why this is one question rather than two booleans a caller has to combine.
 func (c Config) Configured() bool {
-	return c.BaseURL != "" && (c.Token != "" || (c.Username != "" && c.Password != ""))
+	return c.BaseURL != "" && c.Token != ""
 }
 
 // CacheTTL turns the operator's seconds into a duration.
@@ -219,10 +211,6 @@ func (c Config) Validate() error {
 		}
 	}
 
-	if c.Token == "" && (c.Username == "") != (c.Password == "") {
-		return fmt.Errorf("graylog: a username needs a password and a password " +
-			"needs a username; or use an access token instead of both")
-	}
 	if c.MaxMessages < 1 {
 		return fmt.Errorf("graylog: max_messages must be at least 1, got %d", c.MaxMessages)
 	}
@@ -280,9 +268,8 @@ func (c Config) validateAddress() error {
 		}
 	}
 	if u.User != nil {
-		return fmt.Errorf("graylog: put credentials in the token or username " +
-			"and password fields, not in the address; a URL with a password in " +
-			"it ends up in logs")
+		return fmt.Errorf("graylog: put the access token in the token field, " +
+			"not in the address; a URL with a credential in it ends up in logs")
 	}
 	return nil
 }
