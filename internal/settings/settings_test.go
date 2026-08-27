@@ -295,8 +295,13 @@ func TestValidate(t *testing.T) {
 		// the principal only labels ChatGPT in the history.
 		{KeyTunnelID, "tunnel_0123456789abcdef0123456789abcdef", false},
 		{KeyTunnelPrincipal, "svc:chatgpt", false},
-		{KeyTunnelRole, "user", true},
-		{KeyTunnelRole, "superuser", false},
+		// What ChatGPT may do moved onto the account: a host serving two
+		// workspaces has two answers, and one setting cannot hold both. The
+		// key survives so the upgrade can read it once; it is no longer
+		// something the settings form will accept a write to.
+		{KeyTunnelRole, "user", false},
+		{KeyServerTLSMode, "off", true},
+		{KeyServerTLSMode, "sideways", false},
 		{KeyApprovalProposalTTL, "30", true},
 		{KeyApprovalProposalTTL, "0", false},
 		{KeyApprovalProposalTTL, "99999", false},
@@ -342,8 +347,14 @@ func TestSchema_IsCoherent(t *testing.T) {
 			}
 		}
 	}
-	if !IsSecret(KeyTunnelAPIKey) {
-		t.Error("the tunnel API key must be flagged secret, or it is stored in the clear")
+	// The OpenAI credentials moved onto the account, where the store encrypts
+	// them. What must not happen is one of them reappearing here as an
+	// ordinary field: it would be stored in the clear, and it would be a
+	// second authority for a value the accounts table now owns.
+	for _, key := range []string{KeyTunnelAPIKey, KeyTunnelAdminKey, KeyTunnelOrgID} {
+		if _, ok := FieldFor(key); ok {
+			t.Errorf("%s is an editable setting again; it belongs to a ChatGPT account", key)
+		}
 	}
 	if IsSecret(KeyTunnelID) {
 		t.Error("the tunnel id is not a secret and hiding it helps nobody")

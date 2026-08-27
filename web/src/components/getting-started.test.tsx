@@ -40,7 +40,7 @@ function stub({
   vi.spyOn(api, "mcpServers").mockResolvedValue({ servers });
   vi.spyOn(api, "tunnel").mockResolvedValue({
     tunnels: tunnels.map((state) => ({ state })),
-    can_manage: true, plugins: [], workspaces: [], assignments: {},
+    can_manage: true, plugins: [], workspaces: [], assignments: {}, accounts: [],
   });
   vi.spyOn(api, "approvalPolicy").mockResolvedValue({
     rules: Array.from({ length: rules }, (_, i) => ({

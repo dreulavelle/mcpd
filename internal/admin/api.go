@@ -204,11 +204,35 @@ type Options struct {
 	// release.
 	TunnelInfo func() any
 
-	// Directory manages tunnels in the OpenAI organisation. It is a function
-	// because the admin key it needs is a setting, and a value captured at
-	// startup would be the one the deployment began with rather than the one
-	// an operator just saved.
-	Directory func() *tunnel.Directory
+	// Directory manages tunnels in one ChatGPT account's organisation. It
+	// takes an account id because a tunnel is created inside an organisation
+	// and two accounts are two organisations: a directory built from whichever
+	// admin key came first would list one workspace's tunnels and offer to
+	// delete them from another's. An empty id means the only account, when
+	// there is exactly one.
+	//
+	// A function rather than a value because the admin key is stored, and one
+	// captured at startup would be the key the deployment began with rather
+	// than the one an operator just saved.
+	Directory func(accountID string) *tunnel.Directory
+
+	// The ChatGPT accounts tunnels connect with. Each carries a credential, an
+	// identity and a grant, so adding or editing one is an administrative act
+	// and every route below is gated accordingly.
+	//
+	// Nil leaves the pages reporting that accounts are unavailable, which is
+	// what a host with no encryption key has: it cannot store a credential and
+	// should say so rather than offering a form that will fail on save.
+	ChatGPTAccounts      func(ctx context.Context) ([]tunnel.Account, error)
+	AddChatGPTAccount    func(ctx context.Context, actor string, a tunnel.Account) (tunnel.Account, error)
+	UpdateChatGPTAccount func(ctx context.Context, actor, id string, up tunnel.AccountUpdate) (tunnel.Account, error)
+	RemoveChatGPTAccount func(ctx context.Context, actor, id string) error
+
+	// AccountAssignments maps a tunnel id to the ChatGPT account it connects
+	// with. Separate from Assignments because they answer different questions
+	// -- which system a tunnel serves, and whose credential it uses -- and a
+	// tunnel can have one without the other.
+	AccountAssignments func() map[string]string
 
 	// Plugins names the mounted systems, so a tunnel can be assigned to one.
 	Plugins func() []string
@@ -412,6 +436,16 @@ func (s *Server) routes() {
 	// even though what it returns is not privileged.
 	api("POST /api/updates/check", s.handleCheckUpdates, auth.CapAdmin)
 	api("POST /api/restart", s.handleRestart, auth.CapAdmin)
+
+	// The ChatGPT accounts tunnels connect with. Reading the list is an
+	// operator's business -- it holds no credential, only whether one is set --
+	// while adding or editing one hands a whole ChatGPT workspace an identity
+	// and a grant on this host, which is an administrator's decision and is
+	// written into the hash-chained trail.
+	api("GET /api/chatgpt/accounts", s.handleListChatGPTAccounts, auth.CapRead)
+	api("POST /api/chatgpt/accounts", s.handleAddChatGPTAccount, auth.CapAdmin)
+	api("PATCH /api/chatgpt/accounts/{id}", s.handleUpdateChatGPTAccount, auth.CapAdmin)
+	api("DELETE /api/chatgpt/accounts/{id}", s.handleRemoveChatGPTAccount, auth.CapAdmin)
 
 	api("POST /api/tunnel/start", s.handleTunnelStart, auth.CapAdmin)
 	api("POST /api/tunnel/stop", s.handleTunnelStop, auth.CapAdmin)
@@ -690,7 +724,7 @@ type tunnelResponse struct {
 	// made there can be assigned without copying its id by hand. Nil when
 	// there is no admin key, which is different from an organisation with no
 	// tunnels in it.
-	Available []tunnel.TunnelInfo `json:"available,omitempty"`
+	Available []availableTunnel `json:"available,omitempty"`
 	// Problem explains why Available is missing, when it should not be.
 	Problem string `json:"problem,omitempty"`
 	// Missing names the credential needed to manage tunnels, when one is not
@@ -702,6 +736,14 @@ type tunnelResponse struct {
 	// every system. A tunnel here but absent from Tunnels is configured and
 	// not running, which is what a plugin that has not started yet looks like.
 	Assignments map[string]string `json:"assignments"`
+	// AccountAssignments maps a tunnel id to the ChatGPT account it connects
+	// with. A tunnel with no entry here has not been given one, which on a
+	// host with several accounts is why it is not running.
+	AccountAssignments map[string]string `json:"account_assignments"`
+	// Accounts is every ChatGPT account, without credentials. The Tunnels page
+	// needs them to offer a choice when a tunnel is made, and to say which
+	// workspace an existing one belongs to.
+	Accounts []accountView `json:"accounts"`
 	// Workspaces are the ChatGPT workspaces already in use by a tunnel in this
 	// organisation.
 	//
@@ -719,7 +761,8 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 	// error, and it should not be the one that blanks the page.
 	resp := tunnelResponse{
 		Tunnels: []tunnel.Status{}, Plugins: []string{}, Workspaces: []string{},
-		Assignments: map[string]string{},
+		Assignments: map[string]string{}, AccountAssignments: map[string]string{},
+		Accounts: []accountView{},
 	}
 	if s.opts.Tunnel != nil {
 		if list := s.opts.Tunnel.Status(); len(list) > 0 {
@@ -736,20 +779,51 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 			resp.Assignments = assigned
 		}
 	}
-	dir := s.directory()
-	resp.Missing = dir.Missing()
-	if dir.Available() {
-		resp.CanManage = true
-		// A listing failure is reported rather than fatal: the tunnels mcpd is
-		// running are known locally and stay visible either way.
-		if list, err := dir.List(r.Context()); err != nil {
-			resp.Problem = err.Error()
-		} else {
-			resp.Available = list
-			if ws := workspacesIn(list); len(ws) > 0 {
-				resp.Workspaces = ws
+	if s.opts.AccountAssignments != nil {
+		if assigned := s.opts.AccountAssignments(); len(assigned) > 0 {
+			resp.AccountAssignments = assigned
+		}
+	}
+
+	// One listing per account, because each is a separate organisation. A
+	// failure against one is recorded on that account and does not stop the
+	// others: an expired admin key in one workspace should not blank the page
+	// for every other.
+	accounts, accountsErr := s.chatgptAccounts(r.Context())
+	if accountsErr != nil {
+		resp.Problem = accountsErr.Error()
+	}
+	var seen []tunnel.TunnelInfo
+	for _, acct := range accounts {
+		view := newAccountView(acct)
+		dir := s.directory(acct.ID)
+		view.Missing = dir.Missing()
+		if dir.Available() {
+			view.CanManage = true
+			resp.CanManage = true
+			if list, err := dir.List(r.Context()); err != nil {
+				view.Problem = err.Error()
+			} else {
+				for _, t := range list {
+					resp.Available = append(resp.Available, availableTunnel{
+						TunnelInfo:  t,
+						AccountID:   acct.ID,
+						AccountName: acct.Name,
+					})
+				}
+				seen = append(seen, list...)
 			}
 		}
+		resp.Accounts = append(resp.Accounts, view)
+	}
+	if len(resp.Accounts) == 0 {
+		// No accounts at all is the state a new install is in, and the one
+		// thing an operator can do about it. Named here rather than left to
+		// the page to infer from an empty list.
+		resp.Missing = "a ChatGPT account"
+	}
+	if ws := workspacesIn(seen); len(ws) > 0 {
+		resp.Workspaces = ws
 	}
 	if s.opts.TunnelInfo != nil {
 		resp.Version = s.opts.TunnelInfo()
@@ -1519,12 +1593,12 @@ func (s *Server) handleCACertificate(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(pem)
 }
 
-// directory returns the tunnel manager, never nil.
-func (s *Server) directory() *tunnel.Directory {
+// directory returns the tunnel manager for one account, never nil.
+func (s *Server) directory(accountID string) *tunnel.Directory {
 	if s.opts.Directory == nil {
 		return tunnel.NewDirectory("", "", "")
 	}
-	return s.opts.Directory()
+	return s.opts.Directory(accountID)
 }
 
 // handleCreateTunnel makes a tunnel at OpenAI and points it at a system.
@@ -1533,14 +1607,24 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		Name      string `json:"name"`
 		Plugin    string `json:"plugin"`
 		Workspace string `json:"workspace_id"`
+		// Account is whose organisation the tunnel is made in, and whose
+		// credential the connector will authenticate with. Empty means the
+		// only account when there is exactly one.
+		Account string `json:"account"`
 	}
 	if !s.decode(w, r, &body) {
 		return
 	}
 
-	dir := s.directory()
+	account, err := s.resolveAccount(r.Context(), body.Account)
+	if err != nil {
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	dir := s.directory(account.ID)
 	if !dir.Available() {
-		s.writeError(w, r, http.StatusBadRequest, "add "+dir.Missing()+" first")
+		s.writeError(w, r, http.StatusBadRequest,
+			"the ChatGPT account "+account.Name+" needs "+dir.Missing()+" first")
 		return
 	}
 	if err := s.checkPlugin(body.Plugin); err != nil {
@@ -1556,7 +1640,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	// Assigning is the point of creating: a tunnel nothing is bound to is an
 	// object in someone's account doing nothing.
-	if err := s.assign(r, created.ID, body.Plugin); err != nil {
+	if err := s.assign(r, created.ID, body.Plugin, account.ID); err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1573,7 +1657,8 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 // handleAssignTunnel points an existing tunnel at a system.
 func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Plugin string `json:"plugin"`
+		Plugin  string `json:"plugin"`
+		Account string `json:"account"`
 	}
 	if !s.decode(w, r, &body) {
 		return
@@ -1582,7 +1667,12 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.assign(r, r.PathValue("id"), body.Plugin); err != nil {
+	account, err := s.resolveAccount(r.Context(), body.Account)
+	if err != nil {
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.assign(r, r.PathValue("id"), body.Plugin, account.ID); err != nil {
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1591,12 +1681,26 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteTunnel removes a tunnel from the organisation.
 func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
-	dir := s.directory()
-	if !dir.Available() {
-		s.writeError(w, r, http.StatusBadRequest, "deleting a tunnel needs "+dir.Missing())
+	id := r.PathValue("id")
+	// Which organisation to delete it from. Taken from the assignment when the
+	// caller does not say, because that is the account mcpd already knows owns
+	// this tunnel -- and deleting from the wrong organisation is a request
+	// that cannot be taken back.
+	wanted := r.URL.Query().Get("account")
+	if wanted == "" && s.opts.AccountAssignments != nil {
+		wanted = s.opts.AccountAssignments()[id]
+	}
+	account, err := s.resolveAccount(r.Context(), wanted)
+	if err != nil {
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	id := r.PathValue("id")
+	dir := s.directory(account.ID)
+	if !dir.Available() {
+		s.writeError(w, r, http.StatusBadRequest,
+			"deleting a tunnel needs "+dir.Missing()+" on the account "+account.Name)
+		return
+	}
 	if err := dir.Delete(r.Context(), id); err != nil {
 		s.writeError(w, r, http.StatusBadGateway, err.Error())
 		return
@@ -1623,21 +1727,33 @@ func (s *Server) checkPlugin(plugin string) error {
 	return fmt.Errorf("there is no system called %q", plugin)
 }
 
-// assign records which system a tunnel serves.
-func (s *Server) assign(r *http.Request, id, plugin string) error {
+// assign records which system a tunnel serves and whose account it uses.
+//
+// Both in one write. They are one decision -- this connector, for that system,
+// on that workspace's credential -- and applying them separately would leave a
+// window in which a tunnel is pointed at a system with no account, which is
+// exactly the state that refuses to start.
+func (s *Server) assign(r *http.Request, id, plugin, accountID string) error {
 	if s.opts.Settings == nil {
 		return fmt.Errorf("settings are unavailable")
 	}
 	key := settings.KeyTunnelID
+	accountKey := settings.KeyTunnelAccount
 	if plugin != "" {
 		key = settings.PluginTunnelKey(plugin)
+		accountKey = settings.PluginTunnelAccountKey(plugin)
 	}
 	encoded, err := json.Marshal(id)
 	if err != nil {
 		return err
 	}
+	encodedAccount, err := json.Marshal(accountID)
+	if err != nil {
+		return err
+	}
 	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, []settings.Change{
 		{Key: key, Value: string(encoded)},
+		{Key: accountKey, Value: string(encodedAccount)},
 	})
 }
 
@@ -1697,19 +1813,23 @@ func (s *Server) unassign(r *http.Request, id string) error {
 	ctx := r.Context()
 
 	var changes []settings.Change
-	keys := []string{settings.KeyTunnelID}
+	// Paired with the account key that goes with each, so a tunnel's removal
+	// does not leave an account assignment behind pointing at nothing.
+	keys := map[string]string{settings.KeyTunnelID: settings.KeyTunnelAccount}
 	if s.opts.Plugins != nil {
 		for _, name := range s.opts.Plugins() {
-			keys = append(keys, settings.PluginTunnelKey(name))
+			keys[settings.PluginTunnelKey(name)] = settings.PluginTunnelAccountKey(name)
 		}
 	}
-	for _, key := range keys {
+	for key, accountKey := range keys {
 		var current string
 		if found, err := s.opts.Settings.GetJSON(ctx, key, &current); err != nil || !found {
 			continue
 		}
 		if current == id {
-			changes = append(changes, settings.Change{Key: key, Delete: true})
+			changes = append(changes,
+				settings.Change{Key: key, Delete: true},
+				settings.Change{Key: accountKey, Delete: true})
 		}
 	}
 	if len(changes) == 0 {

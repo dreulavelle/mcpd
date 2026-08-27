@@ -57,7 +57,7 @@ function stub(tools: MCPTool[] = [tool()]) {
     groups: [], values: {}, secrets_set: {}, encryption_available: true, bootstrap: [],
   });
   vi.spyOn(api, "tunnel").mockResolvedValue({
-    tunnels: [], can_manage: false, plugins: ["weather"], workspaces: [], assignments: {},
+    tunnels: [], can_manage: false, plugins: ["weather"], workspaces: [], assignments: {}, accounts: [],
   });
   vi.spyOn(api, "mcpServers").mockResolvedValue({ servers: [SERVER] });
   vi.spyOn(api, "mcpServerTools").mockResolvedValue({ tools, count: tools.length });

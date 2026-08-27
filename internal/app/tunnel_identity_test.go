@@ -10,6 +10,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/settings"
+	"github.com/spoked/mcpd/internal/tunnel"
 )
 
 // The tunnel attaches its identity to the server as middleware. Attaching that
@@ -64,19 +65,37 @@ func TestChangingTheRoleReachesTheTunnel(t *testing.T) {
 	t.Cleanup(func() { a.db.Close() })
 
 	ctx := context.Background()
+	acct := addAccount(t, a, "Work", nil)
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
-		{Key: settings.KeyTunnelRole, Value: `"user"`},
+		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.KeyTunnelID, Value: `"tunnel_6a87964313a88191b1cf9d9bf28dde48"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
+	configs := a.tunnelConfigs(ctx)
+	if len(configs) != 1 {
+		t.Fatalf("got %d tunnels, want the aggregate", len(configs))
+	}
+
 	// A connector that cannot approve cannot apply anything: approval happens
 	// in the conversation and this is what carries the answer back.
-	if got := a.tunnelConfig(ctx).Principal.Role; got != auth.RoleUser {
-		t.Fatalf("role = %q, want approver", got)
+	principal := configs[0].Principal
+	if principal.Role != auth.RoleUser {
+		t.Fatalf("role = %q, want the account's", principal.Role)
 	}
-	principal := a.tunnelConfig(ctx).Principal
 	if !principal.Can(auth.CapApprove) {
 		t.Fatal("the connector must be able to record an approval")
+	}
+
+	// And changing it on the account reaches the tunnel, which is the whole
+	// reason the account is read at build time rather than at startup.
+	admin := auth.RoleAdmin
+	if _, err := a.chatgpt.Update(ctx, "user:test", acct.ID,
+		tunnel.AccountUpdate{Role: &admin}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.tunnelConfigs(ctx)[0].Principal.Role; got != auth.RoleAdmin {
+		t.Fatalf("role = %q after the account changed, want admin", got)
 	}
 }
