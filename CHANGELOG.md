@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/dreulavelle/mcpd/compare/v0.4.0...v0.4.1) (2026-08-27)
+
+
+### Fixes
+
+* **dashboard:** render release notes, and move the version off the account ([#86](https://github.com/dreulavelle/mcpd/issues/86)) ([b991a9a](https://github.com/dreulavelle/mcpd/commit/b991a9a7867e1be712eec036eaadea5f60170590))
+
 ## [0.4.0](https://github.com/dreulavelle/mcpd/compare/v0.3.0...v0.4.0) (2026-08-27)
 
 
