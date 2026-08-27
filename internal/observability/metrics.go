@@ -93,8 +93,17 @@ const (
 // calls routinely occupy: a cnMaestro device walk against a large estate takes
 // longer than that, and a bucket set whose last boundary is below the
 // interesting values reports every one of them identically.
+//
+// The bottom is widened for the same reason the top was, and it is the same
+// mistake in the other direction. The default first boundary is 5ms, and the
+// whole of this host's own path fits underneath it: BenchmarkToolCallBySize
+// puts a call at roughly 1ms for a 512-byte answer and 3ms for a 20,000-byte
+// one. With 5ms as the floor every local tool lands in the first bucket, a
+// tool that became ten times slower draws the identical bar, and an
+// interpolated quantile reports where the boundary fell rather than what
+// happened -- a 63us call reads as a p95 of 4.75ms.
 var latencyBuckets = []float64{
-	0.005, 0.025, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60,
+	0.0005, 0.001, 0.0025, 0.005, 0.025, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60,
 }
 
 // resultSizeBuckets spans a terse answer to one well past what may be sent.
@@ -136,9 +145,16 @@ func NewMetrics() *Metrics {
 		Help: "Tool calls by plugin, tool and outcome.",
 	}, []string{"plugin", "tool", "outcome"})
 
+	// Named for the handler rather than the call, because that is what it
+	// times. The clock stops when the handler returns, so the plugin's own
+	// upstream work is inside it and the SDK's marshalling and transport are
+	// not. Against a real upstream that tail is noise; against no upstream it
+	// is nearly the whole call -- the echo plugin records 63us for an answer
+	// BenchmarkToolCallBySize measures at 3ms end to end. A Help string
+	// promising the round trip would be read as one.
 	m.toolDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "mcpd_tool_call_duration_seconds",
-		Help:    "Time a tool call took, including the plugin's own upstream work.",
+		Help:    "Time a tool's handler took, gate to return: the plugin's own upstream work included, the result's serialisation and transport not.",
 		Buckets: latencyBuckets,
 	}, []string{"plugin", "tool"})
 
