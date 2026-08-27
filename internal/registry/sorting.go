@@ -18,10 +18,15 @@ import (
 type Sort string
 
 const (
-	// SortDefault is the order the sources themselves produce, interleaved.
-	// Each catalogue is read in the best order it has -- Smithery by use,
-	// Docker by name, the two Generic-API sources in whatever order they page
-	// -- and Multi takes a few from each. It is a sample and the page says so.
+	// SortDefault is what a caller who asked for no order gets, which is
+	// SortRecentlyUpdated.
+	//
+	// It used to mean "the order the catalogues produce, interleaved", because
+	// a page was assembled from a window of each and there was no better
+	// answer available. The index holds every catalogue, so there is: what has
+	// changed most recently is the useful first page of a list nobody reads to
+	// the end, and it beats an interleaving that was really an artefact of how
+	// the pages arrived.
 	SortDefault Sort = ""
 	// SortMostUsed orders by Entry.Uses, highest first.
 	//

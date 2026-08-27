@@ -44,6 +44,14 @@ export function ImportDialog({
   const [busy, setBusy] = useState(false);
   const nameField = useRef<HTMLInputElement>(null);
 
+  // Open only when the document is the thing being supplied.
+  //
+  // Pasting a server.json by hand is the whole task, so the box is the form.
+  // Adding a catalogued server is a different job -- the document is already
+  // filled in and correct, and almost nobody reads it -- so it starts folded
+  // away and the short form is all that is on screen.
+  const [showDocument, setShowDocument] = useState(seedDocument === undefined);
+
   const trimmed = name.trim();
   // Many registry names end in `/mcp`, so the suggestion collides often. Caught
   // here, the refusal is a field to change rather than a round trip.
@@ -66,6 +74,8 @@ export function ImportDialog({
     } catch {
       // The browser names the position; the server can only say it failed.
       setProblem("That is not valid JSON. Paste the server.json exactly as published.");
+      // An error about a box nobody can see is an error nobody can act on.
+      setShowDocument(true);
       return;
     }
     setBusy(true);
@@ -101,13 +111,16 @@ export function ImportDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="sm:max-w-2xl">
+      {/* Wider only while the document is open, so the two columns each get
+          room. Folded away, the form is short and a wide dialog around it
+          would be mostly empty. */}
+      <DialogContent className={showDocument ? "sm:max-w-5xl" : "sm:max-w-2xl"}>
         <DialogHeader>
           <DialogTitle>Add a remote MCP server</DialogTitle>
           <DialogDescription>
             {seedDocument === undefined
-              ? <>Paste the server's published <code className="font-mono">server.json</code>. It is stored verbatim and checked against a schema this build carries; nothing is fetched while you do it.</>
-              : <>The catalog's copy of this server's <code className="font-mono">server.json</code>. Read it before adding — it is stored verbatim and checked against a schema this build carries, and it is editable if you need to change something.</>}
+              ? <>Paste the server's published <code className="font-mono">server.json</code>. It's stored as-is and checked against this build's schema.</>
+              : <>Give it a name on this host. Nothing is served until you approve its tools.</>}
           </DialogDescription>
         </DialogHeader>
 
@@ -115,7 +128,8 @@ export function ImportDialog({
 
         {seedEntry && <CatalogFacts entry={seedEntry} />}
 
-        <div className="space-y-4">
+        <div className={showDocument ? "grid gap-6 lg:grid-cols-2" : ""}>
+          <div className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="mcp-name">Name</Label>
             <Input
@@ -146,21 +160,35 @@ export function ImportDialog({
             </p>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="mcp-doc">server.json</Label>
-            <Textarea
-              id="mcp-doc" value={documentText} rows={12}
-              className="font-mono text-xs"
-              placeholder={'{\n  "$schema": "…",\n  "name": "com.example/weather",\n  "version": "1.0.0",\n  "remotes": [{ "type": "streamable-http", "url": "https://…" }]\n}'}
-              onChange={(e) => setDocumentText(e.target.value)}
-            />
+          <Notice tone="info">
+            Adding doesn't switch anything on. Next, on its plugin page: fill in
+            what it asks for, run discovery, then choose which tools to allow.
+          </Notice>
           </div>
 
-          <Notice tone="info">
-            Adding mounts nothing. On its plugin page: fill in whatever the
-            document asks for, run discovery, then decide tool by tool what may
-            be served.
-          </Notice>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="mcp-doc" className={showDocument ? "" : "sr-only"}>
+                server.json
+              </Label>
+              <Button
+                type="button" variant="ghost" size="sm"
+                aria-expanded={showDocument}
+                aria-controls="mcp-doc"
+                onClick={() => setShowDocument((open) => !open)}
+              >
+                {showDocument ? "Hide server.json" : "Show server.json"}
+              </Button>
+            </div>
+            {showDocument && (
+              <Textarea
+                id="mcp-doc" value={documentText} rows={18}
+                className="h-full min-h-72 font-mono text-xs"
+                placeholder={'{\n  "$schema": "…",\n  "name": "com.example/weather",\n  "version": "1.0.0",\n  "remotes": [{ "type": "streamable-http", "url": "https://…" }]\n}'}
+                onChange={(e) => setDocumentText(e.target.value)}
+              />
+            )}
+          </div>
         </div>
 
         <DialogFooter className="sm:justify-start">

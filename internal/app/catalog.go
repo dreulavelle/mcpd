@@ -53,7 +53,7 @@ import (
 // process did not get more memory by being pointed at more catalogues.
 //
 // Nothing here reaches the network. A source is constructed, not contacted.
-func buildCatalog(cfg config.Catalog, observe registry.CacheObserver, log *slog.Logger) *registry.Multi {
+func buildCatalog(cfg config.Catalog, observe registry.CacheObserver, log *slog.Logger) *registry.Index {
 	if !cfg.Enabled() {
 		return nil
 	}
@@ -99,21 +99,26 @@ func buildCatalog(cfg config.Catalog, observe registry.CacheObserver, log *slog.
 	if len(sources) == 0 {
 		// Every configured source dropped out -- today that means PulseMCP
 		// alone, switched on with a credential that would not resolve. Nil
-		// rather than an empty Multi, so the handler says "no server catalogue
+		// rather than an empty index, so the handler says "no server catalogue
 		// is configured" instead of failing every browse.
 		return nil
 	}
-	return registry.NewMulti(sources...)
+	// An index rather than a per-request merge across the four. It enumerates
+	// each catalogue once a day and answers from what it holds, which is what
+	// makes a page a consistent length, a count a count, and a search one rule
+	// -- see registry.Index. Nothing is fetched until somebody opens the
+	// Marketplace, so a host nobody browses pays for none of it.
+	return registry.NewIndex(sources, registry.IndexOptions{Log: log})
 }
 
 // catalogAPI hands the dashboard the catalogue, or nothing when every source
 // is switched off.
 //
 // A zero CatalogAPI is what the handler checks for, so the absence has to
-// survive as nil functions rather than as a Multi with no sources -- which
+// survive as nil functions rather than as an index with no sources -- which
 // would answer a browse with an error instead of with "no server catalogue is
 // configured".
-func catalogAPI(catalog *registry.Multi) admin.CatalogAPI {
+func catalogAPI(catalog *registry.Index) admin.CatalogAPI {
 	if catalog == nil {
 		return admin.CatalogAPI{}
 	}

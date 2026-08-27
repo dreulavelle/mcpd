@@ -1049,6 +1049,44 @@ address are one upstream.
 
 ## The catalogue
 
+**Enumerated once a day, not proxied per request.** Each catalogue is walked to
+the end and held locally; browsing answers from that. The arrangement it
+replaced asked four third parties per request and merged the windows that came
+back, which was visibly wrong in three ways.
+
+A page was as long as the catalogues happened to make it. Each source was asked
+for a window, entries this host cannot import were dropped, and what survived
+was however many survived -- so Smithery contributed ten rows and Docker
+contributed two, from identical code. Nobody reading that could tell it from
+broken paging.
+
+The size of the catalogue could only be estimated, because a source that pages
+an opaque cursor cannot say how many servers it holds. And search meant four
+different things at once: one catalogue matches names, another runs a relevance
+engine that returns its whole catalogue ranked, and a page merged from both was
+mostly the second's idea of "related" -- so searching for a product returned
+rows that did not mention it anywhere.
+
+Holding them settles all three. Pages are a consistent length because this host
+decides the length, the count is a count, and searching is one rule applied to
+one set: every term must appear in the name, the suggested name, the title or
+the description. Deliberately not the URL -- a host name matching a term
+nothing visible mentions is a hit nobody can account for by looking at the row.
+
+**What it cannot do is make a catalogue hand over more than it will.** Smithery
+publishes ten thousand servers and lists five hundred; the official registry
+pages twenty-five thousand and publishes no total at all. So the figure
+reported is how many servers this host can actually offer, which is exact and
+deduplicated, rather than what exists in the world, which no caller here can
+know. The same server in two catalogues is one server, identified by the
+endpoint it dials, because the catalogues do not agree on names.
+
+The first read of the day walks the catalogues and takes about fifteen seconds;
+every read after it is served from memory. Nothing is fetched until somebody
+opens the Marketplace, so a host nobody browses pays for none of it.
+
+
+
 Hand-authoring a `server.json` to add a server somebody else already published
 is copying. `internal/registry` browses the public catalogues of MCP servers so
 an operator can pick one instead.

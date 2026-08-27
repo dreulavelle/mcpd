@@ -273,6 +273,7 @@ func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 	for i, source := range covered {
 		w := &sourceWalk{
 			client: source, index: i, name: source.Source(),
+			terms: searchTerms(q.Search),
 			// Read from the source rather than from its answer, so that it is
 			// still reported for a catalogue that failed or was exhausted on
 			// an earlier page. Whether a catalogue publishes a usage figure is
@@ -430,7 +431,7 @@ func (m *Multi) List(ctx context.Context, q Query) (Page, error) {
 	page.Sources = append(page.Sources, excluded...)
 
 	page.NextCursor = next.encode()
-	page.AddableEstimate = estimateAddable(page.Sources)
+	page.Addable = estimateAddable(page.Sources)
 	page.RetrievedAt = oldest
 	if page.RetrievedAt.IsZero() {
 		page.RetrievedAt = time.Now().UTC()
@@ -580,6 +581,11 @@ type sourceWalk struct {
 	// done is a source with nothing further anywhere.
 	done bool
 
+	// terms are the words every entry from this source must carry, from the
+	// query being served. Held per walk so that filtering happens on this
+	// host's own copy of a window rather than on the cache's shared page.
+	terms []string
+
 	// uses is whether this catalogue publishes how often a server is called,
 	// asked of the source itself rather than read from an answer.
 	uses      bool
@@ -617,6 +623,13 @@ func (w *sourceWalk) receive(page Page, err error) {
 			w.window[i].Source = w.name
 		}
 	}
+	// What the catalogue sent that does not actually answer the question is
+	// dropped here, on this host's own copy. A page can come back shorter than
+	// the source's window as a result, which is the same thing deduplication
+	// already does to it -- and the cursor is fingerprinted with the query, so
+	// the offsets recorded against a filtered window are only ever read back
+	// under the query that produced it.
+	w.window = keepMatching(w.window, w.terms)
 	w.next = page.NextCursor
 	w.held = true
 	w.stale = page.Stale

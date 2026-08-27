@@ -108,7 +108,7 @@ type App struct {
 	// catalog browses the public catalogues of MCP servers. Each source holds
 	// its own TTL cache and reaches the network only when a request asks it
 	// to; nil when the deployment has switched every source off.
-	catalog *registry.Multi
+	catalog *registry.Index
 
 	// serving closes once the MCP listener is accepting, so anything that has
 	// to reach mcpd over HTTP -- the tunnel client probing itself, above all

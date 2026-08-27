@@ -179,8 +179,10 @@ func TestCached_ServesStaleAndRefreshesBehindIt(t *testing.T) {
 	if _, err := cache.List(ctx, Query{}); err != nil {
 		t.Fatal(err)
 	}
-	// Past the minute, inside the hour.
-	clk.t = clk.t.Add(10 * time.Minute)
+	// Past the entry's lifetime, inside its stale window. The catalogue asked
+	// for a minute and got the fixture's fifteen: the configured lifetime is a
+	// floor, so a catalogue asking to be re-fetched sooner is overridden.
+	clk.t = clk.t.Add(20 * time.Minute)
 
 	page, err := cache.List(ctx, Query{})
 	if err != nil {
@@ -218,7 +220,8 @@ func TestCached_OneRefreshPerKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	up.block(release)
-	clk.t = clk.t.Add(10 * time.Minute)
+	// Past the fixture's fifteen-minute floor, not the catalogue's minute.
+	clk.t = clk.t.Add(20 * time.Minute)
 
 	var wg sync.WaitGroup
 	for range 8 {
@@ -288,7 +291,16 @@ func TestCached_ADetailOutlivesAListing(t *testing.T) {
 		entry: Detail{Entry: Entry{Name: "io.example/weather", Source: "fake"}},
 	}
 	clk := &clock{t: time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)}
-	cache := NewCached(up, CacheOptions{Now: clk.now})
+	// Set explicitly rather than taken from the defaults. Both defaults are a
+	// day now, so a test reading them would be asserting that two constants
+	// happen to be equal. What matters, and what this defends, is that a
+	// listing and a document are separately keyed and separately clocked --
+	// so a listing falling due does not drag the document out with it.
+	cache := NewCached(up, CacheOptions{
+		DefaultTTL: 15 * time.Minute,
+		DetailTTL:  time.Hour,
+		Now:        clk.now,
+	})
 	ctx := context.Background()
 
 	if _, err := cache.List(ctx, Query{}); err != nil {
@@ -297,8 +309,8 @@ func TestCached_ADetailOutlivesAListing(t *testing.T) {
 	if _, err := cache.Get(ctx, "io.example/weather"); err != nil {
 		t.Fatal(err)
 	}
-	// Past the listing's default, inside the detail's.
-	clk.t = clk.t.Add(DefaultTTL + time.Minute)
+	// Past the listing's lifetime, inside the document's.
+	clk.t = clk.t.Add(30 * time.Minute)
 
 	if _, err := cache.Get(ctx, "io.example/weather"); err != nil {
 		t.Fatal(err)

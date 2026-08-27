@@ -728,7 +728,7 @@ export interface CatalogSource {
   retrieved_at?: string;
   /** How many entries it contributed, after deduplication. */
   entries: number;
-  /** The measured ratio behind `addable_estimate`. */
+  /** The measured counts behind `addable`. */
   judged?: number;
   addable?: number;
   /** How many servers this source says it holds. Absent where it does not say. */
@@ -755,7 +755,8 @@ export interface CatalogPage {
    * A floor, not a count: two of four sources report a total and addability is
    * measured over a sample. Render with a "+", never as a precise figure.
    */
-  addable_estimate?: number;
+  /** How many servers across these catalogues can be imported. Counted. */
+  addable?: number;
   /** True when a catalogue could not be reached and what it last said was served. */
   stale: boolean;
   retrieved_at: string;
