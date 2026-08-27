@@ -46,11 +46,22 @@ type Density = keyof typeof PAGE_SIZE;
  * rearranges nothing and says nothing about why.
  */
 const ORDERS: { key: CatalogSort; label: string }[] = [
-  { key: "", label: "A bit of each" },
-  { key: "most-used", label: "Most used" },
   { key: "recently-updated", label: "Recently updated" },
+  { key: "most-used", label: "Most used" },
   { key: "name", label: "Name" },
 ];
+
+/**
+ * The order a page opens in.
+ *
+ * "A bit of each" used to be here and used to be the default. It named the
+ * order a merge of four windows happened to produce, which was never a
+ * property of the catalogues so much as of how their pages arrived -- and with
+ * the index holding all of them there are no windows to interleave. What has
+ * changed most recently is the useful first screen of a list nobody reads to
+ * the end.
+ */
+const DEFAULT_ORDER: CatalogSort = "recently-updated";
 
 /**
  * The public catalogues, searchable and sampled.
@@ -86,7 +97,7 @@ export function CatalogList({
     source: string;
     refresh: boolean;
     nonce: number;
-  }>({ search: "", sort: "", source: "", refresh: false, nonce: 0 });
+  }>({ search: "", sort: DEFAULT_ORDER, source: "", refresh: false, nonce: 0 });
   const [page, setPage] = useState<Catalog | null>(null);
   const [entries, setEntries] = useState<CatalogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -94,10 +105,6 @@ export function CatalogList({
   const [picking, setPicking] = useState<string | null>(null);
   const live = useRef(true);
   const size = PAGE_SIZE[density];
-
-  // Held from a browse and ignored during a search, where the server reports
-  // the size of the match instead.
-  const [catalogueSize, setCatalogueSize] = useState<number>();
 
   // The catalogues this host browses, learned from the first unscoped answer.
   //
@@ -136,10 +143,6 @@ export function CatalogList({
         if (!current) return;
         setPage(answer);
         setEntries(answer.entries);
-        // The figure belongs to what is in view, so a scoped browse replaces
-        // it rather than leaving the whole catalogue's number over one
-        // catalogue's list.
-        if (!asked.search) setCatalogueSize(answer.addable_estimate);
         // Only an unscoped answer knows the whole set.
         if (!asked.source && answer.sources.length > 0) setCatalogues(answer.sources);
         setError(null);
@@ -265,12 +268,22 @@ export function CatalogList({
       const stillCounted = catalogues.some(
         (c) => c.uses && (!source || c.source === source),
       );
-      const sort = a.sort === "most-used" && !stillCounted ? "" : a.sort;
+      const sort = a.sort === "most-used" && !stillCounted ? DEFAULT_ORDER : a.sort;
       return { ...a, source, sort, refresh: false, nonce: a.nonce + 1 };
     });
   }, [catalogues]);
 
-  if (page === null && error === null) return <LoadingCards count={4} />;
+  if (page === null && error === null) {
+    return (
+      <>
+        <p className="mb-4 text-xs text-muted-foreground">
+          Reading the catalogues. The first read of the day takes a few
+          seconds; after that it's instant.
+        </p>
+        <LoadingCards count={4} />
+      </>
+    );
+  }
 
   if (page === null) {
     return (
@@ -304,7 +317,7 @@ export function CatalogList({
             <Input
               type="search"
               aria-label="Search the catalogue"
-              aria-describedby={catalogueSize ? "catalogue-size" : undefined}
+              aria-describedby="catalogue-size"
               placeholder="Search by name or what it does"
               className="h-11 pl-9 text-base"
               value={search}
@@ -347,19 +360,17 @@ export function CatalogList({
         </div>
         <Ordering sort={asked.sort} counted={counted} scoped={asked.source !== ""} />
         <Size
-          count={catalogueSize}
-          missing={failed.length}
+          addable={page.addable}
+          sources={page.sources}
           retrievedAt={page.retrieved_at}
         />
       </div>
 
       {page.stale && (
-        <Notice tone="info">
-          <strong>This is what was last seen.</strong> The catalogue could not
-          be reached just now, so these entries are from{" "}
-          {when(page.retrieved_at)} ({relative(page.retrieved_at)}). Nothing
-          here is broken — press Refresh to ask again.
-        </Notice>
+        <p className="text-xs text-muted-foreground">
+          Showing the last copy, from {when(page.retrieved_at)}. Press Refresh
+          to try again.
+        </p>
       )}
 
       {failed.length > 0 && <SourcesDown sources={failed} />}
@@ -372,8 +383,8 @@ export function CatalogList({
           title={asked.search ? "Nothing matches that" : "The catalogue is empty"}
         >
           {asked.search
-            ? "Try fewer words, or add the server from its own server.json."
-            : "The catalogues answered, and none of them lists anything."}
+            ? "Try a shorter search."
+            : "The catalogues have nothing to show."}
         </EmptyState>
       ) : (
         <>
@@ -452,45 +463,56 @@ function Ordering({ sort, counted, scoped }: {
   if (sort === "most-used") {
     return (
       <p className="text-xs text-muted-foreground">
-        Calls counted by {counted.join(" and ") || "the catalogue"}.
-        {!scoped && counted.length > 0 && " The other catalogues don't count them, so they aren't in this list."}
+        Call counts come from {counted.join(" and ") || "the catalogue"}.
+        {!scoped && counted.length > 0 && " Catalogues that don't publish them aren't shown here."}
       </p>
     );
   }
   return (
     <p className="text-xs text-muted-foreground">
-      In order within what you have loaded, not across the whole catalogue.
+      Sorted within the results shown.
     </p>
   );
 }
 
 /**
- * How big the catalogue is. An estimate that says so on the page: a source that
- * did not answer is not counted, and none of them report how many of their
- * servers this host would accept.
+ * How many servers there are.
+ *
+ * Counted, not estimated. Each catalogue that publishes how many it holds is
+ * summed, and the number says how many of them were counted -- so a figure
+ * covering every catalogue in view reads as the plain fact it is, and one
+ * covering some of them says which. The previous line offered an estimate
+ * derived from a sample and then spent two sentences apologising for it, which
+ * is a number nobody could act on wrapped in text nobody would finish.
  */
-function Size({ count, missing, retrievedAt }: {
-  count?: number;
-  missing: number;
+function Size({ addable, sources, retrievedAt }: {
+  addable?: number;
+  sources: CatalogSource[];
   retrievedAt: string;
 }) {
-  if (!count) {
-    return retrievedAt
-      ? <p className="text-xs text-muted-foreground">Read {relative(retrievedAt)}.</p>
-      : null;
-  }
+  const read = retrievedAt
+    ? <span className="text-muted-foreground">Updated {relative(retrievedAt)}</span>
+    : null;
+
+  if (!addable) return read && <p className="text-xs">{read}</p>;
+
+  // What each catalogue contributed, so the headline is a figure somebody can
+  // take apart rather than one they have to believe.
+  const detail = sources
+    .filter((s) => s.ok && (s.addable ?? 0) > 0)
+    .map((s) => `${s.source} ${(s.addable ?? 0).toLocaleString()}`)
+    .join(" · ");
+
   return (
-    <p id="catalogue-size" className="text-xs text-muted-foreground">
-      <strong className="font-medium text-foreground">
-        {count.toLocaleString()}+
-      </strong>{" "}
-      servers you can add — an estimate, and a low one: not every catalogue
-      says how much it holds.
-      {missing > 0 && (
-        <> {missing === 1 ? "One is" : `${missing} are`} not counted here at
-        all, having not answered.</>
-      )}
-      {retrievedAt && <> Read {relative(retrievedAt)}.</>}
+    <p id="catalogue-size" className="flex flex-wrap items-center gap-x-2 text-xs">
+      <span>
+        <strong className="font-medium text-foreground">
+          {addable.toLocaleString()}
+        </strong>{" "}
+        <span className="text-muted-foreground">servers you can add</span>
+      </span>
+      {detail && <span className="text-muted-foreground">{detail}</span>}
+      {read}
     </p>
   );
 }
@@ -528,15 +550,23 @@ function DensityToggle({ value, onChange }: {
   );
 }
 
-/** A catalogue that did not answer, named so a short list is not read as all of it. */
+/**
+ * A catalogue that did not answer.
+ *
+ * One quiet line, not a banner. Somebody else's server being briefly
+ * unreachable is the ordinary weather of talking to four third parties, and
+ * nothing here is broken when it happens: the page still works, and the other
+ * catalogues still answered. It is worth one sentence so a short list is not
+ * read as all of it, and worth no more than that -- an alarm raised every time
+ * a third party has a bad minute is an alarm somebody learns to scroll past.
+ */
 function SourcesDown({ sources }: { sources: CatalogSource[] }) {
   return (
-    <Notice tone="attention">
-      <strong>{sources.map((s) => s.source).join(" and ")} did not answer.</strong>{" "}
-      Nothing {sources.length === 1 ? "it lists" : "they list"} is on this
-      page, so what is below is shorter than the catalogue — not the whole of
-      it.
-    </Notice>
+    <p className="text-xs text-muted-foreground">
+      {sources.map((s) => s.source).join(" and ")}{" "}
+      {sources.length === 1 ? "didn't" : "didn't"} respond, so{" "}
+      {sources.length === 1 ? "its" : "their"} servers aren't listed below.
+    </p>
   );
 }
 

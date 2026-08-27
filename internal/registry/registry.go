@@ -160,16 +160,19 @@ type Page struct {
 	// Freshness is what the catalogue said about reusing this answer. Not part
 	// of the wire shape; see Detail.Freshness.
 	Freshness Freshness `json:"-"`
-	// AddableEstimate is roughly how many servers across these catalogues
-	// this host would accept an import of. A floor, and an estimate, and both
-	// on purpose -- see estimateAddable.
+	// Addable is how many servers across these catalogues this host would
+	// accept an import of. Counted, not sampled: every document behind it was
+	// walked and handed to the same parser the import endpoint uses.
 	//
 	// It exists because the size of the catalogue is the question a page of
-	// ten cannot answer, and getting it wrong is what made an operator
-	// looking at thirty rows conclude there were ninety servers in the world.
+	// ten cannot answer, and getting it wrong is what made an operator looking
+	// at thirty rows conclude there were ninety servers in the world. It was
+	// an extrapolation from one window until the index started holding every
+	// catalogue locally; the name went with the estimate.
+	//
 	// Zero means nothing could be said, which is different from zero servers
 	// and is why the field is omitted rather than sent as 0.
-	AddableEstimate int `json:"addable_estimate,omitempty"`
+	Addable int `json:"addable,omitempty"`
 	// Sources says which catalogues this page was assembled from and how each
 	// of them fared.
 	//
@@ -198,7 +201,7 @@ type SourceStatus struct {
 	Entries int `json:"entries"`
 	// Judged is how many of this source's documents this host actually parsed
 	// while producing this answer, and Addable is how many of those it would
-	// accept. Together they are the measured ratio behind Page.AddableEstimate, and
+	// accept. Together they are the measured counts behind Page.Addable, and
 	// they are reported so that the estimate is a claim somebody can check
 	// rather than a number that appears.
 	//

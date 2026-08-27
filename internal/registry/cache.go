@@ -12,26 +12,30 @@ import (
 	"github.com/spoked/mcpd/internal/cachestore"
 )
 
-// DefaultTTL is how long a catalogue answer is reused when the catalogue says
-// nothing about it.
+// DefaultTTL is how long a catalogue answer is reused.
 //
-// A fallback, not a policy. Where a catalogue sends Cache-Control it is
-// honoured instead -- see readFreshness -- and this is what is left for the
-// official registry, which sends no ETag, no Last-Modified and no
-// Cache-Control at all. Twenty thousand entries change a handful of times an
-// hour and nothing an operator does depends on seeing a publication the minute
-// it lands, so this trades freshness nobody needs for a page that renders
-// without a network call.
-const DefaultTTL = 15 * time.Minute
+// A floor rather than a fallback, and the difference is the whole point. Where
+// a catalogue sends a shorter Cache-Control it is deliberately overridden: the
+// marketplace is browsed when somebody is deciding to add a server, which is a
+// handful of times a year on a typical host, and a catalogue that asks to be
+// re-fetched every five minutes is asking for a request per page view in
+// exchange for freshness nobody is waiting on. Twenty thousand entries change
+// a handful of times an hour and nothing an operator does depends on seeing a
+// publication the minute it lands.
+//
+// What makes the override safe rather than merely rude: the validators are
+// still kept, so a refresh is a conditional request the catalogue answers 304
+// to, and Refresh on the page asks again immediately. Nobody is stuck with a
+// day-old answer they did not choose.
+const DefaultTTL = 24 * time.Hour
 
 // DefaultDetailTTL is how long one server.json is reused.
 //
-// Longer than a listing, because it is a different question with a different
-// answer. A listing is "what is there now" and changes whenever anybody
-// publishes anything; a detail is "what does this one server say", keyed by a
-// stable name, and changes when its publisher cuts a release. Holding the
-// second for as long as the first refetches a document that has not moved.
-const DefaultDetailTTL = time.Hour
+// The same day, for a stronger reason. A listing is "what is there now" and
+// changes whenever anybody publishes anything; a detail is "what does this one
+// server say", keyed by a stable name, and changes only when its publisher
+// cuts a release.
+const DefaultDetailTTL = 24 * time.Hour
 
 // negativeTTL is how long "no such server" is remembered.
 //
@@ -511,12 +515,18 @@ func (c *Cached) state(hit *cacheEntry) entryState {
 	}
 }
 
-// entryFor builds an entry from what the catalogue said, falling back to the
-// configured default where it said nothing.
-func (c *Cached) entryFor(f Freshness, fallback time.Duration) *cacheEntry {
+// entryFor builds an entry from what the catalogue said, holding it for at
+// least the configured lifetime.
+//
+// A floor, not a fallback: a catalogue asking to be re-fetched sooner than the
+// configured lifetime is overridden, for the reason DefaultTTL gives. A
+// catalogue asking for longer is honoured -- it knows something about its own
+// publication rate that this host does not, and the only direction that costs
+// anybody anything is the short one.
+func (c *Cached) entryFor(f Freshness, floor time.Duration) *cacheEntry {
 	ttl := f.TTL
-	if ttl <= 0 {
-		ttl = fallback
+	if ttl < floor {
+		ttl = floor
 	}
 	staleWhile := f.StaleWhile
 	if staleWhile > staleServeCeiling {

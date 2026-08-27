@@ -243,7 +243,7 @@ func TestMeasure_TimeToAPage(t *testing.T) {
 		afterOneTook.Round(time.Millisecond), len(afterOne.Entries), wire(t, afterOne))
 	t.Logf("after,  limit=10  page 2: %7s  %3d entries  %6d bytes",
 		afterTwoTook.Round(time.Millisecond), len(afterTwo.Entries), wire(t, afterTwo))
-	t.Logf("estimate beside the search box: %d+", afterOne.AddableEstimate)
+	t.Logf("addable, beside the search box: %d", afterOne.Addable)
 	for _, s := range afterOne.Sources {
 		t.Logf("  %-38s judged %3d  addable %3d  total %5d",
 			s.Source, s.Judged, s.Addable, s.Total)

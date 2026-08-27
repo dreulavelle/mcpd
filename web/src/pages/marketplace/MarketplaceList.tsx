@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
 import { useRouter } from "@/lib/router";
-import { Notice, PageHeader, Section } from "@/components/chrome";
+import { Notice, PageHeader } from "@/components/chrome";
 import { Button } from "@/components/ui/button";
 import { CatalogList, type Installed } from "./CatalogList";
 import type { CatalogChoice } from "./catalog";
@@ -49,7 +49,7 @@ export function MarketplaceList() {
     <>
       <PageHeader
         title="Marketplace"
-        lede="Servers somebody else runs, which you can add to this host. Adding one makes it a plugin: the same endpoint shape, the same scoping, the same audit — and nothing it offers is served until an administrator has read it and said yes."
+        lede="Ready-made MCP servers you can add to this host. Nothing a new server offers is available until you've looked at its tools and approved them."
         actions={<Button onClick={addCustom}>Add Custom MCP</Button>}
       />
 
@@ -68,12 +68,7 @@ export function MarketplaceList() {
 
       {error && <Notice tone="problem">{error}</Notice>}
 
-      <Section
-        title="Catalogue"
-        description="Published servers, ready to add. Everything already added lives under Plugins."
-      >
-        <CatalogList installed={installed} onAdd={addFromCatalog} />
-      </Section>
+      <CatalogList installed={installed} onAdd={addFromCatalog} />
     </>
   );
 }

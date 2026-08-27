@@ -37,7 +37,7 @@ export interface Catalog {
   /** Absent at the end of the listing. */
   next_cursor?: string;
   /** A floor, not a count. Rendered with a "+". */
-  addable_estimate?: number;
+  addable?: number;
   /** Every catalogue that answered, as one line. */
   source: string;
   /** How each of them fared, so a shorter page can say why it is shorter. */

@@ -323,7 +323,14 @@ func Default() *Config {
 		// registry says so rather than discovering that the others existed and
 		// were off. PulseMCP is off because it cannot answer without a key it
 		// has to be issued by hand; see Catalog.
-		Catalog: Catalog{Official: true, Docker: true, Smithery: true},
+		// Docker is off. Its catalogue is 317 servers of which this host can
+		// import 29: the rest are container-packaged, and mcpd only accepts a
+		// server that publishes a remote endpoint. On, it contributed about
+		// two rows per page while every other catalogue contributed ten, which
+		// read as a bug in the paging rather than as a catalogue full of
+		// things that cannot be installed here. Still implemented, and still
+		// one line in config.yaml for a deployment that wants it.
+		Catalog: Catalog{Official: true, Smithery: true},
 		Metrics: Metrics{Enabled: true},
 		Plugins: map[string]PluginConfig{},
 		legacy:  &Legacy{sources: map[string]string{}},

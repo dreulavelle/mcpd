@@ -184,10 +184,16 @@ catalog:
 
   # Docker's MCP catalogue, built from github.com/docker/mcp-registry (MIT).
   # No daemon and no container is involved: reading it is an HTTPS fetch of a
-  # metadata document like any other. Most of what it lists runs locally and is
-  # shown with the reason rather than offered; the remote entries are the ones
-  # this host can actually connect to.
-  docker: true
+  # metadata document like any other.
+  #
+  # Off by default, on the measurement rather than on principle: it lists 317
+  # servers and this host can import 29 of them. The rest are packaged to run
+  # locally, and mcpd only accepts a server that publishes a remote endpoint.
+  # On, it contributed about two rows to a page where every other catalogue
+  # contributed ten -- which reads as broken paging rather than as a catalogue
+  # full of things that cannot be installed here. Switch it on if you want the
+  # 29.
+  docker: false
 
   # Smithery's registry: around 10,500 servers, every hosted one reachable at
   # server.smithery.ai and opened by a single Smithery API key.
