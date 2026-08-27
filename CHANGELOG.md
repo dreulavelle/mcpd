@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/dreulavelle/mcpd/compare/v0.5.0...v0.6.0) (2026-08-27)
+
+
+### Features
+
+* **extremecloudiq:** read an Extreme Networks estate, and say what is wrong with it ([#94](https://github.com/dreulavelle/mcpd/issues/94)) ([ebd0c41](https://github.com/dreulavelle/mcpd/commit/ebd0c4111675ad5f2681490841d4b0d66b6a8f32))
+
+
+### Fixes
+
+* **tunnel:** serialise a tunnel's lifecycle so two settings changes cannot race ([#95](https://github.com/dreulavelle/mcpd/issues/95)) ([04845fd](https://github.com/dreulavelle/mcpd/commit/04845fd83107fd0630014762a9c25b1768811c62))
+
 ## [0.5.0](https://github.com/dreulavelle/mcpd/compare/v0.4.1...v0.5.0) (2026-08-27)
 
 
