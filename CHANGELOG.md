@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/dreulavelle/mcpd/compare/v0.2.0...v0.3.0) (2026-08-27)
+
+
+### Features
+
+* **graylog:** read a log platform, and hold every plugin to one standard ([#80](https://github.com/dreulavelle/mcpd/issues/80)) ([4b07b28](https://github.com/dreulavelle/mcpd/commit/4b07b2835f0b7c72baf62d7d7ecc59942af35151))
+* **trust:** trust your own certificate authority, and say which instance is which ([#82](https://github.com/dreulavelle/mcpd/issues/82)) ([d1be8e8](https://github.com/dreulavelle/mcpd/commit/d1be8e8934ed09ae41d517dfe31cb7a4ee8e0521))
+
+
+### Fixes
+
+* **version:** the binary carries its own version, and there is no "dev" ([#83](https://github.com/dreulavelle/mcpd/issues/83)) ([456403b](https://github.com/dreulavelle/mcpd/commit/456403bb182e5949552e72df09a2303090229760))
+
 ## [0.2.0](https://github.com/dreulavelle/mcpd/compare/v0.1.0...v0.2.0) (2026-08-26)
 
 
