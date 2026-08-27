@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/dreulavelle/mcpd/compare/v0.6.0...v0.6.1) (2026-08-27)
+
+
+### Fixes
+
+* **deploy:** make ./data before the first start, or the container cannot write ([#97](https://github.com/dreulavelle/mcpd/issues/97)) ([9a0493f](https://github.com/dreulavelle/mcpd/commit/9a0493f50c40a00d9c2a58fa3302cc12ff719336))
+
 ## [0.6.0](https://github.com/dreulavelle/mcpd/compare/v0.5.0...v0.6.0) (2026-08-27)
 
 
