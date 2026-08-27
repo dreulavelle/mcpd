@@ -264,7 +264,8 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 					return nil, zero, err
 				}
 				obs.ToolCall(plugin, spec.Name, observability.OutcomeOK, time.Since(started))
-				return nil, out, nil
+				obs.ToolResultSize(plugin, spec.Name, func() int { return marshalledSize(out) })
+				return sendOnce(req), out, nil
 			})
 		},
 	})
@@ -379,9 +380,24 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		tool.InputSchema = spec.InputSchema
 	}
 
+	// The name this call is recorded under, matching the bare form a read tool
+	// reports: the plugin is already a label of its own.
+	//
+	// A proposal is a tool call, and until it was recorded as one it was absent
+	// from every latency and size series the host keeps -- while being, on most
+	// integrations, the slowest call and the largest answer. Plan reads
+	// upstream state, and the result carries the whole change set. Counting it
+	// in mutation_proposals_total said how often a change was asked for and
+	// nothing about what asking cost.
+	timedName := strings.ReplaceAll(spec.Action, ".", "_")
+
 	mcp.AddTool(srv, tool, func(ctx context.Context, req *mcp.CallToolRequest, in P) (*mcp.CallToolResult, operationView, error) {
+		started := time.Now()
 		if err := gate(ctx, qualified, auth.CapPropose); err != nil {
 			obs.MutationProposal(plugin, spec.Action, observability.OutcomeDenied)
+			// Zero, as for a read refused before it ran: a rejection took
+			// microseconds and would drag every quantile towards nothing.
+			obs.ToolCall(plugin, timedName, observability.OutcomeDenied, 0)
 			return nil, operationView{}, err
 		}
 		// What was asked for, before anything is decided about it. A proposal
@@ -398,11 +414,16 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		// and cannot spend a budget by being refused.
 		if err := limiter.allow(auth.FromContext(ctx).ID, time.Now()); err != nil {
 			obs.MutationProposal(plugin, spec.Action, observability.OutcomeRateLimited)
+			obs.ToolCall(plugin, timedName, observability.OutcomeRateLimited, 0)
 			return nil, operationView{}, err
 		}
 
 		params, err := json.Marshal(in)
 		if err != nil {
+			// Recorded so that calls and outcomes still add up. It is not a
+			// MutationProposal outcome: nothing was proposed, and inflating
+			// that counter would overstate how often a change was asked for.
+			obs.ToolCall(plugin, timedName, observability.OutcomeError, time.Since(started))
 			return nil, operationView{}, fmt.Errorf("encode parameters: %w", err)
 		}
 
@@ -412,6 +433,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		plan, err := adapter.plan(ctx, params)
 		if err != nil {
 			obs.MutationProposal(plugin, spec.Action, observability.OutcomeError)
+			obs.ToolCall(plugin, timedName, observability.OutcomeError, time.Since(started))
 			return nil, operationView{}, err
 		}
 
@@ -433,6 +455,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		})
 		if err != nil {
 			obs.MutationProposal(plugin, spec.Action, observability.OutcomeError)
+			obs.ToolCall(plugin, timedName, observability.OutcomeError, time.Since(started))
 			return nil, operationView{}, err
 		}
 		obs.MutationProposal(plugin, spec.Action, observability.OutcomeOK)
@@ -440,7 +463,14 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		// The operation is recorded before anyone is asked, so a change that
 		// is declined -- or one where the client vanishes mid-question --
 		// still leaves a durable record of what was proposed.
-		return nil, resolveApproval(ctx, req, svc, inline, op), nil
+		// Timed around resolveApproval, not before it. Below the inline ceiling
+		// a client's own confirmation settles the call inside it, and a
+		// measurement that stopped short would report the fast half of a call
+		// whose slow half is the part anybody waits on.
+		view := resolveApproval(ctx, req, svc, inline, op)
+		obs.ToolCall(plugin, timedName, observability.OutcomeOK, time.Since(started))
+		obs.ToolResultSize(plugin, timedName, func() int { return marshalledSize(view) })
+		return sendOnce(req), view, nil
 	})
 }
 
@@ -538,8 +568,69 @@ type ToolObserver interface {
 	// ToolCall reports one read tool call. The duration is zero for a call
 	// refused before the handler ran, which is not a measurement of anything.
 	ToolCall(plugin, tool, outcome string, d time.Duration)
+	// ToolResultSize reports how large a successful result was, in bytes of
+	// the JSON the plugin built. Lazy because measuring costs a marshal of
+	// the whole answer, which a host with no metrics endpoint should not pay.
+	ToolResultSize(plugin, tool string, size func() int)
 	// MutationProposal reports one proposal, recorded or refused.
 	MutationProposal(plugin, action, outcome string)
+}
+
+// structuredContentVersion is the protocol version that introduced
+// structuredContent, and therefore the line below which a result must still be
+// sent twice.
+//
+// Dates sort lexicographically, which is how the SDK compares them too.
+const structuredContentVersion = "2025-06-18"
+
+// sendOnce decides whether this caller can be sent the answer once.
+//
+// The specification has a tool result carried as structured content and again
+// as a text copy of the same JSON, so that a client predating SEP-2106 can
+// recover the payload from the unstructured half. The copy is not free: it is
+// 54% of the time and 41% of the allocation of a 20,000-byte call, and it is
+// half of what reaches a model's context -- which is the budget that actually
+// runs out. See MaxResultBytes, whose arithmetic divides by two for exactly
+// this reason.
+//
+// structuredContent arrived in protocol 2025-06-18, so a client that negotiated
+// that version or later is required to read it, and the copy is dead weight.
+// Below it, or when the version cannot be established, the copy stays: a caller
+// that cannot be asked is a caller that gets the compatible answer.
+//
+// Returning a non-nil, empty Content is what suppresses it. The SDK adds its
+// text copy only when Content is nil, and appends one beside a set Content only
+// for a result that is not a JSON object -- and every tool registered here
+// answers with a struct.
+func sendOnce(req *mcp.CallToolRequest) *mcp.CallToolResult {
+	if req == nil || req.Session == nil {
+		return nil
+	}
+	params := req.Session.InitializeParams()
+	if params == nil || params.ProtocolVersion < structuredContentVersion {
+		return nil
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{}}
+}
+
+// marshalledSize reports how many bytes of JSON a result is, which is the
+// number MaxResultBytes bounds and the one a plugin decided against.
+//
+// The SDK marshals the same value again on its way to the transport, so this
+// is the second time it is encoded. That is worth it only because it is the
+// last point the value exists as a Go type: measuring after the transport owns
+// it would mean parsing what was already correct. It runs on successful reads
+// only, and only when something is collecting.
+//
+// A value that will not marshal reports -1, which is not recorded. The SDK is
+// about to fail on it anyway, and observing zero would put "could not be
+// measured" and "answered with nothing" in the same bucket.
+func marshalledSize(v any) int {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return -1
+	}
+	return len(b)
 }
 
 // noObserver is what a host that wants no metrics gets, so no call site needs
@@ -547,6 +638,7 @@ type ToolObserver interface {
 type noObserver struct{}
 
 func (noObserver) ToolCall(string, string, string, time.Duration) {}
+func (noObserver) ToolResultSize(string, string, func() int)      {}
 func (noObserver) MutationProposal(string, string, string)        {}
 
 type registeredTool struct {

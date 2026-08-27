@@ -64,6 +64,10 @@ type Options struct {
 	// endpoint is switched off. MetricsPublic serves it unauthenticated.
 	Metrics       http.Handler
 	MetricsPublic bool
+	// Performance reports the same collectors Metrics serves, shaped for the
+	// console. A function rather than the metrics type so this package keeps
+	// knowing nothing about Prometheus; nil means nothing is being collected.
+	Performance func() observability.Performance
 	// Logs is the copy of this host's log kept for the dashboard, or nil when
 	// the host is not keeping one.
 	Logs *observability.LogStream
@@ -402,6 +406,7 @@ func (s *Server) routes() {
 	// None of it is sensitive and all of it is the first thing asked when
 	// something looks wrong.
 	api("GET /api/resources", s.handleResources, auth.CapRead)
+	api("GET /api/performance", s.handlePerformance, auth.CapRead)
 	api("GET /api/updates", s.handleUpdates, auth.CapRead)
 	// Forcing a check reaches an external service, so it is an admin action
 	// even though what it returns is not privileged.
@@ -1772,6 +1777,27 @@ func (s *Server) handleResources(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, r, http.StatusOK,
 		observability.Snapshot(s.opts.Version, started, time.Now()))
+}
+
+// handlePerformance reports what the host's own collectors have seen.
+//
+// Read at request time rather than kept between calls: the registry is the
+// authority, and a copy held here would be a second one to keep true.
+//
+// An empty surface is a valid answer, not an error. A host with metrics
+// switched off, or one that has served no calls yet, has nothing to show and
+// should say so with an empty table rather than a failure the console has to
+// render as something being broken.
+func (s *Server) handlePerformance(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Performance == nil {
+		s.writeJSON(w, r, http.StatusOK, observability.Performance{
+			Tools:    []observability.ToolStats{},
+			Upstream: []observability.UpstreamStats{},
+			Cache:    []observability.CacheStats{},
+		})
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, s.opts.Performance())
 }
 
 // handleUpdates reports the running version against what has been published.
