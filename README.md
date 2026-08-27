@@ -18,21 +18,40 @@ Run mcpd next to your infrastructure, connect the systems you want ChatGPT to re
 
 ## Features
 
+### Secure connectivity
+
 * **Built-in ChatGPT tunnels** — connect ChatGPT securely without exposing mcpd or your services publicly.
 * **Outbound-only connectivity** — no inbound firewall rules, NAT changes, or public DNS required.
 * **Multiple ChatGPT accounts** — connect several workspaces at once, each with its own identity and its own access.
 * **One gateway, many systems** — combine integrations behind a single endpoint, or give each one its own isolated connector.
-* **Multiple instances per integration** — connect as many environments, customers, sites, or servers as you need, independently.
-* **Approval-gated actions** — let AI look at anything you allow, while every change waits for a human.
-* **Approval policies** — pre-approve the routine work and keep the consequential decisions on your desk.
+* **Trust your own certificate authority** — internal services signed by your company CA, or by the appliance itself, just work. No disabling verification.
+
+### Keep humans in control
+
+* **Approval-gated actions** — AI can look at anything you allow. Changing something needs a person.
+* **Approve in the conversation** — routine changes are confirmed where the work is happening. No context-switch to a dashboard, no queue to babysit.
+* **Approval policies** — pre-approve the routine work so it flows, and hold the consequential decisions for review.
+* **Nothing irreversible is ever auto-approved** — a change that can't be undone always waits for a human, whatever your rules say.
+* **Drift detection** — a change is re-checked against live state before it runs, so an approval from an hour ago can't apply to a system that has moved on.
+* **Confirmed outcomes** — mcpd verifies the change actually landed rather than assuming it did, and says plainly when it couldn't check.
 * **Fine-grained access** — control exactly which users, groups, API keys, and tunnels can reach each system.
-* **Encrypted credentials** — integration secrets are stored locally and encrypted. Nothing leaves your network that you didn't send.
-* **Tamper-evident audit history** — a hash-chained record of what was asked for, who approved it, and what actually happened.
+
+### Connect anything
+
 * **Built-in integrations** — ships ready to connect to real infrastructure, out of the box.
-* **Plugin architecture** — add new integrations with the included Go SDK, without rebuilding the platform.
+* **Multiple instances per integration** — connect as many environments, customers, sites, or servers as you need, independently.
 * **MCP marketplace** — discover and import thousands of MCP servers from multiple catalogs.
 * **Remote MCP support** — bring MCP servers you already run under one managed, access-controlled gateway.
-* **Built-in dashboard** — manage plugins, tunnels, users, permissions, approvals, logs, and system health from your browser.
+* **Full MCP support** — tools, resources, and prompts, not just tools.
+* **Plugin architecture** — build your own integrations with the included Go SDK, in or out of process, without rebuilding the platform.
+
+### Runs on your terms
+
+* **Encrypted credentials** — integration secrets are stored locally and encrypted.
+* **No telemetry** — crash reporting and update checks are off until you switch them on. Nothing leaves your network that you didn't agree to send.
+* **Tamper-evident audit history** — a hash-chained record of what was asked for, who approved it, and what actually happened.
+* **Built-in dashboard** — plugins, tunnels, users, permissions, approvals, logs, and system health, all in the browser.
+* **Performance visibility** — per-tool latency, error rates, and cache behaviour, so you can see which integration is slow rather than guess.
 * **SSO and local accounts** — sign in with Google, Microsoft Entra, GitHub, or any OIDC provider, alongside local users.
 * **API keys for automation** — give scripts and agents their own identities and permissions.
 * **Self-hosted and lightweight** — one binary with the dashboard, database, MCP host, and tunnel management built in. No runtime to install, no database server to maintain.
@@ -69,12 +88,11 @@ Your infrastructure stays private.
 ### Docker
 
 ```bash
-git clone https://github.com/dreulavelle/mcpd.git
-cd mcpd
-docker compose up -d
+curl -fsSLO https://raw.githubusercontent.com/dreulavelle/mcpd/main/docker-compose.prod.yml
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-The first start builds the image and takes a few minutes. After that, open:
+No clone, no build, no toolchain — it pulls the published image and starts. Then open:
 
 ```text
 http://<server-ip>/
@@ -82,6 +100,7 @@ http://<server-ip>/
 
 Create your administrator account and start adding integrations.
 
+> Building from source instead? `git clone`, then `docker compose up -d`.
 > If your user account isn't uid 1000, tell Compose who you are first, or the
 > `./data` directory comes back owned by somebody else:
 > ```bash
