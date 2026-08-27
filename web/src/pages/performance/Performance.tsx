@@ -92,6 +92,13 @@ function Headline({ perf }: { perf: Perf }) {
     .filter((t) => t.result_bytes && t.result_bytes.count > 0)
     .sort((a, b) => (b.result_bytes!.p95 ?? 0) - (a.result_bytes!.p95 ?? 0))[0];
 
+  // Counted across every tool rather than read off the one with the largest
+  // p95: the tool that had an answer cut need not be the tool whose answers
+  // are typically biggest, and it usually is not.
+  const cut = perf.tools.reduce(
+    (n, t) => n + overBudget(t.result_bytes, perf.result_budget_bytes), 0,
+  );
+
   const cacheHits = perf.cache.reduce((n, c) => n + c.hit, 0);
   const cacheAll = perf.cache.reduce((n, c) => n + c.hit + c.miss + c.shared, 0);
 
@@ -109,13 +116,23 @@ function Headline({ perf }: { perf: Perf }) {
       <Tile
         label="Slowest tool (p95)"
         value={slowest ? seconds(slowest.duration!.p95) : "—"}
-        help={slowest ? slowest.tool : "nothing timed yet"}
+        help={
+          slowest
+            ? `${slowest.tool} · mean ${seconds(mean(slowest.duration!))}`
+            : "nothing timed yet"
+        }
       />
       <Tile
         label="Largest answer (p95)"
         value={biggest ? bytes(biggest.result_bytes!.p95) : "—"}
-        help={biggest ? biggest.tool : "nothing measured yet"}
-        tone={biggest && biggest.result_bytes!.p95 >= perf.result_budget_bytes ? "problem" : undefined}
+        help={
+          cut
+            ? `${cut.toLocaleString()} past the budget, cut by the client`
+            : biggest
+              ? `${biggest.tool} · mean ${bytes(mean(biggest.result_bytes!))}`
+              : "nothing measured yet"
+        }
+        tone={cut ? "problem" : undefined}
       />
       <Tile
         label="Cache hit rate"
@@ -256,7 +273,7 @@ function Histogram({ title, empty, d, format, budget, caption }: {
       <div className="flex items-baseline justify-between gap-2">
         <h3 className="text-sm font-medium">{title}</h3>
         <p className="font-mono text-xs text-muted-foreground tabular-nums">
-          p50 {format(d.p50)} · p95 {format(d.p95)}
+          mean {format(mean(d))} · p50 {format(d.p50)} · p95 {format(d.p95)}
         </p>
       </div>
       <ChartContainer config={config} className="h-[200px] w-full">
@@ -420,6 +437,7 @@ function ToolTable({ perf }: { perf: Perf }) {
                 <TableHead className="text-right">Calls</TableHead>
                 <TableHead className="text-right">Failed</TableHead>
                 <TableHead className="text-right">Refused</TableHead>
+                <TableHead className="text-right">mean</TableHead>
                 <TableHead className="text-right">p50</TableHead>
                 <TableHead className="text-right">p95</TableHead>
                 <TableHead className="text-right">p95 size</TableHead>
@@ -428,7 +446,7 @@ function ToolTable({ perf }: { perf: Perf }) {
             <TableBody>
               {perf.tools.map((t) => {
                 const refused = t.calls.denied + t.calls.rate_limited;
-                const big = t.result_bytes && t.result_bytes.p95 >= perf.result_budget_bytes;
+                const big = overBudget(t.result_bytes, perf.result_budget_bytes) > 0;
                 return (
                   <TableRow key={key(t)}>
                     <TableCell className="font-mono text-xs">
@@ -442,6 +460,9 @@ function ToolTable({ perf }: { perf: Perf }) {
                     </TableCell>
                     <TableCell className={"text-right font-mono tabular-nums " + (refused ? "text-attention" : "text-muted-foreground")}>
                       {refused.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right font-mono tabular-nums">
+                      {t.duration?.count ? seconds(mean(t.duration)) : "—"}
                     </TableCell>
                     <TableCell className="text-right font-mono tabular-nums">
                       {t.duration?.count ? seconds(t.duration.p50) : "—"}
@@ -469,6 +490,42 @@ function key(t: ToolStats): string {
   return `${t.plugin}/${t.tool}`;
 }
 
+/**
+ * The exact mean, which the sum and the count give and a quantile cannot.
+ *
+ * A histogram quantile is interpolated inside whichever bucket the rank lands
+ * in, so where the observations sit in a single bucket the estimate describes
+ * the boundaries rather than the calls: one call of 63us reported a p95 of
+ * 4.75ms, which is 95% of the way through the first bucket and nothing to do
+ * with the call. The mean is carried exactly, and is shown beside each
+ * estimate rather than instead of it -- the pair is what tells a reader how
+ * much the estimate is worth.
+ */
+function mean(d: Distribution): number {
+  return d.count > 0 ? d.sum / d.count : 0;
+}
+
+/**
+ * How many answers went past the budget, counted rather than estimated.
+ *
+ * Every observation in a bucket bounded above the budget, and every one in the
+ * overflow, is over it -- exactly, with no interpolation anywhere in it.
+ *
+ * This replaces a `p95 >= budget` test, which asks a question a quantile
+ * cannot answer. One 200KB answer among ninety-nine small ones leaves the 95th
+ * percentile near the small ones, so the single reply the client actually cut
+ * is the one that goes unreported -- and a rare cut answer is the normal shape
+ * of the fault, not an unusual one. A percentile describes the bulk; whether
+ * anything crossed a line is a count.
+ */
+function overBudget(d: Distribution | undefined, budget: number): number {
+  if (!d) return 0;
+  return d.buckets.reduce(
+    (n, b) => (b.le === null || b.le > budget ? n + b.count : n),
+    0,
+  );
+}
+
 function total(o: { ok: number; error: number; denied: number; rate_limited: number }): number {
   return o.ok + o.error + o.denied + o.rate_limited;
 }
@@ -480,7 +537,11 @@ function bucketLabel(b: Bucket, format: (n: number) => string): string {
 
 function seconds(s: number): string {
   if (s === 0) return "0";
-  if (s < 1) return `${Math.round(s * 1000)}ms`;
+  // Microseconds have somewhere to land now the buckets reach below a
+  // millisecond. Rounding to the nearest millisecond drew the entire local
+  // path -- every cached read, every tool with no upstream -- as "0ms".
+  if (s < 0.001) return `${Math.round(s * 1_000_000)}µs`;
+  if (s < 1) return `${(s * 1000).toFixed(s < 0.01 ? 1 : 0)}ms`;
   return `${s.toFixed(s < 10 ? 1 : 0)}s`;
 }
 

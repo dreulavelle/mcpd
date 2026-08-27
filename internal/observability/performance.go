@@ -45,6 +45,10 @@ type ToolStats struct {
 	// looks identical to an unused tool if only successes are counted.
 	Calls Outcomes `json:"calls"`
 	// Duration covers successful and failed calls; refusals are not timed.
+	// It is the handler's own time -- the gate, the limiter and whatever the
+	// plugin asked its upstream -- and the clock stops before the result is
+	// serialised. For a tool with an upstream that is the call; for one
+	// without, it is a fraction of it.
 	Duration *Distribution `json:"duration,omitempty"`
 	// ResultBytes covers successful calls only. Absent means nothing has
 	// been measured yet, which is not the same as answers of size zero.
@@ -88,7 +92,12 @@ type Distribution struct {
 	Buckets []Bucket `json:"buckets"`
 	// P50 and P95 are interpolated within the bucket they land in, the same
 	// estimate histogram_quantile makes and with the same caveat: a quantile
-	// is no finer than the boundaries either side of it.
+	// is no finer than the boundaries either side of it. Where every
+	// observation sits in one bucket the estimate describes the boundaries
+	// rather than the observations, and Sum over Count -- which is exact --
+	// is the number to read. Both are sent so the console can show the pair;
+	// the mean is not carried separately, because a third field derived from
+	// two that are already here is a third thing to keep true.
 	P50 float64 `json:"p50"`
 	P95 float64 `json:"p95"`
 }
