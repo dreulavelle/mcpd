@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/dreulavelle/mcpd/compare/v0.4.1...v0.5.0) (2026-08-27)
+
+
+### Features
+
+* **chatgpt:** connect several ChatGPT accounts, each with its own identity ([#91](https://github.com/dreulavelle/mcpd/issues/91)) ([d8f0f91](https://github.com/dreulavelle/mcpd/commit/d8f0f91eb65a8c6f7135dd20c9f396e9b84f71e7))
+* **marketplace:** hold the catalogues rather than proxying them ([#92](https://github.com/dreulavelle/mcpd/issues/92)) ([4ce4ac1](https://github.com/dreulavelle/mcpd/commit/4ce4ac1b19ccfa38ecf91b73aba951e66f7e28c4))
+* **settings:** one navigation, and groups that say where they live ([#93](https://github.com/dreulavelle/mcpd/issues/93)) ([01af420](https://github.com/dreulavelle/mcpd/commit/01af4205f7b498edac0906ee16d9a2ab4cc57fda))
+
+
+### Fixes
+
+* **dashboard:** let a dialog taller than the window be scrolled ([#90](https://github.com/dreulavelle/mcpd/issues/90)) ([77f3cfd](https://github.com/dreulavelle/mcpd/commit/77f3cfd498821fde8db0decd0dba8b28a0695ca9))
+* **performance:** report what was measured, not where a boundary fell ([#88](https://github.com/dreulavelle/mcpd/issues/88)) ([08b849b](https://github.com/dreulavelle/mcpd/commit/08b849b9771965cc33b1ce20bfabde37ab5bedb5))
+
 ## [0.4.1](https://github.com/dreulavelle/mcpd/compare/v0.4.0...v0.4.1) (2026-08-27)
 
 
