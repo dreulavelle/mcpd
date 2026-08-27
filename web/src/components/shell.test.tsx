@@ -39,7 +39,7 @@ describe("the sidebar", () => {
   it("hides the administrative pages from a user, and keeps the rest", () => {
     mount("user", "/settings");
     expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Approval policy" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Policies" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
   });
 
@@ -55,13 +55,19 @@ describe("the sidebar", () => {
     expect(screen.getByRole("link", { name: "Users" })).toBeInTheDocument();
   });
 
-  // Every administrative page is in the sidebar from anywhere, not only once
-  // Settings has been opened. That is the whole point of flattening them.
+  // Every administrative page that is in the sidebar is there from anywhere,
+  // not only once Settings has been opened. That is the whole point of
+  // flattening them.
+  //
+  // API Keys is deliberately not in the list any more: it, Certificates and
+  // Authentication became tabs on Settings, because each is visited rarely and
+  // a sidebar read constantly should not spend a line on each.
   it("lists the administrative pages from a page in another section", () => {
     mount("admin", "/approvals");
-    for (const label of ["Settings", "Approval policy", "Users", "Groups", "API Keys"]) {
+    for (const label of ["Settings", "Policies", "Users", "Groups"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("link", { name: "API Keys" })).not.toBeInTheDocument();
   });
 
   // /settings covers /settings/users, so both entries match the path. Only the

@@ -3,6 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type SettingGroup, type SettingsPayload } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
+import { Advanced } from "./Advanced";
 import { General } from "./General";
 
 /** The groups the host's own settings moved into, as the API sends them. */
@@ -30,7 +31,10 @@ const groups: SettingGroup[] = [
   {
     name: "timeouts",
     title: "Timeouts",
-    section: "settings",
+    // On Advanced, not here. A group declares its own section in Go and the
+    // dashboard renders where it is told, so a fixture that put it here would
+    // be testing an arrangement this host does not have.
+    section: "advanced",
     fields: [
       {
         key: "server.read_timeout_seconds", label: "Wait for the whole request",
@@ -42,7 +46,8 @@ const groups: SettingGroup[] = [
   {
     name: "approval",
     title: "Approvals",
-    section: "settings",
+    // With the rules it times, on Policies under Govern.
+    section: "approvals",
     fields: [
       {
         key: "approval.proposal_ttl_minutes", label: "Suggestions expire after",
@@ -92,15 +97,13 @@ function stub(overrides: Partial<SettingsPayload> = {}) {
 
 
 /**
- * Whether a section's settings are on the page.
+ * Whether a group's card is on the page.
  *
- * Its name appears twice when it is: once on the button that filters to it,
- * which is always there, and once as the title of its card, which is only
- * there when the section is shown. Only the second answers the question, so
- * this looks for an occurrence that is not inside a button.
+ * A name can also appear on the tab strip above, which is a link rather than a
+ * card, so only an occurrence outside a link answers the question.
  */
 function sectionShown(title: string): boolean {
-  return screen.queryAllByText(title).some((el) => el.closest("button") === null);
+  return screen.queryAllByText(title).some((el) => el.closest("a") === null);
 }
 
 describe("the settings page, after the config file shrank", () => {
@@ -109,44 +112,73 @@ describe("the settings page, after the config file shrank", () => {
     stub();
   });
 
-  it("shows the host's own settings, which used to be in a file", async () => {
+  /**
+   * General is what an operator sets when the host goes up and rarely again.
+   *
+   * It used to be every setting this host has -- thirty-one in one column,
+   * behind a row of filter chips that sat under a row of tabs. Timeouts are on
+   * Advanced now and the approval timings are on Policies, beside the rules
+   * they time.
+   */
+  it("shows the settings a host is set up with, and not the rest", async () => {
     renderWith(<General />, { session: sessionFor("admin") });
 
     expect(await screen.findByLabelText(/Address assistants use/)).toHaveValue(
       "https://mcp.example.net",
     );
-    expect(sectionShown("Timeouts")).toBe(true);
-    expect(sectionShown("Approvals")).toBe(true);
+    expect(sectionShown("Timeouts")).toBe(false);
+    expect(sectionShown("Approvals")).toBe(false);
   });
 
-  // The point of the filter: a hundred and thirty settings in one column is a
-  // scroll, and somebody who remembers a word from a label should not have to
-  // do the scrolling.
-  it("narrows to what a search matches", async () => {
+  /**
+   * Search reaches every tab, not this one.
+   *
+   * Somebody who cannot find a setting does not know which tab it is on --
+   * that is what not finding it means -- so a search scoped to the tab in
+   * front of them would confirm their belief that it does not exist. "Wait for
+   * the whole request" lives on Advanced, and is found from here.
+   */
+  it("finds a setting that lives on another tab", async () => {
     const user = userEvent.setup();
     renderWith(<General />, { session: sessionFor("admin") });
     await screen.findByLabelText(/Address assistants use/);
 
-    await user.type(screen.getByLabelText("Search settings"), "timeout");
+    await user.type(screen.getByLabelText("Search every setting"), "timeout");
 
-    // On the fields rather than the section names: filtering to a single
-    // group makes SettingsForm drop the card title, since a page showing one
-    // group has nothing to tell apart. What matters is which settings are
-    // reachable, and that is what this asserts.
     expect(screen.getByLabelText(/Wait for the whole request/)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Address assistants use/)).not.toBeInTheDocument();
   });
 
-  it("shows one section when its name is clicked, and all of them again after", async () => {
+  // And says where it lives, or a match found from another section looks like
+  // it was here all along and the reader learns nothing for next time.
+  it("says which tab a match came from", async () => {
     const user = userEvent.setup();
     renderWith(<General />, { session: sessionFor("admin") });
     await screen.findByLabelText(/Address assistants use/);
 
-    await user.click(screen.getByRole("button", { name: "Timeouts" }));
-    expect(sectionShown("Approvals")).toBe(false);
+    await user.type(screen.getByLabelText("Search every setting"), "timeout");
+    expect(screen.getByText("On the Advanced tab")).toBeInTheDocument();
+  });
 
-    await user.click(screen.getByRole("button", { name: "All" }));
-    expect(sectionShown("Approvals")).toBe(true);
+  /**
+   * Clearing the search puts the tab back.
+   *
+   * This used to click a row of filter chips that sat under the tabs. Two
+   * navigations stacked is one too many, and these were worse than that: the
+   * chips only meant anything once the tabs had been used, and anybody
+   * describing the page out loud called both of them tabs.
+   */
+  it("puts the tab back when the search is cleared", async () => {
+    const user = userEvent.setup();
+    renderWith(<General />, { session: sessionFor("admin") });
+    await screen.findByLabelText(/Address assistants use/);
+
+    const box = screen.getByLabelText("Search every setting");
+    await user.type(box, "timeout");
+    expect(screen.queryByLabelText(/Address assistants use/)).not.toBeInTheDocument();
+
+    await user.clear(box);
+    expect(await screen.findByLabelText(/Address assistants use/)).toBeInTheDocument();
   });
 
   // The chip existed and nothing declared ApplyRestart, so it had never
@@ -156,8 +188,10 @@ describe("the settings page, after the config file shrank", () => {
     renderWith(<General />, { session: sessionFor("admin") });
     await screen.findByLabelText(/Address assistants use/);
 
+    // Two on this tab. The third restart-only field in the fixture is a
+    // timeout, which lives on Advanced now.
     const chips = screen.getAllByText("needs a restart");
-    expect(chips.length).toBe(3);
+    expect(chips.length).toBe(2);
 
     // And a switch is one of them: a restart-only bool used to render without
     // the chip, because the chip was only drawn beside text boxes.
@@ -171,20 +205,33 @@ describe("the settings page, after the config file shrank", () => {
 
   // A duration counted in the wrong unit is a real mistake: 60 read as minutes
   // is an hour-long request timeout somebody set to a minute.
+  //
+  // Asserted through the search, which is the one view that holds every
+  // section at once -- the two durations in the fixture are now on two
+  // different tabs.
   it("says what unit each duration is counted in", async () => {
+    const user = userEvent.setup();
     renderWith(<General />, { session: sessionFor("admin") });
     await screen.findByLabelText(/Address assistants use/);
 
-    expect(screen.getByText("In seconds.")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Search every setting"), "after");
     expect(screen.getByText("In minutes.")).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Search every setting"));
+    await user.type(screen.getByLabelText("Search every setting"), "request");
+    expect(screen.getByText("In seconds.")).toBeInTheDocument();
   });
 
   // "No inline approval at all" is the strictest setting, and an option
   // reading "none" in a list of risk levels reads as a level instead.
   it("spells the strictest inline ceiling as a word", async () => {
+    const user = userEvent.setup();
     renderWith(<General />, { session: sessionFor("admin") });
     await screen.findByLabelText(/Address assistants use/);
 
+    // It lives with the approval rules now, and is reachable from here by
+    // searching -- which is the behaviour that makes moving it safe.
+    await user.type(screen.getByLabelText("Search every setting"), "conversation");
     const select = screen.getByLabelText(/Approve in the conversation up to/);
     expect(select).toHaveValue("medium");
     expect(
@@ -210,7 +257,10 @@ describe("the settings page, after the config file shrank", () => {
       applied: ["server.read_timeout_seconds"],
       restart_required: ["server.read_timeout_seconds"],
     });
-    renderWith(<General />, { session: sessionFor("admin") });
+    // The field is on Advanced, which renders the same form component from the
+    // same payload -- so this is still one test of saving rather than one per
+    // tab.
+    renderWith(<Advanced />, { session: sessionFor("admin") });
 
     const field = await screen.findByLabelText(/Wait for the whole request/);
     await userEvent.clear(field);

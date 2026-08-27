@@ -82,28 +82,55 @@ func TestTheMovedKeysAreDeclaredFields(t *testing.T) {
 	}
 }
 
-// Every one of them is administrative to change and readable to see, which is
-// what the Settings page already is. A field on a page nobody with read can
-// open would be a setting an operator cannot answer questions about.
-func TestTheMovedKeysAreOnPagesThatAlreadyExist(t *testing.T) {
-	want := map[string]string{
-		"server":   SectionSettings,
-		"timeouts": SectionSettings,
-		"storage":  SectionSettings,
-		"logging":  SectionSettings,
-		"sessions": SectionAuthentication,
+// Every group is on a page that exists.
+//
+// A section is how a group says where it renders, and the dashboard renders
+// what it is told -- so a group naming a section no page reads is a setting
+// that is declared, validated, stored, and invisible. That failure is silent
+// in both directions: nothing errors, and the field simply never appears.
+//
+// The set is checked rather than each group's own section, deliberately.
+// Pinning a group to a section makes this fail every time the pages are
+// rearranged, which is a test that objects to tidying rather than one that
+// catches a mistake. What must hold is that the section is a real one.
+func TestEveryGroupIsOnAPageThatExists(t *testing.T) {
+	pages := map[string]bool{
+		SectionSettings:       true,
+		SectionPlugins:        true,
+		SectionTunnels:        true,
+		SectionAuthentication: true,
+		SectionChatGPT:        true,
+		SectionApprovals:      true,
+		SectionAdvanced:       true,
+		SectionDiagnostics:    true,
 	}
-	seen := map[string]bool{}
 	for _, g := range Schema() {
-		if section, ok := want[g.Name]; ok {
-			seen[g.Name] = true
-			if g.Section != section {
-				t.Errorf("group %q is on section %q, want %q", g.Name, g.Section, section)
-			}
+		if g.Section == "" {
+			t.Errorf("group %q names no section, so nothing renders it", g.Name)
+			continue
+		}
+		if !pages[g.Section] {
+			t.Errorf("group %q is on section %q, which no page reads", g.Name, g.Section)
 		}
 	}
-	for name := range want {
-		if !seen[name] {
+}
+
+// The keys that moved out of config.yaml are still declared and still
+// reachable. Where they render is a layout decision; that they render at all
+// is not.
+func TestTheMovedKeysAreStillReachable(t *testing.T) {
+	for _, name := range []string{"server", "timeouts", "storage", "logging", "sessions"} {
+		found := false
+		for _, g := range Schema() {
+			if g.Name == name {
+				found = true
+				if len(g.Fields) == 0 {
+					t.Errorf("group %q has no fields left", name)
+				}
+				break
+			}
+		}
+		if !found {
 			t.Errorf("group %q is missing from the schema", name)
 		}
 	}

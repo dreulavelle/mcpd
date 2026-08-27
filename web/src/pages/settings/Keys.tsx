@@ -4,6 +4,7 @@ import {
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Copyable, Loading, Notice, PageHeader } from "@/components/chrome";
+import { SettingsTabs } from "./SettingsTabs";
 import { ReachPicker } from "@/components/ReachPicker";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
@@ -47,6 +48,7 @@ export function Keys() {
 
   return (
     <>
+      <SettingsTabs />
       <PageHeader
         title="API Keys"
         lede="A key lets a script call this host. Each one acts as itself, so the history says which."

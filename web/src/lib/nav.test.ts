@@ -52,8 +52,14 @@ describe("navigation gating", () => {
   it("keeps Settings and the approval policy for a user but drops the rest", () => {
     const labels = visibleNav(holding("read")).flatMap((g) => g.items.map((i) => i.label));
     expect(labels).toContain("Settings");
-    expect(labels).toContain("Approval policy");
+    expect(labels).toContain("Policies");
     expect(labels).not.toContain("Users");
+    // Not in the sidebar for anybody now -- they are tabs on Settings. The
+    // capability each route needs is asserted separately, and must not have
+    // moved with the menu entry.
+    expect(labels).not.toContain("Certificates");
+    expect(labels).not.toContain("API Keys");
+    expect(labels).not.toContain("ChatGPT");
     // Who may sign in, and who is waiting to be let in, is the same kind of
     // decision as who has an account -- and is gated the same way.
     expect(labels).not.toContain("Authentication");
@@ -67,8 +73,8 @@ describe("navigation gating", () => {
     const administer = visibleNav(holding("read", "propose", "approve", "admin"))
       .find((g) => g.title === "Administer");
     expect(administer?.items.map((i) => i.label)).toEqual([
-      "Settings", "System", "Performance", "Approval policy", "Authentication",
-      "Users", "Groups", "ChatGPT", "Certificates", "API Keys", "Logs",
+      "Settings", "System", "Performance",
+      "Users", "Groups", "Logs",
     ]);
   });
 
@@ -196,6 +202,9 @@ describe("the capability a path requires", () => {
     // Adding a certificate decides what every outbound connection this host
     // makes will accept as proof of identity.
     ["/settings/certificates", "admin"],
+    // A ChatGPT account carries a credential, an identity and a grant, so
+    // adding one hands a whole workspace a way in.
+    ["/settings/chatgpt", "admin"],
     // Your own profile is not an administrative surface, and gating it on
     // read would be reflex rather than a rule.
     ["/profile", "signed-in"],
@@ -217,6 +226,32 @@ describe("the capability a path requires", () => {
   it("lets a child override the section it sits in", () => {
     expect(capabilityFor("/settings")).toBe("read");
     expect(capabilityFor("/settings/users")).toBe("admin");
+  });
+
+  /**
+   * The bug this exists for. Four pages became tabs on Settings, which took
+   * their sidebar entries away -- and the requirement used to be read off that
+   * entry. Without a rule of their own they fall back to the `/settings` entry
+   * that covers them, which asks for `read`: four administrative pages served
+   * to anyone who could open the console.
+   *
+   * A page's requirement is a property of the page, not of whether it earned a
+   * line in the menu.
+   */
+  it("keeps a tab admin-only after it left the sidebar", () => {
+    const tabs = [
+      "/settings/authentication",
+      "/settings/certificates",
+      "/settings/keys",
+      "/settings/chatgpt",
+    ];
+    const sidebar = visibleNav(holding("read", "propose", "approve", "admin"))
+      .flatMap((g) => g.items.map((i) => i.path));
+
+    for (const path of tabs) {
+      expect(sidebar).not.toContain(path);
+      expect(capabilityFor(path)).toBe("admin");
+    }
   });
 
   // Null is "nothing to render", never "anyone may".

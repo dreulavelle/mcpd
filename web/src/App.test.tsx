@@ -290,7 +290,7 @@ describe("the approval policy page", () => {
 
     // By role: the sidebar links to it by the same words, and the point of
     // this test is that the page behind the link was built.
-    expect(await screen.findByRole("heading", { name: "Approval policy", level: 1 }))
+    expect(await screen.findByRole("heading", { name: "Policies", level: 1 }))
       .toBeInTheDocument();
     expect(screen.queryByText("Nothing here")).not.toBeInTheDocument();
     expect(screen.queryByText("Not for this account")).not.toBeInTheDocument();
