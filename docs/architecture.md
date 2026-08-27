@@ -825,6 +825,15 @@ dashboard's own address, TLS mode, whether the dashboard runs at all, the five
 listener timeouts, how long a statement waits for a lock, relaxed durability,
 the session TTL, the whole approval policy, logging, and the tunnel.
 
+The tunnel's own credentials are the exception, and they are an exception to
+the shape rather than to the rule. `settings` is a flat key/value store, so
+holding several ChatGPT accounts there would mean synthesising keys like
+`tunnel.account.3.api_key` — a table with the constraints left out. They live
+in `chatgpt_accounts` instead, where a name can be unique and a credential can
+be NOT NULL. What stays in `settings` is the assignment: which account a tunnel
+connects with, beside the tunnel id it already held, because those are one
+decision made on one page.
+
 **The argument is the record, not the tidiness.** Editing `config.yaml` leaves
 nothing behind: no actor, no before, no after, and nothing the dashboard can
 show. Every write through `settings.Store.Apply` lands a row in
@@ -846,7 +855,8 @@ was chosen and the other was inherited. A value the settings schema refuses —
 and named, so the file cannot be a way around validation the dashboard applies.
 The tunnel's `api_key_ref` is resolved once and stored encrypted, which puts
 the last credential-shaped thing the file referenced where every other one
-already is.
+already is. It has since moved again, from `settings` onto a ChatGPT account,
+by the same one-turn rule — see Tunnels.
 
 Afterwards the file is ignored, and any key still in it whose value *disagrees*
 with what the host is running is named at startup. Disagreeing rather than
@@ -882,7 +892,8 @@ while they agree.
 
 **Where the secrets are, plainly.** There are no plaintext passwords on disk.
 Account passwords are bcrypt in `users`. Plugin credentials, SSO client secrets
-and the tunnel key are encrypted at rest in `settings`. API keys are digests —
+are encrypted at rest in `settings`, and the ChatGPT keys in
+`chatgpt_accounts` under the same cipher. API keys are digests —
 mcpd checks one, it cannot read one back. Static tokens in the file are
 references resolved at startup, never values. The single plaintext secret is
 `MCPD_SECRET_KEY` in `data/.env` at mode 600, and it cannot be anything else:
@@ -895,7 +906,8 @@ Tables: `operations`, `operation_transitions`, `execution_attempts`,
 `idempotency_records`, `outbox_events`, `audit_events`, `audit_prune_gate`,
 `plugin_state`, `plugin_overrides`, `settings`, `settings_history`, `users`,
 `user_sessions`, `user_identities`, `sso_states`, `groups`, `group_members`,
-`api_keys`, `mcp_servers`, `mcp_server_tools`.
+`api_keys`, `mcp_servers`, `mcp_server_tools`, `ca_certificates`,
+`chatgpt_accounts`.
 
 Migrations are forward-only and checksummed; a changed file that has already
 run is an error rather than a silent divergence. There is no down path —
@@ -1440,6 +1452,41 @@ caches by plugin set, which is right when identity arrives per request and
 wrong for a caller carrying one, so a tunnel builds its own server. Getting
 this wrong stacked middleware on every reconnect and let the first principal
 answer for everyone.
+
+**A tunnel connects with an account, and an account bounds it.** The
+credential, the identity and the grant live in `chatgpt_accounts`; the tunnel
+holds an endpoint and an assignment. Several exist because several ChatGPT
+workspaces can share one host, and when they do the questions worth asking are
+per workspace: whose key is this connector using, what may that workspace
+reach, and which of them made the call somebody is now reading about. One
+shared `svc:chatgpt` could answer none of them.
+
+The two grants meet in `bindAccount`, and the narrower wins. A per-plugin
+tunnel is already bound to its plugin, so assigning it to an account can only
+ever reduce what it reaches, never widen it — which is what makes an account a
+bound rather than a suggestion. An account that is not granted a tunnel's
+plugin does not start that tunnel, and says which of the two refused.
+
+**A tunnel with no account does not start.** Falling back to some other
+account's key would have a connector quietly authenticate as the wrong
+workspace, which is worse than one that does not come up. The empty assignment
+resolves to the only account when there is exactly one — a deployment that has
+never thought about accounts should not have to — and to nothing when there are
+several, because choosing would be choosing whose credential a connector uses.
+
+**The rate limit is a guard, not a quota.** The traffic runs inward: ChatGPT
+calls mcpd, so nothing here is owed to OpenAI. `rate_per_sec` bounds what one
+account can ask of this host and the systems behind it, so one workspace's
+retry loop is not every other workspace's outage. Zero is unlimited and is the
+default. One limiter per account, shared by every tunnel it owns — otherwise a
+workspace given three connectors would get three times the allowance by using
+all of them — and only `tools/call` is limited, because refusing a handshake
+reads as a broken tunnel rather than a busy one.
+
+The single set of credentials that predated accounts is carried into one on the
+first start after the upgrade, keeping the principal it already had so the
+audit trail stays continuous. That is one turn, guarded on the table being
+empty, and it is the same rule the config import follows.
 
 ## Development
 

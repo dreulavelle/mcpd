@@ -1,5 +1,6 @@
 import {
-  Activity, Boxes, ChartColumn, ClipboardCheck, Cog, FileBadge, Gauge, KeyRound, ScrollText,
+  Activity, Boxes, ChartColumn, ClipboardCheck, Cog, FileBadge, Gauge, KeyRound,
+  MessageSquare, ScrollText,
   ShieldCheck, Store, Terminal, Ticket, UserRound, Users, UsersRound, Waypoints,
   type LucideIcon,
 } from "lucide-react";
@@ -146,6 +147,16 @@ export const NAV: NavGroup[] = [
         label: "Groups",
         lede: "A group hands its systems to everyone in it.",
         icon: UsersRound,
+        capability: "admin",
+      },
+      {
+        // An account carries a credential, an identity and a grant, so adding
+        // one hands a whole ChatGPT workspace a way in. Administrator, for the
+        // same reason users and groups are.
+        path: "/settings/chatgpt",
+        label: "ChatGPT",
+        lede: "The accounts tunnels connect with, and what each may reach.",
+        icon: MessageSquare,
         capability: "admin",
       },
       {

@@ -9,7 +9,7 @@ function stub(health: HealthReport | null) {
   vi.spyOn(api, "plugins").mockResolvedValue({ plugins: [], count: 0 });
   vi.spyOn(api, "instances").mockResolvedValue({ instances: [], count: 0 });
   vi.spyOn(api, "tunnel").mockResolvedValue({
-    tunnels: [], can_manage: false, plugins: [], workspaces: [], assignments: {},
+    tunnels: [], can_manage: false, plugins: [], workspaces: [], assignments: {}, accounts: [],
   });
   vi.spyOn(api, "audit").mockResolvedValue({ records: [], count: 0 });
   vi.spyOn(api, "endpoints").mockResolvedValue({

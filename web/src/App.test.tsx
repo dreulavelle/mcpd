@@ -90,7 +90,7 @@ function stubApi(role: "user" | "admin" = "admin") {
   });
   vi.spyOn(api, "tunnel").mockResolvedValue({
     tunnels: [], can_manage: false, plugins: ["echo"], workspaces: [],
-    assignments: {}, missing: "an OpenAI admin key and organization ID",
+    assignments: {}, accounts: [], missing: "an OpenAI admin key and organization ID",
   });
   vi.spyOn(api, "endpoints").mockResolvedValue({
     aggregate: "http://127.0.0.1:18080/mcp", per_plugin_example: "/mcp/{plugin}",

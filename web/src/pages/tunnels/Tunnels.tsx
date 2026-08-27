@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { Waypoints } from "lucide-react";
 import {
   api, ApiError,
-  type OpenAITunnel, type TunnelInfo, type TunnelStatus,
+  type ChatGPTAccount, type OpenAITunnel, type TunnelInfo, type TunnelStatus,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
@@ -41,10 +41,13 @@ export function Tunnels() {
   // An older build sends null rather than [] for an empty list.
   const plugins = info?.plugins ?? [];
   const assignments = info?.assignments ?? {};
+  const accountOf = info?.account_assignments ?? {};
+  const accounts = info?.accounts ?? [];
   const rows: Row[] = !info ? [] : info.can_manage
     ? (info.available ?? []).map((t) => ({ ...t, status: running.get(t.id) }))
     : (info.tunnels ?? []).map((t) => ({
         id: t.tunnel_id ?? "", name: t.plugin || "Everything", status: t,
+        account_id: accountOf[t.tunnel_id ?? ""],
       }));
 
   return (
@@ -73,7 +76,7 @@ export function Tunnels() {
 
       {info?.can_manage && admin && (
         <Add plugins={plugins} workspaces={info.workspaces ?? []}
-             onDone={load} notify={notify} />
+             accounts={accounts} onDone={load} notify={notify} />
       )}
 
       {!info ? <Loading rows={4} /> : rows.length === 0 ? (
@@ -85,6 +88,12 @@ export function Tunnels() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
+                  {/* Always, not only when there are several. Two tunnels can
+                      serve the same plugin name on different accounts, and
+                      then the plugin name identifies neither of them -- so the
+                      column that disambiguates them cannot be the one that
+                      appears only once the confusion has already started. */}
+                  <TableHead>Account</TableHead>
                   <TableHead>Reaches</TableHead>
                   <TableHead>State</TableHead>
                   <TableHead className="w-px" />
@@ -94,6 +103,8 @@ export function Tunnels() {
                 {rows.map((row) => (
                   <TunnelRow key={row.id} row={row} info={info} plugins={plugins}
                              assigned={assignments[row.id]}
+                             account={accountOf[row.id] ?? row.account_id}
+                             accounts={accounts}
                              onDone={load} notify={notify} />
                 ))}
               </TableBody>
@@ -109,13 +120,23 @@ interface Row extends OpenAITunnel {
   status?: TunnelStatus;
 }
 
-function TunnelRow({ row, info, plugins, assigned, onDone, notify }: {
+/** No account chosen, and more than one to choose from. The tunnel will not
+ *  start, and saying so here is the difference between a fixable mistake and
+ *  a connector that silently does nothing. */
+function needsAccount(account: string | undefined, accounts: ChatGPTAccount[]): boolean {
+  return !account && accounts.length > 1;
+}
+
+function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, notify }: {
   row: Row;
   info: TunnelInfo;
   plugins: string[];
   /** What this tunnel is pointed at in the configuration: a plugin name, ""
    *  for everything, or undefined when it is not assigned at all. */
   assigned?: string;
+  /** Which ChatGPT account it connects with, undefined when it has none. */
+  account?: string;
+  accounts: ChatGPTAccount[];
   onDone: () => void;
   notify: Notify;
 }) {
@@ -125,10 +146,15 @@ function TunnelRow({ row, info, plugins, assigned, onDone, notify }: {
   // Until this said so, the assignment looked like it had not taken.
   const waitingOn = assigned && !row.status && !plugins.includes(assigned)
     ? assigned : "";
+  const unassigned = needsAccount(account, accounts);
 
-  async function assign(to: string) {
+  // The account travels with every assignment: pointing a tunnel at a system
+  // and saying whose credential it uses are one decision, and applying them
+  // separately leaves a moment where the tunnel has a system and no account,
+  // which is exactly the state that refuses to start.
+  async function assign(to: string, withAccount = account) {
     try {
-      await api.assignTunnel(row.id, to === "*" ? "" : to);
+      await api.assignTunnel(row.id, to === "*" ? "" : to, withAccount);
     } catch (e) {
       notify("problem", e instanceof ApiError ? e.detail : "Couldn't change that.");
     } finally {
@@ -139,7 +165,9 @@ function TunnelRow({ row, info, plugins, assigned, onDone, notify }: {
   async function remove() {
     if (!confirm(`Delete "${row.name}"? Any connector using it stops working.`)) return;
     try {
-      await api.deleteTunnel(row.id);
+      // Deleted from the organisation it actually lives in. Two accounts are
+      // two organisations, and deleting from the wrong one cannot be undone.
+      await api.deleteTunnel(row.id, account ?? row.account_id);
       notify("good", "Deleted.");
     } catch (e) {
       notify("problem", e instanceof ApiError ? e.detail : "Couldn't delete it.");
@@ -155,6 +183,25 @@ function TunnelRow({ row, info, plugins, assigned, onDone, notify }: {
         {/* Copyable: ChatGPT accepts a tunnel ID typed in, and
             an ID shown with the middle missing cannot be typed anywhere. */}
         <Copyable value={row.id} label="tunnel ID" className="mt-1 max-w-[24rem]" />
+      </TableCell>
+      <TableCell>
+        {info.can_manage && admin ? (
+          <div className="w-40">
+            <NativeSelect
+              aria-label="Account" value={account ?? ""}
+              onChange={(e) => assign(selected(row, assigned), e.target.value)}
+            >
+              <option value="">Not set</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </NativeSelect>
+          </div>
+        ) : (
+          <code className="font-mono text-xs">
+            {accounts.find((a) => a.id === account)?.name ?? "—"}
+          </code>
+        )}
       </TableCell>
       <TableCell>
         {info.can_manage && admin ? (
@@ -176,11 +223,19 @@ function TunnelRow({ row, info, plugins, assigned, onDone, notify }: {
       </TableCell>
       <TableCell>
         <span className="flex items-center gap-2">
-          <StatusDot tone={waitingOn ? "attention" : tone(state)} />
+          <StatusDot
+            tone={waitingOn || unassigned ? "attention" : tone(state)}
+          />
           <span className="text-xs text-muted-foreground">
-            {waitingOn ? "Waiting" : describe(state)}
+            {unassigned ? "No account" : waitingOn ? "Waiting" : describe(state)}
           </span>
         </span>
+        {unassigned && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            This host has more than one ChatGPT account, so a tunnel has to say
+            which one it connects with. Until it does, it is not started.
+          </p>
+        )}
         {waitingOn && (
           <p className="mt-1 text-xs text-muted-foreground">
             {waitingOn} is not running, so this tunnel is not started. It
@@ -205,14 +260,20 @@ function TunnelRow({ row, info, plugins, assigned, onDone, notify }: {
   );
 }
 
-function Add({ plugins, workspaces, onDone, notify }: {
+function Add({ plugins, workspaces, accounts, onDone, notify }: {
   plugins: string[];
   workspaces: string[];
+  accounts: ChatGPTAccount[];
   onDone: () => void;
   notify: Notify;
 }) {
   const [name, setName] = useState("");
   const [plugin, setPlugin] = useState("");
+  // Only accounts that can actually make a tunnel: one without an admin key
+  // and organisation cannot, and offering it would produce a refusal at the
+  // point somebody presses Add rather than at the point they chose.
+  const canMake = accounts.filter((a) => a.can_manage);
+  const [account, setAccount] = useState(canMake[0]?.id ?? "");
   // A tunnel scoped only to the Platform organisation silently does not appear
   // in an Enterprise or Edu workspace, so the default is one that has worked.
   const [workspace, setWorkspace] = useState(workspaces[0] ?? "");
@@ -221,7 +282,7 @@ function Add({ plugins, workspaces, onDone, notify }: {
   async function add() {
     setBusy(true);
     try {
-      await api.createTunnel(name.trim(), plugin, workspace.trim());
+      await api.createTunnel(name.trim(), plugin, workspace.trim(), account);
       // A tunnel is not active for the first half minute; OpenAI's own CLI
       // says the same after creating one.
       notify("good", "Made. Give it about 30 seconds to become active in ChatGPT.");
@@ -237,6 +298,17 @@ function Add({ plugins, workspaces, onDone, notify }: {
   return (
     <Card>
       <CardContent className="flex flex-wrap items-end gap-3">
+        {canMake.length > 0 && (
+          <div className="w-44 space-y-1.5">
+            <Label htmlFor="tacct">Account</Label>
+            <NativeSelect id="tacct" value={account}
+                          onChange={(e) => setAccount(e.target.value)}>
+              {canMake.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </NativeSelect>
+          </div>
+        )}
         <div className="w-48 space-y-1.5">
           <Label htmlFor="tplug">Reaches</Label>
           <NativeSelect id="tplug" value={plugin}
