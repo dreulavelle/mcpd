@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -331,4 +332,97 @@ func TestCheckLatest_NoUpdateWhenCurrent(t *testing.T) {
 	if info.Note != "" {
 		t.Fatalf("no note should be produced when current: %q", info.Note)
 	}
+}
+
+// Two settings changes arriving together must not interleave.
+//
+// The dashboard's settings watcher spawns a goroutine per change, so two saves
+// in quick succession run two Reconfigures against the same manager at the
+// same time. Each does stop, replace, then start — and before the ops lock
+// existed nothing serialised those three, so one reconfiguration's Start could
+// run against the other's configuration.
+//
+// It surfaced as a data race rather than as a wrong tunnel: Start read m.cfg
+// after releasing the field lock, including from two goroutines that outlive
+// it, while Reconfigure wrote it. CI caught it under -race on a run where an
+// unrelated change had made the server factory slow enough to widen the
+// window. That is the shape reproduced here — Enabled is set, because
+// Reconfigure returns before ever reaching Start without it, and Start is
+// where the racing read lives.
+func TestReconfigure_DoesNotInterleaveWithAnother(t *testing.T) {
+	// A control plane that accepts the connection and then says nothing, so
+	// the tunnel gets far enough to leave its goroutines behind — which are
+	// the ones whose reads of the configuration raced.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	// Slow enough that two reconfigurations genuinely overlap, which is the
+	// condition CI hit by accident when a fifth plugin made building the
+	// server slower. It reads nothing, so anything the detector reports is the
+	// manager's own doing.
+	slow := func(*auth.Principal) (*mcp.Server, error) {
+		time.Sleep(2 * time.Millisecond)
+		return mcp.NewServer(&mcp.Implementation{Name: "t", Version: "1"}, nil), nil
+	}
+
+	const (
+		idA = "tunnel_0123456789abcdef0123456789abcdef"
+		idB = "tunnel_fedcba9876543210fedcba9876543210"
+	)
+	config := func(i int) Config {
+		c := Config{
+			Enabled: true, Plugin: "echo", TunnelID: idA, APIKey: "sk-a",
+			Principal:           auth.Principal{ID: "svc:a", Role: auth.RoleUser, Plugins: []string{"echo"}, TokenID: "a"},
+			ControlPlaneBaseURL: srv.URL,
+		}
+		if i%2 == 1 {
+			c.TunnelID, c.APIKey = idB, "sk-b"
+			c.Principal = auth.Principal{ID: "svc:b", Role: auth.RoleUser, Plugins: []string{"echo"}, TokenID: "b"}
+		}
+		return c
+	}
+
+	m := NewManager(config(0), slow, discardLog())
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	for i := range 6 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// Not asserted on: against a control plane that answers nothing
+			// these may fail, and the failure is not what this is about. What
+			// must hold is that the race detector stays quiet.
+			_ = m.Reconfigure(ctx, config(i))
+		}(i)
+	}
+	wg.Wait()
+
+	// Whichever reconfiguration won, the manager holds one whole configuration
+	// rather than a mixture. A tunnel id from one save beside a key from
+	// another would authenticate as the wrong ChatGPT workspace.
+	got := m.Config()
+	switch got.TunnelID {
+	case idA:
+		if got.APIKey != "sk-a" || got.Principal.ID != "svc:a" {
+			t.Errorf("mixed configuration: tunnel %s with key %q and principal %q",
+				got.TunnelID, got.APIKey, got.Principal.ID)
+		}
+	case idB:
+		if got.APIKey != "sk-b" || got.Principal.ID != "svc:b" {
+			t.Errorf("mixed configuration: tunnel %s with key %q and principal %q",
+				got.TunnelID, got.APIKey, got.Principal.ID)
+		}
+	default:
+		t.Errorf("the manager ended on a tunnel id nobody configured: %q", got.TunnelID)
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_ = m.Stop(stopCtx)
 }
