@@ -63,6 +63,19 @@ type Descriptor struct {
 	// Runtime says what is behind this plugin. Empty means builtin, so every
 	// plugin written before remote servers existed keeps the rules it had.
 	Runtime Runtime
+	// Purpose is what this *instance* covers, in an operator's words -- "the
+	// Springfield branch network". It is the only part of a descriptor that
+	// differs between two instances of one integration, which is what it is
+	// for: `observium_list_devices` served twice tells a model nothing about
+	// which of two networks it is about to read.
+	//
+	// Empty is the ordinary state and composes to nothing. A single instance
+	// of an integration is already unambiguous, and a sentence invented for it
+	// would be repeated on every tool entry to say what the name said.
+	//
+	// Set by the host from the instance's settings, not by the plugin: it is a
+	// deployment's fact, and a plugin cannot know it.
+	Purpose string
 }
 
 // EffectiveRuntime resolves the zero value, which is builtin.

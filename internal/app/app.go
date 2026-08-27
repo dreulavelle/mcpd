@@ -376,6 +376,14 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService,
 		inlinePolicyFunc(policyFn), a.metrics)
 
+	// What an instance covers, in the operator's words, for the tool
+	// descriptions and the connect-time instructions. Read at each build
+	// rather than captured, so editing it and remounting is enough.
+	a.manager.SetPurposeSource(func(instance string) string {
+		return a.settings.String(context.Background(),
+			settings.PluginSettingKey(instance, settings.PluginPurposeKey), "")
+	})
+
 	// A settings change rebuilds the plugin it belongs to, so the form takes
 	// effect rather than writing somewhere nothing reads until a restart.
 	// Registered before plugins mount, so a change during startup is not lost.

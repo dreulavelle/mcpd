@@ -236,7 +236,7 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 		attach: func(s *mcp.Server, mw ToolMiddleware, obs ToolObserver) {
 			tool := &mcp.Tool{
 				Name:        qualified,
-				Description: spec.Description,
+				Description: describeTool(r.descriptor.Purpose, spec.Description),
 				Annotations: &mcp.ToolAnnotations{
 					Title:          spec.Title,
 					ReadOnlyHint:   readOnly,
@@ -319,7 +319,8 @@ func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S])
 		qualified: qualified,
 		adapter:   adapter,
 		attach: func(s *mcp.Server, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy, obs ToolObserver) {
-			attachProposeTool[P](s, r.descriptor.Name, qualified, spec, adapter, gate, svc, inline, limiter, obs)
+			attachProposeTool[P](s, r.descriptor.Name, r.descriptor.Purpose, qualified,
+				spec, adapter, gate, svc, inline, limiter, obs)
 		},
 	})
 }
@@ -331,9 +332,12 @@ func Mutation[P, S any](r *Registry, spec MutationSpec, h MutationHandler[P, S])
 // authorised it -- and the returned operation says which in a note field,
 // because a model that reads only a state string can mistake "proposed" for
 // "done" and, under a rule, "done" for "proposed".
-func attachProposeTool[P any](srv *mcp.Server, plugin, qualified string, spec MutationSpec, adapter *handlerAdapter, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy, limiter *mutationLimiter, obs ToolObserver) {
+func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string, spec MutationSpec, adapter *handlerAdapter, gate ToolMiddleware, svc ApprovalService, inline InlinePolicy, limiter *mutationLimiter, obs ToolObserver) {
 	destructive, reachesUpstream := !spec.Reversible, true
-	description := spec.Description + "\n\n" +
+	// The purpose matters more here than on a read. Two instances of one
+	// integration serve identically named propose tools, and the cost of
+	// picking the wrong one is a change to the wrong company's equipment.
+	description := describeTool(purpose, spec.Description) + "\n\n" +
 		"IMPORTANT: this proposes the change; it does not decide it. Nothing " +
 		"reaches " + plugin + " until the proposal is approved -- by the person " +
 		"in this conversation, or by a standing rule an administrator wrote in " +

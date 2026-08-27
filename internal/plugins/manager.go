@@ -54,6 +54,10 @@ type Manager struct {
 
 	mu      sync.RWMutex
 	mounted map[string]*Mounted
+	// purposeOf reads what an instance covers, in the operator's words. Nil
+	// until the host supplies it, which is what a test and an early startup
+	// both look like.
+	purposeOf func(instance string) string
 
 	aggMu      sync.RWMutex
 	aggregates map[string]*mcp.Server
@@ -82,6 +86,30 @@ func NewManager(log *slog.Logger, version string, middleware ToolMiddleware, app
 		observer:   observer,
 		mounted:    make(map[string]*Mounted),
 	}
+}
+
+// SetPurposeSource tells the manager where to read an instance's purpose.
+//
+// A function rather than a value handed in at registration: the purpose is a
+// setting, it changes while the host runs, and reading it at each build is
+// what makes a change take effect on the remount that follows it. Unset -- in
+// a test, or a host wired without settings -- every instance has none, which
+// is the same as an operator not having written one.
+func (m *Manager) SetPurposeSource(fn func(instance string) string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.purposeOf = fn
+}
+
+// purpose reads one instance's purpose, or "" when nothing can answer.
+func (m *Manager) purpose(instance string) string {
+	m.mu.RLock()
+	fn := m.purposeOf
+	m.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return strings.TrimSpace(fn(instance))
 }
 
 // Register mounts a plugin: validates its descriptor, collects its tools and
@@ -141,6 +169,12 @@ func (m *Manager) Register(ctx context.Context, p Plugin, instance string, requi
 // while the host runs has to be assembled exactly as one built at startup, or
 // remounting becomes a second code path with its own bugs.
 func (m *Manager) build(ctx context.Context, d Descriptor, p Plugin, required bool) (*Mounted, error) {
+	// Read here rather than passed in, because build is the one place Register
+	// and Remount share: an instance whose purpose was just edited is rebuilt
+	// through the second, and anything that stamped it only in the first would
+	// leave the edit invisible until a restart.
+	d.Purpose = m.purpose(d.Name)
+
 	reg := newRegistry(d)
 	if err := p.Register(ctx, reg); err != nil {
 		return nil, fmt.Errorf("plugins: %s registration failed: %w", d.Name, err)
@@ -158,7 +192,7 @@ func (m *Manager) build(ctx context.Context, d Descriptor, p Plugin, required bo
 		Title:   d.Title,
 		Version: d.Version,
 	}, &mcp.ServerOptions{
-		Instructions: d.Description,
+		Instructions: instructionsFor(d),
 		Logger:       m.log.With("plugin", d.Name),
 	})
 	// The SDK panics on a malformed tool definition rather than returning an
@@ -447,6 +481,13 @@ func (m *Manager) aggregateInstructions(names []string) string {
 		if mounted == nil {
 			continue
 		}
+		// The purpose comes first where there is one. Two instances of one
+		// integration have identical descriptions, so the line that tells them
+		// apart is the only line worth reading twice.
+		if purpose := mounted.Descriptor.Purpose; purpose != "" {
+			fmt.Fprintf(&b, "- %s: %s. %s\n", name, purpose, mounted.Descriptor.Description)
+			continue
+		}
 		fmt.Fprintf(&b, "- %s: %s\n", name, mounted.Descriptor.Description)
 	}
 	b.WriteString("\nChanges are never applied directly. A tool that changes " +
@@ -612,3 +653,42 @@ type trimmedError struct {
 
 func (e trimmedError) Error() string { return e.msg }
 func (e trimmedError) Unwrap() error { return e.err }
+
+// instructionsFor is what a client hands a model when it connects to one
+// plugin's endpoint.
+//
+// The purpose leads. A description says what an integration is -- true of
+// every instance of it, and the same words twice when there are two -- while
+// the purpose says which one this is, which is the sentence that decides
+// whether the right tools get called.
+func instructionsFor(d Descriptor) string {
+	purpose := strings.TrimSpace(d.Purpose)
+	if purpose == "" {
+		return d.Description
+	}
+	if d.Description == "" {
+		return purpose + "."
+	}
+	return purpose + ". " + d.Description
+}
+
+// describeTool composes what a model reads in the tool list.
+//
+// Appended rather than prefixed, and kept to a phrase: this is paid once per
+// tool entry on every conversation, and a plugin with fourteen tools would
+// otherwise carry fourteen copies of a full sentence to say one thing.
+//
+// Nothing is added where no purpose is set, which is the ordinary case: an
+// integration configured once is already unambiguous, and a line repeated
+// across its tools to restate its own name is the sort of context that costs
+// something and buys nothing.
+func describeTool(purpose, description string) string {
+	purpose = strings.TrimSpace(purpose)
+	if purpose == "" {
+		return description
+	}
+	if description == "" {
+		return purpose + "."
+	}
+	return strings.TrimRight(description, " ") + " " + purpose + "."
+}
