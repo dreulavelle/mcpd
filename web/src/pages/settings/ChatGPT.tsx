@@ -1,7 +1,11 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { api, ApiError, type ChatGPTAccount, type ChatGPTAccountBody } from "@/lib/api";
-import { usePoll } from "@/lib/hooks";
+import { useLoader, usePoll } from "@/lib/hooks";
+import { useCan } from "@/lib/session";
+import { SettingsForm } from "@/components/SettingsForm";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
+import { SettingsTabs } from "./SettingsTabs";
+import { SETTING_LINKS } from "./SettingsSection";
 import { EVERYTHING, ReachPicker } from "@/components/ReachPicker";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
@@ -36,6 +40,15 @@ export function ChatGPT() {
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const notify = useNotify();
+  const admin = useCan("admin");
+
+  // The switches that apply to every account: whether ChatGPT may connect at
+  // all, and the two diagnostic ones. They were on the general settings page,
+  // a tab away from the accounts they govern.
+  const loadSettings = useCallback(() => api.settings(), []);
+  const { data: settings, reload: reloadSettings } = useLoader(
+    loadSettings, "Couldn't load the ChatGPT settings.");
+
   const load = useCallback(() => {
     api.chatgptAccounts()
       .then((r) => { setRows(r.accounts ?? []); setError(""); })
@@ -47,6 +60,7 @@ export function ChatGPT() {
 
   return (
     <>
+      <SettingsTabs />
       <PageHeader
         title="ChatGPT"
         lede="An account is one OpenAI credential and one identity in the history. Add one per workspace that connects here."
@@ -54,6 +68,16 @@ export function ChatGPT() {
       />
 
       {error && <Notice tone="problem">{error}</Notice>}
+
+      {settings && (
+        <div className="mb-4">
+          <SettingsForm
+            groups={settings.groups.filter((g) => g.section === "chatgpt")}
+            settings={settings} links={SETTING_LINKS}
+            onSaved={reloadSettings} readOnly={!admin}
+          />
+        </div>
+      )}
 
       {adding && (
         <AccountDialog

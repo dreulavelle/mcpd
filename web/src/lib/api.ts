@@ -497,7 +497,22 @@ export type SettingKind =
 
 export type SettingApply = "live" | "reconnect" | "restart";
 
-export type SettingSection = "settings" | "plugins" | "tunnels" | "authentication";
+/**
+ * Which page owns a group of settings.
+ *
+ * Mirrors the constants in internal/settings/schema.go. A group declares its
+ * own section there, so the dashboard renders where it is told rather than
+ * guessing from a name.
+ */
+export type SettingSection =
+  | "settings"
+  | "plugins"
+  | "tunnels"
+  | "authentication"
+  | "chatgpt"
+  | "approvals"
+  | "advanced"
+  | "diagnostics";
 
 export interface SettingField {
   key: string;

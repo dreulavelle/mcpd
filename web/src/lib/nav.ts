@@ -1,7 +1,6 @@
 import {
-  Activity, Boxes, ChartColumn, ClipboardCheck, Cog, FileBadge, Gauge, KeyRound,
-  MessageSquare, ScrollText,
-  ShieldCheck, Store, Terminal, Ticket, UserRound, Users, UsersRound, Waypoints,
+  Activity, Boxes, ChartColumn, ClipboardCheck, Cog, Gauge, ScrollText,
+  ShieldCheck, Store, Terminal, UserRound, Users, UsersRound, Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
@@ -57,6 +56,20 @@ export const NAV: NavGroup[] = [
         capability: "read",
       },
       {
+        // The rules that decide the queue above, beside it. It sat under
+        // Administer, which is where a setting lives rather than where a
+        // decision does -- and reading "can this run without asking anyone"
+        // as configuration is how a policy gets widened by somebody tidying.
+        //
+        // Read to see, admin to change. The path is unchanged: a label is not
+        // an address, and links already point at this one.
+        path: "/settings/policy",
+        label: "Policies",
+        lede: "Which changes can run without asking anyone.",
+        icon: ShieldCheck,
+        capability: "read",
+      },
+      {
         path: "/audit",
         label: "Audit",
         lede: "Append-only, and hash-chained. mcpd notices if anything is altered.",
@@ -100,6 +113,12 @@ export const NAV: NavGroup[] = [
     title: "Administer",
     items: [
       {
+        // Authentication, Certificates, API Keys and ChatGPT are tabs on this
+        // page rather than entries of their own. Each is visited rarely -- a
+        // certificate when an upstream first fails a handshake, a key when
+        // somebody writes a script, the providers once, an account per
+        // workspace -- and a sidebar that is read constantly should not spend
+        // a permanent line on each.
         path: "/settings",
         label: "Settings",
         lede: "How this host is configured.",
@@ -121,21 +140,6 @@ export const NAV: NavGroup[] = [
         capability: "read",
       },
       {
-        // Read to see, admin to change, as with Settings above it.
-        path: "/settings/policy",
-        label: "Approval policy",
-        lede: "Which changes can run without asking anyone.",
-        icon: ShieldCheck,
-        capability: "read",
-      },
-      {
-        path: "/settings/authentication",
-        label: "Authentication",
-        lede: "How people sign in, and who is allowed to.",
-        icon: KeyRound,
-        capability: "admin",
-      },
-      {
         path: "/settings/users",
         label: "Users",
         lede: "Who can sign in, what they may do, and what they can reach.",
@@ -147,32 +151,6 @@ export const NAV: NavGroup[] = [
         label: "Groups",
         lede: "A group hands its systems to everyone in it.",
         icon: UsersRound,
-        capability: "admin",
-      },
-      {
-        // An account carries a credential, an identity and a grant, so adding
-        // one hands a whole ChatGPT workspace a way in. Administrator, for the
-        // same reason users and groups are.
-        path: "/settings/chatgpt",
-        label: "ChatGPT",
-        lede: "The accounts tunnels connect with, and what each may reach.",
-        icon: MessageSquare,
-        capability: "admin",
-      },
-      {
-        // Adding one decides what every outbound connection this host makes
-        // will accept as proof of identity, which is an administrator's call.
-        path: "/settings/certificates",
-        label: "Certificates",
-        lede: "Authorities this host trusts, on top of the ones it ships with.",
-        icon: FileBadge,
-        capability: "admin",
-      },
-      {
-        path: "/settings/keys",
-        label: "API Keys",
-        lede: "Credentials for scripts and agents. Each one acts as itself.",
-        icon: Ticket,
         capability: "admin",
       },
       {
@@ -244,7 +222,35 @@ export function covers(entryPath: string, path: string): boolean {
  * What a path requires. Longest match wins, so a child overrides its section.
  * Null means "nothing here to render", never "anyone may".
  */
+/**
+ * What a route needs, for the routes that are not sidebar entries.
+ *
+ * These three became tabs on the Settings page, which took their entries out
+ * of the sidebar -- and the gate read the requirement off that entry. Without
+ * this they would fall back to the `/settings` entry that covers them, which
+ * asks for `read`: three administrative pages served to anyone who could open
+ * the console. A page's requirement is a property of the page, not of whether
+ * it earned a line in the menu.
+ */
+const ROUTE_CAPABILITIES: Record<string, Requirement> = {
+  "/settings/authentication": "admin",
+  "/settings/certificates": "admin",
+  "/settings/keys": "admin",
+  // An account carries a credential, an identity and a grant, so adding one
+  // hands a whole ChatGPT workspace a way in. Administrator, for the same
+  // reason users and groups are.
+  "/settings/chatgpt": "admin",
+  // Both are tabs rather than sidebar entries, so neither has an entry to
+  // read a requirement from. Advanced changes how patient the listeners are
+  // and what the database trades for speed; Diagnostics decides what leaves
+  // this machine.
+  "/settings/advanced": "admin",
+  "/settings/diagnostics": "admin",
+};
+
 export function capabilityFor(path: string): Requirement | null {
+  const own = ROUTE_CAPABILITIES[path];
+  if (own !== undefined) return own;
   return entryFor(path)?.capability ?? null;
 }
 

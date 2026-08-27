@@ -1,7 +1,8 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { api, ApiError, type Group, type Role, type User } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { Loading, Notice, PageHeader } from "@/components/chrome";
+import { Loading, Notice, PageHeader, Section } from "@/components/chrome";
+import { SettingsTabs } from "./SettingsTabs";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -21,7 +22,13 @@ const ROLES: [Role, string][] = [
 ];
 
 /** An account is an email address, a role, and the systems it may reach. */
-export function Users() {
+/**
+ * `embedded` renders this as one section of a larger page rather than as a
+ * page of its own. Users and groups are one subject -- who is here, and what
+ * each of them can reach -- and a host with a dozen of each does not need two
+ * destinations to say so.
+ */
+export function Users({ embedded = false }: { embedded?: boolean } = {}) {
   const [users, setUsers] = useState<User[] | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [error, setError] = useState("");
@@ -38,11 +45,22 @@ export function Users() {
 
   return (
     <>
-      <PageHeader
-        title="Users"
-        lede="Roles decide what somebody may do. Groups decide what they can reach."
-        actions={users && <Button onClick={() => setAdding(true)}>Add user</Button>}
-      />
+      {!embedded && <SettingsTabs />}
+      {embedded ? (
+        <Section
+          title="Users"
+          description="Roles decide what somebody may do. Groups decide what they can reach."
+          actions={users && <Button onClick={() => setAdding(true)}>Add user</Button>}
+        >
+          <></>
+        </Section>
+      ) : (
+        <PageHeader
+          title="Users"
+          lede="Roles decide what somebody may do. Groups decide what they can reach."
+          actions={users && <Button onClick={() => setAdding(true)}>Add user</Button>}
+        />
+      )}
 
       {error && <Notice tone="problem">{error}</Notice>}
 

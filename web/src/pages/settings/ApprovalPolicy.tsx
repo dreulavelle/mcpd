@@ -5,8 +5,10 @@ import {
   type ApprovalPolicy as Policy, type ApprovalRule, type PolicyEvaluation,
 } from "@/lib/api";
 import { riskLabel } from "@/lib/format";
+import { useLoader } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
+import { SettingsForm } from "@/components/SettingsForm";
 import { Chip } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -208,11 +210,16 @@ export function ApprovalPolicy() {
   return (
     <>
       <PageHeader
-        title="Approval policy"
+        title="Policies"
         lede={mayWrite
           ? "Which changes can run without asking anyone."
           : "Which changes run here without asking anyone. Only an administrator can change these."}
       />
+
+      {/* How long a suggestion lives, how long an approval stands, and how
+          much may be settled in the conversation. They were on the general
+          settings page, a section away from the rules they time. */}
+      <ApprovalTimings />
 
       {unreadable ? (
         <Notice tone="problem" icon={<TriangleAlert />}>
@@ -733,5 +740,31 @@ function DefaultDecision({ policy, mayWrite, onSaved }: {
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * The approval timings, beside the rules they apply to.
+ *
+ * Split across two pages they were two subjects; together they are one. An
+ * operator widening a rule and an operator lengthening the window a suggestion
+ * survives are answering the same question about how much this host decides on
+ * its own.
+ */
+function ApprovalTimings() {
+  const mayWrite = useCan("admin");
+  const load = useCallback(() => api.settings(), []);
+  const { data, reload } = useLoader(load, "Couldn't load the approval settings.");
+
+  if (!data) return null;
+  const groups = data.groups.filter((g) => g.section === "approvals");
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="mb-4">
+      <SettingsForm
+        groups={groups} settings={data} onSaved={reload} readOnly={!mayWrite}
+      />
+    </div>
   );
 }

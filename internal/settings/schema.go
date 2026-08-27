@@ -168,6 +168,21 @@ const (
 	SectionPlugins = "plugins"
 	// SectionTunnels is the page listing ChatGPT connectors.
 	SectionTunnels = "tunnels"
+	// SectionChatGPT is the page holding the ChatGPT accounts. The tunnel's
+	// own switches belong beside the accounts they apply to.
+	SectionChatGPT = "chatgpt"
+	// SectionApprovals is the page holding the approval rules. How long a
+	// suggestion lives and how much may be settled in the conversation are
+	// the same subject as the rules themselves, and were a page away from
+	// them.
+	SectionApprovals = "approvals"
+	// SectionAdvanced is what an operator changes while diagnosing something,
+	// not while setting the host up: how patient the listeners are, and how
+	// the database trades durability for speed.
+	SectionAdvanced = "advanced"
+	// SectionDiagnostics is what this host says about itself and to whom --
+	// how much it logs, and whether a crash leaves the machine.
+	SectionDiagnostics = "diagnostics"
 	// SectionAuthentication is the page deciding who can sign in and how.
 	// Separate from the general settings page because the pending queue lives
 	// beside these fields and answers the question they raise.
@@ -501,7 +516,7 @@ func schema() []Group {
 		{
 			Name:      "tunnel",
 			Title:     "ChatGPT",
-			Section:   SectionSettings,
+			Section:   SectionChatGPT,
 			EnabledBy: KeyTunnelEnabled,
 			Help:      "Lets ChatGPT reach mcpd without opening anything to the internet.",
 			Fields: []Field{
@@ -556,7 +571,7 @@ func schema() []Group {
 		{
 			Name:    "errors",
 			Title:   "Crash reporting",
-			Section: SectionSettings,
+			Section: SectionDiagnostics,
 			Help: "Off unless you fill in an address below. mcpd runs on your " +
 				"network and manages your equipment, so nothing about a crash " +
 				"leaves this machine until you say where to send it.",
@@ -613,7 +628,7 @@ func schema() []Group {
 		{
 			Name:    "approval",
 			Title:   "Approvals",
-			Section: SectionSettings,
+			Section: SectionApprovals,
 			Help:    "How long a change waits, and who may approve one.",
 			Fields: []Field{
 				{
@@ -663,7 +678,7 @@ func schema() []Group {
 		{
 			Name:    "timeouts",
 			Title:   "Timeouts",
-			Section: SectionSettings,
+			Section: SectionAdvanced,
 			Help: "How patient the two HTTP listeners are. Both are built once " +
 				"when mcpd starts, so a change here waits for a restart.",
 			Fields: []Field{
@@ -704,7 +719,7 @@ func schema() []Group {
 		{
 			Name:    "storage",
 			Title:   "Database",
-			Section: SectionSettings,
+			Section: SectionAdvanced,
 			Help: "Where the database is kept is in the startup file -- the host " +
 				"has to know it before it can read anything here. How it is " +
 				"opened is below, and the pools are opened once, so both take a " +
@@ -729,7 +744,7 @@ func schema() []Group {
 		{
 			Name:    "logging",
 			Title:   "Logging",
-			Section: SectionSettings,
+			Section: SectionDiagnostics,
 			Help:    "What mcpd writes to its own output.",
 			Fields: []Field{
 				{
