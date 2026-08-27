@@ -84,8 +84,9 @@ function Sidebar({ badges, onNavigate }: {
  * Who is signed in, and the way out. Sign-out is a control of its own beside
  * the profile link, not nested inside it: a misclick should not end the session.
  */
-function SidebarFooter({ onSignOut, onNavigate }: {
+function SidebarFooter({ onSignOut, version, onNavigate }: {
   onSignOut: () => void;
+  version: string;
   onNavigate?: () => void;
 }) {
   const session = useSession();
@@ -116,6 +117,13 @@ function SidebarFooter({ onSignOut, onNavigate }: {
           <LogOut className="size-4" aria-hidden="true" />
         </Button>
       </div>
+      {/* What is actually running, where somebody looks when they are about to
+          report something. Quiet on purpose: a fact to find, not one to read
+          every time the page opens. Not a link -- the System page it would
+          lead to is already an entry in this same sidebar. */}
+      <p className="px-2.5 pt-2 font-mono text-[11px] text-muted-foreground">
+        mcpd {version}
+      </p>
     </div>
   );
 }
@@ -135,9 +143,11 @@ export function Brand({ compact }: { compact?: boolean }) {
 }
 
 /** The console's frame. */
-export function Shell({ badges, onSignOut, children }: {
+export function Shell({ badges, onSignOut, version, children }: {
   badges: Record<string, number>;
   onSignOut: () => void;
+  /** What this host is running, shown under the account. */
+  version: string;
   children: ReactNode;
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -150,7 +160,7 @@ export function Shell({ badges, onSignOut, children }: {
         <Brand />
         <Separator />
         <Sidebar badges={badges} />
-        <SidebarFooter onSignOut={onSignOut} />
+        <SidebarFooter onSignOut={onSignOut} version={version} />
       </aside>
 
       {drawerOpen && (
@@ -165,7 +175,7 @@ export function Shell({ badges, onSignOut, children }: {
             <Brand />
             <Separator />
             <Sidebar badges={badges} onNavigate={closeDrawer} />
-            <SidebarFooter onSignOut={onSignOut} onNavigate={closeDrawer} />
+            <SidebarFooter onSignOut={onSignOut} version={version} onNavigate={closeDrawer} />
           </aside>
         </div>
       )}

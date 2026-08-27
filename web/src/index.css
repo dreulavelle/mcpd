@@ -67,6 +67,20 @@
   --destructive: #a5382a;
   --destructive-foreground: #ffffff;
 
+  /* Series colours, for charts only. Deliberately not --primary: the brand
+     teal has a chroma of 0.086, which reads as grey once it is a filled area
+     rather than a button, and a validator says so rather than a reviewer
+     noticing late. These four are a selected set -- the order is the order
+     they are assigned in, never cycled -- and they clear the lightness band,
+     the chroma floor and colour-vision separation against this surface. The
+     first sits below 3:1 on white, so anything drawn in it carries a visible
+     label or a table beside it. Reordering them is not cosmetic: blue beside
+     violet fails outright in dark. */
+  --chart-1: #1baf7a;
+  --chart-2: #2a78d6;
+  --chart-3: #eb6834;
+  --chart-4: #4a3aa7;
+
   --radius: 0.5rem;
 }
 
@@ -109,6 +123,15 @@
     --info-soft: #74a8d41f;
     --destructive: #e08472;
     --destructive-foreground: #180a08;
+
+    /* Stepped for the dark surface rather than flipped: the same four hues,
+       re-chosen against #151b1a. The light steps are too light here -- the
+       dark brand teal misses the band by itself -- so this is a second
+       selection, validated as a set, not an inversion of the first. */
+    --chart-1: #199e70;
+    --chart-2: #3987e5;
+    --chart-3: #d95926;
+    --chart-4: #9085e9;
   }
 }
 
@@ -147,6 +170,11 @@
   --color-info-soft: var(--info-soft);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

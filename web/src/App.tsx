@@ -67,7 +67,7 @@ export default function App() {
       <TooltipProvider delayDuration={200}>
         <ToastProvider>
           <RouterProvider>
-            <Console onSignOut={signOut} />
+            <Console onSignOut={signOut} version={meta.version} />
           </RouterProvider>
         </ToastProvider>
       </TooltipProvider>
@@ -75,13 +75,13 @@ export default function App() {
   );
 }
 
-function Console({ onSignOut }: { onSignOut: () => void }) {
+function Console({ onSignOut, version }: { onSignOut: () => void; version: string }) {
   const { path } = useRouter();
   const badges = usePendingCount();
 
   return (
     <>
-      <Shell badges={badges} onSignOut={onSignOut}>
+      <Shell badges={badges} onSignOut={onSignOut} version={version}>
         {/* Keyed on the path, so a page that failed is rebuilt from scratch when
             it is opened again rather than staying broken for the session. The
             boundary is inside the chrome: whatever happens to a page, the

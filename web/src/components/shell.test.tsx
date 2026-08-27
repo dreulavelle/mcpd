@@ -5,7 +5,7 @@ import { renderWith, sessionFor } from "@/test/render";
 import { Shell } from "./shell";
 
 function mount(role: "user" | "admin", path = "/") {
-  return renderWith(<Shell badges={{}} onSignOut={() => {}}>page</Shell>, {
+  return renderWith(<Shell badges={{}} onSignOut={() => {}} version="1.2.3">page</Shell>, {
     session: sessionFor(role),
     path,
   });
@@ -96,7 +96,7 @@ describe("the sidebar footer", () => {
   });
 
   it("falls back to the email when no display name is set", () => {
-    renderWith(<Shell badges={{}} onSignOut={() => {}}>page</Shell>, {
+    renderWith(<Shell badges={{}} onSignOut={() => {}} version="1.2.3">page</Shell>, {
       session: sessionFor("user", { display_name: "" }),
     });
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
@@ -150,5 +150,19 @@ describe("the sidebar footer", () => {
     const nav = screen.getByRole("navigation");
     expect(nav.className).toContain("min-h-0");
     expect(nav.className).toContain("overflow-y-auto");
+  });
+});
+
+/**
+ * The running version, in the sidebar.
+ *
+ * It is the first thing asked for in any report of something being wrong, and
+ * before this it appeared only on the System page -- which is one click away
+ * from wherever the problem actually is.
+ */
+describe("the running version", () => {
+  it("names what this host is running, under the account", () => {
+    mount("user");
+    expect(screen.getAllByText(/mcpd 1\.2\.3/).length).toBeGreaterThan(0);
   });
 });
