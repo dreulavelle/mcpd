@@ -1,5 +1,8 @@
 BINARY  := mcpd
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# Stripped of its leading v so a local build names itself the way a release
+# does. Empty only outside a git checkout, where the binary falls back to what
+# the build itself records.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
 LDFLAGS := -s -w -X github.com/spoked/mcpd/internal/app.Version=$(VERSION)
 
 # The pure-Go SQLite driver is what makes a static binary possible; building

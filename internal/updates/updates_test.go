@@ -70,19 +70,20 @@ func TestStatus_ReportsEveryReleaseAhead(t *testing.T) {
 	}
 }
 
-// A build that does not name a version cannot be behind one. Reporting "dev"
-// as out of date would put an update banner on every development start.
-func TestStatus_DevBuildIsNotReportedAsBehind(t *testing.T) {
-	c, _ := checker(t, "dev", Config{Enabled: true}, func(w http.ResponseWriter, r *http.Request) {
+// A build that does not name a version cannot be behind one. Reporting a
+// build from source as out of date would put an update banner on every start
+// somebody makes from a working copy.
+func TestStatus_ASourceBuildIsNotReportedAsBehind(t *testing.T) {
+	c, _ := checker(t, "source", Config{Enabled: true}, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, twoReleases)
 	})
 	got := c.Status(context.Background(), false)
 
 	if got.Comparable {
-		t.Error("dev was treated as a comparable version")
+		t.Error("a build with no release behind it was treated as comparable")
 	}
 	if got.UpdateAvailable {
-		t.Error("a dev build was reported as having an update available")
+		t.Error("a build from source was reported as having an update available")
 	}
 	if got.Latest != "0.5.0" {
 		t.Errorf("the newest release should still be reported: %q", got.Latest)
@@ -171,7 +172,7 @@ func TestParse(t *testing.T) {
 	}{
 		{"v1.2.3", true}, {"1.2.3", true}, {"v0.1", true}, {"v2", true},
 		{"v1.2.3-rc1", true}, {"v1.2.3-dirty", true}, {"v1.2.3+meta", true},
-		{"dev", false}, {"", false}, {"v1.2.3.4", false}, {"vx.y.z", false},
+		{"source", false}, {"", false}, {"v1.2.3.4", false}, {"vx.y.z", false},
 	}
 	for _, tc := range cases {
 		if got := parse(tc.in) != nil; got != tc.want {
@@ -183,5 +184,42 @@ func TestParse(t *testing.T) {
 	}
 	if compare(parse("v2.0.0"), parse("v1.99.99")) <= 0 {
 		t.Error("2.0.0 should sort above 1.99.99")
+	}
+}
+
+// The forms internal/app gives a build that is not a release.
+//
+// This is the coupling that matters between the two packages: what a version
+// looks like is decided there, and whether it can be ordered is decided here.
+// A build from a working copy has to be unorderable rather than merely
+// unusual, because a version this package can order is one it will report as
+// behind -- or, worse, level with a release it is not.
+func TestParse_RefusesTheVersionsAnUnreleasedBuildCarries(t *testing.T) {
+	for _, v := range []string{
+		"source",
+		"source+d1be8e8934ed",
+		"source+d1be8e8934ed.modified",
+	} {
+		t.Run(v, func(t *testing.T) {
+			if got := parse(v); got != nil {
+				t.Errorf("parse(%q) = %v, want it refused so nothing orders it", v, got)
+			}
+		})
+	}
+}
+
+// A build from the source tree carries the last release plus a marker, and
+// that one *is* ordered -- against the release it was built after. A host
+// built past 0.2.0 should still be told when 0.3.0 is published.
+func TestParse_ASourceBuildOrdersAsItsBaseRelease(t *testing.T) {
+	got := parse("0.2.0+source")
+	if got == nil {
+		t.Fatal("a source build could not be ordered, so it would never be told about a release")
+	}
+	if want := (&version{major: 0, minor: 2, patch: 0}); *got != *want {
+		t.Errorf("parse = %v, want it to order as the release it was built after", got)
+	}
+	if compare(parse("0.3.0"), got) <= 0 {
+		t.Error("0.3.0 did not order above a build made after 0.2.0")
 	}
 }
