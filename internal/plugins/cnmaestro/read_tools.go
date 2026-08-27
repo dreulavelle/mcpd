@@ -107,7 +107,7 @@ type NetworksOutput struct {
 
 func (p *Plugin) listNetworks(ctx context.Context, in NetworksInput) (NetworksOutput, error) {
 	account := p.cfg.Account(in.Account)
-	page, err := p.client.List(ctx, "/networks", accountParams(account))
+	page, err := p.client.List(ctx, "/networks", accountParams(account), plugins.ResultBudget(1))
 	p.note(err)
 	if err != nil {
 		return NetworksOutput{}, err
@@ -178,7 +178,7 @@ func (p *Plugin) listDevices(ctx context.Context, in DevicesInput) (DevicesOutpu
 		}
 	}
 
-	page, err := p.client.List(ctx, "/devices", params)
+	page, err := p.client.List(ctx, "/devices", params, plugins.ResultBudget(1))
 	p.note(err)
 	if err != nil {
 		return DevicesOutput{}, err
@@ -222,7 +222,7 @@ type ManagedAccountsOutput struct {
 }
 
 func (p *Plugin) listManagedAccounts(ctx context.Context, _ ManagedAccountsInput) (ManagedAccountsOutput, error) {
-	page, err := p.client.List(ctx, "/msp/managed_accounts", nil)
+	page, err := p.client.List(ctx, "/msp/managed_accounts", nil, plugins.ResultBudget(1))
 	p.note(err)
 	if err != nil {
 		return ManagedAccountsOutput{}, err
@@ -335,7 +335,7 @@ func (p *Plugin) collect(
 	ctx context.Context, path string, params url.Values,
 	account string, s scope, noun, narrowBy string,
 ) (Page, string, error) {
-	page, err := p.client.List(ctx, path, params)
+	page, err := p.client.List(ctx, path, params, plugins.ResultBudget(1))
 	p.note(err)
 	if err != nil {
 		return Page{}, "", err

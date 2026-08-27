@@ -21,6 +21,12 @@ import (
 //     an integration "does not work".
 //   - tool_call_duration_seconds: which tool is slow. A model with a deadline
 //     abandons a slow tool and reports a failure that looks like an outage.
+//   - tool_result_bytes: how large an answer is, measured in the units
+//     plugins.MaxResultBytes budgets against. A tool whose results sit against
+//     the ceiling is one whose answers are being cut, and this says which tool
+//     and how often before anybody reports a reply that stopped mid-sentence.
+//     Note that the wire cost is twice this: the specification has a result
+//     carried as structured content and again as text.
 //   - mutation_proposals_total: how often a class of change is being asked
 //     for, and how often the per-caller limit is refusing it -- the number
 //     that says whether a standing rule is being leaned on harder than the
@@ -45,8 +51,9 @@ import (
 type Metrics struct {
 	registry *prometheus.Registry
 
-	toolCalls    *prometheus.CounterVec
-	toolDuration *prometheus.HistogramVec
+	toolCalls      *prometheus.CounterVec
+	toolDuration   *prometheus.HistogramVec
+	toolResultSize *prometheus.HistogramVec
 
 	proposals *prometheus.CounterVec
 
@@ -90,6 +97,31 @@ var latencyBuckets = []float64{
 	0.005, 0.025, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60,
 }
 
+// resultSizeBuckets spans a terse answer to one well past what may be sent.
+//
+// The boundary that matters is 40,000: it is plugins.MaxResultBytes, the
+// ceiling a plugin builds against, and a count above it is a result the client
+// will cut rather than the plugin. The boundaries either side of it exist so
+// "close to the ceiling" and "far past it" are different readings rather than
+// one bucket labelled +Inf. 20,000 is the share a two-collection composite
+// gets, which is the other place answers bunch up.
+//
+// Exported so plugins can assert the boundary still matches its own constant;
+// this package cannot import that one without a cycle.
+var ResultSizeBuckets = []float64{
+	512, 2048, 8192, 20_000, ResultBudgetBytes, 60_000, 100_000, 200_000,
+}
+
+// ResultBudgetBytes is the ceiling a plugin builds an answer against.
+//
+// It is plugins.MaxResultBytes, restated here because that package imports
+// this one and the reverse would be a cycle. Restated rather than derived from
+// the bucket list by position: an index into a slice is arithmetic that goes
+// quietly wrong when a boundary is added, and this number is read by the
+// console to draw the line an operator judges every tool against. A test in
+// the plugins package fails if the two ever disagree.
+const ResultBudgetBytes = 40_000
+
 // NewMetrics builds the collectors on a registry of its own.
 //
 // Its own rather than the default one: the default registry is global state
@@ -108,6 +140,16 @@ func NewMetrics() *Metrics {
 		Name:    "mcpd_tool_call_duration_seconds",
 		Help:    "Time a tool call took, including the plugin's own upstream work.",
 		Buckets: latencyBuckets,
+	}, []string{"plugin", "tool"})
+
+	// Bytes rather than tokens. A token count depends on a tokeniser this
+	// host does not have and would differ per model; bytes are exact, and the
+	// arithmetic from one to the other is written down once in
+	// plugins.MaxResultBytes rather than approximated per series.
+	m.toolResultSize = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "mcpd_tool_result_bytes",
+		Help:    "Size of a successful tool result, as the plugin built it.",
+		Buckets: ResultSizeBuckets,
 	}, []string{"plugin", "tool"})
 
 	m.proposals = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -146,7 +188,7 @@ func NewMetrics() *Metrics {
 	}, []string{"result"})
 
 	m.registry.MustRegister(
-		m.toolCalls, m.toolDuration, m.proposals, m.upstream,
+		m.toolCalls, m.toolDuration, m.toolResultSize, m.proposals, m.upstream,
 		m.catalogRequests, m.catalogDuration, m.pluginCache, m.outboxPublished,
 	)
 	return m
@@ -221,6 +263,22 @@ func (m *Metrics) ToolCall(plugin, tool, outcome string, d time.Duration) {
 	// towards zero, hiding the latency the histogram exists to show.
 	if outcome == OutcomeOK || outcome == OutcomeError {
 		m.toolDuration.WithLabelValues(plugin, tool).Observe(d.Seconds())
+	}
+}
+
+// ToolResultSize records how large one successful result was.
+//
+// The size arrives as a function rather than a number because measuring it
+// costs a marshal of the whole answer, and a host with no metrics endpoint
+// should not pay for a series nobody scrapes. A nil *Metrics never calls it.
+func (m *Metrics) ToolResultSize(plugin, tool string, size func() int) {
+	if m == nil || size == nil {
+		return
+	}
+	// Negative means the caller could not measure it. Not recorded, because a
+	// zero would read as a tool that answered with nothing.
+	if n := size(); n >= 0 {
+		m.toolResultSize.WithLabelValues(plugin, tool).Observe(float64(n))
 	}
 }
 

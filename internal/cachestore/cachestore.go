@@ -56,6 +56,13 @@ type Entry struct {
 	FetchedAt  time.Time
 	TTL        time.Duration
 	StaleWhile time.Duration
+
+	// Bytes is roughly how much memory Value holds, for a store that bounds
+	// itself by size as well as by count. Zero means the caller did not say,
+	// and an entry that does not say is not counted -- a store cannot weigh an
+	// `any` without encoding it, and encoding it here would spend more than
+	// the bound saves.
+	Bytes int
 }
 
 // State reports how usable this entry is at now.
@@ -78,18 +85,36 @@ func (e *Entry) State(now time.Time) State {
 // A cap that each cache gets its own copy of is a cap the next cache silently
 // doubles.
 type Store struct {
-	limit int
+	limit     int
+	byteLimit int
 
 	mu      sync.Mutex
 	entries map[string]*Entry
+	bytes   int
 }
 
-// New builds a store. A limit of zero takes DefaultLimit.
-func New(limit int) *Store {
+// New builds a store bounded by entry count alone. A limit of zero takes
+// DefaultLimit.
+func New(limit int) *Store { return NewBounded(limit, 0) }
+
+// NewBounded builds a store bounded by count and by size.
+//
+// Two bounds because one of them is always the wrong one. A count says how many
+// answers are held and nothing about how large they are: two hundred and fifty
+// six listings of five hundred records each is a bound in name only, and it is
+// reached by an estate being big rather than by anything going wrong. A size
+// alone would let a flood of tiny answers fill the map with keys.
+//
+// A byteLimit of zero means no size bound, which is what New gives and what a
+// caller holding small fixed things wants.
+func NewBounded(limit, byteLimit int) *Store {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
-	return &Store{limit: limit, entries: make(map[string]*Entry)}
+	if byteLimit < 0 {
+		byteLimit = 0
+	}
+	return &Store{limit: limit, byteLimit: byteLimit, entries: make(map[string]*Entry)}
 }
 
 // Get returns the held entry, or nil.
@@ -99,15 +124,41 @@ func (s *Store) Get(key string) *Entry {
 	return s.entries[key]
 }
 
-// Put stores an entry, evicting the least recently fetched one if the store is
-// full and this is a new key.
+// Put stores an entry, evicting the least recently fetched ones until both
+// bounds are satisfied.
+//
+// The new entry is stored first and then evicted towards, rather than making
+// room in advance. That way an entry larger than the whole size bound leaves
+// the store holding exactly it, rather than holding nothing and having thrown
+// away everything to fit something it then also refuses.
 func (s *Store) Put(key string, entry *Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, replacing := s.entries[key]; !replacing && len(s.entries) >= s.limit {
-		s.evictOldestLocked()
+
+	if old, replacing := s.entries[key]; replacing {
+		s.bytes -= old.Bytes
 	}
 	s.entries[key] = entry
+	s.bytes += entry.Bytes
+
+	for len(s.entries) > s.limit || (s.byteLimit > 0 && s.bytes > s.byteLimit) {
+		if len(s.entries) <= 1 {
+			// Only the entry just stored is left. Evicting it would mean a Put
+			// that stored nothing, which is worse than being briefly over a
+			// bound that the next Put will enforce again.
+			break
+		}
+		if !s.evictOldestLocked(key) {
+			break
+		}
+	}
+}
+
+// Bytes reports the size of what is held, counting only entries that said.
+func (s *Store) Bytes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bytes
 }
 
 // Len reports how many entries are held.
@@ -129,20 +180,31 @@ func (s *Store) Keys() []string {
 	return out
 }
 
-// evictOldestLocked drops the least recently fetched entry. A linear scan over
-// a few hundred entries, on the miss path only, is cheaper than maintaining an
-// order that nothing else needs.
-func (s *Store) evictOldestLocked() {
+// evictOldestLocked drops the least recently fetched entry other than keep, and
+// reports whether it dropped anything. A linear scan over a few hundred
+// entries, on the miss path only, is cheaper than maintaining an order that
+// nothing else needs.
+//
+// keep is the entry Put has just stored. Without it a large new entry could
+// evict itself on the first pass, and the caller would find its own answer
+// missing the moment it asked for it back.
+func (s *Store) evictOldestLocked(keep string) bool {
 	var oldestKey string
 	var oldest time.Time
 	for k, v := range s.entries {
+		if k == keep {
+			continue
+		}
 		if oldestKey == "" || v.FetchedAt.Before(oldest) {
 			oldestKey, oldest = k, v.FetchedAt
 		}
 	}
-	if oldestKey != "" {
-		delete(s.entries, oldestKey)
+	if oldestKey == "" {
+		return false
 	}
+	s.bytes -= s.entries[oldestKey].Bytes
+	delete(s.entries, oldestKey)
+	return true
 }
 
 // Group makes one in-flight fetch serve every caller waiting on the same key.

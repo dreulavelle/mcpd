@@ -2,6 +2,7 @@ package graylog
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strings"
 	"time"
@@ -87,7 +88,7 @@ func newReadCache(plugin string, cfg Config, now func() time.Time, obs plugins.C
 	}
 	return &readCache{
 		plugin: plugin,
-		store:  cachestore.New(maxCacheEntries),
+		store:  cachestore.NewBounded(maxCacheEntries, maxCacheBytes),
 		cfg:    cfg,
 		now:    now,
 		obs:    obs,
@@ -148,7 +149,9 @@ func (c *readCache) reuse(ctx context.Context, method, path string, params url.V
 			// remembered as an installation with no streams.
 			return nil, err
 		}
-		c.store.Put(key, &cachestore.Entry{Value: v, FetchedAt: c.now(), TTL: ttl})
+		c.store.Put(key, &cachestore.Entry{
+			Value: v, FetchedAt: c.now(), TTL: ttl, Bytes: heldBytes(v),
+		})
 		return v, nil
 	})
 	if err != nil {
@@ -167,4 +170,28 @@ func (c *readCache) event(event string) {
 		return
 	}
 	c.obs.CacheEvent(c.plugin, kindConfig, event)
+}
+
+// maxCacheBytes bounds the memory those entries may occupy.
+//
+// A count alone is not a bound here. One held answer is a whole walk of a
+// paginated collection -- up to max_items records, each as wide as the upstream
+// makes them -- so the same 256 entries are a few megabytes on a small estate
+// and well past a hundred on a large one. The number that matters to a host
+// running inside somebody's memory limit is the second one, and nothing was
+// watching it.
+const maxCacheBytes = 32 << 20
+
+// heldBytes is roughly what an answer occupies, for the store's size bound.
+//
+// Encoded, because that is the only honest measure of a value whose shape
+// varies per record; a count of items would call a listing of banners the same
+// size as a listing of identifiers. It runs on the miss path only, after a
+// round trip that cost far more than this does.
+func heldBytes(v any) int {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	return len(b)
 }

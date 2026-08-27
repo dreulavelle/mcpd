@@ -8,6 +8,7 @@ package echoplugin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 // Plugin is the echo integration.
 type Plugin struct {
 	deps  plugins.Deps
+	cfg   Config
 	start time.Time
 
 	mu           sync.RWMutex
@@ -27,8 +29,8 @@ type Plugin struct {
 }
 
 // New constructs the plugin.
-func New(deps plugins.Deps) *Plugin {
-	return &Plugin{deps: deps, start: deps.Now()}
+func New(deps plugins.Deps, cfg Config) *Plugin {
+	return &Plugin{deps: deps, cfg: cfg, start: deps.Now()}
 }
 
 // Descriptor implements plugins.Plugin.
@@ -106,7 +108,107 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 		}, nil
 	})
 
+	if p.cfg.BenchmarksEnabled {
+		p.registerBenchmark(r)
+	}
 	return nil
+}
+
+// --- measuring the host itself ----------------------------------------------
+
+// Payload sizes, and what each one is for.
+//
+// Named rather than a free integer, because the argument decides how much goes
+// into somebody's context and a number field invites a model to pick one. The
+// values are placed against the result-size histogram's boundaries so a call
+// lands in a bucket that was chosen rather than one either side of it.
+var payloadSizes = map[string]int{
+	// Below every interesting boundary: what a call costs when the answer is
+	// not the cost.
+	"tiny": 512,
+	// An ordinary listing.
+	"small": 8_000,
+	// The share a two-collection composite answer gets.
+	"medium": 20_000,
+	// Exactly the ceiling a plugin builds against.
+	"budget": plugins.MaxResultBytes,
+	// Deliberately past it. This is the one that demonstrates the failure
+	// rather than avoiding it: the client cuts the reply mid-JSON, and the
+	// overflow bucket is where it shows up.
+	"over": plugins.MaxResultBytes + plugins.MaxResultBytes/2,
+}
+
+// BenchmarkPayloadInput chooses how large an answer to build.
+type BenchmarkPayloadInput struct {
+	Size string `json:"size" jsonschema:"how large the answer should be: tiny, small, medium, budget, or over. over deliberately exceeds what may be sent and will be cut by the client"`
+}
+
+// BenchmarkPayloadOutput is the answer, and what it actually measured.
+type BenchmarkPayloadOutput struct {
+	Size string `json:"size"`
+	// Bytes is the exact encoded length of this result, envelope included.
+	Bytes int    `json:"bytes"`
+	Note  string `json:"note,omitempty"`
+	// Filler carries the weight and means nothing. Last, so a reader of the
+	// raw JSON meets the numbers first.
+	Filler string `json:"filler"`
+}
+
+func (p *Plugin) registerBenchmark(r *plugins.Registry) {
+	// get_, because it returns one thing. The verb vocabulary is closed and a
+	// diagnostic is not a reason to widen it -- "benchmark" lives in the noun,
+	// where it warns without inventing a fifth verb every plugin then sees.
+	plugins.Tool(r, plugins.ToolSpec{
+		Name:  "get_benchmark_payload",
+		Title: "Get a benchmark payload",
+		Description: "Returns a result of the size you ask for, to measure what " +
+			"this host costs. Echo has no upstream, so the time a call takes is " +
+			"mcpd's own overhead rather than any far end's. For measuring, not " +
+			"for checking a connection — use echo_get_echo for that.",
+		Idempotent: true,
+	}, func(_ context.Context, in BenchmarkPayloadInput) (BenchmarkPayloadOutput, error) {
+		target, err := payloadSize(in.Size)
+		if err != nil {
+			return BenchmarkPayloadOutput{}, err
+		}
+		return buildPayload(in.Size, target)
+	})
+}
+
+// payloadSize resolves the named size, refusing anything else.
+//
+// Refused rather than defaulted: a caller who asked for a size this does not
+// know did not mean "whatever you like", and silently answering with the
+// smallest would make a benchmark report a number nobody asked for.
+func payloadSize(name string) (int, error) {
+	n, ok := payloadSizes[strings.ToLower(strings.TrimSpace(name))]
+	if !ok {
+		return 0, fmt.Errorf(
+			"size must be one of tiny, small, medium, budget or over; got %q", name)
+	}
+	return n, nil
+}
+
+// buildPayload returns a result whose encoded length is exactly target.
+//
+// The envelope is measured rather than estimated: the field names, the size
+// word and the digits of Bytes all take room, and a filler sized by subtracting
+// a guess would land a call in the bucket next to the one it asked for --
+// which is the one thing a tool built to exercise buckets must not do.
+func buildPayload(size string, target int) (BenchmarkPayloadOutput, error) {
+	out := BenchmarkPayloadOutput{Size: size, Bytes: target}
+	if target > plugins.MaxResultBytes {
+		out.Note = "deliberately past the ceiling; the client will cut this reply"
+	}
+	empty, err := json.Marshal(out)
+	if err != nil {
+		return BenchmarkPayloadOutput{}, err
+	}
+	// Every filler byte is one JSON byte: plain ASCII needs no escaping.
+	if n := target - len(empty); n > 0 {
+		out.Filler = strings.Repeat("x", n)
+	}
+	return out, nil
 }
 
 // Check implements plugins.Checker. The echo plugin has no upstream

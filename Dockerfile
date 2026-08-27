@@ -50,12 +50,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     version="${VERSION}"; \
     if [ -z "$version" ]; then \
       # release-please writes the last released version here on every release,
-      # so it is the nearest thing in the tree to the truth. The +source marks
-      # a build that is that release plus whatever else is in the working
-      # copy -- which is not the release, and must not claim to be.
+      # so it is the nearest thing in the tree to the truth.
+      #
+      # Reported bare, as x.y.z. It used to carry a +source suffix marking a
+      # build that is that release plus whatever else is in the working copy;
+      # the version is read by people far more often than by anything ordering
+      # releases, and a suffix in front of every one of them was not paying for
+      # itself. The cost is accepted deliberately: a build from a working tree
+      # now reports the same string as the release it was cut after.
       base="$(sed -n 's/.*"\."[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
               .release-please-manifest.json)"; \
-      version="${base:-0.0.0}+source"; \
+      version="${base:-0.0.0}"; \
     fi; \
     echo "building mcpd $version"; \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \

@@ -806,6 +806,66 @@ export interface UpdateStatus {
 }
 
 /** Resource usage, read from the Go runtime and /proc. */
+/**
+ * One histogram, already converted from the cumulative buckets Prometheus
+ * exposes to the count that fell in each one. The host does that conversion
+ * so the browser never has to know the exposition format's conventions.
+ */
+export interface Distribution {
+  count: number;
+  sum: number;
+  buckets: Bucket[];
+  /** Interpolated within their bucket, so no finer than the boundaries. */
+  p50: number;
+  p95: number;
+}
+
+/** One bar. `le` is null for the overflow bucket, which has no upper bound. */
+export interface Bucket {
+  le: number | null;
+  count: number;
+}
+
+/** How a call ended. Kept as four numbers because they call for four actions. */
+export interface Outcomes {
+  ok: number;
+  error: number;
+  denied: number;
+  rate_limited: number;
+}
+
+export interface ToolStats {
+  plugin: string;
+  tool: string;
+  calls: Outcomes;
+  duration?: Distribution;
+  /** Absent until something has been measured; not the same as zero bytes. */
+  result_bytes?: Distribution;
+}
+
+export interface UpstreamStats {
+  plugin: string;
+  outcome: string;
+  duration: Distribution;
+}
+
+export interface CacheStats {
+  plugin: string;
+  kind: string;
+  hit: number;
+  miss: number;
+  /** Joined a fetch already in flight rather than starting a second one. */
+  shared: number;
+}
+
+export interface Performance {
+  tools: ToolStats[];
+  upstream: UpstreamStats[];
+  cache: CacheStats[];
+  /** The ceiling a plugin builds against. Sent so this never hardcodes it. */
+  result_budget_bytes: number;
+}
+
 export interface Resources {
   version: string;
   started_at: string;
@@ -1088,6 +1148,7 @@ export const api = {
 
   /** What this process is costing the machine it runs on. */
   resources: () => request<Resources>("/api/resources"),
+  performance: () => request<Performance>("/api/performance"),
 
   /** The running version against what has been published. */
   updates: () => request<UpdateStatus>("/api/updates"),

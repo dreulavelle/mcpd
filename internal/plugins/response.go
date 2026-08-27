@@ -5,12 +5,21 @@ package plugins
 // A tool result is charged twice, and neither charge is obvious from the code
 // that builds it.
 //
-// **It goes over the wire twice.** The MCP specification says a tool returning
-// structured content SHOULD also return the serialized JSON in a text block,
-// so pre-SEP-2106 clients can recover the payload; the Go SDK does exactly
-// that. So a result this host builds appears in `structuredContent` and again
-// in `content[0].text`. That is correct and not something to fight -- but it
-// means the number a plugin budgets against is half of what it actually costs.
+// **It may go over the wire twice.** The MCP specification says a tool
+// returning structured content SHOULD also return the serialized JSON in a
+// text block, so pre-SEP-2106 clients can recover the payload; the Go SDK does
+// exactly that whenever a handler leaves Content nil.
+//
+// This host no longer leaves it nil for a client that negotiated 2025-06-18 or
+// later -- see sendOnce in registry.go -- so a modern connector is charged for
+// the answer once. An older one is still charged twice, and the budget below is
+// therefore still computed against the worse case: it is the ceiling that has
+// to hold for every caller, not the one that happens to be connected.
+//
+// The saving is deliberately banked rather than spent. Doubling the budget
+// would hand the freed context straight back to larger answers; leaving it
+// where it is means a modern client pays half of what it used to for the same
+// result, which is the win that is actually felt.
 //
 // **The client has its own ceiling.** Claude Code caps a tool response at
 // 25,000 tokens by default, and other clients have their own. A response past
