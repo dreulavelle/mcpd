@@ -214,8 +214,12 @@ func (m *Manager) Remount(ctx context.Context, instance string, p Plugin, requir
 			// The old one is still mounted and still serving. Reporting the
 			// failure is the whole point: an operator who has just saved a
 			// wrong credential needs to know it was not taken up.
-			return fmt.Errorf("%s did not start with the new settings: %w",
-				instance, ownName(instance, err))
+			// No instance name in the sentence: every caller has it as a
+			// field or a key already, and the dashboard prints it in bold
+			// immediately before this text -- which read as "graylog graylog
+			// did not start".
+			return fmt.Errorf("did not start with the new settings: %w",
+				Explain(ownName(instance, err)))
 		}
 	}
 
@@ -287,11 +291,17 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 		if err := starter.Start(ctx); err != nil {
 			if mp.Required {
-				return fmt.Errorf("plugins: required plugin %s failed to start: %w", name, err)
+				return fmt.Errorf("plugins: required plugin %s failed to start: %w",
+					name, Explain(ownName(name, err)))
 			}
-			mp.setHealth(Unhealthy(fmt.Sprintf("start failed: %v", err)))
+			// Explained here as well as on the remount path: the first
+			// failure an operator meets is usually this one, at startup,
+			// where "certificate signed by unknown authority" names no
+			// address and no way to fix it.
+			explained := Explain(ownName(name, err))
+			mp.setHealth(Unhealthy(explained.Error()))
 			m.log.ErrorContext(ctx, "optional plugin failed to start; continuing without it",
-				"plugin", name, "error", err)
+				"plugin", name, "error", explained)
 			continue
 		}
 		// A start that returned nil means healthy, for a plugin whose Start
