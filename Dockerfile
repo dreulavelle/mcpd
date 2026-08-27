@@ -31,7 +31,13 @@ COPY . .
 # The dashboard bundle must sit inside the package for go:embed to reach it.
 COPY --from=web /web/dist ./internal/admin/dist
 
-ARG VERSION=dev
+# Empty rather than "dev". A release build is told its version by CI, which
+# takes it from the tag; anything else derives one below from the release
+# manifest that is committed to the source tree. Nothing reads it from the
+# environment, because a version typed into a file beside the deployment is a
+# second answer to a question the source already answers, and it is the one
+# that goes stale.
+ARG VERSION=
 # Supplied by buildx per target; defaulted for a plain `docker build`.
 ARG TARGETARCH
 ARG TARGETOS=linux
@@ -40,9 +46,21 @@ ARG TARGETOS=linux
 # Alpine below runs it as-is; nothing links against musl.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    set -eu; \
+    version="${VERSION}"; \
+    if [ -z "$version" ]; then \
+      # release-please writes the last released version here on every release,
+      # so it is the nearest thing in the tree to the truth. The +source marks
+      # a build that is that release plus whatever else is in the working
+      # copy -- which is not the release, and must not claim to be.
+      base="$(sed -n 's/.*"\."[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+              .release-please-manifest.json)"; \
+      version="${base:-0.0.0}+source"; \
+    fi; \
+    echo "building mcpd $version"; \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -trimpath \
-      -ldflags="-s -w -X github.com/spoked/mcpd/internal/app.Version=${VERSION}" \
+      -ldflags="-s -w -X github.com/spoked/mcpd/internal/app.Version=${version}" \
       -o /out/mcpd ./cmd/mcpd
 
 # ---- artifacts --------------------------------------------------------------

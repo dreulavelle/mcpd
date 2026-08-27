@@ -276,7 +276,7 @@ type version struct{ major, minor, patch int }
 
 // parse reads vMAJOR.MINOR.PATCH, tolerating the v and any build or
 // prerelease suffix. It returns nil for anything it cannot order, which
-// includes "dev" -- a build that does not name a version must not be reported
+// includes "source" -- a build with no release behind it must not be reported
 // as behind one.
 func parse(s string) *version {
 	s = strings.TrimSpace(s)

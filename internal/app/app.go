@@ -38,8 +38,6 @@ import (
 )
 
 // Version is the host version, overridden at build time via -ldflags.
-var Version = "dev"
-
 // App holds every long-lived component.
 type App struct {
 	cfg     *config.Config
