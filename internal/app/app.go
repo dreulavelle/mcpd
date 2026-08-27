@@ -88,6 +88,13 @@ type App struct {
 	mcpMu      sync.RWMutex
 	mcpServers map[string]mcpservers.Server
 
+	// accounts holds the ChatGPT accounts tunnels connect with, and the
+	// per-account rate limiters built from them. A store rather than settings
+	// keys because an account is a privilege grant with a credential attached
+	// and there can be any number of them; see migration 0018.
+	chatgpt  *sqlite.ChatGPTAccountStore
+	limiters *accountLimiters
+
 	// pluginOverrides is what the dashboard has said about the plugins the
 	// configuration file declares: removed, or switched on or off. It is a
 	// store rather than a settings key because it overrides the deployment's
@@ -238,6 +245,15 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			"Generate one with: openssl rand -base64 32")
 	}
 	a.settings = settings.NewStore(db, cipher, time.Now)
+	// Passed only when there is one. A nil *settings.Cipher handed to an
+	// interface parameter is a non-nil interface holding a nil pointer, which
+	// would get past the store's own guard and panic at the first credential.
+	if cipher != nil {
+		a.chatgpt = sqlite.NewChatGPTAccountStore(db, cipher, time.Now)
+	} else {
+		a.chatgpt = sqlite.NewChatGPTAccountStore(db, nil, time.Now)
+	}
+	a.limiters = newAccountLimiters()
 
 	// One turn for the startup file, on the first start after an upgrade, and
 	// then never again. See configimport.go for why it is one turn and not a
@@ -246,6 +262,24 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	if err != nil {
 		db.Close()
 		return nil, err
+	}
+	// And the same one turn for the credentials that predated accounts. It
+	// runs after the import so that a deployment arriving from config.yaml on
+	// this very start has its key in the store to be carried.
+	if err := a.seedChatGPTAccount(ctx); err != nil {
+		// Not fatal. An account that could not be seeded leaves the tunnels
+		// unstarted and says so on their status, which is recoverable from the
+		// dashboard; refusing to boot is not.
+		log.WarnContext(ctx, "could not carry the existing ChatGPT credentials "+
+			"into an account", "error", err)
+	}
+	// With exactly one account, write down which one each tunnel uses. Nothing
+	// running changes; what it prevents is adding a second account stopping
+	// every tunnel that never had to name one.
+	if err := a.pinTunnelsToTheOnlyAccount(ctx); err != nil {
+		log.WarnContext(ctx, "could not record which ChatGPT account the existing "+
+			"tunnels use; adding a second account will stop them until each one "+
+			"names an account", "error", err)
 	}
 	a.logStream = built.logStream
 	a.applyLogSettings(ctx, built.logControl)
@@ -603,15 +637,18 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			SessionTTL:       a.sessionTTL,
 			Plugins:          func() []string { return a.manager.Names() },
 			Assignments:      func() map[string]string { return a.tunnelAssignments(context.Background()) },
-			Directory: func() *tunnel.Directory {
-				// Read at call time: the admin key is a setting, and one
-				// captured at startup would be the key the deployment began
-				// with rather than the one just saved.
-				ctx := context.Background()
-				return tunnel.NewDirectory(
-					a.settings.Secret(ctx, settings.KeyTunnelAdminKey, ""),
-					a.settings.String(ctx, settings.KeyTunnelOrgID, ""),
-					a.settings.String(ctx, settings.KeyTunnelControlPlane, ""))
+			Directory: func(accountID string) *tunnel.Directory {
+				// Read at call time: the admin key belongs to a stored
+				// account, and one captured at startup would be the key the
+				// deployment began with rather than the one just saved.
+				return a.chatgptDirectory(context.Background(), accountID)
+			},
+			ChatGPTAccounts:      a.ListChatGPTAccounts,
+			AddChatGPTAccount:    a.AddChatGPTAccount,
+			UpdateChatGPTAccount: a.UpdateChatGPTAccount,
+			RemoveChatGPTAccount: a.RemoveChatGPTAccount,
+			AccountAssignments: func() map[string]string {
+				return a.tunnelAccountAssignments(context.Background())
 			},
 			CACertificate: func() []byte {
 				if a.tls == nil {
@@ -869,6 +906,20 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 		// then apply as they would to a bearer token.
 		srv.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
 			return func(ctx context.Context, method string, req sdkmcp.Request) (sdkmcp.Result, error) {
+				// Only calls are limited. Rate-limiting the handshake or a
+				// listing would refuse a connector at the point it is trying
+				// to connect, which reads as a broken tunnel rather than a
+				// busy one -- and neither of those reaches an upstream, which
+				// is what the limit is protecting.
+				//
+				// Keyed on TokenID, which an account's principal sets to the
+				// account id. One limiter therefore covers every tunnel the
+				// account owns, rather than one allowance per connector.
+				if method == "tools/call" && principal != nil {
+					if err := a.limiters.allow(principal.TokenID); err != nil {
+						return nil, err
+					}
+				}
 				return next(auth.WithPrincipal(ctx, principal), method, req)
 			}
 		})
@@ -910,12 +961,23 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 // that system's endpoint -- which is what a per-plugin tunnel id means. The
 // tunnel without a plugin serves the aggregate endpoint, and both kinds can
 // run at once.
+//
+// Each one connects with a ChatGPT account, which supplies the credential and
+// the identity. A tunnel whose account is missing is not started: it would
+// otherwise fall back to some other account's key, and a connector quietly
+// authenticating as the wrong workspace is worse than one that does not come
+// up.
 func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 	base := a.tunnelConfig(ctx)
+	accounts := a.chatgptAccounts(ctx)
 
 	var out []tunnel.Config
-	if base.TunnelID != "" {
-		out = append(out, base)
+	if id := a.settings.String(ctx, settings.KeyTunnelID, ""); id != "" {
+		if cfg, ok := a.bindAccount(ctx, base, accounts,
+			a.settings.String(ctx, settings.KeyTunnelAccount, ""), ""); ok {
+			cfg.TunnelID = id
+			out = append(out, cfg)
+		}
 	}
 
 	// Every configured instance, not only the mounted ones: an assignment to a
@@ -937,7 +999,7 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 				"plugin", name, "tunnel_id", id)
 			continue
 		}
-		if id == base.TunnelID {
+		if len(out) > 0 && id == out[0].TunnelID {
 			// One tunnel cannot serve two endpoints, and running two clients
 			// against the same id has them competing for the same commands.
 			a.log.WarnContext(ctx, "ignoring a per-plugin tunnel that reuses the main tunnel's id",
@@ -945,13 +1007,13 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 			continue
 		}
 
-		scoped := base
+		scoped, ok := a.bindAccount(ctx, base, accounts,
+			a.settings.String(ctx, settings.PluginTunnelAccountKey(name), ""), name)
+		if !ok {
+			continue
+		}
 		scoped.Plugin = name
 		scoped.TunnelID = id
-		// Scoped by the principal it carries, which is the whole point: the
-		// connector reaches this plugin and cannot discover any other. Every
-		// tunnel binds in process, so there is no URL to scope instead.
-		scoped.Principal.Plugins = []string{name}
 		// Only one client may bind the diagnostics port.
 		scoped.DiagnosticsAddr = ""
 		out = append(out, scoped)
@@ -959,25 +1021,86 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 	return out
 }
 
-// tunnelConfig resolves the tunnel's settings.
+// bindAccount attaches an account's credential and identity to a tunnel.
 //
-// All of them from the store. The file used to supply defaults here; it does
-// not any more, because what a deployment had in its file was imported into
-// the store on the first start after the upgrade and the store is the only
-// authority now.
+// plugin is the single system a per-plugin tunnel serves, or empty for the
+// aggregate. It is where the two grants meet: the account says what the
+// workspace may reach and the tunnel says what this connector is for, and the
+// narrower of the two wins. Assigning a tunnel to an account can therefore
+// only ever reduce what that tunnel reaches, never widen it -- which is what
+// makes an account a bound rather than a suggestion.
+//
+// Returns false when the tunnel should not run, having said why. Every reason
+// is a configuration mistake an operator can fix, and each is named rather
+// than collapsed into one message, because "no account" and "that account
+// cannot reach this system" call for different fixes.
+func (a *App) bindAccount(ctx context.Context, base tunnel.Config, accounts []tunnel.Account, accountID, plugin string) (tunnel.Config, bool) {
+	where := "the main tunnel"
+	if plugin != "" {
+		where = "the tunnel for " + plugin
+	}
+
+	acct, ok := accountFor(accounts, accountID)
+	if !ok {
+		switch {
+		case accountID != "":
+			a.log.WarnContext(ctx, "a tunnel names a ChatGPT account that no longer exists, "+
+				"so it is not being started",
+				"tunnel", where, "account_id", accountID)
+		case len(accounts) == 0:
+			a.log.WarnContext(ctx, "a tunnel has no ChatGPT account to connect with, "+
+				"so it is not being started. Add one on the ChatGPT page",
+				"tunnel", where)
+		default:
+			// Several accounts and no choice made. Picking one would be
+			// picking whose credential a connector authenticates with, which
+			// is not a decision this host gets to make on somebody's behalf.
+			a.log.WarnContext(ctx, "a tunnel does not say which ChatGPT account it uses "+
+				"and this host has more than one, so it is not being started",
+				"tunnel", where, "accounts", len(accounts))
+		}
+		return tunnel.Config{}, false
+	}
+	if !acct.Enabled {
+		a.log.WarnContext(ctx, "a tunnel's ChatGPT account is switched off, "+
+			"so it is not being started",
+			"tunnel", where, "account", acct.Name)
+		return tunnel.Config{}, false
+	}
+
+	cfg := base
+	cfg.AccountID = acct.ID
+	cfg.AccountName = acct.Name
+	cfg.APIKey = acct.APIKey
+	cfg.Principal = acct.AsPrincipal()
+
+	if plugin != "" {
+		if !cfg.Principal.CanAccessPlugin(plugin) {
+			a.log.WarnContext(ctx, "a tunnel serves a system its ChatGPT account is not "+
+				"granted, so it is not being started",
+				"tunnel", where, "account", acct.Name, "plugin", plugin)
+			return tunnel.Config{}, false
+		}
+		// Scoped by the principal it carries, which is the whole point: the
+		// connector reaches this plugin and cannot discover any other. Every
+		// tunnel binds in process, so there is no URL to scope instead.
+		cfg.Principal.Plugins = []string{plugin}
+	}
+	return cfg, true
+}
+
+// tunnelConfig resolves the settings a tunnel shares with every other one.
+//
+// What is left here after accounts is what genuinely is one value for the
+// whole host: whether tunnels run at all, how loudly the client logs, where
+// its diagnostics listener binds, and which control plane it dials. The
+// credential, the identity and the grant come from the account instead, and
+// are attached by bindAccount.
 func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 	cfg := tunnel.Config{
 		Enabled:             a.settings.FieldBool(ctx, settings.KeyTunnelEnabled),
-		TunnelID:            a.settings.String(ctx, settings.KeyTunnelID, ""),
 		ControlPlaneBaseURL: a.settings.String(ctx, settings.KeyTunnelControlPlane, ""),
 		LogLevel:            slog.LevelInfo,
-		Principal: auth.Principal{
-			ID:          a.settings.String(ctx, settings.KeyTunnelPrincipal, "svc:chatgpt"),
-			DisplayName: "tunnel",
-			Role:        auth.Role(a.settings.FieldString(ctx, settings.KeyTunnelRole)),
-			Plugins:     a.settings.Strings(ctx, settings.KeyTunnelPlugins, nil),
-			TokenID:     "tunnel",
-		},
 	}
 
 	// The tunnel talks to an MCP server in this process: no port, no socket,
@@ -985,30 +1108,11 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 	// credential, which is what it already is -- the organisation owns it and a
 	// runtime key authenticates it.
 	//
-	// There is no longer an option to bind over HTTP so the connector can sign
-	// people in. It required an authorization server reachable from the public
-	// internet, which is the one thing a tunnel exists to avoid: OpenAI's
-	// documentation is explicit that the authorization server "is not
-	// automatically tunneled" and that Harpoon is "not a general-purpose
-	// proxy", so the connector fetched the protected-resource metadata, found
-	// an authorization server it could not reach, and stopped.
 	// Loopback only, and only inside this process's network namespace: it is
 	// unauthenticated, and it exists for someone already on the host running
 	// curl against it.
 	cfg.DiagnosticsAddr = a.settings.String(ctx, settings.KeyTunnelDiagnostics, "")
 	cfg.Debug = a.settings.FieldBool(ctx, settings.KeyTunnelDebug)
-
-	// Encrypted at rest, like every other credential this host holds. A
-	// deployment that used to name a reference in the file had the key it
-	// pointed at read once, on upgrade, and written here.
-	cfg.APIKey = a.settings.Secret(ctx, settings.KeyTunnelAPIKey, "")
-
-	// An empty grant reaches nothing, which is never what someone leaving the
-	// field blank meant. Everything the principal could see is the sensible
-	// reading, and it is still bounded by what is mounted.
-	if len(cfg.Principal.Plugins) == 0 {
-		cfg.Principal.Plugins = []string{auth.Wildcard}
-	}
 	return cfg
 }
 

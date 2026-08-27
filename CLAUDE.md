@@ -52,6 +52,15 @@ moved key; it seeds the store once on the first start after an upgrade, and a
 key left behind that disagrees is named in a startup warning. Silent
 disagreement between two sources is the failure mode this exists to remove.
 
+The exception is a *collection*, and it is an exception to the shape rather
+than to the rule. `settings` is a flat key/value store, so several ChatGPT
+accounts there would mean synthesising `tunnel.account.3.api_key` — a table
+with the constraints left out. They live in `chatgpt_accounts`, where a name
+can be unique and a credential can be NOT NULL. Each is still the only
+authority for what it holds; what stays in `settings` is the *assignment* of a
+tunnel to an account, beside the tunnel id it already held, because those are
+one decision made on one page.
+
 **Capabilities, not roles.** Check `principal.Can(auth.CapAdmin)`, never
 `role == "admin"`. Roles are `user` and `admin`; the map from roles to
 capabilities is the only place that knows the difference.
@@ -112,6 +121,16 @@ they are a separate opt-in. If you add a field to a report, scrub it there.
 **A tunnel carries its own identity**, so it builds its own MCP server rather
 than sharing the cached one. Writing a principal into a shared server lets the
 first caller answer for everyone.
+
+That identity belongs to a **ChatGPT account**, not to the host. Several
+workspaces can share one mcpd, and when they do the questions worth asking are
+per workspace: whose key is this connector using, what may that workspace
+reach, and which of them made the call somebody is now reading about. An
+account's grant and a tunnel's own grant meet in `bindAccount`, and the
+narrower wins — assigning a tunnel to an account can only ever reduce what it
+reaches, never widen it. A tunnel with no account does not start: falling back
+to some other account's key would have a connector quietly authenticate as the
+wrong workspace, which is worse than one that does not come up.
 
 **Tools are named `verb_resource`.** The host prefixes the instance name, so
 `search` reaches a model as `graylog_search` — a service and a verb, saying

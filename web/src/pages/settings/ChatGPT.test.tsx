@@ -1,0 +1,154 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { api, type ChatGPTAccount } from "@/lib/api";
+import { renderWith } from "@/test/render";
+import { ChatGPT } from "./ChatGPT";
+
+function account(overrides: Partial<ChatGPTAccount> = {}): ChatGPTAccount {
+  return {
+    id: "acct_1",
+    name: "Work",
+    principal: "svc:chatgpt:work",
+    role: "user",
+    plugins: ["*"],
+    rate_per_sec: 0,
+    enabled: true,
+    has_admin_key: true,
+    organization_id: "org_123",
+    can_manage: true,
+    created_at: "2026-08-27T09:00:00Z",
+    ...overrides,
+  };
+}
+
+function stub(accounts: ChatGPTAccount[], plugins: string[] = ["echo", "graylog"]) {
+  vi.spyOn(api, "chatgptAccounts").mockResolvedValue({ accounts, plugins });
+}
+
+describe("the ChatGPT accounts page", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  });
+
+  // No accounts means no tunnel can connect at all, which is a different thing
+  // from a page with nothing on it yet. It says what to add and why.
+  it("says an empty list is why nothing can connect", async () => {
+    stub([]);
+    renderWith(<ChatGPT />);
+    expect(await screen.findByText(/no tunnel can connect/i)).toBeInTheDocument();
+  });
+
+  /**
+   * The whole reason accounts exist: two workspaces, two identities, and a
+   * history that can say which of them made a call. An account that did not
+   * show its identity would leave that unanswerable from the page.
+   */
+  it("shows each account's own identity and grant", async () => {
+    stub([
+      account(),
+      account({
+        id: "acct_2", name: "Support", principal: "svc:chatgpt:support",
+        role: "user", plugins: ["graylog"], rate_per_sec: 2,
+      }),
+    ]);
+    renderWith(<ChatGPT />);
+
+    expect(await screen.findByText("Work")).toBeInTheDocument();
+    const support = screen.getByText("Support").closest("tr")!;
+    expect(support).toHaveTextContent("svc:chatgpt:support");
+    expect(support).toHaveTextContent("graylog");
+    expect(support).toHaveTextContent("2/sec");
+  });
+
+  /**
+   * The role decides one thing: whether a plugin tool marked administrative
+   * may be called. It is not the control over whether ChatGPT can change your
+   * systems -- every account can propose a change, and the conversation is
+   * where that is agreed. An ordinary account must not be rendered in a way
+   * that reads as a permission granted.
+   */
+  it("marks only an account allowed administrative tools", async () => {
+    stub([
+      account({ id: "acct_1", name: "Work", role: "user" }),
+      account({
+        id: "acct_2", name: "Ops", principal: "svc:chatgpt:ops", role: "admin",
+      }),
+    ]);
+    renderWith(<ChatGPT />);
+
+    const work = (await screen.findByText("Work")).closest("tr")!;
+    expect(work).not.toHaveTextContent("Allowed");
+    expect(screen.getByText("Ops").closest("tr")!).toHaveTextContent("Allowed");
+  });
+
+  // Zero is unlimited and is the ordinary answer. Rendering it as "0/sec"
+  // would read as an account that may make no calls at all.
+  it("shows no rate limit as absent rather than as zero", async () => {
+    stub([account({ rate_per_sec: 0 })]);
+    renderWith(<ChatGPT />);
+
+    const row = (await screen.findByText("Work")).closest("tr")!;
+    expect(row).not.toHaveTextContent("0/sec");
+  });
+
+  /**
+   * The bug this guards: the page never reads a key back, so an edit that
+   * changes only the rate limit carries no key. Sending an empty string would
+   * erase the stored one and take every tunnel on the account offline.
+   */
+  it("omits the key from an edit that did not retype it", async () => {
+    stub([account()]);
+    const update = vi.spyOn(api, "updateChatGPTAccount")
+      .mockResolvedValue(account({ rate_per_sec: 5 }));
+    renderWith(<ChatGPT />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const rate = await screen.findByLabelText("Rate limit");
+    await userEvent.clear(rate);
+    await userEvent.type(rate, "5");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(update).toHaveBeenCalled();
+    const [, body] = update.mock.calls[0]!;
+    expect(body).not.toHaveProperty("api_key");
+    expect(body.rate_per_sec).toBe(5);
+  });
+
+  // An empty grant would reach nothing, which is never what leaving the field
+  // blank meant.
+  it("reads a blank reach as everything", async () => {
+    stub([]);
+    const add = vi.spyOn(api, "addChatGPTAccount").mockResolvedValue(account());
+    renderWith(<ChatGPT />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add account" }));
+    await userEvent.type(screen.getByLabelText("Name"), "Work");
+    await userEvent.type(screen.getByLabelText("OpenAI key"), "sk-test");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(add).toHaveBeenCalled();
+    expect(add.mock.calls[0]![0].plugins).toEqual(["*"]);
+  });
+
+  // A new account with no key cannot run a tunnel, so the form does not offer
+  // to save one -- the refusal belongs before the request, not after it.
+  it("will not add an account with no key", async () => {
+    stub([]);
+    renderWith(<ChatGPT />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add account" }));
+    await userEvent.type(screen.getByLabelText("Name"), "Work");
+    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+  });
+
+  // An account with no admin key can still run tunnels whose ids were pasted
+  // in. Saying so is what stops it reading as broken.
+  it("says when an account cannot make tunnels", async () => {
+    stub([account({ has_admin_key: false, organization_id: "", can_manage: false })]);
+    renderWith(<ChatGPT />);
+    expect(await screen.findByText(/no admin key/i)).toBeInTheDocument();
+  });
+});

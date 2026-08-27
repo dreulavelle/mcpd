@@ -419,6 +419,12 @@ export interface TunnelInfo {
    * configuration, so it lists tunnels `tunnels` does not.
    */
   assignments?: Record<string, string>;
+  /** Which ChatGPT account each tunnel connects with, by tunnel id. A tunnel
+   *  absent from here has not been given one, which on a host with several
+   *  accounts is why it is not running. */
+  account_assignments?: Record<string, string>;
+  /** Every account, so a tunnel can be told whose credential to use. */
+  accounts: ChatGPTAccount[];
   /** The systems a tunnel can be pointed at. */
   plugins: string[];
   /**
@@ -433,6 +439,57 @@ export interface OpenAITunnel {
   name: string;
   description?: string;
   workspace_ids?: string[];
+  /** Which account this tunnel was listed from. Two accounts are two
+   *  organisations, so an id alone does not say whose a tunnel is. */
+  account_id?: string;
+  account_name?: string;
+}
+
+/**
+ * One ChatGPT account, without its credentials.
+ *
+ * No key is ever sent to the browser -- `has_admin_key` is the only thing said
+ * about one. An operator who has forgotten a key replaces it; a page that
+ * could show one is a page that leaks every key to anyone who reaches it.
+ */
+export interface ChatGPTAccount {
+  id: string;
+  name: string;
+  /** The identity this account's calls act as, and what history records. */
+  principal: string;
+  role: "user" | "admin";
+  /** What this account may reach, or ["*"]. */
+  plugins: string[];
+  /** Calls per second across every tunnel it owns. 0 is unlimited. */
+  rate_per_sec: number;
+  enabled: boolean;
+  organization_id?: string;
+  /** Whether tunnels can be made from this account, not what the key is. */
+  has_admin_key: boolean;
+  /** This account's own access to its organisation. Per account: one
+   *  workspace's expired admin key says nothing about another's. */
+  can_manage: boolean;
+  missing?: string;
+  problem?: string;
+  created_at: string;
+}
+
+/**
+ * What the account form sends.
+ *
+ * Every field optional, so "not sent" and "set to empty" stay different. It
+ * matters most for the keys: an edit that changes only the rate limit sends no
+ * key at all, and a blank string would read as an instruction to erase one.
+ */
+export interface ChatGPTAccountBody {
+  name?: string;
+  api_key?: string;
+  admin_key?: string;
+  organization_id?: string;
+  role?: "user" | "admin";
+  plugins?: string[];
+  rate_per_sec?: number;
+  enabled?: boolean;
 }
 
 export type SettingKind =
@@ -1175,20 +1232,46 @@ export const api = {
 
   tunnelStop: () => request<TunnelStatus>("/api/tunnel/stop", { method: "POST" }),
 
-  createTunnel: (name: string, plugin: string, workspaceID?: string) =>
+  createTunnel: (name: string, plugin: string, workspaceID?: string, account?: string) =>
     request<OpenAITunnel>("/api/tunnels", {
       method: "POST",
-      body: JSON.stringify({ name, plugin, workspace_id: workspaceID ?? "" }),
+      body: JSON.stringify({
+        name, plugin, workspace_id: workspaceID ?? "", account: account ?? "",
+      }),
     }),
 
-  assignTunnel: (id: string, plugin: string) =>
+  assignTunnel: (id: string, plugin: string, account?: string) =>
     request<{ status: string }>(`/api/tunnels/${encodeURIComponent(id)}/assign`, {
       method: "POST",
-      body: JSON.stringify({ plugin }),
+      body: JSON.stringify({ plugin, account: account ?? "" }),
     }),
 
-  deleteTunnel: (id: string) =>
-    request<{ status: string }>(`/api/tunnels/${encodeURIComponent(id)}`, {
+  // The account is carried so the tunnel is deleted from the organisation it
+  // actually lives in. Deleting from the wrong one cannot be taken back.
+  deleteTunnel: (id: string, account?: string) =>
+    request<{ status: string }>(
+      `/api/tunnels/${encodeURIComponent(id)}` +
+        (account ? `?account=${encodeURIComponent(account)}` : ""),
+      { method: "DELETE" },
+    ),
+
+  chatgptAccounts: () =>
+    request<{ accounts: ChatGPTAccount[]; plugins: string[] }>("/api/chatgpt/accounts"),
+
+  addChatGPTAccount: (body: ChatGPTAccountBody) =>
+    request<ChatGPTAccount>("/api/chatgpt/accounts", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateChatGPTAccount: (id: string, body: ChatGPTAccountBody) =>
+    request<ChatGPTAccount>(`/api/chatgpt/accounts/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  removeChatGPTAccount: (id: string) =>
+    request<{ status: string }>(`/api/chatgpt/accounts/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
 

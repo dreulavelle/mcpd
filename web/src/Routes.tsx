@@ -15,6 +15,7 @@ import { Profile } from "@/pages/profile/Profile";
 import { ApprovalPolicy } from "@/pages/settings/ApprovalPolicy";
 import { Authentication } from "@/pages/settings/Authentication";
 import { Certificates } from "@/pages/settings/Certificates";
+import { ChatGPT } from "@/pages/settings/ChatGPT";
 import { General } from "@/pages/settings/General";
 import { Groups } from "@/pages/settings/Groups";
 import { Keys } from "@/pages/settings/Keys";
@@ -82,6 +83,7 @@ export function Routes() {
           case "groups": return <Groups />;
           case "keys": return <Keys />;
           case "certificates": return <Certificates />;
+          case "chatgpt": return <ChatGPT />;
           default: return null;
         }
 

@@ -58,6 +58,15 @@ type Config struct {
 
 	// TunnelID identifies the tunnel in OpenAI's control plane.
 	TunnelID string
+
+	// AccountID and AccountName name the ChatGPT account this tunnel connects
+	// with. They decide nothing -- the credential and the identity are already
+	// resolved into APIKey and Principal by the time a Config reaches here --
+	// and exist so that a log line, a status and an error can say which
+	// workspace a tunnel belongs to. With one account that is noise; with
+	// several it is the first thing anybody needs to know.
+	AccountID   string
+	AccountName string
 	// APIKey is a *runtime* key. An admin key is for creating and deleting
 	// tunnels and must not be used for the long-running connection.
 	APIKey string

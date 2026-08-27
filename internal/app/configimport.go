@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/settings"
@@ -292,6 +293,17 @@ func (a *App) resolveTunnelKey(ctx context.Context, ref string) (string, error) 
 // deliberately not form fields have no declaration to check against, and are
 // taken as they are.
 func validateMoved(m movedSetting) error {
+	// The keys that moved onto a ChatGPT account have no declaration here any
+	// more, and they are still read once: the seed builds the first account
+	// from them. A value with a consumer still has a contract, so it is
+	// checked against what that consumer accepts rather than waved through
+	// because the form no longer offers it.
+	if m.key == settings.KeyTunnelRole {
+		if role := auth.Role(m.value); !role.Valid() {
+			return fmt.Errorf("unknown role %q", m.value)
+		}
+		return nil
+	}
 	if _, ok := settings.FieldFor(m.key); !ok {
 		return nil
 	}

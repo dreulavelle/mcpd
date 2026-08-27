@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/tunnel"
@@ -47,10 +48,31 @@ func newSettingsApp(t *testing.T) *App {
 	return a
 }
 
+// addAccount stores one ChatGPT account and returns it.
+//
+// Most tunnel tests want an account only so that a tunnel has a credential to
+// connect with; a single stored account resolves without any assignment, which
+// is what a deployment that has never thought about accounts has.
+func addAccount(t *testing.T, a *App, name string, plugins []string) tunnel.Account {
+	t.Helper()
+	acct, err := a.chatgpt.Create(context.Background(), "user:test", tunnel.Account{
+		Name:    name,
+		APIKey:  "sk-runtime-key-" + name,
+		Role:    auth.RoleUser,
+		Plugins: plugins,
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("creating the %s account: %v", name, err)
+	}
+	return acct
+}
+
 // The bug this test exists for: the tunnel was built from the file at startup
 // and never consulted the store, so pasting credentials into the dashboard
-// reported success and did nothing.
-func TestTunnelConfigComesFromSettings(t *testing.T) {
+// reported success and did nothing. The credential moved onto an account since,
+// and the same thing has to hold of it.
+func TestTunnelConfigComesFromSettingsAndTheAccount(t *testing.T) {
 	a := newSettingsApp(t)
 	ctx := context.Background()
 
@@ -58,38 +80,129 @@ func TestTunnelConfigComesFromSettings(t *testing.T) {
 		t.Fatal("with nothing stored, the file's disabled value should hold")
 	}
 
+	acct := addAccount(t, a, "Work", nil)
 	const id = "tunnel_6a87964313a88191b1cf9d9bf28dde48"
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
 		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
-		{Key: settings.KeyTunnelAPIKey, Value: "sk-runtime-key", Secret: true},
-		{Key: settings.KeyTunnelRole, Value: `"user"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	got := a.tunnelConfig(ctx)
+	configs := a.tunnelConfigs(ctx)
+	if len(configs) != 1 {
+		t.Fatalf("got %d tunnels, want the aggregate", len(configs))
+	}
+	got := configs[0]
 	if !got.Enabled {
 		t.Fatal("enabling the tunnel in settings must reach the tunnel config")
 	}
 	if got.TunnelID != id {
 		t.Fatalf("tunnel id = %q, want the stored value", got.TunnelID)
 	}
-	if got.APIKey != "sk-runtime-key" {
-		t.Fatal("the stored API key must reach the tunnel config")
+	if got.APIKey != acct.APIKey {
+		t.Fatal("the account's API key must reach the tunnel config")
 	}
-	if string(got.Principal.Role) != "user" {
-		t.Fatalf("role = %q, want the stored value", got.Principal.Role)
+	if got.Principal.Role != auth.RoleUser {
+		t.Fatalf("role = %q, want the account's", got.Principal.Role)
+	}
+	if got.AccountID != acct.ID {
+		t.Fatalf("account = %q, want %q -- a tunnel has to say whose it is",
+			got.AccountID, acct.ID)
 	}
 }
 
 // Leaving the plugin list blank means "everything I can see", not "nothing".
 func TestTunnelConfig_EmptyGrantsMeanEverything(t *testing.T) {
 	a := newSettingsApp(t)
-	got := a.tunnelConfig(context.Background())
+	ctx := context.Background()
 
-	if len(got.Principal.Plugins) == 0 {
+	addAccount(t, a, "Work", nil)
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.KeyTunnelID, Value: `"tunnel_6a87964313a88191b1cf9d9bf28dde48"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	configs := a.tunnelConfigs(ctx)
+	if len(configs) != 1 {
+		t.Fatalf("got %d tunnels, want the aggregate", len(configs))
+	}
+	if len(configs[0].Principal.Plugins) == 0 {
 		t.Fatal("an empty grant would reach nothing, which is never what a blank field meant")
+	}
+}
+
+// A tunnel with no account cannot start. Falling back to some other account's
+// key would have a connector quietly authenticate as the wrong workspace,
+// which is worse than a tunnel that does not come up.
+func TestATunnelWithoutAnAccountDoesNotStart(t *testing.T) {
+	a := newSettingsApp(t)
+	ctx := context.Background()
+
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.KeyTunnelID, Value: `"tunnel_6a87964313a88191b1cf9d9bf28dde48"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.tunnelConfigs(ctx); len(got) != 0 {
+		t.Fatalf("got %d tunnels with no account stored, want none", len(got))
+	}
+}
+
+// With several accounts an unassigned tunnel is ambiguous rather than obvious,
+// and picking one would be picking whose credential a connector uses.
+func TestAnUnassignedTunnelIsAmbiguousWithTwoAccounts(t *testing.T) {
+	a := newSettingsApp(t)
+	ctx := context.Background()
+
+	addAccount(t, a, "Work", nil)
+	second := addAccount(t, a, "Home", nil)
+	const id = "tunnel_6a87964313a88191b1cf9d9bf28dde48"
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.tunnelConfigs(ctx); len(got) != 0 {
+		t.Fatalf("got %d tunnels, want none until an account is named", len(got))
+	}
+
+	// Naming one settles it, and the named one is the one used.
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelAccount, Value: `"` + second.ID + `"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	configs := a.tunnelConfigs(ctx)
+	if len(configs) != 1 {
+		t.Fatalf("got %d tunnels once an account was named, want one", len(configs))
+	}
+	if configs[0].APIKey != second.APIKey {
+		t.Error("the tunnel used a different account's credential than the one named")
+	}
+}
+
+// An account bounds what its tunnels reach. A per-plugin tunnel on an account
+// not granted that plugin must not start: assigning a tunnel to an account can
+// only ever reduce what it reaches, never widen it.
+func TestAnAccountBoundsWhatItsTunnelsReach(t *testing.T) {
+	a := newSettingsApp(t)
+	ctx := context.Background()
+
+	addAccount(t, a, "Narrow", []string{"something-else"})
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.PluginTunnelKey("echo"),
+			Value: `"tunnel_1123456789abcdef0123456789abcdef"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.tunnelConfigs(ctx); len(got) != 0 {
+		t.Fatalf("got %d tunnels, want none: the account cannot reach echo", len(got))
 	}
 }
 
@@ -147,6 +260,8 @@ func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
 	a := newSettingsApp(t)
 	ctx := context.Background()
 
+	addAccount(t, a, "Work", nil)
+
 	const (
 		main = "tunnel_0123456789abcdef0123456789abcdef"
 		echo = "tunnel_1123456789abcdef0123456789abcdef"
@@ -186,6 +301,8 @@ func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
 func TestAPerPluginTunnelCannotReuseTheMainTunnelID(t *testing.T) {
 	a := newSettingsApp(t)
 	ctx := context.Background()
+
+	addAccount(t, a, "Work", nil)
 
 	const id = "tunnel_0123456789abcdef0123456789abcdef"
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
@@ -239,6 +356,8 @@ func TestHistoryIsReadableAndPrunable(t *testing.T) {
 func TestAPerPluginTunnelIsScopedWithoutSignIn(t *testing.T) {
 	a := newSettingsApp(t)
 	ctx := context.Background()
+
+	addAccount(t, a, "Work", nil)
 
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},

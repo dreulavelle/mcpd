@@ -188,7 +188,24 @@ const (
 	//
 	// A deployment that would rather not hand mcpd an admin key can still set
 	// tunnel.tunnel_id in config.yaml, which this falls back to.
-	KeyTunnelID       = "tunnel.tunnel_id"
+	KeyTunnelID = "tunnel.tunnel_id"
+	// KeyTunnelAccount names the ChatGPT account the aggregate tunnel
+	// connects with.
+	//
+	// The account itself lives in `chatgpt_accounts`; this is the assignment,
+	// and it is here beside KeyTunnelID because the two are one decision made
+	// on one page. Empty means the only account, when there is exactly one --
+	// which is what a deployment that has never thought about accounts has,
+	// and it should not have to.
+	KeyTunnelAccount = "tunnel.account"
+
+	// The single set of OpenAI credentials that predated accounts.
+	//
+	// No longer editable fields, and no longer read to run anything. They are
+	// kept as keys because the first start after the upgrade reads them once
+	// to seed an account from them -- see the seeding in internal/app -- and
+	// because a config.yaml that still names them has to be recognised in
+	// order to be warned about.
 	KeyTunnelAPIKey   = "tunnel.api_key"
 	KeyTunnelAdminKey = "tunnel.admin_key"
 	KeyTunnelOrgID    = "tunnel.organization_id"
@@ -199,10 +216,14 @@ const (
 	// name it invites them to think it means more than it does. config.yaml
 	// can still set it.
 	KeyTunnelPrincipal = "tunnel.principal"
-	KeyTunnelRole      = "tunnel.role"
-	KeyTunnelPlugins   = "tunnel.plugins"
-	KeyTunnelUpdates   = "tunnel.check_for_updates"
-	KeyTunnelDebug     = "tunnel.debug"
+	// KeyTunnelRole and KeyTunnelPlugins are what a connector may do and
+	// reach. Both moved onto the account, so that two workspaces sharing this
+	// host can be granted differently; they survive here for the same reason
+	// the credentials above do -- the upgrade seeds an account from them.
+	KeyTunnelRole    = "tunnel.role"
+	KeyTunnelPlugins = "tunnel.plugins"
+	KeyTunnelUpdates = "tunnel.check_for_updates"
+	KeyTunnelDebug   = "tunnel.debug"
 
 	// KeyTunnelDiagnostics binds the tunnel client's own health and admin
 	// listener, which reports OAuth discovery state mcpd cannot see. Empty
@@ -366,6 +387,12 @@ func intPtr(i int) *int { return &i }
 // copy a value the app already has.
 func PluginTunnelKey(plugin string) string { return "tunnel.plugin." + plugin + ".tunnel_id" }
 
+// PluginTunnelAccountKey names the ChatGPT account a per-plugin tunnel
+// connects with. Empty means the only account, as with KeyTunnelAccount.
+func PluginTunnelAccountKey(plugin string) string {
+	return "tunnel.plugin." + plugin + ".account"
+}
+
 // PluginFromTunnelKey reverses PluginTunnelKey, returning "" for anything else.
 func PluginFromTunnelKey(key string) string {
 	const prefix = "tunnel.plugin."
@@ -483,41 +510,12 @@ func schema() []Group {
 					Kind: KindBool, Group: "tunnel", Apply: ApplyReconnect,
 					Default: false,
 				},
-				{
-					Key: KeyTunnelAPIKey, Label: "OpenAI key", Kind: KindSecret,
-					Group: "tunnel", Apply: ApplyReconnect, Required: true,
-					Help: "Needs Tunnels: Read and Use. Stored encrypted.",
-				},
-				{
-					Key: KeyTunnelAdminKey, Label: "OpenAI admin key", Kind: KindSecret,
-					Group: "tunnel", Apply: ApplyLive, Required: true,
-					Help: "A different key from the one above, and how tunnels get made " +
-						"on the Tunnels page. Stored encrypted.",
-				},
-				{
-					Key: KeyTunnelOrgID, Label: "OpenAI organization ID", Kind: KindString,
-					Group: "tunnel", Apply: ApplyLive, Required: true,
-					Placeholder: "org_...",
-					Help:        "Goes with the admin key. Settings, Organization, General.",
-				},
-				{
-					Key: KeyTunnelRole, Label: "What ChatGPT may do", Kind: KindEnum,
-					Group: "tunnel", Apply: ApplyReconnect, Default: "user",
-					Options: []string{"user", "admin"},
-					// A user can approve, and has to be able to: approval
-					// happens in the conversation and the agent is what carries
-					// the answer back. Admin additionally lets it change this
-					// host's own settings, which is almost never wanted for a
-					// connector.
-					Help: "Changes apply only after you say yes in the conversation. " +
-						"Admin also lets it change these settings, which you probably " +
-						"do not want.",
-				},
-				{
-					Key: KeyTunnelPlugins, Label: "Systems ChatGPT can reach", Kind: KindList,
-					Group: "tunnel", Apply: ApplyReconnect,
-					Help: "Comma separated. Empty means all of them.",
-				},
+				// The credentials, the role and the plugin grant are not
+				// fields here any more. They belong to an account, because a
+				// host serving two ChatGPT workspaces has two of each, and a
+				// single text box cannot hold two -- see the ChatGPT page,
+				// which edits the accounts themselves. What is left in this
+				// group is what genuinely is one value for the whole host.
 				{
 					Key: KeyTunnelDebug, Label: "Log everything (for diagnosis)",
 					Kind: KindBool, Group: "tunnel", Apply: ApplyReconnect, Default: false,
