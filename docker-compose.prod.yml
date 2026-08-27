@@ -1,9 +1,12 @@
+# Runs the published image instead of building from source.
+#   docker compose -f docker-compose.prod.yml up -d
 name: mcpd
 
 services:
   mcpd:
-    build: .
-    image: ghcr.io/dreulavelle/mcpd:local
+    # Pin it: MCPD_VERSION=0.5.0 in .env. The default tracks the latest release.
+    image: ghcr.io/dreulavelle/mcpd:${MCPD_VERSION:-latest}
+    pull_policy: always
     container_name: mcpd
     restart: unless-stopped
     # Owns ./data. Set UID/GID in .env if your account is not uid 1000.
