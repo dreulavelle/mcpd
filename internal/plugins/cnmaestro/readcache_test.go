@@ -109,7 +109,7 @@ func TestReadCache_ASecondIdenticalReadDoesNotReachUpstream(t *testing.T) {
 	c, _ := cachingClient(t, f, obs, nil)
 
 	for range 5 {
-		if _, err := c.List(context.Background(), "/devices", url.Values{}); err != nil {
+		if _, err := c.List(context.Background(), "/devices", url.Values{}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -132,7 +132,7 @@ func TestReadCache_DifferentFiltersAreDifferentKeys(t *testing.T) {
 
 	for _, network := range []string{"north", "south", "north"} {
 		if _, err := c.List(context.Background(), "/devices",
-			url.Values{"network": {network}}); err != nil {
+			url.Values{"network": {network}}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -153,10 +153,10 @@ func TestReadCache_KeysOnTheResolvedRequestNotTheArguments(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	if _, err := c.List(ctx, "/devices", url.Values{}); err != nil {
+	if _, err := c.List(ctx, "/devices", url.Values{}, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.List(ctx, "/devices", url.Values{managedAccountKV: {"Acme"}}); err != nil {
+	if _, err := c.List(ctx, "/devices", url.Values{managedAccountKV: {"Acme"}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.dataRequests.Load(); got != 1 {
@@ -174,7 +174,7 @@ func TestReadCache_AnotherAccountIsAnotherAnswer(t *testing.T) {
 
 	ctx := context.Background()
 	for _, account := range []string{"Acme", "Globex", "Acme"} {
-		if _, err := c.List(ctx, "/devices", url.Values{managedAccountKV: {account}}); err != nil {
+		if _, err := c.List(ctx, "/devices", url.Values{managedAccountKV: {account}}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -258,11 +258,11 @@ func TestReadCache_ExpiresAndRefetches(t *testing.T) {
 	c, clk := cachingClient(t, f, nil, nil)
 
 	ctx := context.Background()
-	if _, err := c.List(ctx, "/devices", url.Values{}); err != nil {
+	if _, err := c.List(ctx, "/devices", url.Values{}, 0); err != nil {
 		t.Fatal(err)
 	}
 	clk.advance(14 * time.Second)
-	if _, err := c.List(ctx, "/devices", url.Values{}); err != nil {
+	if _, err := c.List(ctx, "/devices", url.Values{}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.dataRequests.Load(); got != 1 {
@@ -270,7 +270,7 @@ func TestReadCache_ExpiresAndRefetches(t *testing.T) {
 	}
 
 	clk.advance(2 * time.Second)
-	if _, err := c.List(ctx, "/devices", url.Values{}); err != nil {
+	if _, err := c.List(ctx, "/devices", url.Values{}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.dataRequests.Load(); got != 2 {
@@ -295,13 +295,13 @@ func TestReadCache_NeverServesAnExpiredAnswer(t *testing.T) {
 	c, clk := cachingClient(t, f, nil, nil)
 
 	ctx := context.Background()
-	if _, err := c.List(ctx, "/devices", url.Values{}); err != nil {
+	if _, err := c.List(ctx, "/devices", url.Values{}, 0); err != nil {
 		t.Fatal(err)
 	}
 	status.Store("offline")
 	clk.advance(time.Minute)
 
-	page, err := c.List(ctx, "/devices", url.Values{})
+	page, err := c.List(ctx, "/devices", url.Values{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,11 +330,11 @@ func TestReadCache_DoesNotHoldAFailure(t *testing.T) {
 	c, _ := cachingClient(t, f, nil, nil)
 
 	ctx := context.Background()
-	if _, err := c.List(ctx, "/devices", url.Values{}); err == nil {
+	if _, err := c.List(ctx, "/devices", url.Values{}, 0); err == nil {
 		t.Fatal("a failing upstream must fail the call")
 	}
 	fail.Store(false)
-	page, err := c.List(ctx, "/devices", url.Values{})
+	page, err := c.List(ctx, "/devices", url.Values{}, 0)
 	if err != nil {
 		t.Fatalf("the next call should reach the recovered upstream: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestReadCache_ConcurrentIdenticalReadsShareOneWalk(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = c.List(context.Background(), "/devices", url.Values{})
+			_, errs[i] = c.List(context.Background(), "/devices", url.Values{}, 0)
 		}()
 	}
 	wg.Wait()
@@ -391,14 +391,14 @@ func TestReadCache_ACallerCannotAppendIntoTheCache(t *testing.T) {
 	c, _ := cachingClient(t, f, nil, nil)
 
 	ctx := context.Background()
-	first, err := c.List(ctx, "/devices", url.Values{})
+	first, err := c.List(ctx, "/devices", url.Values{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first.Items = append(first.Items, Record{"mac": "intruder"})
 	first.Warnings = append(first.Warnings, "invented")
 
-	second, err := c.List(ctx, "/devices", url.Values{})
+	second, err := c.List(ctx, "/devices", url.Values{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,12 +507,12 @@ func BenchmarkList(b *testing.B) {
 			f := newAPI(b)
 			c := build(f, tc.seconds)
 			// Warm the token so the first iteration is not paying for it.
-			if _, err := c.List(context.Background(), "/devices", url.Values{}); err != nil {
+			if _, err := c.List(context.Background(), "/devices", url.Values{}, 0); err != nil {
 				b.Fatal(err)
 			}
 			b.ResetTimer()
 			for range b.N {
-				if _, err := c.List(context.Background(), "/devices", url.Values{}); err != nil {
+				if _, err := c.List(context.Background(), "/devices", url.Values{}, 0); err != nil {
 					b.Fatal(err)
 				}
 			}

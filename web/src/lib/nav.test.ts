@@ -61,15 +61,14 @@ describe("navigation gating", () => {
     expect(labels).not.toContain("API Keys");
   });
 
-  // The six of them are siblings, not a section that opens. A destination
-  // nobody can see until they click something else is one most people never
-  // find.
+  // They are siblings, not a section that opens. A destination nobody can see
+  // until they click something else is one most people never find.
   it("lists every administrative page beside Settings rather than inside it", () => {
     const administer = visibleNav(holding("read", "propose", "approve", "admin"))
       .find((g) => g.title === "Administer");
     expect(administer?.items.map((i) => i.label)).toEqual([
-      "Settings", "System", "Approval policy", "Authentication", "Users", "Groups",
-      "Certificates", "API Keys", "Logs",
+      "Settings", "System", "Performance", "Approval policy", "Authentication",
+      "Users", "Groups", "Certificates", "API Keys", "Logs",
     ]);
   });
 

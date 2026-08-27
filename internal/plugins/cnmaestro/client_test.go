@@ -117,7 +117,7 @@ func TestToken_SendsBasicCredentials(t *testing.T) {
 	})
 	c := testClient(t, f, nil)
 
-	if _, err := c.List(context.Background(), "/networks", nil); err != nil {
+	if _, err := c.List(context.Background(), "/networks", nil, 0); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestToken_DataCallsFollowRedirectURI(t *testing.T) {
 	})
 
 	c := testClient(t, front, nil)
-	page, err := c.List(context.Background(), "/networks", nil)
+	page, err := c.List(context.Background(), "/networks", nil, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestToken_UnusableRedirectFallsBack(t *testing.T) {
 	})
 	c := testClient(t, f, nil)
 
-	if _, err := c.List(context.Background(), "/networks", nil); err != nil {
+	if _, err := c.List(context.Background(), "/networks", nil, 0); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if c.APIHost() != f.server.URL {
@@ -185,7 +185,7 @@ func TestToken_IsReusedAcrossCalls(t *testing.T) {
 	c := testClient(t, f, nil)
 
 	for range 5 {
-		if _, err := c.List(context.Background(), "/networks", nil); err != nil {
+		if _, err := c.List(context.Background(), "/networks", nil, 0); err != nil {
 			t.Fatalf("List: %v", err)
 		}
 	}
@@ -208,10 +208,10 @@ func TestUnauthorizedDropsTheCachedToken(t *testing.T) {
 	})
 	c := testClient(t, f, nil)
 
-	if _, err := c.List(context.Background(), "/networks", nil); err == nil {
+	if _, err := c.List(context.Background(), "/networks", nil, 0); err == nil {
 		t.Fatal("a 401 must surface as an error")
 	}
-	if _, err := c.List(context.Background(), "/networks", nil); err != nil {
+	if _, err := c.List(context.Background(), "/networks", nil, 0); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if got := f.tokenCalls.Load(); got != 2 {
@@ -235,7 +235,7 @@ func TestList_FollowsOffsetPaging(t *testing.T) {
 	})
 	c := testClient(t, f, func(cfg *Config) { cfg.PageSize = 3 })
 
-	page, err := c.List(context.Background(), "/devices", nil)
+	page, err := c.List(context.Background(), "/devices", nil, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestList_FollowsContinuationTokens(t *testing.T) {
 	})
 	c := testClient(t, f, nil)
 
-	page, err := c.List(context.Background(), "/events", nil)
+	page, err := c.List(context.Background(), "/events", nil, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestList_TruncatesAndSaysSo(t *testing.T) {
 	})
 	c := testClient(t, f, func(cfg *Config) { cfg.PageSize = 10; cfg.MaxItems = 25 })
 
-	page, err := c.List(context.Background(), "/devices", nil)
+	page, err := c.List(context.Background(), "/devices", nil, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestList_StopsOnAnEmptyPage(t *testing.T) {
 	})
 	c := testClient(t, f, nil)
 
-	page, err := c.List(context.Background(), "/devices", nil)
+	page, err := c.List(context.Background(), "/devices", nil, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestManagedAccountIsSentOnEveryRequest(t *testing.T) {
 	})
 	c := testClient(t, f, func(cfg *Config) { cfg.ManagedAccount = "Base Infrastructure" })
 
-	if _, err := c.List(context.Background(), "/networks", nil); err != nil {
+	if _, err := c.List(context.Background(), "/networks", nil, 0); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if got := f.query().Get("managed_account"); got != "Base Infrastructure" {
@@ -358,7 +358,7 @@ func TestList_PassesWarningsThrough(t *testing.T) {
 	})
 	c := testClient(t, f, nil)
 
-	page, err := c.List(context.Background(), "/devices", nil)
+	page, err := c.List(context.Background(), "/devices", nil, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestDo_RefusesBlockedPathsBeforeCalling(t *testing.T) {
 	})
 	c := testClient(t, f, nil)
 
-	if _, err := c.List(context.Background(), "/devices/AA:BB:CC:DD:EE:FF/cli", nil); err == nil {
+	if _, err := c.List(context.Background(), "/devices/AA:BB:CC:DD:EE:FF/cli", nil, 0); err == nil {
 		t.Fatal("a blocked path must be refused")
 	}
 	if got := f.dataRequests.Load(); got != 0 {
@@ -394,7 +394,7 @@ func TestErrorsDoNotLeakCredentials(t *testing.T) {
 	f.tokenStatus = http.StatusUnauthorized
 	c := testClient(t, f, nil)
 
-	_, err := c.List(context.Background(), "/networks", nil)
+	_, err := c.List(context.Background(), "/networks", nil, 0)
 	if err == nil {
 		t.Fatal("expected a failure")
 	}
@@ -467,7 +467,7 @@ func TestManagedAccount_NamedPerRequestWins(t *testing.T) {
 	c := testClient(t, f, func(cfg *Config) { cfg.ManagedAccount = MainAccount })
 
 	params := url.Values{"managed_account": {"Acme Networks"}}
-	if _, err := c.List(context.Background(), "/networks", params); err != nil {
+	if _, err := c.List(context.Background(), "/networks", params, 0); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if got := f.query().Get("managed_account"); got != "Acme Networks" {
@@ -486,7 +486,7 @@ func TestManagedAccount_AbsentWhenThereIsNone(t *testing.T) {
 	c := testClient(t, f, func(cfg *Config) { cfg.ManagedAccount = "" })
 
 	params := url.Values{"managed_account": {""}}
-	if _, err := c.List(context.Background(), "/networks", params); err != nil {
+	if _, err := c.List(context.Background(), "/networks", params, 0); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if _, present := f.query()["managed_account"]; present {

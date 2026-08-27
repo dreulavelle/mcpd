@@ -497,7 +497,15 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 				}
 				return a.metrics.Handler()
 			}(),
-			MetricsPublic:     cfg.Metrics.Public,
+			MetricsPublic: cfg.Metrics.Public,
+			// Nil when nothing is collecting, so the console renders an empty
+			// surface rather than zeroes that look like measurements.
+			Performance: func() func() observability.Performance {
+				if a.metrics == nil {
+					return nil
+				}
+				return a.metrics.Performance
+			}(),
 			Pruner:            a.audit,
 			PublicURL:         a.publicURL,
 			FrontendPublicURL: a.frontendPublicURL,

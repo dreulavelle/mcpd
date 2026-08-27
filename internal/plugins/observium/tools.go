@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
@@ -545,16 +547,33 @@ func (p *Plugin) getCapacity(ctx context.Context, in capacityArgs) (capacityResu
 	q := url.Values{}
 	setIDIf(q, "device_id", in.DeviceID)
 
-	storage, err := p.fetchWithin(ctx, EntityStorage, q, in.Limit, 3)
-	if err != nil {
-		return capacityResult{}, err
-	}
-	memory, err := p.fetchWithin(ctx, EntityMempools, q, in.Limit, 3)
-	if err != nil {
-		return capacityResult{}, err
-	}
-	processors, err := p.fetchWithin(ctx, EntityProcessors, q, in.Limit, 3)
-	if err != nil {
+	// Three independent reads, so they wait on the upstream together rather
+	// than one after another.
+	//
+	// The rate limiter still spaces the requests, which is why this is worth
+	// anything at all: below one round trip per limiter interval it changes
+	// nothing, and above it -- a large Observium answering a listing by
+	// querying the whole table -- it is the difference between three latencies
+	// and one. The group owns the goroutines, Wait is the join, and the derived
+	// context stops the siblings when one fails.
+	//
+	// Sharing q is safe: Read copies what it needs into fresh parameters and
+	// never writes to what it was given.
+	var storage, memory, processors Page
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		storage, err = p.fetchWithin(gctx, EntityStorage, q, in.Limit, 3)
+		return err
+	})
+	g.Go(func() (err error) {
+		memory, err = p.fetchWithin(gctx, EntityMempools, q, in.Limit, 3)
+		return err
+	})
+	g.Go(func() (err error) {
+		processors, err = p.fetchWithin(gctx, EntityProcessors, q, in.Limit, 3)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return capacityResult{}, err
 	}
 
@@ -582,17 +601,39 @@ func (p *Plugin) getTopology(ctx context.Context, in topologyArgs) (topologyResu
 	q := url.Values{}
 	setIDIf(q, "device_id", in.DeviceID)
 
-	neighbours, err := p.fetchWithin(ctx, EntityNeighbours, q, in.Limit, 3)
-	if err != nil {
-		return topologyResult{}, err
-	}
 	addrQuery := url.Values{}
 	for k, v := range q {
 		addrQuery[k] = v
 	}
 	setIf(addrQuery, FilterAF, in.AF)
-	addresses, err := p.fetchWithin(ctx, EntityAddresses, addrQuery, in.Limit, 3)
-	if err != nil {
+
+	var neighbours, addresses, vlans Page
+	var vlanErr error
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		neighbours, err = p.fetchWithin(gctx, EntityNeighbours, q, in.Limit, 3)
+		return err
+	})
+	g.Go(func() (err error) {
+		addresses, err = p.fetchWithin(gctx, EntityAddresses, addrQuery, in.Limit, 3)
+		return err
+	})
+	if in.VLANs {
+		// A permission failure here is not a failure of the call. VLANs need a
+		// level 7 account, and a topology answer without them is still the
+		// answer to most of the question -- so it degrades with a note rather
+		// than losing the neighbours fetched beside it.
+		//
+		// Which is why this returns nil whatever happens: an error returned to
+		// the group would cancel the derived context and take the neighbours
+		// down with it. The failure is carried out instead, and read after
+		// Wait, which is the barrier that makes that safe.
+		g.Go(func() error {
+			vlans, vlanErr = p.fetchWithin(gctx, EntityVLANs, q, in.Limit, 3)
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
 		return topologyResult{}, err
 	}
 
@@ -603,14 +644,9 @@ func (p *Plugin) getTopology(ctx context.Context, in topologyArgs) (topologyResu
 	}
 
 	if in.VLANs {
-		// A permission failure here is not a failure of the call. VLANs need a
-		// level 7 account, and a topology answer without them is still the
-		// answer to most of the question -- so it degrades with a note rather
-		// than losing the neighbours that were already fetched.
-		vlans, err := p.fetchWithin(ctx, EntityVLANs, q, in.Limit, 3)
 		switch {
-		case err != nil:
-			out.VLANs.Note = "VLANs could not be read: " + err.Error()
+		case vlanErr != nil:
+			out.VLANs.Note = "VLANs could not be read: " + vlanErr.Error()
 		default:
 			out.VLANs = resultOf(vlans, "VLANs")
 		}
