@@ -32,6 +32,7 @@ import (
 	"github.com/spoked/mcpd/internal/servertls"
 	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/trust"
 	"github.com/spoked/mcpd/internal/tunnel"
 	"github.com/spoked/mcpd/internal/updates"
 )
@@ -58,9 +59,13 @@ type App struct {
 	// and a forgotten check in one would turn a recovered panic into a second.
 	errors *observability.ErrorReporter
 
-	accounts      *users.Store
-	groups        *groups.Store
-	keys          *apikeys.Store
+	accounts *users.Store
+	groups   *groups.Store
+	keys     *apikeys.Store
+	trust    *trust.Store
+	// trustPool caches the roots built from that store: the system ones plus
+	// every certificate an operator added.
+	trustPool     trustPool
 	logStream     *observability.LogStream
 	sso           *sso.Service
 	ssoStates     *sso.StateStore
@@ -321,6 +326,11 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	// resolving grants itself, so there is exactly one union in the process.
 	a.groups = groups.NewStore(db, time.Now)
 	a.keys = apikeys.NewStore(db, a.groups, time.Now)
+	a.trust = trust.NewStore(db, time.Now)
+	// Loaded before anything that reaches an upstream is built: a plugin holds
+	// the client it was constructed with, so a pool loaded afterwards would be
+	// believed by nothing that was already running.
+	a.loadTrustPool(ctx)
 
 	fileTokens, err := buildVerifier(cfg, log)
 	if err != nil {
@@ -489,6 +499,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			Identities:        a.accounts,
 			Groups:            a.groups,
 			Keys:              a.keys,
+			Certificates:      a.trust,
+			TrustChanged:      a.trustChanged,
 			KeyGrants: func(ctx context.Context, keyID string) ([]string, error) {
 				return a.groups.Effective(ctx, groups.Key(keyID))
 			},
@@ -817,7 +829,11 @@ func instanceID(cfg *config.Config) string {
 // The checker runs whether or not the tunnel is enabled, because knowing a
 // newer client exists is useful before turning one on.
 func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *slog.Logger) error {
-	a.tunnelCheck = tunnel.NewChecker(newPluginHTTPClient(), log, 24*time.Hour)
+	// The same trust as a plugin gets. This reaches a public address, which
+	// needs no help -- until the deployment sits behind a proxy that reissues
+	// every certificate under the company's own authority, which is the same
+	// deployment that needed this feature in the first place.
+	a.tunnelCheck = tunnel.NewChecker(a.pluginHTTPClient(), log, 24*time.Hour)
 
 	a.tunnels = tunnel.NewGroup(log.With("component", "tunnel"))
 	a.tunnelFactory = func(principal *auth.Principal) (*sdkmcp.Server, error) {

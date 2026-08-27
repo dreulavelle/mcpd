@@ -132,6 +132,17 @@ type Options struct {
 	// routes answering "not configured" rather than panicking.
 	Keys Keys
 
+	// Certificates are the roots this host trusts in addition to the system
+	// ones, for upstreams behind a company authority or an appliance's own
+	// certificate. Nil leaves the routes answering "not configured".
+	Certificates Certificates
+
+	// TrustChanged tells the host that set has changed, so it can rebuild the
+	// pool and remount what was using the old one. Without it a certificate
+	// would be stored and trusted by nothing until the next restart, which is
+	// the confusion the page exists to remove.
+	TrustChanged func(ctx context.Context)
+
 	// KeyGrants resolves what a key reaches, through the same union an account
 	// goes through. A function rather than a method on Keys, because the union
 	// belongs to the groups package and nothing here should be able to compute
@@ -501,6 +512,16 @@ func (s *Server) routes() {
 	// Revoked rather than deleted: an audit entry naming an identifier that
 	// resolves to nothing would not answer "which agent did this".
 	api("POST /api/keys/{id}/revoke", s.handleRevokeKey, auth.CapAdmin)
+	// Certificates this host trusts on top of the system roots. An
+	// administrator's, because adding one decides what every outbound
+	// connection this host makes will accept as proof of identity.
+	//
+	// There is no PATCH. A certificate is the bytes it is; changing them under
+	// a name somebody already recognises is how a trust decision gets made
+	// twice and reviewed once.
+	api("GET /api/certificates", s.handleListCertificates, auth.CapAdmin)
+	api("POST /api/certificates", s.handleAddCertificate, auth.CapAdmin)
+	api("DELETE /api/certificates/{id}", s.handleDeleteCertificate, auth.CapAdmin)
 	api("GET /api/registrations", s.handleListRegistrations, auth.CapAdmin)
 	api("POST /api/registrations/{id}/approve", s.handleApproveRegistration, auth.CapAdmin)
 	api("POST /api/registrations/{id}/reject", s.handleRejectRegistration, auth.CapAdmin)

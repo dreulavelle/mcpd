@@ -1,6 +1,7 @@
 import {
-  Activity, Boxes, ClipboardCheck, Cog, Gauge, KeyRound, ScrollText, ShieldCheck, Store,
-  Terminal, Ticket, UserRound, Users, UsersRound, Waypoints, type LucideIcon,
+  Activity, Boxes, ClipboardCheck, Cog, FileBadge, Gauge, KeyRound, ScrollText,
+  ShieldCheck, Store, Terminal, Ticket, UserRound, Users, UsersRound, Waypoints,
+  type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
 
@@ -138,6 +139,15 @@ export const NAV: NavGroup[] = [
         label: "Groups",
         lede: "A group hands its systems to everyone in it.",
         icon: UsersRound,
+        capability: "admin",
+      },
+      {
+        // Adding one decides what every outbound connection this host makes
+        // will accept as proof of identity, which is an administrator's call.
+        path: "/settings/certificates",
+        label: "Certificates",
+        lede: "Authorities this host trusts, on top of the ones it ships with.",
+        icon: FileBadge,
         capability: "admin",
       },
       {
