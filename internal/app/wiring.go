@@ -18,6 +18,7 @@ import (
 	"github.com/spoked/mcpd/internal/plugins/cnmaestro"
 	"github.com/spoked/mcpd/internal/plugins/echoplugin"
 	"github.com/spoked/mcpd/internal/plugins/external"
+	"github.com/spoked/mcpd/internal/plugins/extremecloudiq"
 	"github.com/spoked/mcpd/internal/plugins/graylog"
 	"github.com/spoked/mcpd/internal/plugins/observium"
 )
@@ -90,6 +91,7 @@ func builtinTypes() (*plugins.Catalog, error) {
 	return plugins.NewCatalog(
 		echoplugin.Type(),
 		cnmaestro.Type(),
+		extremecloudiq.Type(),
 		graylog.Type(),
 		observium.Type(),
 	)

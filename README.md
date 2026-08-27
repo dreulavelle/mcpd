@@ -137,6 +137,7 @@ See [Upgrading](docs/upgrading.md) for how to apply one.
 | `graylog` | Graylog: log search, aggregations, alerts and alert rules, and the installation's own health | Read-only |
 | `observium` | Observium: devices, interfaces, sensors, capacity, alerts. Needs the subscription REST API | Read-only |
 | `cnmaestro` | Cambium cnMaestro: Wi-Fi and fixed-wireless estates | Read-only |
+| `extremecloudiq` | Extreme Networks ExtremeCloud IQ: access points and switches, connected clients, alerts, sites and network policies | Read-only |
 | `echo` | Nothing real — a worked example, including an approval-gated write | Bundled |
 
 You can also add any remote MCP server somebody else runs: paste its
