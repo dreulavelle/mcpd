@@ -88,6 +88,7 @@ Your infrastructure stays private.
 ### Docker
 
 ```bash
+mkdir -p mcpd/data && cd mcpd
 curl -fsSLO https://raw.githubusercontent.com/dreulavelle/mcpd/main/docker-compose.prod.yml
 docker compose -f docker-compose.prod.yml up -d
 ```
