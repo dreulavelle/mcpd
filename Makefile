@@ -1,8 +1,12 @@
 BINARY  := mcpd
-# Stripped of its leading v so a local build names itself the way a release
-# does. Empty only outside a git checkout, where the binary falls back to what
-# the build itself records.
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+# The nearest tag, stripped of its leading v, so a local build names itself the
+# way a release does: x.y.z and nothing else. --abbrev=0 rather than a full
+# describe because the commit count and -dirty suffix a describe adds are not a
+# version, and they showed up everywhere the version is displayed.
+#
+# A working tree therefore reports the release it was cut after. That is the
+# accepted trade for a version people can read at a glance.
+VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 LDFLAGS := -s -w -X github.com/spoked/mcpd/internal/app.Version=$(VERSION)
 
 # The pure-Go SQLite driver is what makes a static binary possible; building
