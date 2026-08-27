@@ -195,11 +195,34 @@ type ServerFactory func(principal *auth.Principal) (*mcp.Server, error)
 // the dashboard: an operator who has just pasted a tunnel ID should not have
 // to restart mcpd to find out whether it works.
 type Manager struct {
-	cfg     Config
 	factory ServerFactory
 	log     *slog.Logger
 
-	mu          sync.RWMutex
+	// ops serialises the lifecycle transitions -- Start, Stop, Reconfigure --
+	// end to end.
+	//
+	// mu is not enough and never was. It guards the fields, so a read and a
+	// write of cfg cannot tear; it does not stop two changes arriving together
+	// from interleaving one's Stop with the other's Start, which leaves a
+	// tunnel running a configuration nobody asked for and no error anywhere
+	// saying so. The dashboard's settings watcher spawns a goroutine per
+	// change, so two saves in quick succession is the ordinary case rather
+	// than a contrived one.
+	//
+	// It is a plain Mutex rather than part of mu because the two protect
+	// different things: mu protects the fields for the length of a field
+	// access, and this protects the *sequence* for the length of a restart,
+	// which includes waiting on goroutines and a network round trip. Holding a
+	// field lock across either of those would block Status on the dashboard
+	// for the whole of a reconnect.
+	ops sync.Mutex
+
+	mu sync.RWMutex
+	// cfg is guarded by mu. Start snapshots it under the lock and every read
+	// after that is of the snapshot, because the goroutines Start leaves
+	// behind outlive it and Reconfigure may have replaced it by the time they
+	// run.
+	cfg         Config
 	state       State
 	message     string
 	connectedAt *time.Time
@@ -240,6 +263,13 @@ func (m *Manager) Status() Status {
 // has failed, so a caller acting on an operator's request can report the
 // outcome rather than leaving them to poll.
 func (m *Manager) Start(ctx context.Context) error {
+	m.ops.Lock()
+	defer m.ops.Unlock()
+	return m.start(ctx)
+}
+
+// start connects the tunnel. The caller holds ops.
+func (m *Manager) start(ctx context.Context) error {
 	m.mu.Lock()
 	if m.state == StateDisabled {
 		m.mu.Unlock()
@@ -251,16 +281,22 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 	m.state = StateStarting
 	m.message = ""
+	// Snapshotted here, under the lock, and used for the whole of this call
+	// and by every goroutine it leaves behind. Reading m.cfg after the unlock
+	// is what raced with Reconfigure writing it -- and the two goroutines
+	// below outlive this function, so their reads landed whenever the control
+	// plane happened to answer.
+	cfg := m.cfg
 	m.mu.Unlock()
 
-	if err := m.cfg.Validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		m.fail(err)
 		return err
 	}
 
 	// The tunnel drives an MCP server in this process, built for the identity
 	// this tunnel carries.
-	principal := m.cfg.Principal
+	principal := cfg.Principal
 	server, err := m.factory(&principal)
 	if err != nil {
 		m.fail(fmt.Errorf("tunnel: could not build the MCP server: %w", err))
@@ -277,7 +313,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	var rejectOnce sync.Once
 	out := logWriter{log: m.log, rejected: func(code string) {
 		rejectOnce.Do(func() {
-			m.fail(fmt.Errorf("tunnel: %s", diagnose(m.cfg.APIKey, code)))
+			m.fail(fmt.Errorf("tunnel: %s", diagnose(cfg.APIKey, code)))
 			// Stopping is the point. The client would otherwise keep retrying
 			// a credential the control plane has already rejected, filling the
 			// log with a failure nobody is going to see.
@@ -289,21 +325,21 @@ func (m *Manager) Start(ctx context.Context) error {
 				}
 				// Stop resets the state to stopped, which would erase the
 				// explanation the operator needs.
-				m.fail(fmt.Errorf("tunnel: %s", diagnose(m.cfg.APIKey, code)))
+				m.fail(fmt.Errorf("tunnel: %s", diagnose(cfg.APIKey, code)))
 			}()
 		})
 	}}
 
-	client, err := newRuntime(m.cfg, server, runCtx, m.log, out)
+	client, err := newRuntime(cfg, server, runCtx, m.log, out)
 	if err != nil {
 		cancel()
-		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, m.cfg.APIKey)))
+		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)))
 		return err
 	}
 
 	if err := client.Start(runCtx); err != nil {
 		cancel()
-		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, m.cfg.APIKey)))
+		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)))
 		return err
 	}
 
@@ -343,9 +379,9 @@ func (m *Manager) Start(ctx context.Context) error {
 			}
 			m.mu.Unlock()
 			m.log.InfoContext(ctx, "tunnel connected",
-				"tunnel_id", m.cfg.TunnelID,
-				"principal", m.cfg.Principal.ID,
-				"plugins", m.cfg.Principal.Plugins)
+				"tunnel_id", cfg.TunnelID,
+				"principal", cfg.Principal.ID,
+				"plugins", cfg.Principal.Plugins)
 		case <-runCtx.Done():
 		}
 	}()
@@ -355,14 +391,22 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Unlock()
 
 	m.log.InfoContext(ctx, "tunnel started; waiting for the first control-plane poll",
-		"tunnel_id", m.cfg.TunnelID,
-		"principal", m.cfg.Principal.ID,
-		"plugins", m.cfg.Principal.Plugins)
+		"tunnel_id", cfg.TunnelID,
+		"principal", cfg.Principal.ID,
+		"plugins", cfg.Principal.Plugins)
 	return nil
 }
 
 // Stop disconnects the tunnel and waits for its goroutines.
 func (m *Manager) Stop(ctx context.Context) error {
+	m.ops.Lock()
+	defer m.ops.Unlock()
+	return m.stop(ctx)
+}
+
+// stop disconnects the tunnel and waits for its goroutines. The caller holds
+// ops.
+func (m *Manager) stop(ctx context.Context) error {
 	m.mu.Lock()
 	cancel := m.cancel
 	m.cancel = nil
@@ -396,7 +440,13 @@ func (m *Manager) Stop(ctx context.Context) error {
 // form has to reach the running tunnel, not just the database. It stops first
 // so a changed key or id never keeps serving under the old one.
 func (m *Manager) Reconfigure(ctx context.Context, cfg Config) error {
-	if err := m.Stop(ctx); err != nil {
+	// Held for the whole of stop, replace and start. Two settings changes
+	// arriving together are serialised into two complete reconfigurations
+	// rather than interleaved into one incoherent one.
+	m.ops.Lock()
+	defer m.ops.Unlock()
+
+	if err := m.stop(ctx); err != nil {
 		m.log.WarnContext(ctx, "previous tunnel did not stop cleanly before reconfiguring", "error", err)
 	}
 
@@ -415,7 +465,7 @@ func (m *Manager) Reconfigure(ctx context.Context, cfg Config) error {
 	m.state = StateStopped
 	m.mu.Unlock()
 
-	return m.Start(ctx)
+	return m.start(ctx)
 }
 
 // Enabled reports whether a tunnel is configured.
