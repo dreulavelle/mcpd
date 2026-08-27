@@ -1,7 +1,8 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { api, ApiError, type Group, type GroupMember } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { Loading, Notice, PageHeader } from "@/components/chrome";
+import { Loading, Notice, PageHeader, Section } from "@/components/chrome";
+import { SettingsTabs } from "./SettingsTabs";
 import { ReachPicker } from "@/components/ReachPicker";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
@@ -20,7 +21,13 @@ export function reachLabel(plugins: string[]): string {
 }
 
 /** A group hands its systems to everyone in it. */
-export function Groups() {
+/**
+ * `embedded` renders this as one section of a larger page rather than as a
+ * page of its own. Users and groups are one subject -- who is here, and what
+ * each of them can reach -- and a host with a dozen of each does not need two
+ * destinations to say so.
+ */
+export function Groups({ embedded = false }: { embedded?: boolean } = {}) {
   const [groups, setGroups] = useState<Group[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
@@ -36,11 +43,22 @@ export function Groups() {
 
   return (
     <>
-      <PageHeader
-        title="Groups"
-        lede="Everyone in a group can reach the systems it lists."
-        actions={groups && <Button onClick={() => setAdding(true)}>Add group</Button>}
-      />
+      {!embedded && <SettingsTabs />}
+      {embedded ? (
+        <Section
+          title="Groups"
+          description="Everyone in a group can reach the systems it lists."
+          actions={groups && <Button onClick={() => setAdding(true)}>Add group</Button>}
+        >
+          <></>
+        </Section>
+      ) : (
+        <PageHeader
+          title="Groups"
+          lede="Everyone in a group can reach the systems it lists."
+          actions={groups && <Button onClick={() => setAdding(true)}>Add group</Button>}
+        />
+      )}
 
       {error && <Notice tone="problem">{error}</Notice>}
 

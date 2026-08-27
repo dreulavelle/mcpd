@@ -14,12 +14,14 @@ import { PluginsList } from "@/pages/plugins/PluginsList";
 import { Profile } from "@/pages/profile/Profile";
 import { ApprovalPolicy } from "@/pages/settings/ApprovalPolicy";
 import { Authentication } from "@/pages/settings/Authentication";
+import { Advanced } from "@/pages/settings/Advanced";
 import { Certificates } from "@/pages/settings/Certificates";
+import { Diagnostics } from "@/pages/settings/Diagnostics";
 import { ChatGPT } from "@/pages/settings/ChatGPT";
 import { General } from "@/pages/settings/General";
-import { Groups } from "@/pages/settings/Groups";
+
 import { Keys } from "@/pages/settings/Keys";
-import { Users } from "@/pages/settings/Users";
+import { UsersAndGroups } from "@/pages/settings/UsersAndGroups";
 import { Performance } from "@/pages/performance/Performance";
 import { System } from "@/pages/system/System";
 import { Tunnels } from "@/pages/tunnels/Tunnels";
@@ -79,10 +81,14 @@ export function Routes() {
           case undefined: return <General />;
           case "policy": return <ApprovalPolicy />;
           case "authentication": return <Authentication />;
-          case "users": return <Users />;
-          case "groups": return <Groups />;
+          // One page for the pair. /settings/groups is kept as a way in
+          // rather than a page of its own: links to it exist.
+          case "users": return <UsersAndGroups />;
+          case "groups": return <UsersAndGroups />;
           case "keys": return <Keys />;
           case "certificates": return <Certificates />;
+          case "advanced": return <Advanced />;
+          case "diagnostics": return <Diagnostics />;
           case "chatgpt": return <ChatGPT />;
           default: return null;
         }
