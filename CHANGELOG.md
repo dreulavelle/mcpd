@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/dreulavelle/mcpd/compare/v0.3.0...v0.4.0) (2026-08-27)
+
+
+### Features
+
+* measure what a call costs, and stop paying twice ([#84](https://github.com/dreulavelle/mcpd/issues/84)) ([ec00c61](https://github.com/dreulavelle/mcpd/commit/ec00c618b65e5d59507777230b49eccd24cb2950))
+
 ## [0.3.0](https://github.com/dreulavelle/mcpd/compare/v0.2.0...v0.3.0) (2026-08-27)
 
 
