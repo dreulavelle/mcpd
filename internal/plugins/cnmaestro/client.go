@@ -175,7 +175,7 @@ type Page struct {
 // token is followed by token, and one without is followed by offset. That way
 // an endpoint moving between schemes — which is happening, one at a time,
 // ahead of offset's removal in 6.4.0 — does not need this client changed.
-func (c *Client) List(ctx context.Context, path string, params url.Values) (Page, error) {
+func (c *Client) List(ctx context.Context, path string, params url.Values, budget int) (Page, error) {
 	answer, err := c.reuse(ctx, "list", path, params, func(ctx context.Context) (any, error) {
 		return c.walk(ctx, path, params)
 	})
@@ -190,7 +190,53 @@ func (c *Client) List(ctx context.Context, path string, params url.Values) (Page
 	// would spend most of what the cache saves.
 	page.Items = append([]Record(nil), page.Items...)
 	page.Warnings = append([]string(nil), page.Warnings...)
+	// After the copy, never before it. The cached entry is the whole walk, and
+	// capping it would serve a later caller whatever the first caller's budget
+	// happened to leave -- a smaller answer with nothing saying why.
+	//
+	// MaxItems already stopped the walk somewhere; this stops the answer. They
+	// are different questions and an estate hits either first: two hundred
+	// alarms is a lot of rows, and one alarm carrying a device's full
+	// configuration is a lot of bytes.
+	if capBytes(&page.Items, budget) {
+		page.Truncated = true
+	}
 	return page, nil
+}
+
+// capBytes drops records from the end until what remains fits the budget.
+//
+// This is the ceiling MaxItems cannot see. A caller's item limit bounds how
+// many things come back; nothing bounded how much until this, so a listing that
+// passed the item limit could still be cut by the client instead -- mid-JSON,
+// with no note saying what went missing. See plugins.MaxResultBytes.
+//
+// Measured by marshalling, because that is what the size is: a record with ten
+// short keys and one carrying a multi-line banner are not the same row, and
+// anything cheaper would be guessing.
+//
+// The first record is always kept. An answer of nothing at all, because the one
+// matching row was large, is worse than an answer of one large row.
+func capBytes(items *[]Record, budget int) bool {
+	if budget <= 0 || len(*items) == 0 {
+		return false
+	}
+	spent := 0
+	for i, item := range *items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			// An unencodable record is the SDK's to report, not this
+			// function's to hide by truncating around it.
+			continue
+		}
+		spent += len(encoded)
+		if spent <= budget || i == 0 {
+			continue
+		}
+		*items = (*items)[:i]
+		return true
+	}
+	return false
 }
 
 // walk is the pagination loop List used to be, minus the caching around it.

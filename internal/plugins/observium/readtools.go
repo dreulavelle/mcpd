@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
@@ -205,15 +207,25 @@ func (p *Plugin) listCountersSuppliesProbes(ctx context.Context, in indicatorsAr
 		{"supplies", EntityPrinterSupply, "printer supplies", &out.Supplies},
 		{"probes", EntityProbes, "probes", &out.Probes},
 	}
+	// The requested categories are independent reads, so they wait on the
+	// upstream together. Each writes to its own field, which is why no lock is
+	// needed; Wait is the barrier that makes those writes visible here.
+	g, gctx := errgroup.WithContext(ctx)
 	for _, c := range categories {
 		if only != "" && only != c.name {
 			continue
 		}
-		page, err := p.fetchWithin(ctx, c.entity, q, in.Limit, 3)
-		if err != nil {
-			return indicatorsResult{}, err
-		}
-		*c.into = resultOf(page, c.what)
+		g.Go(func() error {
+			page, err := p.fetchWithin(gctx, c.entity, q, in.Limit, 3)
+			if err != nil {
+				return err
+			}
+			*c.into = resultOf(page, c.what)
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return indicatorsResult{}, err
 	}
 
 	if in.DeviceID <= 0 && only == "" {
