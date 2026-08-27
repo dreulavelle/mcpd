@@ -107,11 +107,11 @@ func explainRequestFailure(status int, path string, body []byte) error {
 			path, summarise(status, body))
 
 	case http.StatusUnauthorized:
-		return fmt.Errorf("graylog: the API rejected our credentials. An access "+
-			"token expires when it reaches the TTL it was created with, and "+
-			"reads as revoked from here when it does; a username and password "+
-			"stop working when the password changes. Reaching %s",
-			redactURL(path))
+		return fmt.Errorf("graylog: the API rejected our access token. A token "+
+			"expires when it reaches the TTL it was created with, and reads as "+
+			"revoked from here when it does -- the two are indistinguishable, "+
+			"so check the token's expiry as well as whether it still exists. "+
+			"Reaching %s", redactURL(path))
 
 	case http.StatusForbidden:
 		return fmt.Errorf("graylog: not permitted to read %s. Graylog authorises "+

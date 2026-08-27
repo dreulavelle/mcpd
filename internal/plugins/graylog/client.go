@@ -53,10 +53,6 @@ type tokenAuth struct{ token string }
 
 func (a tokenAuth) apply(req *http.Request) { req.SetBasicAuth(a.token, "token") }
 
-type basicAuth struct{ user, pass string }
-
-func (a basicAuth) apply(req *http.Request) { req.SetBasicAuth(a.user, a.pass) }
-
 // noAuth is what an unconfigured plugin gets, so that a call made before
 // credentials are supplied fails at Graylog with a 401 rather than panicking
 // on a nil interface here.
@@ -66,16 +62,13 @@ func (noAuth) apply(*http.Request) {}
 
 // NewClient builds a client. The credential is passed separately from the
 // config so that the Config the plugin retains can be free of it.
-func NewClient(hc *http.Client, cfg Config, token, user, pass string,
+func NewClient(hc *http.Client, cfg Config, token string,
 	log *slog.Logger, now func() time.Time, cache *readCache,
 	observe func(string, time.Duration)) *Client {
 
 	var auth authorizer = noAuth{}
-	switch {
-	case token != "":
+	if token != "" {
 		auth = tokenAuth{token: token}
-	case user != "" && pass != "":
-		auth = basicAuth{user: user, pass: pass}
 	}
 
 	return &Client{

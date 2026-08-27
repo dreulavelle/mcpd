@@ -26,7 +26,7 @@ func testClient(t *testing.T, h http.HandlerFunc) (*Client, *httptest.Server) {
 	t.Cleanup(srv.Close)
 
 	cfg := testConfig(srv.URL)
-	return NewClient(srv.Client(), cfg, "tok", "", "",
+	return NewClient(srv.Client(), cfg, "tok",
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		time.Now, nil, func(string, time.Duration) {}), srv
 }
