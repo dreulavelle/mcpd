@@ -81,12 +81,34 @@ function Sidebar({ badges, onNavigate }: {
 }
 
 /**
+ * What this host is running.
+ *
+ * Above the rule rather than below it, because everything below the rule
+ * belongs to the account -- who is signed in, and the way out -- and a version
+ * is a fact about the host, not about the person reading it. It sat under the
+ * email for one revision and read as though it were theirs.
+ *
+ * Quiet, and not a link: it is a fact to find when somebody is about to report
+ * something, and the System page it would lead to is already an entry in this
+ * same sidebar. Inset like a nav label so it lines up with the section above it
+ * rather than floating at the edge.
+ */
+function Version({ version }: { version: string }) {
+  return (
+    <div className="shrink-0 px-3 pb-2">
+      <p className="px-2.5 font-mono text-[11px] text-muted-foreground">
+        mcpd {version}
+      </p>
+    </div>
+  );
+}
+
+/**
  * Who is signed in, and the way out. Sign-out is a control of its own beside
  * the profile link, not nested inside it: a misclick should not end the session.
  */
-function SidebarFooter({ onSignOut, version, onNavigate }: {
+function SidebarFooter({ onSignOut, onNavigate }: {
   onSignOut: () => void;
-  version: string;
   onNavigate?: () => void;
 }) {
   const session = useSession();
@@ -117,13 +139,6 @@ function SidebarFooter({ onSignOut, version, onNavigate }: {
           <LogOut className="size-4" aria-hidden="true" />
         </Button>
       </div>
-      {/* What is actually running, where somebody looks when they are about to
-          report something. Quiet on purpose: a fact to find, not one to read
-          every time the page opens. Not a link -- the System page it would
-          lead to is already an entry in this same sidebar. */}
-      <p className="px-2.5 pt-2 font-mono text-[11px] text-muted-foreground">
-        mcpd {version}
-      </p>
     </div>
   );
 }
@@ -160,7 +175,8 @@ export function Shell({ badges, onSignOut, version, children }: {
         <Brand />
         <Separator />
         <Sidebar badges={badges} />
-        <SidebarFooter onSignOut={onSignOut} version={version} />
+        <Version version={version} />
+        <SidebarFooter onSignOut={onSignOut} />
       </aside>
 
       {drawerOpen && (
@@ -175,7 +191,8 @@ export function Shell({ badges, onSignOut, version, children }: {
             <Brand />
             <Separator />
             <Sidebar badges={badges} onNavigate={closeDrawer} />
-            <SidebarFooter onSignOut={onSignOut} version={version} onNavigate={closeDrawer} />
+            <Version version={version} />
+            <SidebarFooter onSignOut={onSignOut} onNavigate={closeDrawer} />
           </aside>
         </div>
       )}

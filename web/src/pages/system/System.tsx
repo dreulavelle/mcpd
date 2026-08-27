@@ -4,6 +4,7 @@ import { api, ApiError, type Resources, type UpdateStatus } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
+import { Markdown } from "@/components/markdown";
 import { Chip } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -147,9 +148,10 @@ function VersionBody({ status }: { status: UpdateStatus }) {
                 )}
               </div>
               {r.notes && (
-                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
-                  {r.notes.trim()}
-                </pre>
+                <Markdown
+                  text={r.notes}
+                  className="mt-2 max-h-64 overflow-auto text-xs break-words text-muted-foreground"
+                />
               )}
             </div>
           ))}
