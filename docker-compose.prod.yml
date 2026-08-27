@@ -1,5 +1,12 @@
 # Runs the published image instead of building from source.
+#
+#   mkdir -p mcpd/data && cd mcpd
+#   curl -fsSLO https://raw.githubusercontent.com/dreulavelle/mcpd/main/docker-compose.prod.yml
 #   docker compose -f docker-compose.prod.yml up -d
+#
+# Make ./data yourself before the first start. Docker creates a missing bind
+# mount as root, and mcpd runs as you -- so it would come up unable to write to
+# its own data directory and restart until somebody chowned it.
 name: mcpd
 
 services:
