@@ -266,7 +266,7 @@ describe("an entry this host cannot accept", () => {
 describe("stale data", () => {
   it("says so, and when it was read", async () => {
     await render({ load: catalog([WEATHER], { stale: true }) });
-    expect(await screen.findByText(/what was last seen/i)).toBeInTheDocument();
+    expect(await screen.findByText(/showing the last copy/i)).toBeInTheDocument();
   });
 
   it("asks again, bypassing the cache, when refresh is pressed", async () => {
@@ -295,7 +295,7 @@ describe("stale data", () => {
       }),
     });
 
-    expect(await screen.findByText(/docker\/mcp-registry did not answer/))
+    expect(await screen.findByText(/docker\/mcp-registry didn't respond/))
       .toBeInTheDocument();
   });
 });
@@ -486,7 +486,8 @@ describe("what a card shows", () => {
     await screen.findByText("Tickets");
     expect(document.querySelector("img")).toBeNull();
     const marks = [...document.querySelectorAll("svg text")].map((t) => t.textContent);
-    expect(marks).toEqual(["WE", "TI"]);
+    expect(marks).toHaveLength(2);
+    expect(new Set(marks)).toEqual(new Set(["WE", "TI"]));
   });
 
   // One box per entry, the same size, so nothing on the row moves.
@@ -505,19 +506,57 @@ describe("what a card shows", () => {
  * look exactly like a catalogue of ten, and the operator who read thirty rows
  * as ninety servers was reading the page correctly -- the page was wrong.
  *
- * The figure is an estimate and says so, because it has to be: two of the four
- * catalogues report no size at all, and none of them says how many of its
- * servers this host would accept. The "+" is doing real work.
+ * It is counted rather than estimated: each catalogue that publishes how many
+ * it holds is summed. Where that covers only some of the catalogues in view,
+ * the line says which -- a fact, in four words, rather than the two sentences
+ * of apology an estimate needed.
  */
 describe("the size of the catalogue", () => {
-  it("says roughly how many can be added, as a floor", async () => {
-    await render({ load: catalog([WEATHER], { addable_estimate: 7900 }) });
+  it("counts the servers that can actually be added", async () => {
+    await render({
+      load: catalog([WEATHER], {
+        addable: 13390,
+        sources: [
+          { source: "registry.modelcontextprotocol.io", ok: true, stale: false,
+            entries: 1, judged: 24970, addable: 13121, total: 24970 },
+          { source: "registry.smithery.ai", ok: true, stale: false,
+            entries: 0, judged: 270, addable: 269, total: 10880 },
+        ],
+      }),
+    });
 
-    expect(await screen.findByText("7,900+")).toBeInTheDocument();
-    expect(screen.getByText(/an estimate, and a low one/)).toBeInTheDocument();
+    expect(await screen.findByText("13,390")).toBeInTheDocument();
+    expect(screen.getByText(/servers you can add/)).toBeInTheDocument();
   });
 
-  it("says nothing rather than guessing when nothing could be said", async () => {
+  /**
+   * The headline is a figure somebody can take apart rather than one they have
+   * to believe, so each catalogue's contribution is beside it.
+   */
+  it("shows what each catalogue contributed", async () => {
+    await render({
+      load: catalog([WEATHER], {
+        addable: 13390,
+        sources: [
+          { source: "registry.modelcontextprotocol.io", ok: true, stale: false,
+            entries: 1, judged: 24970, addable: 13121, total: 24970 },
+          { source: "registry.smithery.ai", ok: true, stale: false,
+            entries: 0, judged: 270, addable: 269, total: 10880 },
+        ],
+      }),
+    });
+
+    expect(await screen.findByText(/registry\.modelcontextprotocol\.io 13,121/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/registry\.smithery\.ai 269/)).toBeInTheDocument();
+  });
+
+  /**
+   * Nothing said rather than a guess. A host whose catalogues all failed has
+   * no number, and rendering a zero would say there are no servers rather than
+   * that none could be counted.
+   */
+  it("says nothing rather than guessing when nothing could be counted", async () => {
     await render({ load: catalog([WEATHER]) });
 
     await screen.findByText("Weather");
@@ -525,41 +564,25 @@ describe("the size of the catalogue", () => {
   });
 
   /**
-   * A total that does not move when a catalogue goes down is worse than a
-   * smaller one, so a source that did not answer is not counted -- and the
-   * line says as much, rather than quietly shrinking.
+   * A catalogue that did not answer contributed nothing, so it is not in the
+   * breakdown -- a source listed with no figure reads as a catalogue holding
+   * nothing rather than one that could not be asked.
    */
-  it("says when it is short a catalogue that did not answer", async () => {
+  it("leaves a catalogue that did not answer out of the breakdown", async () => {
     await render({
       load: catalog([WEATHER], {
-        addable_estimate: 140,
+        addable: 140,
         sources: [
-          { source: "docker/mcp-registry", ok: true, stale: false, entries: 1 },
-          { source: "registry.smithery.ai", ok: false, stale: false, entries: 0, error: "timeout" },
+          { source: "docker/mcp-registry", ok: true, stale: false,
+            entries: 1, judged: 317, addable: 140, total: 317 },
+          { source: "registry.smithery.ai", ok: false, stale: false,
+            entries: 0, error: "timeout" },
         ],
       }),
     });
 
-    expect(await screen.findByText(/not counted here at all/)).toBeInTheDocument();
-  });
-
-  /**
-   * It is a fact about the catalogues rather than about the answer, and it is
-   * most useful while somebody is typing -- which is exactly when the server
-   * is reporting the size of the *match* instead.
-   */
-  it("keeps the browse figure while a search is running", async () => {
-    const load = vi.fn<(q: CatalogQuery) => Promise<Catalog>>(async (q) =>
-      q.search
-        ? answer([TICKETS], { addable_estimate: 3 })
-        : answer([WEATHER], { addable_estimate: 7900 }));
-    await render({ load });
-
-    await screen.findByText("7,900+");
-    await userEvent.type(screen.getByLabelText("Search the catalogue"), "tickets");
-
-    await screen.findByText("Tickets");
-    expect(screen.getByText("7,900+")).toBeInTheDocument();
+    expect(await screen.findByText("140")).toBeInTheDocument();
+    expect(screen.queryByText(/registry\.smithery\.ai \d/)).not.toBeInTheDocument();
   });
 });
 
@@ -714,8 +737,8 @@ describe("ordering the catalogue", () => {
     await screen.findByText("87,579 calls");
 
     fireEvent.change(screen.getByLabelText("Order"), { target: { value: "most-used" } });
-    expect(await screen.findByText(/Calls counted by registry\.smithery\.ai/)).toBeInTheDocument();
-    expect(screen.getByText(/other catalogues don't count them/)).toBeInTheDocument();
+    expect(await screen.findByText(/Call counts come from registry\.smithery\.ai/)).toBeInTheDocument();
+    expect(screen.getByText(/aren't shown here/)).toBeInTheDocument();
   });
 
   it("does not claim an order it does not have", async () => {
@@ -723,7 +746,7 @@ describe("ordering the catalogue", () => {
     await screen.findByText("Weather");
 
     fireEvent.change(screen.getByLabelText("Order"), { target: { value: "name" } });
-    expect(await screen.findByText(/not across the whole catalogue/)).toBeInTheDocument();
+    expect(await screen.findByText(/Sorted within the results shown/)).toBeInTheDocument();
   });
 
   it("keeps a second page in order rather than starting the alphabet again", async () => {
@@ -737,7 +760,7 @@ describe("ordering the catalogue", () => {
     await screen.findByText("Tickets");
 
     fireEvent.change(screen.getByLabelText("Order"), { target: { value: "name" } });
-    await screen.findByText(/not across the whole catalogue/);
+    await screen.findByText(/Sorted within the results shown/);
     await userEvent.click(await screen.findByRole("button", { name: "Show more" }));
 
     await screen.findByText("Atlas");
@@ -789,10 +812,12 @@ describe("scoping to one catalogue", () => {
     fireEvent.change(screen.getByLabelText("Which catalogue"),
       { target: { value: "docker/mcp-registry" } });
     // The order goes with it rather than becoming a request the server would
-    // refuse, and the control shows that it has.
+    // refuse, and the control shows that it has. It falls back to the default
+    // order rather than to no order: "a bit of each" stopped existing when the
+    // index started holding every catalogue.
     await waitFor(() =>
       expect(load).toHaveBeenCalledWith(expect.objectContaining({
-        source: "docker/mcp-registry", sort: "",
+        source: "docker/mcp-registry", sort: "recently-updated",
       })));
     expect(screen.queryByRole("option", { name: "Most used" })).not.toBeInTheDocument();
   });

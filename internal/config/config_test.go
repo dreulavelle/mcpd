@@ -266,7 +266,11 @@ func TestCatalog_DefaultsOnAndCanBeSwitchedOff(t *testing.T) {
 	// API refuses every unauthenticated request and a source that can only
 	// answer 401 is worse to default to than one that is absent.
 	def := Default()
-	if !def.Catalog.Official || !def.Catalog.Docker || !def.Catalog.Smithery {
+	if def.Catalog.Docker {
+		t.Error("the Docker catalogue is on by default; 29 of its 317 servers " +
+			"can be imported here, and it made every page look mis-paged")
+	}
+	if !def.Catalog.Official || !def.Catalog.Smithery {
 		t.Errorf("catalog = %+v, want the credential-free sources on by default", def.Catalog)
 	}
 	if def.Catalog.PulseMCP {
@@ -282,16 +286,18 @@ func TestCatalog_DefaultsOnAndCanBeSwitchedOff(t *testing.T) {
 		wantPulseMCP bool
 		wantEnabled  bool
 	}{
+		// Docker is the one source that is off unless asked for. See the
+		// default: 29 of its 317 servers can be imported here.
 		{name: "no catalog block at all", yaml: "",
-			wantOfficial: true, wantDocker: true, wantSmithery: true, wantEnabled: true},
+			wantOfficial: true, wantSmithery: true, wantEnabled: true},
 		{name: "the official registry only",
-			yaml:         "catalog:\n  docker: false\n  smithery: false\n",
+			yaml:         "catalog:\n  smithery: false\n",
 			wantOfficial: true, wantEnabled: true},
-		{name: "docker only",
-			yaml:       "catalog:\n  official: false\n  smithery: false\n",
+		{name: "docker only, asked for",
+			yaml:       "catalog:\n  official: false\n  smithery: false\n  docker: true\n",
 			wantDocker: true, wantEnabled: true},
 		{name: "smithery only",
-			yaml:         "catalog:\n  official: false\n  docker: false\n",
+			yaml:         "catalog:\n  official: false\n",
 			wantSmithery: true, wantEnabled: true},
 		// PulseMCP is the one source that is off unless asked for: its v0.1
 		// API authenticates every request, so a deployment that has not been

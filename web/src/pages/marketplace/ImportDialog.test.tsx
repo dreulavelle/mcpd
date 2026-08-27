@@ -48,16 +48,45 @@ describe("adding a remote MCP server", () => {
       />,
     );
 
-    // Seeded, and still shown: the operator reads what they are adding rather
-    // than agreeing to a name in a list.
     expect(screen.getByLabelText("Name")).toHaveValue("weather");
-    expect(screen.getByLabelText("server.json"))
-      .toHaveValue(JSON.stringify(DOCUMENT, null, 2));
+
+    // The document is folded away: it is already filled in and correct, and
+    // the dialog was taller than the window with it open. It is still what
+    // gets imported, which is the part that must not depend on it being on
+    // screen.
+    expect(screen.queryByLabelText("server.json")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>
       expect(importServer).toHaveBeenCalledWith("weather", DOCUMENT));
+  });
+
+  // Folded away, not withheld. Somebody who wants to read what they are adding
+  // is one click from it, and what they get is the document as published.
+  it("shows the catalogued document when asked", async () => {
+    renderWith(
+      <ImportDialog
+        open onOpenChange={() => {}} onImported={() => {}}
+        seedName="weather" seedDocument={DOCUMENT}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Show server.json" }));
+    expect(screen.getByLabelText("server.json"))
+      .toHaveValue(JSON.stringify(DOCUMENT, null, 2));
+  });
+
+  /**
+   * Pasting a document by hand is the whole task, so that form opens with the
+   * box already there. Making somebody click to reveal the only field they
+   * came to fill in would be a fold that costs a step and saves nothing.
+   */
+  it("opens with the box ready when there is nothing to seed it with", () => {
+    renderWith(
+      <ImportDialog open onOpenChange={() => {}} onImported={() => {}} />,
+    );
+    expect(screen.getByLabelText("server.json")).toBeInTheDocument();
   });
 
   // Caught in the browser rather than sent: an error naming the character and
