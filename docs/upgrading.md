@@ -7,6 +7,40 @@ since it, with the notes from each. Turn the check on under Settings ->
 Updates; it is off by default because reaching github.com on a timer is a
 connection worth agreeing to rather than discovering.
 
+## Which version am I running
+
+The binary carries it. Nothing reads it from the environment, and there is no
+version to keep up to date in a file beside the deployment.
+
+| How it was built | What it reports |
+|---|---|
+| Released by CI at a tag | `0.3.0` |
+| `docker compose build` from a working tree | `0.2.0+source` |
+| `go build` inside a checkout | `source+d1be8e8934ed` |
+| `go install …/cmd/mcpd@v0.3.0` | `v0.3.0` |
+
+A release is stamped into the binary at link time from the tag CI built it at,
+and the release job checks the result reports that tag before it publishes
+anything. A build from the source tree derives its number from the release
+manifest committed to the repository — the last release, plus `+source` to say
+that it is that release and whatever else was in the working copy, which is not
+the release and must not claim to be.
+
+There is no "dev". A release is whatever CI cuts, and everything else is
+somebody's working copy; a word implying a third kind of build invites a binary
+to describe itself as unfinished while it is the thing running in production.
+
+Only the first two forms are ordered against published releases. `+source`
+compares as the release it was built after, so a host built past 0.2.0 is still
+told when 0.3.0 appears. A build with no release behind it is not compared at
+all — an update banner on every start from a working copy is noise, and one
+claiming a version that was never published is worse.
+
+This used to be `MCPD_VERSION` in `.env`, passed to the image build. It was a
+second answer to a question the source already answers, and it was the one that
+went stale: a host ran for weeks reporting the release it was built after
+rather than the code it was running.
+
 mcpd never installs an update itself. Replacing a running host means replacing
 a binary or an image, which needs privileges the deployment drops on purpose:
 the container runs read-only, as a non-root user, with every capability

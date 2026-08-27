@@ -2,10 +2,12 @@ name: mcpd
 
 services:
   mcpd:
+    # No version argument: the binary carries its own. A release is stamped
+    # by CI from the tag it is built at, and a build from a working tree
+    # derives one from the release manifest in the source. An environment
+    # variable naming a version is a second answer that nothing keeps true.
     build:
       context: .
-      args:
-        VERSION: ${MCPD_VERSION:-dev}
     image: ghcr.io/dreulavelle/mcpd:local
     container_name: mcpd
     restart: unless-stopped
