@@ -90,6 +90,49 @@ would fail at the last hop with nothing saying why.
 The cost of getting this wrong is not a compile error. It is a model choosing
 the wrong tool, occasionally, in a way nobody attributes to the name.
 
+## Two instances of one integration
+
+Nothing about a plugin says *which* one it is. Two Observiums pointed at two
+networks serve `observium_springfield_list_devices` and
+`observium_northgate_list_devices` — the same fourteen tools, the same
+descriptions, and a prefix that is a slug somebody typed. A model choosing
+between them is reading the name and nothing else.
+
+So every instance carries one host-supplied setting, **What this one covers**,
+which a plugin does not declare and cannot know: it is a deployment's fact. It
+lands in the two places that reach a model for free:
+
+- the **instructions** a client reads once when it connects, where the purpose
+  leads and the plugin's own description follows;
+- **each tool's description**, appended as a phrase.
+
+```
+Purpose:  the Springfield branch network
+
+instructions →  the Springfield branch network. Reads an Observium install…
+tool         →  Lists the devices Observium is monitoring. the Springfield
+                branch network.
+```
+
+Blank is the default and composes to nothing at all — no phrase, no punctuation,
+descriptions exactly as the plugin wrote them. A single instance is already
+unambiguous, and a line repeated across fourteen tools to restate the name in
+the prefix would be a cost with no question behind it.
+
+It is a phrase rather than a sentence for the same reason: it is paid once per
+tool entry, so "the Springfield branch network" buys what "This MCP handles
+communications to Springfield" buys, for a third of the tokens.
+
+**Deliberately not a tool.** A `get_description` tool would cost an entry in
+every plugin's list whether or not anything called it, and would only help a
+model that thought to ask — which is the model that already knew there was an
+ambiguity. This arrives before the first call, in what the model is reading
+anyway when it decides which tool to use.
+
+The value is read when the plugin is built, so editing it remounts the instance
+and the new text reaches a client on its next connection. An assistant halfway
+through a conversation keeps the tool list it already fetched.
+
 ## The tool list is a budget
 
 Everything a plugin advertises — names, descriptions, input schemas, output

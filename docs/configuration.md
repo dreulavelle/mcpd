@@ -63,3 +63,70 @@ auth:
       role: user
       plugins: [echo]
 ```
+
+## Reaching an upstream behind your own certificate
+
+An integration inside a company often points at an HTTPS address whose
+certificate was issued by that company's own authority, or by the appliance
+itself. Nothing in a public trust store has heard of either, so the connection
+fails before a credential is ever sent:
+
+```
+graylog did not start with the new settings: 10.10.12.53 presented a
+certificate this host does not trust. If it is your own — a company
+authority, or the appliance's own certificate — add it under Settings,
+Certificates, and every integration here will trust it.
+```
+
+**Settings → Certificates** is where that goes. Paste the certificate or pick
+the file; mcpd parses it there and then, so an unreadable paste is refused
+where you are looking rather than at a handshake weeks later. It takes effect
+immediately — the plugins are remounted on the spot, and nothing needs
+restarting.
+
+Everything added there is trusted by every outbound connection this host makes,
+**in addition to** the public authorities it already ships with. Two decisions
+worth knowing about:
+
+- **Additive, never a replacement.** An instance behind a company CA still
+  reaches ordinary public endpoints, so the extras are appended to the system
+  roots rather than standing in for them.
+- **Host-wide rather than per-plugin.** Naming the certificate again on each
+  integration that needs it would be a second step whose failure looks exactly
+  like the problem being solved: the certificate is stored, and the handshake
+  still fails. This is the arrangement a company root already has in an
+  operating system's trust store.
+
+Adding and removing are both recorded in the audit trail, because the
+security-relevant fact is not the bytes — a certificate is public — but the
+decision to believe them.
+
+### What it can and cannot fix
+
+A certificate is only useful here if a chain can be anchored on it. A
+self-signed certificate straight off an appliance usually carries no extensions
+at all, and that case works: nothing on it constrains it out of the role. One
+that explicitly says `basicConstraints: CA:FALSE`, or names a key usage without
+certificate signing, is a leaf that means it — the page says **cannot anchor a
+chain** against it, and the authority that signed it is the one to add instead.
+
+It also cannot help with the *other* certificate failure. If the address does
+not appear on the certificate, the message says which names it does carry:
+trusting it cannot cover a name it was not issued for, and the address is the
+thing to change.
+
+### Formats
+
+PEM and DER both work; a `.crt` from a Windows authority is frequently DER
+despite the extension, and it is converted on the way in. A PKCS#7 bundle
+(`.p7b`, `.p7c`) is a container rather than a certificate, and mcpd says so
+along with the one command that opens it:
+
+```bash
+openssl pkcs7 -print_certs -in bundle.p7b -out certificates.pem
+```
+
+One certificate per entry. A paste holding a whole chain is refused, naming
+what it found, because a bundle in one row cannot say which certificate inside
+it is the one expiring in six weeks — which is the question the page exists to
+answer. A private key in the paste is refused outright.

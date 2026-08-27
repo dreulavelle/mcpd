@@ -149,7 +149,7 @@ Anything else is a plugin you write — see [Writing a plugin](docs/plugins.md).
 
 | | |
 |---|---|
-| [Configuration](docs/configuration.md) | The five-line config file, and where the secrets are |
+| [Configuration](docs/configuration.md) | The five-line config file, where the secrets are, and trusting your own certificate authority |
 | [How a change gets made](docs/approvals.md) | The approval path, end to end |
 | [Approval policy](docs/approval-policy.md) | Rules that let routine changes through |
 | [Upgrading](docs/upgrading.md) | Applying an update, and moving an older deployment |

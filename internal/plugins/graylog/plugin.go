@@ -31,7 +31,7 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	token, user, pass := cfg.Token, cfg.Username, cfg.Password
+	token := cfg.Token
 	configured := cfg.Configured()
 
 	httpClient := deps.HTTP
@@ -44,9 +44,9 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 		httpClient = &clone
 	}
 
-	// Credentials are not kept on the config the plugin holds, so a dump of it
-	// -- a log line, an error, the settings page -- cannot carry one.
-	cfg.Token, cfg.Username, cfg.Password = "", "", ""
+	// The credential is not kept on the config the plugin holds, so a dump of
+	// it -- a log line, an error, the settings page -- cannot carry one.
+	cfg.Token = ""
 
 	now := deps.Now
 	if now == nil {
@@ -73,7 +73,7 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 		deps:       deps,
 		cfg:        cfg,
 		configured: configured,
-		client:     NewClient(httpClient, cfg, token, user, pass, deps.Log, now, cache, observe),
+		client:     NewClient(httpClient, cfg, token, deps.Log, now, cache, observe),
 	}, nil
 }
 
@@ -173,12 +173,16 @@ func (p *Plugin) Check(_ context.Context) plugins.Health {
 
 	switch {
 	case !p.configured:
-		return plugins.Degraded("not configured yet — set the address and " +
-			"either an access token or a username and password below, then restart")
+		return plugins.Degraded("not configured yet — set the address and an " +
+			"access token below, then restart")
 	case checked.IsZero():
 		return plugins.Degraded("has not reached Graylog yet")
 	case err != nil:
-		return plugins.Degraded("last call to Graylog failed: " + err.Error())
+		// Explained rather than passed through: the failure an operator meets
+		// first is a certificate their own authority signed, and the stock
+		// wording for that names an unknown authority and no way to fix it.
+		return plugins.Degraded("last call to Graylog failed: " +
+			plugins.Explain(err).Error())
 	}
 	return plugins.Healthy()
 }

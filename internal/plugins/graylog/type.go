@@ -33,23 +33,14 @@ func Type() plugins.Type {
 			},
 			{
 				Key: "token", Label: "Access token", Kind: settings.KindSecret,
+				Required: true,
 				Help: "From your own user page in Graylog, under Edit tokens. " +
-					"Preferred over a username and password: it carries only " +
-					"the permissions of the account that made it and revoking " +
-					"it does not change anyone's login. Note the TTL you give " +
-					"it — a token stops working when it expires, and from here " +
-					"that looks exactly like a revoked one. Stored encrypted.",
-			},
-			{
-				Key: "username", Label: "Username", Kind: settings.KindString,
-				Help: "An ordinary Graylog account, for an installation where a " +
-					"token with a long enough life is not practical. Leave both " +
-					"this and the password empty if you set a token — the " +
-					"token wins.",
-			},
-			{
-				Key: "password", Label: "Password", Kind: settings.KindSecret,
-				Help: "The other half of the account above. Stored encrypted.",
+					"The only credential this integration takes: it carries " +
+					"only the permissions of the account that made it and " +
+					"revoking it does not change anyone's login. Note the TTL " +
+					"you give it — a token stops working when it expires, and " +
+					"from here that looks exactly like a revoked one. Stored " +
+					"encrypted.",
 			},
 			{
 				Key: "max_messages", Label: "Most messages per search",

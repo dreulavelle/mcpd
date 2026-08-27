@@ -104,9 +104,14 @@ wrong.
 
 Tokens carry a TTL — 30 days by default — and stop working when they reach it.
 From here an expired token and a revoked one are indistinguishable, which is
-why the 401 message names both. A username and password are supported for an
-installation where a token with a long enough life is not practical; the token
-wins when both are set.
+why the 401 message names both.
+
+A token is the only credential this integration takes. An account's username
+and password would authenticate the same calls, and are deliberately not
+offered: they carry everything that account can do rather than what a token was
+issued for, they cannot be revoked without changing somebody's login, and
+offering both means a second code path, a second thing the 401 message has to
+hedge about, and a settings page inviting the worse of the two.
 
 ## Results are columns, not records
 
