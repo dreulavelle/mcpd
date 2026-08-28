@@ -119,7 +119,7 @@ export function ImportDialog({
           <DialogTitle>Add a remote MCP server</DialogTitle>
           <DialogDescription>
             {seedDocument === undefined
-              ? <>Paste the server's published <code className="font-mono">server.json</code>. It's stored as-is and checked against this build's schema.</>
+              ? <>Paste the server's published <code className="font-mono">server.json</code>, or the <code className="font-mono">mcpServers</code> block from an editor's <code className="font-mono">mcp.json</code>. A server.json is stored as-is; a client config is converted, and any server in it that runs a local command is named and skipped, because this host reaches servers over HTTP rather than running them.</>
               : <>Give it a name on this host. Nothing is served until you approve its tools.</>}
           </DialogDescription>
         </DialogHeader>
@@ -184,7 +184,7 @@ export function ImportDialog({
               <Textarea
                 id="mcp-doc" value={documentText} rows={18}
                 className="h-full min-h-72 font-mono text-xs"
-                placeholder={'{\n  "$schema": "…",\n  "name": "com.example/weather",\n  "version": "1.0.0",\n  "remotes": [{ "type": "streamable-http", "url": "https://…" }]\n}'}
+                placeholder={'{\n  "$schema": "…",\n  "name": "com.example/weather",\n  "version": "1.0.0",\n  "remotes": [{ "type": "streamable-http", "url": "https://…" }]\n}\n\nor\n\n{\n  "mcpServers": {\n    "weather": { "url": "https://…/mcp", "headers": { "Authorization": "…" } }\n  }\n}'}
                 onChange={(e) => setDocumentText(e.target.value)}
               />
             )}
@@ -210,9 +210,19 @@ export function ImportDialog({
  * out rather than dashed, which would read as a value somebody chose.
  */
 function CatalogFacts({ entry }: { entry: CatalogEntry }) {
+  // "unknown" is its own answer, not a missing one. The catalogue's document
+  // declared no header and no variable, which is silence rather than a claim
+  // that the server is open -- and most servers whose documents look like this
+  // answer 401. Saying so here is the difference between an operator who adds
+  // it knowing they may have to supply a credential, and one who reads "No
+  // credential", adds it, and gets a 401 with nothing naming the cause.
   const credential = entry.auth === "api_key"
     ? "Needs an API key"
-    : entry.auth === "none" ? "No credential" : "";
+    : entry.auth === "none"
+      ? "No credential"
+      : entry.auth === "unknown"
+        ? "Not stated — may need one"
+        : "";
   return (
     <dl className="grid gap-x-6 gap-y-3 rounded-md border bg-muted/30 p-3 sm:grid-cols-2">
       {entry.version && (
