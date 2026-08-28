@@ -82,14 +82,16 @@ func TestPulseMCP_ReadsTheGenericRegistryShape(t *testing.T) {
 	if entry.UpdatedAt.IsZero() {
 		t.Error("updated_at is zero, so the lifecycle facts were not read")
 	}
-	// The fixture's document offers streamable-http, so it is addable and
-	// needs no credential -- and says the second thing rather than leaving it
-	// to be guessed.
+	// The fixture's document offers streamable-http, so it is addable. Its
+	// remotes declare no headers and no variables, so what this host can say
+	// about credentials is that the document does not say -- not that there
+	// are none. Most published documents shaped like this one answer 401.
 	if !entry.Addable {
 		t.Fatalf("the entry must be addable; reason: %s", entry.Reason)
 	}
-	if entry.Auth != AuthNone {
-		t.Errorf("auth = %q, want %q for a document with no secret input", entry.Auth, AuthNone)
+	if entry.Auth != AuthUnknown {
+		t.Errorf("auth = %q, want %q for a document that declares no inputs at all",
+			entry.Auth, AuthUnknown)
 	}
 	if page.NextCursor == "" {
 		t.Error("the cursor the far end offered was dropped")

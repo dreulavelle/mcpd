@@ -65,6 +65,12 @@ var ErrServerExists = errors.New("sqlite: a remote MCP server with that name alr
 // ErrNoSuchServer reports an operation against a server that is not imported.
 var ErrNoSuchServer = errors.New("sqlite: no such remote MCP server")
 
+// ErrHeaderExists reports a header already declared on this server.
+var ErrHeaderExists = errors.New("sqlite: that header is already declared on this server")
+
+// ErrNoSuchHeader reports a removal of a header that was not declared.
+var ErrNoSuchHeader = errors.New("sqlite: no such header on this server")
+
 // Import records a new server. The insert is guarded by the primary key
 // rather than by a prior read, so two operators racing the same name produce
 // one server and one refusal.
@@ -178,7 +184,138 @@ func (s *MCPServerStore) List(ctx context.Context) ([]mcpservers.Server, error) 
 		}
 		out = append(out, srv)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// One query for every server's headers rather than one per server: this
+	// runs on the boot path that mounts every remote server, and a per-row
+	// query there is a round trip per integration for a table most rows have
+	// nothing in.
+	byServer, err := s.allHeaders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].ExtraHeaders = byServer[out[i].Name]
+	}
+	return out, nil
+}
+
+// allHeaders reads every operator-added header, keyed by server.
+func (s *MCPServerStore) allHeaders(ctx context.Context) (map[string][]mcpservers.KeyValueInput, error) {
+	rows, err := s.db.Reader().QueryContext(ctx, `
+		SELECT server_name, name, description, is_secret, is_required
+		  FROM mcp_server_headers
+		 ORDER BY server_name, name`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list mcp server headers: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string][]mcpservers.KeyValueInput{}
+	for rows.Next() {
+		var server string
+		h, err := scanHeader(rows, &server)
+		if err != nil {
+			return nil, err
+		}
+		out[server] = append(out[server], h)
+	}
 	return out, rows.Err()
+}
+
+// Headers reads one server's operator-added headers.
+func (s *MCPServerStore) Headers(ctx context.Context, server string) ([]mcpservers.KeyValueInput, error) {
+	rows, err := s.db.Reader().QueryContext(ctx, `
+		SELECT server_name, name, description, is_secret, is_required
+		  FROM mcp_server_headers
+		 WHERE server_name = ?
+		 ORDER BY name`, server)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list mcp server headers: %w", err)
+	}
+	defer rows.Close()
+
+	out := []mcpservers.KeyValueInput{}
+	for rows.Next() {
+		var name string
+		h, err := scanHeader(rows, &name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func scanHeader(row scanner, server *string) (mcpservers.KeyValueInput, error) {
+	var (
+		h                    mcpservers.KeyValueInput
+		isSecret, isRequired int
+	)
+	if err := row.Scan(server, &h.Name, &h.Input.Description, &isSecret, &isRequired); err != nil {
+		return mcpservers.KeyValueInput{}, err
+	}
+	h.Input.IsSecret = isSecret == 1
+	h.Input.IsRequired = isRequired == 1
+	return h, nil
+}
+
+// AddHeader declares a header this host must send that the document did not.
+func (s *MCPServerStore) AddHeader(ctx context.Context, actor, server string,
+	h mcpservers.KeyValueInput) error {
+	now := s.now().UnixMilli()
+	return s.db.WriteTx(ctx, now, func(u *UnitOfWork) error {
+		var exists int
+		if err := u.queryRow(`SELECT COUNT(*) FROM mcp_servers WHERE name = ?`,
+			server).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			return ErrNoSuchServer
+		}
+		// Guarded by the primary key rather than by a SELECT first: two
+		// administrators adding the same header at once must not both think
+		// they declared it.
+		res, err := u.exec(`
+			INSERT INTO mcp_server_headers
+			       (server_name, name, description, is_secret, is_required, created_by, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (server_name, name) DO NOTHING`,
+			server, h.Name, h.Input.Description, boolToInt(h.Input.IsSecret),
+			boolToInt(h.Input.IsRequired), actor, now)
+		if err != nil {
+			return fmt.Errorf("sqlite: add mcp server header: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrHeaderExists
+		}
+		return auditServer(u, "mcpserver.header_added", actor, server, "add_header",
+			map[string]any{"header": h.Name, "secret": h.Input.IsSecret})
+	})
+}
+
+// RemoveHeader withdraws one operator-added header.
+//
+// The value in `settings` is deliberately left where it is. Removing a header
+// declaration stops this host sending it; deleting the credential too would
+// mean a mis-click costs a token nobody kept a copy of, and a stored value
+// with nothing reading it is inert.
+func (s *MCPServerStore) RemoveHeader(ctx context.Context, actor, server, name string) error {
+	return s.db.WriteTx(ctx, s.now().UnixMilli(), func(u *UnitOfWork) error {
+		res, err := u.exec(`
+			DELETE FROM mcp_server_headers WHERE server_name = ? AND name = ?`,
+			server, name)
+		if err != nil {
+			return fmt.Errorf("sqlite: remove mcp server header: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNoSuchHeader
+		}
+		return auditServer(u, "mcpserver.header_removed", actor, server, "remove_header",
+			map[string]any{"header": name})
+	})
 }
 
 // Get returns one server.
@@ -191,6 +328,9 @@ func (s *MCPServerStore) Get(ctx context.Context, name string) (mcpservers.Serve
 		return mcpservers.Server{}, false, nil
 	}
 	if err != nil {
+		return mcpservers.Server{}, false, err
+	}
+	if srv.ExtraHeaders, err = s.Headers(ctx, name); err != nil {
 		return mcpservers.Server{}, false, err
 	}
 	return srv, true, nil

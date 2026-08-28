@@ -104,8 +104,8 @@ type Entry struct {
 	// saying so.
 	Reason string `json:"reason,omitempty"`
 	// Auth says whether importing this entry will ask the operator for a
-	// credential: AuthNone or AuthAPIKey, and empty where there is nothing to
-	// say because the entry cannot be imported at all.
+	// credential: AuthNone, AuthAPIKey or AuthUnknown, and empty where there
+	// is nothing to say because the entry cannot be imported at all.
 	//
 	// It is derived from the document rather than from anything a catalogue
 	// claims about the server, so it means the same thing on all four sources
@@ -495,6 +495,16 @@ const (
 	// AuthAPIKey is an entry whose import will ask for a secret -- a token in
 	// a header, typed into the dashboard and encrypted at rest.
 	AuthAPIKey = "api_key"
+	// AuthUnknown is an entry whose document says nothing about credentials.
+	//
+	// It is not AuthNone. A document that lists no headers and no variables
+	// has not said the server is open; it has said nothing, and most of the
+	// ones that say nothing answer 401. Reporting that silence as "none"
+	// promises an operator a server they can add and use, and the promise is
+	// broken at the first dial -- after the import, with nothing naming the
+	// cause. The two facts are different and are kept apart, for the same
+	// reason a missing precondition snapshot is not a drift check that passed.
+	AuthUnknown = "unknown"
 )
 
 func describe(document []byte) (transport, url string, addable bool, reason, auth string) {
@@ -530,14 +540,30 @@ func describe(document []byte) (transport, url string, addable bool, reason, aut
 	if err != nil {
 		return "", "", false, clean(strings.TrimPrefix(err.Error(), "mcpremote: "), maxReasonRunes), ""
 	}
-	auth = AuthNone
+	return remote.Type, clean(remote.URL, maxURLRunes), true, "", authFor(remote, fields)
+}
+
+// authFor works out what an operator has to go and find before clicking Add.
+//
+// A secret field is the certain case: the document named a credential, so the
+// import will ask for it. The distinction that matters is between the other
+// two. A document that declares headers or variables has been examined and
+// found to need nothing secret; one that declares neither has not been
+// examined at all, because there was nothing there to examine. Only the first
+// of those is AuthNone.
+func authFor(remote mcpservers.Remote, fields []settings.Field) string {
 	for _, f := range fields {
 		if f.Kind == settings.KindSecret {
-			auth = AuthAPIKey
-			break
+			return AuthAPIKey
 		}
 	}
-	return remote.Type, clean(remote.URL, maxURLRunes), true, "", auth
+	// Fields always carries this host's own calls-per-second setting, so its
+	// length says nothing about the document. The document's own inputs are
+	// the question, and they live on the remote.
+	if len(remote.Headers) > 0 || len(remote.Variables) > 0 {
+		return AuthNone
+	}
+	return AuthUnknown
 }
 
 // countAddable is how many of these entries this host would accept an import

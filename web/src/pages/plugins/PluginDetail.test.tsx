@@ -20,7 +20,7 @@ const SERVER: MCPServer = {
   readable: true,
   pending: 1,
   enabled_tools: 1,
-  disabled: 0,
+  disabled: 0, extra_headers: [], declares_no_credential: false,
 };
 
 function tool(overrides: Partial<MCPTool> = {}): MCPTool {
