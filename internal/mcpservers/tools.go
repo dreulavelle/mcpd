@@ -92,10 +92,26 @@ type Server struct {
 	Transport     string    `json:"transport"`
 	// URL is the template, braces intact. Substitution happens at dial time,
 	// from resolved settings.
-	URL       string    `json:"url"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	URL     string `json:"url"`
+	Enabled bool   `json:"enabled"`
+	// ExtraHeaders are headers an operator added because the published
+	// document did not declare them. They are merged onto Parsed on the way to
+	// building a client or a settings form -- never into Document, which stays
+	// as it was imported. See Document.WithHeaders.
+	ExtraHeaders []KeyValueInput `json:"extra_headers,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+// Effective is the document as this host acts on it: what the publisher wrote,
+// with the headers an operator added merged on.
+//
+// Every path that builds a client or renders a settings form goes through
+// here, so a header an operator added is asked for, sent, and cleaned up on
+// removal by exactly the code that already does those things for a declared
+// one. Nil when the document is one this build cannot read.
+func (s Server) Effective() *Document {
+	return s.Parsed.WithHeaders(s.ExtraHeaders)
 }
 
 // Diff is what one discovery changed.

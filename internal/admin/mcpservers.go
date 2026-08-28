@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/mcpservers"
@@ -35,6 +36,72 @@ type MCPServerAPI struct {
 	Classify func(ctx context.Context, actor, server, tool, hash string, state mcpservers.ToolState) error
 	// Schema returns the vendored server.json schema an import is judged by.
 	Schema func() []byte
+	// AddHeader declares a header this host must send that the published
+	// document did not, and RemoveHeader withdraws one.
+	AddHeader    func(ctx context.Context, actor, server, name, description string, secret bool) error
+	RemoveHeader func(ctx context.Context, actor, server, name string) error
+}
+
+// addHeaderRequest is an operator saying what the publisher left out.
+type addHeaderRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// A pointer, because the default is true and an absent field must not
+	// read as false. A credential stored as a non-secret is rendered in a form
+	// field to anybody who can open the page.
+	Secret *bool `json:"secret"`
+}
+
+func (s *Server) handleAddMCPServerHeader(w http.ResponseWriter, r *http.Request) {
+	if s.opts.MCPServers.AddHeader == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "remote MCP servers cannot be managed here")
+		return
+	}
+	var req addHeaderRequest
+	if !s.decode(w, r, &req) {
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		s.writeError(w, r, http.StatusBadRequest, "a header name is required")
+		return
+	}
+	// Refused here rather than at the next dial, where the operator is no
+	// longer looking at the field they typed it into.
+	if err := mcpservers.CheckHeaderName(name); err != nil {
+		s.writeError(w, r, http.StatusBadRequest,
+			fmt.Sprintf("%q is not a usable HTTP header name", name))
+		return
+	}
+	secret := true
+	if req.Secret != nil {
+		secret = *req.Secret
+	}
+	actor := auth.FromContext(r.Context()).ID
+	if err := s.opts.MCPServers.AddHeader(r.Context(), actor,
+		r.PathValue("name"), name, strings.TrimSpace(req.Description), secret); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusCreated, map[string]any{
+		"status": "added",
+		"note": "Fill the value in on the settings page, then run discovery " +
+			"again to see what the server offers.",
+	})
+}
+
+func (s *Server) handleRemoveMCPServerHeader(w http.ResponseWriter, r *http.Request) {
+	if s.opts.MCPServers.RemoveHeader == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "remote MCP servers cannot be managed here")
+		return
+	}
+	actor := auth.FromContext(r.Context()).ID
+	if err := s.opts.MCPServers.RemoveHeader(r.Context(), actor,
+		r.PathValue("name"), r.PathValue("header")); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"status": "removed"})
 }
 
 func (s *Server) handleListMCPServers(w http.ResponseWriter, r *http.Request) {

@@ -14,6 +14,7 @@ import {
 import { Chip, StatusDot } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -326,6 +327,10 @@ function Body({ server, tools, toolsError, onChanged }: {
         </Card>
       </Section>
 
+      <Section title="Credentials">
+        <Headers server={server} mayAdminister={mayAdminister} onChanged={onChanged} />
+      </Section>
+
       <Section title="This server">
         <Card>
           <CardContent className="flex flex-wrap items-center justify-between gap-3">
@@ -364,6 +369,160 @@ function Body({ server, tools, toolsError, onChanged }: {
 }
 
 /** What the last discovery changed. */
+/**
+ * The headers this host sends that the published document never declared.
+ *
+ * Four in five published documents name no header and no variable at all. Some
+ * of those servers really are open -- roughly a quarter answer without a
+ * credential -- so this is offered rather than demanded: nothing here has to
+ * be filled in for a server that needs nothing, and a 401 is the signal that
+ * it does.
+ *
+ * Only the declaration is made here. The value is typed on the settings page,
+ * into the field this creates, where it is encrypted like every other stored
+ * credential and never read back.
+ */
+function Headers({ server, mayAdminister, onChanged }: {
+  server: MCPServer;
+  mayAdminister: boolean;
+  onChanged: () => void;
+}) {
+  const notify = useNotify();
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const headers = server.extra_headers ?? [];
+
+  async function add() {
+    setBusy(true);
+    try {
+      const r = await api.addMCPServerHeader(server.name, name.trim(), description.trim(), true);
+      notify("good", r.note ?? `Added ${name.trim()}.`);
+      setName("");
+      setDescription("");
+      setAdding(false);
+      onChanged();
+    } catch (e) {
+      notify("problem", e instanceof ApiError ? e.detail : "Couldn't add that header.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(header: string) {
+    setBusy(true);
+    try {
+      await api.removeMCPServerHeader(server.name, header);
+      notify("good", `Removed ${header}.`);
+      onChanged();
+    } catch (e) {
+      notify("problem", e instanceof ApiError ? e.detail : "Couldn't remove that header.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="space-y-4">
+        {server.declares_no_credential && headers.length === 0 && (
+          <Notice tone="info">
+            This server's document declares no credential. That may be right —
+            some servers need none — but it is silence rather than a statement,
+            and it is the usual reason discovery comes back 401. If it does, add
+            the header the server asks for and fill its value in on the settings
+            page.
+          </Notice>
+        )}
+
+        {headers.length > 0 && (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Header</TableHead>
+                  <TableHead>Note</TableHead>
+                  {mayAdminister && <TableHead className="w-0" />}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {headers.map((h) => (
+                  <TableRow key={h.name}>
+                    <TableCell className="font-mono text-xs">{h.name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {h.description || "—"}
+                    </TableCell>
+                    {mayAdminister && (
+                      <TableCell>
+                        <Button
+                          variant="ghost" size="sm" disabled={busy}
+                          onClick={() => remove(h.name)}
+                        >
+                          Remove
+                        </Button>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {mayAdminister && (adding ? (
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1 text-sm">
+                <span className="font-medium">Header name</span>
+                <Input
+                  value={name} autoFocus
+                  placeholder="X-Api-Key"
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="font-medium">Note (optional)</span>
+                <Input
+                  value={description}
+                  placeholder="Where to generate one"
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </label>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              The exact header the server expects — a 401 usually names it. Its
+              value is a credential, so it is stored encrypted and asked for on
+              the settings page rather than here.
+            </p>
+            <div className="flex gap-2">
+              <Button disabled={busy || !name.trim()} onClick={add}>
+                {busy ? "Adding…" : "Add header"}
+              </Button>
+              <Button
+                variant="ghost" disabled={busy}
+                onClick={() => { setAdding(false); setName(""); setDescription(""); }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button variant="secondary" onClick={() => setAdding(true)}>
+            Add a header
+          </Button>
+        ))}
+
+        {!mayAdminister && headers.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No headers have been added to this server.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function DiscoveryResult({ diff }: { diff: MCPDiff }) {
   const added = diff.added ?? [];
   const changed = diff.changed ?? [];

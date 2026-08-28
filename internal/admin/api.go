@@ -491,6 +491,10 @@ func (s *Server) routes() {
 	// credentials, which is not a read of local state.
 	api("POST /api/mcp-servers/{name}/discover", s.handleDiscoverMCPServer, auth.CapAdmin)
 	api("PATCH /api/mcp-servers/{name}/tools/{tool}", s.handleClassifyMCPTool, auth.CapAdmin)
+	// Declaring a header decides what credential this host sends to a third
+	// party, so it is an admin capability like the import that preceded it.
+	api("POST /api/mcp-servers/{name}/headers", s.handleAddMCPServerHeader, auth.CapAdmin)
+	api("DELETE /api/mcp-servers/{name}/headers/{header}", s.handleRemoveMCPServerHeader, auth.CapAdmin)
 	// The public catalogue. Administrator rather than operator because
 	// browsing it makes this host reach a third party, which is a request an
 	// operator should not be able to cause; what comes back is public.
@@ -708,7 +712,11 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, endpointsResponse{
 		Aggregate: s.connectURL(r.Context(), "/mcp"),
-		PerPlugin: s.connectURL(r.Context(), "/mcp/{name}"),
+		// {plugin} rather than {name}: the placeholder is shown to an operator
+		// beside the route that serves it, and internal/mcp/host.go registers
+		// that route as /mcp/{plugin}. Two spellings of one path read as two
+		// paths.
+		PerPlugin: s.connectURL(r.Context(), "/mcp/{plugin}"),
 	})
 }
 

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spoked/mcpd/internal/mcpservers"
@@ -92,6 +94,23 @@ type MCPServerView struct {
 	Pending  int `json:"pending"`
 	Active   int `json:"enabled_tools"`
 	Disabled int `json:"disabled"`
+	// ExtraHeaders are the headers an operator added because the published
+	// document declared none. Names and whether each is a credential; never a
+	// value, which lives encrypted in settings and is not read back.
+	ExtraHeaders []MCPHeaderView `json:"extra_headers"`
+	// DeclaresNoCredential reports a readable document that names no header
+	// and no variable of its own. It is not a claim that the server is open --
+	// it is the reason the page offers to add a header, and the difference
+	// between an operator who knows to go and find a key and one who reads an
+	// empty settings form as "nothing to fill in".
+	DeclaresNoCredential bool `json:"declares_no_credential"`
+}
+
+// MCPHeaderView is one operator-added header, without its value.
+type MCPHeaderView struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Secret      bool   `json:"secret"`
 }
 
 // MCPServers lists every imported server.
@@ -117,6 +136,17 @@ func (a *App) MCPServers(ctx context.Context) ([]MCPServerView, error) {
 			view.Title = srv.Parsed.DisplayTitle()
 			view.Description = srv.Parsed.Description
 			view.Version = srv.Parsed.Version
+			if remote, err := srv.Parsed.Remote(); err == nil {
+				view.DeclaresNoCredential = len(remote.Headers) == 0 && len(remote.Variables) == 0
+			}
+		}
+		view.ExtraHeaders = []MCPHeaderView{}
+		for _, h := range srv.ExtraHeaders {
+			view.ExtraHeaders = append(view.ExtraHeaders, MCPHeaderView{
+				Name:        h.Name,
+				Description: h.Input.Description,
+				Secret:      h.Input.IsSecret,
+			})
 		}
 		tools, err := a.mcpStore.Tools(ctx, srv.Name)
 		if err != nil {
@@ -163,6 +193,19 @@ func (a *App) ImportMCPServer(ctx context.Context, actor, name string, document 
 		}
 	}
 
+	// A paste that is a client config is converted rather than refused. It is
+	// the file an operator actually has -- their editor's mcpServers block --
+	// and telling them it declares no $schema answers a question they did not
+	// ask. What comes back is a server.json, judged by exactly the checks
+	// below, so nothing is admitted here that a paste could not be.
+	if mcpservers.LooksLikeClientConfig(document) {
+		converted, err := clientConfigDocument(name, document)
+		if err != nil {
+			return err
+		}
+		document = converted
+	}
+
 	doc, err := mcpservers.Parse(document)
 	if err != nil {
 		return err
@@ -195,7 +238,91 @@ func (a *App) ImportMCPServer(ctx context.Context, actor, name string, document 
 	return nil
 }
 
-// RemoveMCPServer forgets a server, its tool snapshot and its settings.
+// clientConfigDocument picks one server out of a pasted client config.
+//
+// A config holds several servers and an import records one, so the name the
+// operator typed selects which -- the field is already on the form, and asking
+// for it twice would be asking the same question in two places. A file holding
+// exactly one server needs no such choice.
+//
+// Every refusal names the entries the file did contain. An operator who pasted
+// the wrong file, or one whose servers all run local commands, learns which
+// from the message rather than from an empty list afterwards.
+func clientConfigDocument(name string, raw []byte) ([]byte, error) {
+	entries, err := mcpservers.ParseClientConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	usable := make([]mcpservers.ClientConfigEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.Document != nil {
+			usable = append(usable, e)
+		}
+	}
+
+	// Exactly one server, and the operator's name is this host's name for it.
+	if len(usable) == 1 && (len(entries) == 1 || name == "" || name == usable[0].Name) {
+		return usable[0].Document, nil
+	}
+
+	for _, e := range usable {
+		if e.Name == name {
+			return e.Document, nil
+		}
+	}
+
+	// Named an entry that exists but cannot be imported: say why, once, about
+	// the one they asked for.
+	for _, e := range entries {
+		if e.Name != name || e.Document != nil {
+			continue
+		}
+		msg := fmt.Sprintf("%q in that configuration %s", e.Name, e.Reason)
+		if e.Suggestion != "" {
+			msg += "; " + e.Suggestion
+		}
+		return nil, errors.New(msg)
+	}
+
+	if len(usable) == 0 {
+		return nil, fmt.Errorf("that configuration holds %s, and none of them can be "+
+			"reached from here: %s", plural(len(entries), "server"),
+			clientConfigSummary(entries))
+	}
+	return nil, fmt.Errorf("that configuration holds %s. Set the name to the one "+
+		"to add: %s", plural(len(usable), "usable server"), clientConfigNames(usable))
+}
+
+func clientConfigNames(entries []mcpservers.ClientConfigEntry) string {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, strconv.Quote(e.Name))
+	}
+	return strings.Join(names, ", ")
+}
+
+// clientConfigSummary says what became of each entry, shortest useful form.
+func clientConfigSummary(entries []mcpservers.ClientConfigEntry) string {
+	parts := make([]string, 0, len(entries))
+	for _, e := range entries {
+		part := fmt.Sprintf("%q %s", e.Name, e.Reason)
+		if e.Suggestion != "" {
+			part += " (" + e.Suggestion + ")"
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "one " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// RemoveMCPServer forgets a server, its tool snapshot and its settings.// RemoveMCPServer forgets a server, its tool snapshot and its settings.
 //
 // The settings go with it for the same reason a compiled-in instance's do: a
 // name reused later must not silently inherit someone else's credentials.
@@ -240,7 +367,10 @@ func (a *App) RemoveMCPServer(ctx context.Context, actor, name string) error {
 	// the operator never filled in has nothing to record the removal of, and
 	// the history is read by people trying to work out what changed.
 	if srv.Parsed != nil {
-		if fields, err := mcpremote.Fields(srv.Parsed); err == nil {
+		// Effective rather than Parsed: an operator-added header has a stored
+		// credential too, and leaving it behind is the reuse-of-a-name hazard
+		// this sweep exists to prevent.
+		if fields, err := mcpremote.Fields(srv.Effective()); err == nil {
 			for _, f := range fields {
 				key := settings.PluginSettingKey(name, f.Key)
 				if _, set, err := a.settings.Get(ctx, key); err != nil || !set {
@@ -368,12 +498,95 @@ func (a *App) ClassifyMCPTool(ctx context.Context, actor, server, tool, hash str
 }
 
 // mcpFields returns the settings one imported server asks for.
+// AddMCPServerHeader declares a header the published document did not.
+//
+// This is the operator's answer to a document that says nothing about
+// credentials. It records only the declaration; the value is typed on the
+// settings page afterwards, into the field this creates, and is encrypted
+// there like every other stored credential.
+func (a *App) AddMCPServerHeader(ctx context.Context, actor, server, name, description string, secret bool) error {
+	srv, ok := a.mcpServer(server)
+	if !ok {
+		return fmt.Errorf("no remote MCP server named %q", server)
+	}
+	if srv.Parsed == nil {
+		return fmt.Errorf("%q was imported in a server.json format this build "+
+			"no longer reads; remove it and import it again", server)
+	}
+	if err := mcpservers.CheckHeaderName(name); err != nil {
+		return err
+	}
+	// Refused rather than silently ignored. WithHeaders lets the publisher's
+	// own declaration win, so accepting this would store a row that changes
+	// nothing and leave an operator waiting for a field that never appears.
+	if remote, err := srv.Parsed.Remote(); err == nil {
+		for _, h := range remote.Headers {
+			if strings.EqualFold(h.Name, name) {
+				return fmt.Errorf("the document already declares the header %q; "+
+					"fill its value in on the settings page", h.Name)
+			}
+		}
+	}
+
+	if err := a.mcpStore.AddHeader(ctx, actor, server, mcpservers.KeyValueInput{
+		Name: name,
+		Input: mcpservers.Input{
+			Description: description,
+			IsSecret:    secret,
+			IsRequired:  true,
+		},
+	}); err != nil {
+		switch {
+		case errors.Is(err, sqlite.ErrNoSuchServer):
+			return fmt.Errorf("no remote MCP server named %q", server)
+		case errors.Is(err, sqlite.ErrHeaderExists):
+			return fmt.Errorf("%q already has a header named %q", server, name)
+		}
+		return err
+	}
+	if err := a.loadMCPServers(ctx); err != nil {
+		return err
+	}
+	a.log.InfoContext(ctx, "remote MCP server header declared",
+		"server", server, "header", name, "secret", secret, "by", actor)
+	// The settings form and the client both come from the document this just
+	// changed, so what is mounted no longer matches what is configured.
+	if err := a.reconcileInstance(ctx, server); err != nil {
+		a.log.WarnContext(ctx, "could not remount after a header was declared",
+			"server", server, "error", err)
+	}
+	return nil
+}
+
+// RemoveMCPServerHeader withdraws a header an operator declared.
+func (a *App) RemoveMCPServerHeader(ctx context.Context, actor, server, name string) error {
+	if _, ok := a.mcpServer(server); !ok {
+		return fmt.Errorf("no remote MCP server named %q", server)
+	}
+	if err := a.mcpStore.RemoveHeader(ctx, actor, server, name); err != nil {
+		if errors.Is(err, sqlite.ErrNoSuchHeader) {
+			return fmt.Errorf("%q has no header named %q that this host added", server, name)
+		}
+		return err
+	}
+	if err := a.loadMCPServers(ctx); err != nil {
+		return err
+	}
+	a.log.InfoContext(ctx, "remote MCP server header withdrawn",
+		"server", server, "header", name, "by", actor)
+	if err := a.reconcileInstance(ctx, server); err != nil {
+		a.log.WarnContext(ctx, "could not remount after a header was withdrawn",
+			"server", server, "error", err)
+	}
+	return nil
+}
+
 func (a *App) mcpFields(srv mcpservers.Server) ([]settings.Field, error) {
 	if srv.Parsed == nil {
 		return nil, fmt.Errorf("app: %q was imported in a server.json format this "+
 			"build no longer reads", srv.Name)
 	}
-	return mcpremote.Fields(srv.Parsed)
+	return mcpremote.Fields(srv.Effective())
 }
 
 // buildMCPPlugin constructs the runtime for one server.
@@ -410,7 +623,7 @@ func (a *App) buildMCPPlugin(ctx context.Context, srv mcpservers.Server, tools [
 
 	return mcpremote.New(mcpremote.Options{
 		Instance:          srv.Name,
-		Document:          srv.Parsed,
+		Document:          srv.Effective(),
 		Tools:             tools,
 		Values:            values,
 		RequestsPerSecond: rps,

@@ -118,6 +118,9 @@ type ConfigInput struct {
 // understand.
 var ErrUnsupportedSchema = errors.New("mcpservers: unsupported server.json schema")
 
+// ErrClientConfig reports an mcp.json handed to the server.json parser.
+var ErrClientConfig = errors.New("mcpservers: wrong kind of file")
+
 // headerNamePattern is RFC 9110's field-name token.
 var headerNamePattern = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+\-.^_` + "`" + `|~]+$`)
 
@@ -149,6 +152,16 @@ func Parse(raw []byte) (*Document, error) {
 
 	version, known := lookupSchema(strings.TrimSpace(doc.Schema))
 	switch {
+	// Named before the schema is mentioned. A document with no $schema is
+	// usually not a server.json that forgot one -- it is an mcp.json, the
+	// file an editor keeps and the one people reach for first. Answering that
+	// with a list of schema dates describes a format they were not trying to
+	// use and does not say what to do next.
+	case looksLikeClientConfigDoc(raw):
+		return nil, fmt.Errorf("%w: this is an MCP client configuration (an "+
+			"mcpServers file), not a server.json. Paste it into Add server and "+
+			"this host will convert the servers in it that can be reached over "+
+			"HTTP", ErrClientConfig)
 	case strings.TrimSpace(doc.Schema) == "":
 		return nil, fmt.Errorf("%w: the document declares no $schema; this host reads %s",
 			ErrUnsupportedSchema, supportedSchemaList())
@@ -705,4 +718,58 @@ func (d *Document) DisplayTitle() string {
 		return after
 	}
 	return d.Name
+}
+
+// CheckHeaderName reports whether a name can be sent as an HTTP header.
+//
+// Exported because the operator-supplied headers on a server are checked
+// before they are stored, and a name that cannot be sent must be refused where
+// somebody can still fix it rather than at the next dial.
+func CheckHeaderName(name string) error {
+	if !headerNamePattern.MatchString(name) {
+		return fmt.Errorf("mcpservers: %q is not a usable HTTP header name", name)
+	}
+	return nil
+}
+
+// WithHeaders returns a copy of the document with extra headers merged onto
+// its streamable-http remote.
+//
+// It is a copy on purpose. The stored document is the operator's own file and
+// a re-export has to be byte-faithful to what they imported, so what an
+// operator adds afterwards is merged on the way to a client or a settings
+// form -- and is never written back into somebody else's published document.
+//
+// A published header wins over an added one of the same name. The document is
+// the publisher's statement about their own server; an operator adding a
+// header the document already declares has duplicated a field rather than
+// overridden it, and the resolved value would otherwise depend on the order
+// two slices happened to be concatenated in.
+func (d *Document) WithHeaders(extra []KeyValueInput) *Document {
+	if d == nil || len(extra) == 0 {
+		return d
+	}
+	out := *d
+	out.Remotes = make([]Remote, len(d.Remotes))
+	copy(out.Remotes, d.Remotes)
+
+	for i, r := range out.Remotes {
+		if r.Type != TransportStreamableHTTP {
+			continue
+		}
+		declared := make(map[string]bool, len(r.Headers))
+		for _, h := range r.Headers {
+			declared[strings.ToLower(h.Name)] = true
+		}
+		merged := make([]KeyValueInput, len(r.Headers), len(r.Headers)+len(extra))
+		copy(merged, r.Headers)
+		for _, h := range extra {
+			if declared[strings.ToLower(h.Name)] {
+				continue
+			}
+			merged = append(merged, h)
+		}
+		out.Remotes[i].Headers = merged
+	}
+	return &out
 }

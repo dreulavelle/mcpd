@@ -694,6 +694,21 @@ export interface MCPServer {
   pending: number;
   enabled_tools: number;
   disabled: number;
+  /** Headers an operator added because the document declared none. No values. */
+  extra_headers: MCPExtraHeader[];
+  /**
+   * The document names no header and no variable of its own. Not a claim that
+   * the server is open -- four in five published documents look like this, and
+   * most of those answer 401.
+   */
+  declares_no_credential: boolean;
+}
+
+/** One operator-added header. The value lives in settings, encrypted. */
+export interface MCPExtraHeader {
+  name: string;
+  description: string;
+  secret: boolean;
 }
 
 /* -- the public catalogue -------------------------------------------------- */
@@ -1398,6 +1413,24 @@ export const api = {
     request<{ status: string }>(`/api/mcp-servers/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }),
+
+  /**
+   * Declares a header this host must send that the published document did not.
+   * Records the declaration only; the value is typed on the settings page.
+   */
+  addMCPServerHeader: (
+    server: string, name: string, description: string, secret: boolean,
+  ) =>
+    request<{ status: string; note?: string }>(
+      `/api/mcp-servers/${encodeURIComponent(server)}/headers`,
+      { method: "POST", body: JSON.stringify({ name, description, secret }) },
+    ),
+
+  removeMCPServerHeader: (server: string, name: string) =>
+    request<{ status: string }>(
+      `/api/mcp-servers/${encodeURIComponent(server)}/headers/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
 
   /**
    * Records a decision about one tool. A 409 means the far end changed the
