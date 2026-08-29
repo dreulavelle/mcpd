@@ -60,6 +60,11 @@ type Options struct {
 	// stops mcpd for good.
 	Restart func(reason string) error
 
+	// Backup writes and restores this whole instance as one encrypted file.
+	// Nil leaves the routes answering "not configured" rather than offering a
+	// page whose every button fails.
+	Backup BackupService
+
 	// Metrics serves the Prometheus exposition format, or is nil when the
 	// endpoint is switched off. MetricsPublic serves it unauthenticated.
 	Metrics       http.Handler
@@ -436,6 +441,15 @@ func (s *Server) routes() {
 	// even though what it returns is not privileged.
 	api("POST /api/updates/check", s.handleCheckUpdates, auth.CapAdmin)
 	api("POST /api/restart", s.handleRestart, auth.CapAdmin)
+
+	// A backup is the whole instance in one file: every account, every group's
+	// reach, every stored credential. Reading what one *would* hold is already
+	// enough to describe this host's shape, and taking one exports it, so both
+	// are administrator's work rather than an operator's.
+	api("GET /api/backup", s.handleBackupStatus, auth.CapAdmin)
+	api("POST /api/backup", s.handleCreateBackup, auth.CapAdmin)
+	api("POST /api/backup/restore", s.handleStageRestore, auth.CapAdmin)
+	api("DELETE /api/backup/restore", s.handleCancelRestore, auth.CapAdmin)
 
 	// The ChatGPT accounts tunnels connect with. Reading the list is an
 	// operator's business -- it holds no credential, only whether one is set --

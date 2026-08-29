@@ -175,6 +175,28 @@ func parseMigrationName(filename string) (int, string, error) {
 	return version, base[idx+1:], nil
 }
 
+// LatestSchemaVersion reports the highest migration this build carries, which
+// is what the database will be at once Migrate has run.
+//
+// Distinct from SchemaVersion, which reports what a particular database has
+// actually applied. The two differ while an upgrade is pending, and the
+// difference is what tells a restore that an archive is from a newer build
+// than this one: migrations only go forward, so a database past this number
+// has tables this binary does not know and no way back down.
+func LatestSchemaVersion() (int, error) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		return 0, err
+	}
+	latest := 0
+	for _, m := range migrations {
+		if m.version > latest {
+			latest = m.version
+		}
+	}
+	return latest, nil
+}
+
 // SchemaVersion reports the highest applied migration version.
 func SchemaVersion(ctx context.Context, db *DB) (int, error) {
 	var v sql.NullInt64
