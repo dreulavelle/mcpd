@@ -1,6 +1,6 @@
 import {
   Activity, Boxes, ChartColumn, ClipboardCheck, Cog, Gauge, ScrollText,
-  ShieldCheck, Store, Terminal, UserRound, Users, UsersRound, Waypoints,
+  ShieldCheck, Store, Terminal, UserRound, Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
@@ -113,12 +113,13 @@ export const NAV: NavGroup[] = [
     title: "Administer",
     items: [
       {
-        // Authentication, Certificates, API Keys and ChatGPT are tabs on this
-        // page rather than entries of their own. Each is visited rarely -- a
-        // certificate when an upstream first fails a handshake, a key when
-        // somebody writes a script, the providers once, an account per
-        // workspace -- and a sidebar that is read constantly should not spend
-        // a permanent line on each.
+        // Authentication, Users & Groups, API Keys, Certificates and ChatGPT
+        // are tabs on this page rather than entries of their own. Each is
+        // visited rarely -- a certificate when an upstream first fails a
+        // handshake, a key when somebody writes a script, the providers once,
+        // an account per workspace, an account or a group when somebody joins
+        // -- and a sidebar that is read constantly should not spend a
+        // permanent line on each.
         path: "/settings",
         label: "Settings",
         lede: "How this host is configured.",
@@ -138,20 +139,6 @@ export const NAV: NavGroup[] = [
         lede: "How long this host's tools take, and how much they send back.",
         icon: ChartColumn,
         capability: "read",
-      },
-      {
-        path: "/settings/users",
-        label: "Users",
-        lede: "Who can sign in, what they may do, and what they can reach.",
-        icon: Users,
-        capability: "admin",
-      },
-      {
-        path: "/settings/groups",
-        label: "Groups",
-        lede: "A group hands its systems to everyone in it.",
-        icon: UsersRound,
-        capability: "admin",
       },
       {
         // Not read: the log carries every request this host served, which
@@ -236,6 +223,12 @@ const ROUTE_CAPABILITIES: Record<string, Requirement> = {
   "/settings/authentication": "admin",
   "/settings/certificates": "admin",
   "/settings/keys": "admin",
+  // Who may sign in, and what a group hands everyone in it. These were two
+  // sidebar entries beside Settings while also being one tab on it, so the
+  // same page had two ways in that highlighted differently. The tab is the
+  // way in; both paths stay routed because links and bookmarks point at them.
+  "/settings/users": "admin",
+  "/settings/groups": "admin",
   // An account carries a credential, an identity and a grant, so adding one
   // hands a whole ChatGPT workspace a way in. Administrator, for the same
   // reason users and groups are.
@@ -257,10 +250,10 @@ export function capabilityFor(path: string): Requirement | null {
 /**
  * Which sidebar entry a path belongs to, or null for a path in no section.
  *
- * The longest match, not the first. /settings and /settings/users are siblings
- * now, and the first covers the second -- so an entry that merely covers the
- * path is not the entry the person is on, and highlighting every one that does
- * would light up half the menu.
+ * The longest match, not the first. /settings covers every settings tab, and
+ * /plugins covers a plugin's own page -- so an entry that merely covers the
+ * path is not always the entry the person is on, and highlighting every one
+ * that does would light up half the menu.
  */
 export function entryFor(path: string): NavItem | null {
   let matched: NavItem | null = null;

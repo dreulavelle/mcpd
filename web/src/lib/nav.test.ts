@@ -73,20 +73,41 @@ describe("navigation gating", () => {
     const administer = visibleNav(holding("read", "propose", "approve", "admin"))
       .find((g) => g.title === "Administer");
     expect(administer?.items.map((i) => i.label)).toEqual([
-      "Settings", "System", "Performance",
-      "Users", "Groups", "Logs",
+      "Settings", "System", "Performance", "Logs",
     ]);
   });
 
-  // /settings covers /settings/users, and both are in the sidebar now. An
-  // entry that merely covers the path is not the entry somebody is on, and
+  // /settings covers /settings/policy, and both are in the sidebar. An entry
+  // that merely covers the path is not the entry somebody is on, and
   // highlighting every one that does would light up most of the section.
   it("marks one entry current, the deepest that matches", () => {
-    expect(entryFor("/settings/users")?.path).toBe("/settings/users");
+    expect(entryFor("/settings/policy")?.path).toBe("/settings/policy");
     expect(entryFor("/settings")?.path).toBe("/settings");
     // A page beneath an entry still belongs to it.
     expect(entryFor("/plugins/echo")?.path).toBe("/plugins");
     expect(entryFor("/nowhere")).toBeNull();
+  });
+
+  /**
+   * The bug this exists for. Users and Groups were tabs on Settings *and* two
+   * entries beside it, so the same page had two ways in that highlighted
+   * differently, and the sidebar spent two permanent lines on a page visited
+   * when somebody joins.
+   *
+   * Leaving the sidebar must not ungate them. The requirement moved into the
+   * route map rather than being read off an entry that no longer exists --
+   * without that they would fall back to the `/settings` entry covering them,
+   * which asks for read, and two administrative pages would be served to
+   * anybody who could open the console.
+   */
+  it("keeps users and groups out of the sidebar while keeping them admin-only", () => {
+    const labels = visibleNav(holding("read", "propose", "approve", "admin"))
+      .flatMap((g) => g.items.map((i) => i.label));
+    expect(labels).not.toContain("Users");
+    expect(labels).not.toContain("Groups");
+
+    expect(capabilityFor("/settings/users")).toBe("admin");
+    expect(capabilityFor("/settings/groups")).toBe("admin");
   });
 
   // It is in the map because the router judges every path against the map.

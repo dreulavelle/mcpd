@@ -40,7 +40,7 @@ describe("the sidebar", () => {
     mount("user", "/settings");
     expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Policies" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
   });
 
   // Settings is how the host is configured. Your own account is not, and is
@@ -50,31 +50,38 @@ describe("the sidebar", () => {
     expect(screen.queryByRole("link", { name: "Account" })).not.toBeInTheDocument();
   });
 
-  it("shows Users to an administrator", () => {
+  // Users and Groups are one tab on Settings, and were also two entries here.
+  // The same page reached two ways highlighted differently depending on which
+  // way you came, and the sidebar spent two permanent lines on a page visited
+  // when somebody joins. The tab is the way in; the paths stay routed.
+  it("does not list Users or Groups beside Settings", () => {
     mount("admin", "/settings");
-    expect(screen.getByRole("link", { name: "Users" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Groups" })).not.toBeInTheDocument();
   });
 
   // Every administrative page that is in the sidebar is there from anywhere,
   // not only once Settings has been opened. That is the whole point of
   // flattening them.
   //
-  // API Keys is deliberately not in the list any more: it, Certificates and
-  // Authentication became tabs on Settings, because each is visited rarely and
-  // a sidebar read constantly should not spend a line on each.
+  // API Keys is deliberately not in the list: it, Certificates, Authentication
+  // and Users & Groups became tabs on Settings, because each is visited rarely
+  // and a sidebar read constantly should not spend a line on each.
   it("lists the administrative pages from a page in another section", () => {
     mount("admin", "/approvals");
-    for (const label of ["Settings", "Policies", "Users", "Groups"]) {
+    for (const label of ["Settings", "Policies", "System", "Logs"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
-    expect(screen.queryByRole("link", { name: "API Keys" })).not.toBeInTheDocument();
+    for (const label of ["API Keys", "Users", "Groups"]) {
+      expect(screen.queryByRole("link", { name: label })).not.toBeInTheDocument();
+    }
   });
 
-  // /settings covers /settings/users, so both entries match the path. Only the
-  // one somebody is actually on may be marked current.
+  // /settings covers /settings/policy, so both entries match the path. Only
+  // the one somebody is actually on may be marked current.
   it("marks only the deepest matching entry as current", () => {
-    mount("admin", "/settings/users");
-    expect(screen.getByRole("link", { name: "Users" }))
+    mount("admin", "/settings/policy");
+    expect(screen.getByRole("link", { name: "Policies" }))
       .toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Settings" }))
       .not.toHaveAttribute("aria-current");
