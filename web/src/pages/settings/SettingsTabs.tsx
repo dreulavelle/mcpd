@@ -32,6 +32,7 @@ const TABS: Tab[] = [
   { path: "/settings/keys", label: "API Keys", admin: true },
   { path: "/settings/certificates", label: "Certificates", admin: true },
   { path: "/settings/diagnostics", label: "Diagnostics", section: "diagnostics", admin: true },
+  { path: "/settings/backup", label: "Backup & Restore", admin: true },
   { path: "/settings/advanced", label: "Advanced", section: "advanced", admin: true },
 ];
 

@@ -21,6 +21,7 @@ import { ChatGPT } from "@/pages/settings/ChatGPT";
 import { General } from "@/pages/settings/General";
 
 import { Keys } from "@/pages/settings/Keys";
+import { BackupRestore } from "@/pages/settings/BackupRestore";
 import { UsersAndGroups } from "@/pages/settings/UsersAndGroups";
 import { Performance } from "@/pages/performance/Performance";
 import { System } from "@/pages/system/System";
@@ -90,6 +91,7 @@ export function Routes() {
           case "advanced": return <Advanced />;
           case "diagnostics": return <Diagnostics />;
           case "chatgpt": return <ChatGPT />;
+          case "backup": return <BackupRestore />;
           default: return null;
         }
 

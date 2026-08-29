@@ -54,6 +54,7 @@ Run mcpd next to your infrastructure, connect the systems you want ChatGPT to re
 * **Performance visibility** — per-tool latency, error rates, and cache behaviour, so you can see which integration is slow rather than guess.
 * **SSO and local accounts** — sign in with Google, Microsoft Entra, GitHub, or any OIDC provider, alongside local users.
 * **API keys for automation** — give scripts and agents their own identities and permissions.
+* **Backup and restore** — take the whole instance as one encrypted file, put it back, or move it to another machine. See [`docs/backup.md`](docs/backup.md).
 * **Self-hosted and lightweight** — one binary with the dashboard, database, MCP host, and tunnel management built in. No runtime to install, no database server to maintain.
 * **Docker or bare metal** — deploy wherever your infrastructure already lives.
 

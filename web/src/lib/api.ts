@@ -872,6 +872,131 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 
+/** One file inside a backup archive. */
+export interface BackupFile {
+  name: string;
+  size: number;
+  sha256: string;
+  /** False for a file carried for reference. config.yaml is the one. */
+  restored: boolean;
+}
+
+/** What an archive says about the instance it was taken from. */
+export interface BackupManifest {
+  created_at: string;
+  mcpd_version: string;
+  schema_version: number;
+  instance?: string;
+  key_fingerprint?: string;
+  files: BackupFile[];
+}
+
+/** A restore that has been checked and is waiting for a restart. */
+export interface BackupPending {
+  staged_at: string;
+  actor: string;
+  manifest: BackupManifest;
+}
+
+/** What a backup taken now would hold. */
+export interface BackupStatus {
+  database_bytes: number;
+  tls_files: number;
+  config_included: boolean;
+  /**
+   * Identifies the encryption key this host's stored credentials are under. A
+   * restore needs the same one, so this is what to compare between two hosts.
+   */
+  key_fingerprint?: string;
+  schema_version: number;
+  mcpd_version: string;
+  instance?: string;
+  pending?: BackupPending;
+  /** The floor the host enforces, so the form does not name its own number. */
+  min_passphrase: number;
+}
+
+/**
+ * Reads an error out of a response that was not meant to carry JSON.
+ *
+ * The download and upload paths below do not go through `request`, because one
+ * answers with a file and the other sends multipart rather than JSON. They
+ * still have to fail the same way, or a caller would have two kinds of error
+ * to handle for no reason a user could see.
+ */
+async function failure(response: Response): Promise<ApiError> {
+  let body: Record<string, unknown> = {};
+  try {
+    body = await response.json();
+  } catch {
+    // A non-JSON body from a proxy, or from a stream that was cut off.
+  }
+  return new ApiError(
+    response.status,
+    String(body.error ?? `http_${response.status}`),
+    String(body.detail ?? body.error ?? response.statusText),
+    body.correlation_id as string | undefined,
+  );
+}
+
+/** The name the host offered the download under, or a sensible fallback. */
+function filenameFrom(response: Response): string {
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+  return match?.[1] ?? "mcpd-backup.mcpdbak";
+}
+
+/**
+ * Takes a backup and hands back the file.
+ *
+ * A blob rather than a link the browser follows, because the request needs the
+ * CSRF header and a passphrase in its body, and a plain navigation carries
+ * neither.
+ */
+export async function downloadBackup(
+  passphrase: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+
+  const response = await fetch("/api/backup", {
+    method: "POST",
+    headers,
+    credentials: "include",
+    body: JSON.stringify({ passphrase }),
+  });
+  if (!response.ok) throw await failure(response);
+  return { blob: await response.blob(), filename: filenameFrom(response) };
+}
+
+/**
+ * Uploads an archive to be applied on the next start.
+ *
+ * The passphrase is appended first on purpose: the host streams the file
+ * straight into the decryption rather than holding it anywhere, so it has to
+ * have the passphrase by the time the bytes arrive.
+ */
+export async function stageRestore(
+  archive: File,
+  passphrase: string,
+): Promise<{ status: string; pending: BackupPending; note: string }> {
+  const form = new FormData();
+  form.append("passphrase", passphrase);
+  form.append("archive", archive);
+
+  const headers = new Headers();
+  if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+
+  const response = await fetch("/api/backup/restore", {
+    method: "POST",
+    headers,
+    credentials: "include",
+    body: form,
+  });
+  if (!response.ok) throw await failure(response);
+  return response.json();
+}
+
 /** One published release, as the update check reports it. */
 export interface Release {
   version: string;
@@ -1251,6 +1376,11 @@ export const api = {
    */
   restart: () =>
     request<{ status: string; note: string }>("/api/restart", { method: "POST" }),
+
+  backupStatus: () => request<BackupStatus>("/api/backup"),
+
+  cancelRestore: () =>
+    request<void>("/api/backup/restore", { method: "DELETE" }),
 
   saveSettings: (values: Record<string, string>, clearSecrets: string[] = []) =>
     request<SaveResult>("/api/settings", {

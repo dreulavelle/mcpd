@@ -113,13 +113,13 @@ export const NAV: NavGroup[] = [
     title: "Administer",
     items: [
       {
-        // Authentication, Users & Groups, API Keys, Certificates and ChatGPT
-        // are tabs on this page rather than entries of their own. Each is
-        // visited rarely -- a certificate when an upstream first fails a
-        // handshake, a key when somebody writes a script, the providers once,
-        // an account per workspace, an account or a group when somebody joins
-        // -- and a sidebar that is read constantly should not spend a
-        // permanent line on each.
+        // Authentication, Users & Groups, API Keys, Certificates, ChatGPT and
+        // Backup & Restore are tabs on this page rather than entries of their
+        // own. Each is visited rarely -- a certificate when an upstream first
+        // fails a handshake, a key when somebody writes a script, the
+        // providers once, an account per workspace, an account or a group when
+        // somebody joins -- and a sidebar that is read constantly should not
+        // spend a permanent line on each.
         path: "/settings",
         label: "Settings",
         lede: "How this host is configured.",
@@ -229,6 +229,9 @@ const ROUTE_CAPABILITIES: Record<string, Requirement> = {
   // way in; both paths stay routed because links and bookmarks point at them.
   "/settings/users": "admin",
   "/settings/groups": "admin",
+  // A backup carries this host's database and the key that opens its secrets,
+  // and a restore replaces both. Nothing on this page is less than admin.
+  "/settings/backup": "admin",
   // An account carries a credential, an identity and a grant, so adding one
   // hands a whole ChatGPT workspace a way in. Administrator, for the same
   // reason users and groups are.

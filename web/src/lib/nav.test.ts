@@ -215,6 +215,8 @@ describe("the capability a path requires", () => {
     ["/settings/policy", "read"],
     ["/settings/authentication", "admin"],
     ["/settings/users", "admin"],
+    // A backup is the whole instance in one file, and a restore replaces it.
+    ["/settings/backup", "admin"],
     // Groups decide what an account or a key reaches, and keys are
     // credentials that act on this host. Both are the same kind of decision
     // as who has an account, and are gated the same way.
