@@ -45,6 +45,9 @@ type Config struct {
 	// it to run; the first start after an upgrade reads it to import, and
 	// every start after that reads it to warn.
 	legacy *Legacy
+
+	// path is the file this was read from. Set by Load; see Path.
+	path string
 }
 
 // Legacy returns what the file still says about the settings that have moved.
@@ -285,6 +288,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(raw, cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	cfg.path = path
 	// Environment overrides layer over the file, so a container image can vary
 	// a handful of settings without a rewritten config.
 	if err := cfg.applyEnvOverrides(); err != nil {
@@ -360,3 +364,12 @@ func (c *Config) TLSDir() string {
 
 // StorageDir returns the directory holding the database.
 func (c *Config) StorageDir() string { return filepath.Dir(c.Storage.Path) }
+
+// Path is the file this configuration was read from, or empty for one built
+// in memory.
+//
+// Unexported and set by Load rather than a field somebody could set to
+// anything: it is used to carry the file into a backup, and a value that could
+// disagree with where the configuration actually came from would put the wrong
+// file in the archive.
+func (c *Config) Path() string { return c.path }

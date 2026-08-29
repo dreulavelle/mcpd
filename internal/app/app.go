@@ -21,6 +21,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
+	"github.com/spoked/mcpd/internal/backup"
 	"github.com/spoked/mcpd/internal/config"
 	mcphost "github.com/spoked/mcpd/internal/mcp"
 	"github.com/spoked/mcpd/internal/mcpservers"
@@ -79,6 +80,12 @@ type App struct {
 	tunnelCheck   *tunnel.Checker
 	settings      *settings.Store
 	tls           *servertls.Materials
+
+	// backups writes and stages whole-instance archives. keyFingerprint
+	// identifies the settings encryption key its archives are readable under;
+	// empty when this host has no key.
+	backups        *backup.Service
+	keyFingerprint string
 
 	// mcpStore holds the imported remote MCP servers and their tool
 	// snapshots. The cache beside it exists because instances() consults them
@@ -179,6 +186,23 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		return nil, fmt.Errorf("app: create storage directory: %w", err)
 	}
 
+	// Before anything opens the database, because this is the only moment a
+	// restore is safe: the file can be replaced while nothing holds it, no
+	// connection is open, and no component is yet holding state read from it.
+	// A staged restore that fails here stops the start rather than being
+	// skipped -- a host that quietly carried on with the database somebody
+	// asked it to replace would be the worst outcome available.
+	if err := backup.ApplyPending(cfg.StorageDir(), cfg.Storage.Path, log); err != nil {
+		return nil, err
+	}
+	// A backup writes its snapshot to a directory beside the database. One
+	// left behind is a download that was abandoned, and at a cold start there
+	// is nothing writing to it.
+	backup.SweepWorkDirs(cfg.StorageDir(), log)
+	// And the instances past restores replaced. Kept, because a restore is not
+	// undoable any other way; bounded, because each one is a database.
+	backup.PruneSuperseded(cfg.StorageDir(), backup.KeepSuperseded, log)
+
 	db, err := openStorage(ctx, cfg, log)
 	if err != nil {
 		return nil, err
@@ -239,12 +263,17 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			db.Close()
 			return nil, err
 		}
+		// A hash of the key rather than the key, kept so a backup can say
+		// which key its contents are readable under without this process
+		// holding the key anywhere it could be logged or serialised.
+		a.keyFingerprint = backup.Fingerprint(key)
 	} else {
 		log.WarnContext(ctx, "no settings encryption key is configured; "+
 			"secrets cannot be set from the dashboard. "+
 			"Generate one with: openssl rand -base64 32")
 	}
 	a.settings = settings.NewStore(db, cipher, time.Now)
+	a.backups = a.newBackupService(cfg, db, log)
 	// Passed only when there is one. A nil *settings.Cipher handed to an
 	// interface parameter is a non-nil interface holding a nil pointer, which
 	// would get past the store's own guard and panic at the first credential.
@@ -541,6 +570,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 				return a.metrics.Performance
 			}(),
 			Pruner:            a.audit,
+			Backup:            a.backups,
 			PublicURL:         a.publicURL,
 			FrontendPublicURL: a.frontendPublicURL,
 			Accounts:          a.accounts,
