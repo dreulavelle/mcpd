@@ -702,6 +702,23 @@ export interface MCPServer {
    * most of those answer 401.
    */
   declares_no_credential: boolean;
+  /** When this server was last asked what it offers. */
+  discovery: MCPDiscovery;
+}
+
+/**
+ * The age of a server's tool list, and whether checking it is working.
+ *
+ * Three facts because one cannot say the thing that matters when a server
+ * starts failing: `last_succeeded` is how old the tools on screen are and stops
+ * advancing while checks fail, `last_attempted` is when checking last ran, and
+ * `error` is what the last attempt said. Both absent means nothing has asked
+ * this server yet.
+ */
+export interface MCPDiscovery {
+  last_attempted?: string;
+  last_succeeded?: string;
+  error?: string;
 }
 
 /** One operator-added header. The value lives in settings, encrypted. */

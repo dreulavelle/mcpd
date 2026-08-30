@@ -256,6 +256,10 @@ const (
 
 	KeyHistoryRetentionDays = "history.retention_days"
 
+	// How often this host re-asks each remote MCP server what it offers. See
+	// the group below for why it is on by default when the update check is not.
+	KeyDiscoveryIntervalHours = "mcpservers.rediscovery_interval_hours"
+
 	// The host's own runtime configuration. These were once keys in
 	// config.yaml; the file no longer supplies them, and the database is the
 	// only authority for what they are. See docs/architecture.md, "Where
@@ -550,6 +554,33 @@ func schema() []Group {
 					Key: KeyTunnelUpdates, Label: "Mention new versions",
 					Kind: KindBool, Group: "tunnel", Apply: ApplyLive, Default: true,
 					Help: "Nothing updates itself.",
+				},
+			},
+		},
+		{
+			Name:    "mcpservers",
+			Title:   "Remote MCP servers",
+			Section: SectionSettings,
+			Help: "How often this host re-checks what the servers it has " +
+				"imported are offering.",
+			Fields: []Field{
+				{
+					Key: KeyDiscoveryIntervalHours, Label: "Re-check what they offer",
+					Kind: KindInt, Group: "mcpservers", Apply: ApplyLive,
+					Default: 24, Min: intPtr(0), Max: intPtr(720),
+					Unit: "hours",
+					// On by default, unlike the update check, and the difference
+					// is who is being contacted. That reaches a public service
+					// this deployment has no relationship with, so it has to be
+					// agreed to. This re-asks servers the operator imported
+					// deliberately and that mcpd already dials on every tool
+					// call -- no new destination, no new disclosure, and the
+					// alternative is a tool changing under an approval that was
+					// given for something else.
+					Help: "Hours. A server that adds, withdraws or rewrites a tool " +
+						"is only noticed when somebody looks, so this looks on a " +
+						"timer. A changed tool stops being served until it is " +
+						"approved again. Zero checks only when you press Discover.",
 				},
 			},
 		},

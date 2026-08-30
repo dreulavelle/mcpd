@@ -20,6 +20,7 @@ const SERVER: MCPServer = {
   enabled: true, mounted: false, readable: true,
   created_at: "2026-08-01T10:00:00Z", updated_at: "2026-08-20T10:00:00Z",
   pending: 0, enabled_tools: 0, disabled: 0, extra_headers: [], declares_no_credential: false,
+    discovery: {},
 };
 
 const INSTANCE: PluginInstance = {

@@ -23,6 +23,7 @@ const SERVER: MCPServer = {
   disabled: 0,
   extra_headers: [],
   declares_no_credential: true,
+    discovery: {},
 };
 
 function stub(server: Partial<MCPServer> = {}) {
