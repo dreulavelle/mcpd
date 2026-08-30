@@ -258,6 +258,13 @@ const (
 
 	// Whether every tool call is written down, and for how long. See the group
 	// below for why this is separate from the history retention beside it.
+	// Where this host sends its own events, and in what shape. Empty means
+	// nowhere, which is the default; see the group below.
+	KeyNotifyURL    = "notifications.url"
+	KeyNotifyFormat = "notifications.format"
+	KeyNotifyTopic  = "notifications.topic"
+	KeyNotifyToken  = "notifications.token"
+
 	KeyCallsRecord        = "calls.record"
 	KeyCallsRetentionDays = "calls.retention_days"
 
@@ -586,6 +593,49 @@ func schema() []Group {
 						"is only noticed when somebody looks, so this looks on a " +
 						"timer. A changed tool stops being served until it is " +
 						"approved again. Zero checks only when you press Discover.",
+				},
+			},
+		},
+		{
+			Name:    "notifications",
+			Title:   "Notifications",
+			Section: SectionDiagnostics,
+			Help: "Off until you fill in an address. mcpd will tell you when a " +
+				"remote server changes a tool, when a change runs without " +
+				"anybody being asked, and when something stops working. It " +
+				"never asks you to approve anything: that happens where the " +
+				"work is, in the conversation.",
+			Fields: []Field{
+				{
+					Key: KeyNotifyURL, Label: "Send to",
+					Kind: KindSecret, Group: "notifications", Apply: ApplyLive,
+					Placeholder: "https://hooks.slack.com/services/…",
+					// Secret rather than a plain string: a Slack or Discord
+					// webhook URL is a bearer credential wearing an address's
+					// clothes, and anybody holding it can post as this host.
+					Help: "A webhook address. Treated as a credential, because a " +
+						"Slack or Discord webhook URL is one -- anybody who has " +
+						"it can post. Empty sends nothing.",
+				},
+				{
+					Key: KeyNotifyFormat, Label: "Shape",
+					Kind: KindEnum, Group: "notifications", Apply: ApplyLive,
+					Default: "json", Options: []string{"json", "slack", "ntfy"},
+					Help: "Slack also fits Mattermost and Discord's " +
+						"Slack-compatible endpoint. JSON is mcpd's own event, for " +
+						"anything else.",
+				},
+				{
+					Key: KeyNotifyTopic, Label: "ntfy topic",
+					Kind: KindString, Group: "notifications", Apply: ApplyLive,
+					Placeholder: "mcpd-alerts",
+					Help:        "Only used by the ntfy shape.",
+				},
+				{
+					Key: KeyNotifyToken, Label: "Token",
+					Kind: KindSecret, Group: "notifications", Apply: ApplyLive,
+					Help: "Sent as a bearer credential, for a receiver that wants " +
+						"one. Slack and Discord do not; ntfy may.",
 				},
 			},
 		},

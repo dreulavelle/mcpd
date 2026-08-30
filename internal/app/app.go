@@ -26,6 +26,7 @@ import (
 	mcphost "github.com/spoked/mcpd/internal/mcp"
 	"github.com/spoked/mcpd/internal/mcpservers"
 	"github.com/spoked/mcpd/internal/messaging"
+	"github.com/spoked/mcpd/internal/notify"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
@@ -80,6 +81,10 @@ type App struct {
 	tunnelCheck   *tunnel.Checker
 	settings      *settings.Store
 	tls           *servertls.Materials
+
+	// notifier tells an operator about this host's own events. Nil-safe: it
+	// sends nothing until an address is configured.
+	notifier *notify.Notifier
 
 	// bypasses are the windows in which this host stops asking. Read on every
 	// proposal; see activeBypass for why it is not cached.
@@ -284,6 +289,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			"Generate one with: openssl rand -base64 32")
 	}
 	a.settings = settings.NewStore(db, cipher, time.Now)
+	a.notifier = notify.New(log.With("component", "notify"), a.notifyConfig)
 	a.backups = a.newBackupService(cfg, db, log)
 	// Passed only when there is one. A nil *settings.Cipher handed to an
 	// interface parameter is a non-nil interface holding a nil pointer, which
@@ -584,6 +590,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			Backup:            a.backups,
 			Calls:             a.calls,
 			Bypasses:          a.bypasses,
+			BypassOpened:      a.notifyBypassOpened,
+			NotifyTest:        a.sendTestNotification,
 			PublicURL:         a.publicURL,
 			FrontendPublicURL: a.frontendPublicURL,
 			Accounts:          a.accounts,

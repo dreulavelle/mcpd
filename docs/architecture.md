@@ -48,6 +48,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/messaging` | In-process bus and outbox publisher |
 | `internal/cachestore` | The bounded, timed map every cache is built on |
 | `internal/servertls` | Self-signed CA and certificate issuance |
+| `internal/notify` | Telling an operator what happened, when they have said where |
 | `internal/config` | The four keys that stay in a file, and the one-time import of the ones that did not |
 | `sdk` | Building out-of-process plugins |
 

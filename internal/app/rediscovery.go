@@ -120,6 +120,7 @@ func (a *App) rediscoverOne(ctx context.Context, name string) {
 		// things that are this host's problem.
 		a.log.WarnContext(ctx, "scheduled re-check of a remote MCP server failed",
 			"server", name, "error", err)
+		a.notifyDiscoveryFailed(ctx, name, err)
 		return
 	}
 
@@ -135,6 +136,7 @@ func (a *App) rediscoverOne(ctx context.Context, name string) {
 		"server", name,
 		"added", diff.Added, "changed", diff.Changed, "removed", diff.Removed,
 		"note", "an added or changed tool is not served until it is approved")
+	a.notifyToolsChanged(ctx, name, diff)
 }
 
 // rediscoveryActor is who the audit trail and the tool snapshot record for a
