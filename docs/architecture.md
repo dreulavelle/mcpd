@@ -41,7 +41,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/storage/sqlite` | Schema, migrations, every transaction |
 | `internal/tunnel` | The embedded OpenAI tunnel client, one per connector |
 | `internal/settings` | Runtime configuration in the database |
-| `internal/mcpservers` | server.json, and the snapshot of a remote server's tools |
+| `internal/mcpservers` | server.json, and the snapshot of a remote server's tools, with its age |
 | `internal/plugins/mcpremote` | Mounting a remote MCP server as a plugin |
 | `internal/registry` | Browsing the public catalogues of MCP servers |
 | `internal/messaging` | In-process bus and outbox publisher |

@@ -51,6 +51,39 @@ func (a *App) loadMCPServers(ctx context.Context) error {
 	return nil
 }
 
+// recordDiscovery writes down that a server was asked, and how it went.
+//
+// Here rather than in the schedule that calls it, so the Discover button and
+// the timer record the same fact the same way. Were only the timer to record,
+// a manual discovery would leave the timestamp stale and the schedule would
+// re-probe a server somebody had just checked by hand.
+//
+// The cache is refreshed afterwards because loadMCPServers is invalidated by
+// refreshing after every write, and this is one -- without it the dashboard
+// would keep showing the previous attempt's age until something else wrote.
+//
+// Failures here are logged and swallowed. The discovery itself either worked
+// or did not, and that answer belongs to the caller; failing their request
+// because the bookkeeping failed would turn a successful discovery into an
+// error an operator cannot act on.
+func (a *App) recordDiscovery(ctx context.Context, name string, discoveryErr error) {
+	// Its own context and deadline: a discovery cancelled by shutdown must
+	// still record that it was attempted, or the next start reads the server
+	// as one nothing has ever checked and probes it immediately.
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	if err := a.mcpStore.RecordDiscovery(recordCtx, name, time.Now(), discoveryErr); err != nil {
+		a.log.WarnContext(ctx, "could not record a discovery attempt",
+			"server", name, "error", err)
+		return
+	}
+	if err := a.loadMCPServers(recordCtx); err != nil {
+		a.log.WarnContext(ctx, "could not refresh the server cache after a discovery",
+			"server", name, "error", err)
+	}
+}
+
 // mcpServer returns one imported server from the cache.
 func (a *App) mcpServer(name string) (mcpservers.Server, bool) {
 	a.mcpMu.RLock()
@@ -104,6 +137,11 @@ type MCPServerView struct {
 	// between an operator who knows to go and find a key and one who reads an
 	// empty settings form as "nothing to fill in".
 	DeclaresNoCredential bool `json:"declares_no_credential"`
+
+	// Discovery is when this server was last asked what it offers. The tool
+	// list on screen is a snapshot, and without this there is no way to tell a
+	// snapshot taken an hour ago from one taken in March.
+	Discovery mcpservers.Discovery `json:"discovery"`
 }
 
 // MCPHeaderView is one operator-added header, without its value.
@@ -131,6 +169,7 @@ func (a *App) MCPServers(ctx context.Context) ([]MCPServerView, error) {
 			CreatedAt:     srv.CreatedAt,
 			UpdatedAt:     srv.UpdatedAt,
 			Readable:      srv.Parsed != nil,
+			Discovery:     srv.Discovery,
 		}
 		if srv.Parsed != nil {
 			view.Title = srv.Parsed.DisplayTitle()
@@ -432,6 +471,12 @@ func (a *App) DiscoverMCPServer(ctx context.Context, actor, name string) (mcpser
 	// first discovery runs in -- so discovery cannot depend on one being there.
 	probe, err := a.buildMCPPlugin(ctx, srv, nil)
 	if err != nil {
+		// From here on the attempt has begun, so it is recorded whether or not
+		// it works. Everything above this point is a bad argument -- no such
+		// server, a document this build cannot read -- and recording those as
+		// failed discoveries would put an operator's typo in the column that
+		// says whether the far end is answering.
+		a.recordDiscovery(ctx, name, err)
 		return mcpservers.Diff{}, err
 	}
 	defer func() {
@@ -445,13 +490,16 @@ func (a *App) DiscoverMCPServer(ctx context.Context, actor, name string) (mcpser
 
 	seen, err := probe.Discover(dialCtx)
 	if err != nil {
+		a.recordDiscovery(ctx, name, err)
 		return mcpservers.Diff{}, err
 	}
 
 	diff, err := a.mcpStore.Snapshot(ctx, actor, name, seen)
 	if err != nil {
+		a.recordDiscovery(ctx, name, err)
 		return mcpservers.Diff{}, err
 	}
+	a.recordDiscovery(ctx, name, nil)
 	a.log.InfoContext(ctx, "remote MCP server discovered",
 		"server", name, "by", actor, "offered", len(seen),
 		"added", len(diff.Added), "changed", len(diff.Changed), "removed", len(diff.Removed))

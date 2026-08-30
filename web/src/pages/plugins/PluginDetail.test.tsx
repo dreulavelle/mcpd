@@ -21,6 +21,7 @@ const SERVER: MCPServer = {
   pending: 1,
   enabled_tools: 1,
   disabled: 0, extra_headers: [], declares_no_credential: false,
+    discovery: {},
 };
 
 function tool(overrides: Partial<MCPTool> = {}): MCPTool {
