@@ -1051,6 +1051,29 @@ export interface Caller {
   plugins?: string[];
 }
 
+/** One window in which this host approves changes without asking. */
+export interface Bypass {
+  id: string;
+  plugin?: string;
+  ceiling: string;
+  reason?: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string;
+  /** Computed by the host: a window closes by the clock, not by a stored flag. */
+  active: boolean;
+  seconds_left: number;
+  /** How many changes it let through, counted from the operations it authorised. */
+  approved: number;
+}
+
+export interface BypassStatus {
+  active: boolean;
+  current?: Bypass;
+  recent: Bypass[];
+  max_minutes: number;
+}
+
 /** One published release, as the update check reports it. */
 export interface Release {
   version: string;
@@ -1430,6 +1453,17 @@ export const api = {
    */
   restart: () =>
     request<{ status: string; note: string }>("/api/restart", { method: "POST" }),
+
+  bypassStatus: () => request<BypassStatus>("/api/approval-policy/bypass"),
+
+  openBypass: (body: {
+    minutes: number; ceiling: string; reason: string; plugin?: string;
+  }) => request<Bypass>("/api/approval-policy/bypass", {
+    method: "POST", body: JSON.stringify(body),
+  }),
+
+  revokeBypasses: () =>
+    request<{ closed: number }>("/api/approval-policy/bypass", { method: "DELETE" }),
 
   calls: (params: {
     principal?: string; plugin?: string; outcome?: string;
