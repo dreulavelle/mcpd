@@ -138,6 +138,10 @@ func (s *Server) handleOpenBypass(w http.ResponseWriter, r *http.Request) {
 		"bypass", b.ID, "principal", actor, "plugin", b.Plugin,
 		"ceiling", b.Ceiling, "expires", b.ExpiresAt, "reason", b.Reason)
 
+	if s.opts.BypassOpened != nil {
+		s.opts.BypassOpened(r.Context(), b)
+	}
+
 	s.writeJSON(w, r, http.StatusCreated, viewBypass(b, time.Now(), 0))
 }
 

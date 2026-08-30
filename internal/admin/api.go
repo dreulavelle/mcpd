@@ -64,6 +64,15 @@ type Options struct {
 	// they are not configured.
 	Bypasses Bypasses
 
+	// BypassOpened is told when a window is opened, so the host can announce
+	// it. A function rather than the notifier itself: this package should be
+	// able to report the event without being able to invent others.
+	BypassOpened func(ctx context.Context, b *operations.Bypass)
+
+	// NotifyTest sends one event to whatever address is configured, for the
+	// button that answers "did I type the URL correctly".
+	NotifyTest func(ctx context.Context) error
+
 	// Calls is the record of who called what, or nil when this host is not
 	// keeping one.
 	Calls CallLedger
@@ -444,6 +453,11 @@ func (s *Server) routes() {
 	api("GET /api/approval-policy/bypass", s.handleBypassStatus, auth.CapRead)
 	api("POST /api/approval-policy/bypass", s.handleOpenBypass, auth.CapAdmin)
 	api("DELETE /api/approval-policy/bypass", s.handleRevokeBypasses, auth.CapAdmin)
+
+	// Sending a test reaches an outside service with this host's own address
+	// in hand, which is an administrator's act even though what it sends
+	// carries nothing privileged.
+	api("POST /api/notifications/test", s.handleTestNotification, auth.CapAdmin)
 	// Starting and stopping a tunnel changes what an external service can
 	// reach, so it takes administrator rights rather than read.
 	// Version, resources and releases are readable by anyone who may read.
