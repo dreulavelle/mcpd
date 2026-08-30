@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -13,11 +14,11 @@ import (
 // to raise. Summing them into "calls" makes both look like ordinary use.
 func TestPerformanceCountsOutcomesSeparately(t *testing.T) {
 	m := NewMetrics()
-	m.ToolCall("graylog", "search_messages", OutcomeOK, 100*time.Millisecond)
-	m.ToolCall("graylog", "search_messages", OutcomeOK, 200*time.Millisecond)
-	m.ToolCall("graylog", "search_messages", OutcomeError, 50*time.Millisecond)
-	m.ToolCall("graylog", "search_messages", OutcomeDenied, 0)
-	m.ToolCall("graylog", "search_messages", OutcomeRateLimited, 0)
+	m.ToolCall(context.Background(), "graylog", "search_messages", OutcomeOK, 100*time.Millisecond)
+	m.ToolCall(context.Background(), "graylog", "search_messages", OutcomeOK, 200*time.Millisecond)
+	m.ToolCall(context.Background(), "graylog", "search_messages", OutcomeError, 50*time.Millisecond)
+	m.ToolCall(context.Background(), "graylog", "search_messages", OutcomeDenied, 0)
+	m.ToolCall(context.Background(), "graylog", "search_messages", OutcomeRateLimited, 0)
 
 	p := m.Performance()
 	if len(p.Tools) != 1 {

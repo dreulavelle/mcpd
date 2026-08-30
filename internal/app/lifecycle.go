@@ -100,6 +100,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.startWorker("sso-state-housekeeper", workerCtx, a.purgeSSOStates)
 
 	a.startWorker("history-retention", workerCtx, a.pruneHistory)
+	a.startWorker("call-retention", workerCtx, a.pruneToolCalls)
 	// Asks each imported remote server what it offers, on a timer, so a tool
 	// that changed under an approval is caught without anybody looking.
 	a.startWorker("mcp-rediscovery", workerCtx, a.rediscover)

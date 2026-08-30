@@ -81,6 +81,11 @@ type App struct {
 	settings      *settings.Store
 	tls           *servertls.Materials
 
+	// calls is the record of who called what. Distinct from the audit trail,
+	// which is for administrative acts and mutations inside the transaction
+	// that made them, and from the counters, which cannot name a caller.
+	calls *sqlite.ToolCallStore
+
 	// backups writes and stages whole-instance archives. keyFingerprint
 	// identifies the settings encryption key its archives are readable under;
 	// empty when this host has no key.
@@ -235,6 +240,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		ops:        sqlite.NewOperationStore(db, time.Now),
 		outbox:     sqlite.NewOutboxStore(db, time.Now),
 		audit:      sqlite.NewAuditStore(db),
+		calls:      sqlite.NewToolCallStore(db, time.Now),
 		mcpStore:   sqlite.NewMCPServerStore(db, time.Now),
 		mcpServers: map[string]mcpservers.Server{},
 		catalog:    buildCatalog(cfg.Catalog, metrics, log),
@@ -435,7 +441,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	a.buildSSO()
 
 	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService,
-		inlinePolicyFunc(policyFn), a.metrics)
+		inlinePolicyFunc(policyFn), a.newToolObserver())
 
 	// What an instance covers, in the operator's words, for the tool
 	// descriptions and the connect-time instructions. Read at each build
@@ -571,6 +577,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			}(),
 			Pruner:            a.audit,
 			Backup:            a.backups,
+			Calls:             a.calls,
 			PublicURL:         a.publicURL,
 			FrontendPublicURL: a.frontendPublicURL,
 			Accounts:          a.accounts,

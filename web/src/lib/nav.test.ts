@@ -208,6 +208,9 @@ describe("the capability a path requires", () => {
     ["/", "read"],
     ["/approvals", "read"],
     ["/audit", "read"],
+    // A row names which systems were reached and by whom, which is wider than
+    // any one account's own work. Same reasoning as the log.
+    ["/activity", "admin"],
     ["/plugins", "read"],
     ["/tunnels", "read"],
     ["/marketplace", "admin"],

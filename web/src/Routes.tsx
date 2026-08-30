@@ -21,6 +21,7 @@ import { ChatGPT } from "@/pages/settings/ChatGPT";
 import { General } from "@/pages/settings/General";
 
 import { Keys } from "@/pages/settings/Keys";
+import { Activity } from "@/pages/activity/Activity";
 import { BackupRestore } from "@/pages/settings/BackupRestore";
 import { UsersAndGroups } from "@/pages/settings/UsersAndGroups";
 import { Performance } from "@/pages/performance/Performance";
@@ -70,6 +71,9 @@ export function Routes() {
 
       case "performance":
         return <Performance />;
+
+      case "activity":
+        return <Activity />;
 
       case "logs":
         return <Logs />;
