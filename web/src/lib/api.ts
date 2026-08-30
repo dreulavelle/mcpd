@@ -1454,6 +1454,11 @@ export const api = {
   restart: () =>
     request<{ status: string; note: string }>("/api/restart", { method: "POST" }),
 
+  testNotification: () =>
+    request<{ status: string; note: string }>("/api/notifications/test", {
+      method: "POST",
+    }),
+
   bypassStatus: () => request<BypassStatus>("/api/approval-policy/bypass"),
 
   openBypass: (body: {

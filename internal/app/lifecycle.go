@@ -101,6 +101,9 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.startWorker("history-retention", workerCtx, a.pruneHistory)
 	a.startWorker("call-retention", workerCtx, a.pruneToolCalls)
+	// Delivers queued events. Started always: it costs one idle goroutine and
+	// it means switching notifications on takes effect without a restart.
+	a.startWorker("notifier", workerCtx, a.notifier.Run)
 	// Asks each imported remote server what it offers, on a timer, so a tool
 	// that changed under an approval is caught without anybody looking.
 	a.startWorker("mcp-rediscovery", workerCtx, a.rediscover)
