@@ -160,7 +160,7 @@ func label(e Entry) string {
 // used, on every row it lists.
 //
 // Optional, in the way Revalidating is: a source that does not implement it
-// publishes no figure, which is three of the four today. It is declared by the
+// publishes no figure, which is every source but one. It is declared by the
 // source rather than inferred from the rows, because SortMostUsed has to
 // decide which catalogues to ask *before* it holds any rows to look at -- and
 // because "this page happened to carry no figure" and "this catalogue

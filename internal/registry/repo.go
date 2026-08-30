@@ -333,14 +333,20 @@ func (r *Repo) List(ctx context.Context, q Query) (Page, error) {
 	if limit <= 0 || limit > len(matched) {
 		limit = len(matched)
 	}
+	// Where to resume. The cursor is an entry's name, and the entry it names
+	// may be gone -- a refresh between two pages is exactly what this source
+	// does on a timer. So it resumes at the first name that sorts at or after
+	// the cursor rather than at an exact match: falling back to the start
+	// would hand a paging caller the first page again, with the same cursor
+	// on it, and a client that walked to the end would never get there.
+	//
+	// Entries are sorted by name, which is what makes the search meaningful
+	// and what makes the resumption point stable across a refresh.
 	start := 0
 	if q.Cursor != "" {
-		for i, e := range matched {
-			if e.Name == q.Cursor {
-				start = i
-				break
-			}
-		}
+		start = sort.Search(len(matched), func(i int) bool {
+			return matched[i].Name >= q.Cursor
+		})
 	}
 	end := min(start+limit, len(matched))
 
