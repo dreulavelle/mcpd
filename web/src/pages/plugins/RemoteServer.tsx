@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
-  api, ApiError, type MCPDiff, type MCPServer, type MCPTool, type MCPToolState,
+  api, ApiError, type MCPDiff, type MCPDiscovery, type MCPServer, type MCPTool,
+  type MCPToolState,
 } from "@/lib/api";
 import { when, whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
@@ -239,6 +240,8 @@ function Body({ server, tools, toolsError, onChanged }: {
         }
       >
         {toolsError && <Notice tone="problem">{toolsError}</Notice>}
+
+        <Discovered discovery={server.discovery} />
 
         {tools === null && !toolsError ? (
           <Loading rows={4} />
@@ -555,5 +558,44 @@ function DiscoveryResult({ diff }: { diff: MCPDiff }) {
         )}
       </div>
     </Notice>
+  );
+}
+
+/**
+ * How old this tool list is, and whether checking is still working.
+ *
+ * The page shows a stored snapshot rather than asking the server on every
+ * load, which is the right trade -- a dashboard should not dial somebody
+ * else's service because a tab was opened. It does mean the list can be old
+ * without looking old, so the age is stated rather than implied.
+ *
+ * A failing check is said out loud, and separately from the age. "Confirmed
+ * four days ago" and "the last three checks failed" are different facts, and
+ * an operator deciding whether to trust what is on screen needs both.
+ */
+function Discovered({ discovery }: { discovery?: MCPDiscovery }) {
+  if (!discovery) return null;
+
+  const { last_succeeded: succeeded, last_attempted: attempted, error } = discovery;
+
+  if (!attempted && !succeeded) {
+    return (
+      <p className="mb-3 text-xs text-muted-foreground">
+        Not checked yet. mcpd re-checks on a schedule; press Discover to ask now.
+      </p>
+    );
+  }
+
+  return (
+    <p className="mb-3 text-xs text-muted-foreground">
+      {succeeded
+        ? <>This list was confirmed {when(succeeded)}.</>
+        : <>This list has never been confirmed.</>}
+      {error && (
+        <span className="text-problem">
+          {" "}The last check{attempted ? ` (${when(attempted)})` : ""} failed: {error}
+        </span>
+      )}
+    </p>
   );
 }

@@ -168,7 +168,8 @@ func (s *MCPServerStore) SetEnabled(ctx context.Context, actor, name string, ena
 // List returns every imported server, by name.
 func (s *MCPServerStore) List(ctx context.Context) ([]mcpservers.Server, error) {
 	rows, err := s.db.Reader().QueryContext(ctx, `
-		SELECT name, document, schema_version, transport, url, enabled, created_at, updated_at
+		SELECT name, document, schema_version, transport, url, enabled, created_at, updated_at,
+		       last_attempt_at, last_discovered_at, last_discovery_error
 		  FROM mcp_servers
 		 ORDER BY name`)
 	if err != nil {
@@ -321,7 +322,8 @@ func (s *MCPServerStore) RemoveHeader(ctx context.Context, actor, server, name s
 // Get returns one server.
 func (s *MCPServerStore) Get(ctx context.Context, name string) (mcpservers.Server, bool, error) {
 	row := s.db.Reader().QueryRowContext(ctx, `
-		SELECT name, document, schema_version, transport, url, enabled, created_at, updated_at
+		SELECT name, document, schema_version, transport, url, enabled, created_at, updated_at,
+		       last_attempt_at, last_discovered_at, last_discovery_error
 		  FROM mcp_servers WHERE name = ?`, name)
 	srv, err := scanServer(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -345,15 +347,27 @@ func scanServer(row scanner) (mcpservers.Server, error) {
 		doc                  string
 		enabled              int
 		createdAt, updatedAt int64
+		// Null on a server the schedule has not reached yet, which is every
+		// row until the first pass after this column arrived.
+		attempted, succeeded sql.NullInt64
+		discoveryErr         sql.NullString
 	)
 	if err := row.Scan(&srv.Name, &doc, &srv.SchemaVersion, &srv.Transport, &srv.URL,
-		&enabled, &createdAt, &updatedAt); err != nil {
+		&enabled, &createdAt, &updatedAt,
+		&attempted, &succeeded, &discoveryErr); err != nil {
 		return mcpservers.Server{}, err
 	}
 	srv.Document = json.RawMessage(doc)
 	srv.Enabled = enabled == 1
 	srv.CreatedAt = time.UnixMilli(createdAt)
 	srv.UpdatedAt = time.UnixMilli(updatedAt)
+	if attempted.Valid {
+		srv.Discovery.LastAttempted = time.UnixMilli(attempted.Int64)
+	}
+	if succeeded.Valid {
+		srv.Discovery.LastSucceeded = time.UnixMilli(succeeded.Int64)
+	}
+	srv.Discovery.Error = discoveryErr.String
 
 	// A document this build can no longer read is reported as an unparsed
 	// server rather than an error: the row still has to be listable and
@@ -362,6 +376,46 @@ func scanServer(row scanner) (mcpservers.Server, error) {
 		srv.Parsed = parsed
 	}
 	return srv, nil
+}
+
+// RecordDiscovery writes the outcome of one discovery attempt.
+//
+// Called for a failure as well as a success, because the schedule is driven by
+// when a server was last *tried*: without recording the failure, a server that
+// is refusing connections would be due on every pass and retried as fast as
+// the loop comes round.
+//
+// A success clears the error and moves both timestamps. A failure moves only
+// the attempt, so the age shown beside the tools stays the age of the tools.
+func (s *MCPServerStore) RecordDiscovery(ctx context.Context, name string, at time.Time, discoveryErr error) error {
+	var result sql.Result
+	var err error
+
+	if discoveryErr == nil {
+		result, err = s.db.Writer().ExecContext(ctx, `
+			UPDATE mcp_servers
+			   SET last_attempt_at = ?, last_discovered_at = ?, last_discovery_error = NULL
+			 WHERE name = ?`, at.UnixMilli(), at.UnixMilli(), name)
+	} else {
+		// Bounded by the package's own truncate, which also maps an empty
+		// message to NULL -- so a failure with nothing to say is recorded the
+		// same as no failure, which is the only sensible reading of it.
+		// Written from whatever the far end said, and an upstream that returns
+		// a page of HTML should not put a page of HTML in the database.
+		result, err = s.db.Writer().ExecContext(ctx, `
+			UPDATE mcp_servers
+			   SET last_attempt_at = ?, last_discovery_error = ?
+			 WHERE name = ?`, at.UnixMilli(), truncate(discoveryErr.Error(), 500), name)
+	}
+	if err != nil {
+		return fmt.Errorf("sqlite: record discovery for %s: %w", name, err)
+	}
+	// Not an error. A server removed while its discovery was in flight is an
+	// ordinary race, and the removal is the outcome that should win.
+	if n, _ := result.RowsAffected(); n == 0 {
+		return nil
+	}
+	return nil
 }
 
 // Tools returns a server's whole snapshot, in every state.
