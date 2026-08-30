@@ -1,11 +1,14 @@
 package app
 
 import (
+	"context"
 	"log/slog"
+	"time"
 
 	"github.com/spoked/mcpd/internal/admin"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/registry"
+	"github.com/spoked/mcpd/internal/settings"
 )
 
 // buildCatalog assembles the public catalogues this deployment browses.
@@ -53,7 +56,7 @@ import (
 // process did not get more memory by being pointed at more catalogues.
 //
 // Nothing here reaches the network. A source is constructed, not contacted.
-func buildCatalog(cfg config.Catalog, observe registry.CacheObserver, log *slog.Logger) *registry.Index {
+func buildCatalog(cfg config.Catalog, repo *registry.Repo, observe registry.CacheObserver, log *slog.Logger) *registry.Index {
 	if !cfg.Enabled() {
 		return nil
 	}
@@ -62,6 +65,19 @@ func buildCatalog(cfg config.Catalog, observe registry.CacheObserver, log *slog.
 	options := registry.CacheOptions{Store: shared, Observe: observe}
 
 	var sources []registry.Client
+	// The operator's own list goes first, which is a statement about trust
+	// rather than about freshness. Preference order decides which copy of a
+	// server survives deduplication, and a document somebody here put under
+	// review beats every third party's description of the same thing --
+	// including the publisher's own registration, because the question this
+	// list answers is not "what exists" but "what are we allowed to run".
+	//
+	// Uncached, unlike the four below. It is already held in memory and
+	// refreshed on its own schedule; a cache in front would be a second
+	// staleness with no fetch to save.
+	if repo != nil {
+		sources = append(sources, repo)
+	}
 	if cfg.Official {
 		sources = append(sources, registry.NewCached(
 			registry.NewOfficial(registry.OfficialOptions{UserAgent: agent}), options))
@@ -97,8 +113,8 @@ func buildCatalog(cfg config.Catalog, observe registry.CacheObserver, log *slog.
 			registry.NewSmithery(registry.SmitheryOptions{UserAgent: agent}), options))
 	}
 	if len(sources) == 0 {
-		// Every configured source dropped out -- today that means PulseMCP
-		// alone, switched on with a credential that would not resolve. Nil
+		// Every configured source dropped out -- PulseMCP switched on with a
+		// credential that would not resolve, and no self-hosted list. Nil
 		// rather than an empty index, so the handler says "no server catalogue
 		// is configured" instead of failing every browse.
 		return nil
@@ -126,5 +142,67 @@ func catalogAPI(catalog *registry.Index) admin.CatalogAPI {
 		List:   catalog.List,
 		Get:    catalog.Get,
 		Source: catalog.Source,
+	}
+}
+
+// refreshRepoCatalog re-reads the operator's own list on a schedule.
+//
+// On a timer rather than on each browse, for the reason the entries are served
+// from memory: opening the Marketplace should not depend on a git host being
+// up. A fetch that fails leaves the previous list in place and is reported
+// through the source's status, so the page can say the list is not being
+// confirmed rather than showing an empty catalogue.
+//
+// The loop wakes far more often than it fetches, and that is the point. An
+// operator who has just pasted an address expects the list to appear, not to
+// arrive in six hours -- so whether a fetch is due is decided per pass from
+// when the last one succeeded, rather than by how long the timer was set to
+// when the loop last went round. Waking on a short tick and doing nothing is
+// what makes changing the setting take effect.
+func (a *App) refreshRepoCatalog(ctx context.Context) error {
+	const tick = time.Minute
+
+	// A first pass shortly after start, before the tick, so a host that has
+	// been restarted has its list back promptly.
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+		}
+		timer.Reset(tick)
+
+		if !a.repoCatalog.Configured(ctx) {
+			continue
+		}
+		status := a.repoCatalog.Status(ctx)
+		hours := a.settings.Int(ctx, settings.KeyCatalogRepoHours, 6)
+
+		switch {
+		case status.FetchedAt.IsZero():
+			// Never read: an address that has just been set, or a restart.
+		case hours <= 0:
+			// Zero is "only on a restart", and one has already happened.
+			continue
+		case time.Since(status.FetchedAt) < time.Duration(hours)*time.Hour:
+			continue
+		}
+
+		if err := a.repoCatalog.Refresh(ctx); err != nil {
+			a.log.WarnContext(ctx, "could not read your own server catalogue; "+
+				"the previous list is still being offered", "error", err)
+			continue
+		}
+		// The index answers from an enumeration it holds for a day, so a list
+		// that has just changed has to drop it -- otherwise a server somebody
+		// added to their catalogue appears up to a day later.
+		if a.catalog != nil {
+			a.catalog.Invalidate()
+		}
+		a.log.InfoContext(ctx, "read your own server catalogue",
+			"entries", a.repoCatalog.Status(ctx).Entries)
 	}
 }
