@@ -34,7 +34,7 @@ func bypassRequest(mut func(*AutoApprovalRequest)) AutoApprovalRequest {
 func TestBypassAuthorisesWhatTheRulesDeclined(t *testing.T) {
 	declined := AutoApprovalDecision{Reason: "no rule covers this change"}
 
-	got := applyBypass(declined, openBypass(nil), bypassRequest(nil), bypassNow)
+	got := applyBypass(declined, []*Bypass{openBypass(nil)}, bypassRequest(nil), bypassNow)
 	if !got.AutoApprove {
 		t.Fatalf("the bypass did not authorise: %s", got.Reason)
 	}
@@ -59,7 +59,7 @@ func TestBypassDoesNotOverrideAnExclusion(t *testing.T) {
 	}
 	declined := AutoApprovalDecision{Rule: exclusion, Reason: "excluded"}
 
-	got := applyBypass(declined, openBypass(nil), bypassRequest(nil), bypassNow)
+	got := applyBypass(declined, []*Bypass{openBypass(nil)}, bypassRequest(nil), bypassNow)
 	if got.AutoApprove {
 		t.Fatal("a bypass overrode an explicit exclusion")
 	}
@@ -74,7 +74,7 @@ func TestBypassCoversAGrantThatFellShort(t *testing.T) {
 	grant := &AutoApprovalRule{ID: "rule_low", Plugin: "graylog", MaxRisk: RiskLow}
 	declined := AutoApprovalDecision{Rule: grant, Reason: "authorises up to low"}
 
-	got := applyBypass(declined, openBypass(nil), bypassRequest(func(r *AutoApprovalRequest) {
+	got := applyBypass(declined, []*Bypass{openBypass(nil)}, bypassRequest(func(r *AutoApprovalRequest) {
 		r.Risk = RiskMedium
 	}), bypassNow)
 	if !got.AutoApprove {
@@ -155,7 +155,7 @@ func TestBypassNeverReversesAnApproval(t *testing.T) {
 		Reason:      "rule_ok authorises this",
 	}
 	// A window that covers nothing at all.
-	got := applyBypass(approved, openBypass(func(b *Bypass) { b.Plugin = "elsewhere" }),
+	got := applyBypass(approved, []*Bypass{openBypass(func(b *Bypass) { b.Plugin = "elsewhere" })},
 		bypassRequest(nil), bypassNow)
 
 	if !got.AutoApprove {
@@ -171,5 +171,37 @@ func TestNoBypassChangesNothing(t *testing.T) {
 	got := applyBypass(declined, nil, bypassRequest(nil), bypassNow)
 	if got.AutoApprove {
 		t.Fatal("a change was authorised with no bypass open")
+	}
+}
+
+// Two windows scoped to different plugins are not comparable -- neither
+// authorises what the other does. Honouring only one would leave the other
+// listed as open and doing nothing.
+func TestEveryOpenWindowIsConsulted(t *testing.T) {
+	declined := AutoApprovalDecision{Reason: "no rule covers this change"}
+	windows := []*Bypass{
+		openBypass(func(b *Bypass) { b.ID = "byp_other"; b.Plugin = "observium" }),
+		openBypass(func(b *Bypass) { b.ID = "byp_ours"; b.Plugin = "graylog" }),
+	}
+
+	got := applyBypass(declined, windows, bypassRequest(nil), bypassNow)
+	if !got.AutoApprove {
+		t.Fatalf("a change on graylog was not covered: %s", got.Reason)
+	}
+	if got.Bypass.ID != "byp_ours" {
+		t.Errorf("authorised by %s, want the window that actually covers it", got.Bypass.ID)
+	}
+}
+
+// And a change no open window covers is still put to a person.
+func TestNoOpenWindowCoversTheChange(t *testing.T) {
+	declined := AutoApprovalDecision{Reason: "no rule covers this change"}
+	windows := []*Bypass{
+		openBypass(func(b *Bypass) { b.Plugin = "observium" }),
+		openBypass(func(b *Bypass) { b.Plugin = "netbox" }),
+	}
+
+	if got := applyBypass(declined, windows, bypassRequest(nil), bypassNow); got.AutoApprove {
+		t.Fatal("a change was authorised by a window scoped to another plugin")
 	}
 }

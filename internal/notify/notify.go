@@ -80,8 +80,6 @@ type Notifier struct {
 	// host a dropped message rather than an ever-growing backlog, and it must
 	// never be able to slow down the thing that raised the event.
 	queue chan Event
-	once  sync.Once
-	wg    sync.WaitGroup
 
 	// dropped counts what the bound cost, reported once rather than per event
 	// so a dead receiver cannot fill the log either.

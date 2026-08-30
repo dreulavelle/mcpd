@@ -80,7 +80,8 @@ type Entry struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	// Uses is how many times this entry's own catalogue has been asked to
 	// call the server. Absent where the catalogue publishes no such figure,
-	// which is three of the four today.
+	// which is every source but PulseMCP -- including an operator's own list,
+	// which is a list rather than a service and counts nothing.
 	//
 	// A pointer, and that is the point of it. Absent and zero are different
 	// facts -- "nobody has told us" against "nobody has called it" -- and a
@@ -217,7 +218,7 @@ type SourceStatus struct {
 	//
 	// It is on the response so that a dashboard can offer that order for the
 	// catalogues that support it and name them, rather than hard-coding which
-	// of the four does. A source scoped away by the caller is not in this
+	// ones do. A source scoped away by the caller is not in this
 	// list at all, so a consumer that wants the full set reads it from an
 	// unscoped page.
 	Uses bool `json:"uses,omitempty"`
@@ -226,10 +227,11 @@ type SourceStatus struct {
 	//
 	// It exists because a page of ten out of twelve thousand looks exactly
 	// like a catalogue of ten, and an operator who reads the second is
-	// deciding against a thing that is not true. Only two of the four sources
-	// can answer it -- Smithery reports a totalCount and Docker's whole
-	// catalogue is held in one document, so its length is the count -- which
-	// is why what the dashboard renders from these is a floor and says so.
+	// deciding against a thing that is not true. Few sources can answer it --
+	// Smithery reports a totalCount, Docker's whole catalogue is held in one
+	// document so its length is the count, and an operator's own list is read
+	// whole for the same reason -- which is why what the dashboard renders
+	// from these is a floor and says so.
 	Total int `json:"total,omitempty"`
 	// Error says what went wrong, when OK is false. It is a third party's
 	// failure, not this host's, and the operator deciding whether to wait
@@ -484,8 +486,8 @@ func SuggestName(catalogueName string) string {
 // would read as "free to add".
 //
 // Deliberately not read from what a catalogue claims about the server. Two of
-// the four have a field for it, they spell it differently, and one of those
-// two fills it in only for a paying tenant -- so a value taken from upstream
+// the public ones have a field for it, they spell it differently, and one of
+// those two fills it in only for a paying tenant -- so a value taken from upstream
 // would mean three different things across a merged page and nothing at all on
 // most rows. A fact this host works out for itself is the one that is there
 // for every row and means one thing.

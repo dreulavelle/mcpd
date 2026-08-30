@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -81,12 +82,14 @@ func (s *BypassStore) Open(ctx context.Context, actor string, minutes int, plugi
 	return b, nil
 }
 
-// Active returns the window in force now, or nil.
+// Active returns every window in force now.
 //
-// The most permissive one when several are open: two windows are two people
-// saying "stop asking", and honouring only the narrower would make the second
-// request appear to have done nothing.
-func (s *BypassStore) Active(ctx context.Context) (*operations.Bypass, error) {
+// All of them, not the broadest. Two windows scoped to different plugins are
+// not comparable -- neither authorises what the other does -- so picking one
+// would silently ignore the other, and the operator who opened it would see it
+// listed as open and doing nothing. The caller checks each; the first that
+// covers a change decides.
+func (s *BypassStore) Active(ctx context.Context) ([]*operations.Bypass, error) {
 	now := s.now()
 	rows, err := s.db.Reader().QueryContext(ctx, `
 		SELECT id, created_at, expires_at, created_by, reason, plugin, ceiling
@@ -98,44 +101,6 @@ func (s *BypassStore) Active(ctx context.Context) (*operations.Bypass, error) {
 	}
 	defer rows.Close()
 
-	var best *operations.Bypass
-	for rows.Next() {
-		b, err := scanBypass(rows)
-		if err != nil {
-			return nil, err
-		}
-		if best == nil || broader(b, best) {
-			best = b
-		}
-	}
-	return best, rows.Err()
-}
-
-// broader reports whether a authorises more than b.
-//
-// One covering every plugin beats one scoped to a single instance; between two
-// of the same scope, the higher ceiling wins.
-func broader(a, b *operations.Bypass) bool {
-	if (a.Plugin == "") != (b.Plugin == "") {
-		return a.Plugin == ""
-	}
-	return a.Ceiling.AtLeast(b.Ceiling) && a.Ceiling != b.Ceiling
-}
-
-// List returns recent windows, open or not, newest first.
-func (s *BypassStore) List(ctx context.Context, limit int) ([]*operations.Bypass, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
-	rows, err := s.db.Reader().QueryContext(ctx, `
-		SELECT id, created_at, expires_at, created_by, reason, plugin, ceiling
-		  FROM approval_bypasses
-		 ORDER BY created_at DESC LIMIT ?`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("sqlite: list bypasses: %w", err)
-	}
-	defer rows.Close()
-
 	out := []*operations.Bypass{}
 	for rows.Next() {
 		b, err := scanBypass(rows)
@@ -144,7 +109,26 @@ func (s *BypassStore) List(ctx context.Context, limit int) ([]*operations.Bypass
 		}
 		out = append(out, b)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Broadest first, so a caller showing one shows the one that authorises
+	// most -- which is the one worth warning about.
+	sort.SliceStable(out, func(i, j int) bool { return broader(out[i], out[j]) })
+	return out, nil
+}
+
+// broader reports whether a authorises more than b.
+//
+// A partial order, and only used for presentation: one covering every plugin
+// beats one scoped to a single instance, and between two of the same shape the
+// higher ceiling wins. Two windows on different plugins are simply not
+// comparable, which is why nothing decides an authorisation with this.
+func broader(a, b *operations.Bypass) bool {
+	if (a.Plugin == "") != (b.Plugin == "") {
+		return a.Plugin == ""
+	}
+	return a.Ceiling.AtLeast(b.Ceiling) && a.Ceiling != b.Ceiling
 }
 
 // RevokeAll closes every open window, returning how many it closed.

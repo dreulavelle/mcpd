@@ -1276,11 +1276,11 @@ func (a *App) approvalPolicy(ctx context.Context) operations.Policy {
 			// answer: "nothing" in a dropdown is the empty level here.
 			Unmatched: inlineCeiling(a.settings.FieldString(ctx, settings.KeyApprovalUnmatched)),
 		},
-		Bypass: a.activeBypass(ctx),
+		Bypasses: a.activeBypasses(ctx),
 	}
 }
 
-// activeBypass reads the window in force, or nil.
+// activeBypasses reads every window in force.
 //
 // Queried rather than cached, because the thing that makes a bypass safe is
 // that it stops applying the moment it expires -- and a cache is a place for a
@@ -1290,17 +1290,17 @@ func (a *App) approvalPolicy(ctx context.Context) operations.Policy {
 //
 // A failure to read is a failure to find one, which leaves every change going
 // to a person. That is the direction to fail in.
-func (a *App) activeBypass(ctx context.Context) *operations.Bypass {
+func (a *App) activeBypasses(ctx context.Context) []*operations.Bypass {
 	if a.bypasses == nil {
 		return nil
 	}
-	b, err := a.bypasses.Active(ctx)
+	open, err := a.bypasses.Active(ctx)
 	if err != nil {
 		a.log.WarnContext(ctx, "could not read whether a bypass is open; "+
 			"changes will be put to a person", "error", err)
 		return nil
 	}
-	return b
+	return open
 }
 
 // inlineCeiling turns the stored enum into the policy's own vocabulary.

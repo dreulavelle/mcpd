@@ -239,3 +239,64 @@ The operation's audit trail carries an `operation.approved` entry whose actor is
 
 The rule is recorded in full rather than by id alone, so the entry stays true
 after the rule is edited or deleted.
+
+## Stopping the asking, for a while
+
+Settings → Policies → **Stop asking, for a while**.
+
+A rule is a standing decision that a class of change does not need a person. A
+bypass is somebody saying *not for the next hour*, and it exists because the
+alternative is worse: without it, the only way to stop being asked is to widen
+a rule, and a widened rule has no expiry and is still there next month.
+
+So the defining property is that it cannot be made permanent. A window lasts
+between 1 and 480 minutes, there is no value meaning "forever", and the bound
+is enforced at the API, in the store, and again when a change is judged against
+it.
+
+### What it cannot do
+
+It is a **weaker** authority than a rule, not a stronger one. Every refusal it
+makes mirrors one the rule set already makes:
+
+| | |
+|---|---|
+| An irreversible mutation | Never. The argument for authorising anything in advance is that a mistake is cheap to correct, and it does not hold where there is no correction. |
+| Critical risk | Never. A rule cannot name a critical ceiling either: a level an operator can opt out of is not a level. |
+| A risk this host does not recognise | Never. An unrecognised classification is exactly the case to put in front of somebody. |
+| **An exclusion** | Never. A rule authorising nothing is somebody writing "never" about a specific action, and an evening's convenience must not cancel it. |
+
+That last one is the important one. A carve-out you wrote most deliberately is
+the one you would least expect a temporary window to override, so it does not.
+
+A bypass also never makes a change *less* likely to be approved: a decision the
+rules already authorised is returned untouched, and the rule that authorised it
+is still what the trail names.
+
+### What it is recorded as
+
+A change a window let through records `bypass:<id>` as its authority, never a
+rule id. "A rule authorised this" and "somebody had switched the asking off"
+are different facts about how a change came to run, and the trail has to be
+able to tell them apart.
+
+Opening and revoking are both written to the audit trail. How many changes a
+window let through is counted from the operations that name it — there is no
+counter beside the window that could disagree with them.
+
+### Seeing that one is open
+
+A banner appears on **every** page while a window is open, not on the page
+where one is opened. The risk is somebody opening a window, being pulled away,
+and nobody remembering — so it has to be visible from wherever they happen to
+be. It says what the window covers, how long is left, and how many changes it
+has approved so far.
+
+Seeing it needs `read`; opening and closing need `admin`, because that decides
+when the gate is skipped. An operator who cannot close one can still tell that
+it is open, which is the half that matters for noticing.
+
+More than one window can be open at once, and they are not comparable — two
+scoped to different plugins each authorise something the other does not. Every
+open window is consulted; the banner shows the widest and says how many there
+are.

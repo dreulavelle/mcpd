@@ -22,7 +22,7 @@ function bypass(overrides: Partial<Bypass> = {}): Bypass {
 
 function stub(status: Partial<BypassStatus> = {}) {
   vi.spyOn(api, "bypassStatus").mockResolvedValue({
-    active: false, recent: [], max_minutes: 480, ...status,
+    active: false, max_minutes: 480, ...status,
   });
 }
 
