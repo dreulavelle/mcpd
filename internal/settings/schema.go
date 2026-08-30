@@ -256,6 +256,11 @@ const (
 
 	KeyHistoryRetentionDays = "history.retention_days"
 
+	// Whether every tool call is written down, and for how long. See the group
+	// below for why this is separate from the history retention beside it.
+	KeyCallsRecord        = "calls.record"
+	KeyCallsRetentionDays = "calls.retention_days"
+
 	// How often this host re-asks each remote MCP server what it offers. See
 	// the group below for why it is on by default when the update check is not.
 	KeyDiscoveryIntervalHours = "mcpservers.rediscovery_interval_hours"
@@ -581,6 +586,34 @@ func schema() []Group {
 						"is only noticed when somebody looks, so this looks on a " +
 						"timer. A changed tool stops being served until it is " +
 						"approved again. Zero checks only when you press Discover.",
+				},
+			},
+		},
+		{
+			Name:    "calls",
+			Title:   "Call record",
+			Section: SectionSettings,
+			Help: "Who called what. Kept on this host and nowhere else, and " +
+				"never including a call's arguments or its result.",
+			Fields: []Field{
+				{
+					Key: KeyCallsRecord, Label: "Record tool calls",
+					Kind: KindBool, Group: "calls", Apply: ApplyLive,
+					Default: true,
+					Help: "On, because the counters can say a tool was called four " +
+						"hundred times and not who called it, and that is the " +
+						"question an incident asks. A row names the caller, the " +
+						"tool and how it ended -- never what was asked for.",
+				},
+				{
+					Key: KeyCallsRetentionDays, Label: "Keep calls for",
+					Kind: KindInt, Group: "calls", Apply: ApplyLive,
+					Default: 30, Min: intPtr(0), Max: intPtr(3650),
+					Unit: "days",
+					Help: "Days. Separate from the history above because this " +
+						"gains a row every time an assistant reads anything, and " +
+						"that fills a disk faster than administrative history " +
+						"does. Zero keeps everything.",
 				},
 			},
 		},

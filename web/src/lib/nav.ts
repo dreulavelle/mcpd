@@ -1,6 +1,6 @@
 import {
   Activity, Boxes, ChartColumn, ClipboardCheck, Cog, Gauge, ScrollText,
-  ShieldCheck, Store, Terminal, UserRound, Waypoints,
+  ListChecks, ShieldCheck, Store, Terminal, UserRound, Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
@@ -68,6 +68,17 @@ export const NAV: NavGroup[] = [
         lede: "Which changes can run without asking anyone.",
         icon: ShieldCheck,
         capability: "read",
+      },
+      {
+        // Beside Approvals and Audit because the three answer one question
+        // between them: what happened. Admin rather than read, for the reason
+        // the log is -- a row names which systems were reached and by whom,
+        // which is a wider view than any one account's own work.
+        path: "/activity",
+        label: "Activity",
+        lede: "Every tool call this host served, and who made it.",
+        icon: ListChecks,
+        capability: "admin",
       },
       {
         path: "/audit",
