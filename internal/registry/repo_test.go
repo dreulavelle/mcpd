@@ -244,3 +244,44 @@ func TestRepoSearchAndPaging(t *testing.T) {
 		t.Errorf("second page = %d entries, cursor %q", len(second.Entries), second.NextCursor)
 	}
 }
+
+// A refresh between two pages removes the entry a cursor names. Resuming at
+// the start would hand the caller page one again with the same cursor on it,
+// and a client walking to the end would never get there.
+func TestRepoPagingSurvivesAnEntryDisappearing(t *testing.T) {
+	repo, _, _ := repoServing(t, archiveOf(t, map[string]string{
+		"c/a.json": serverDoc("io.example/a"),
+		"c/b.json": serverDoc("io.example/b"),
+		"c/c.json": serverDoc("io.example/c"),
+	}))
+	if err := repo.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// A cursor naming an entry that is not there, sorting between two that are.
+	page, err := repo.List(context.Background(), Query{Cursor: "io.example/bb", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) != 1 || page.Entries[0].Name != "io.example/c" {
+		t.Fatalf("resumed at %+v, want the first name after the cursor", page.Entries)
+	}
+}
+
+// A cursor past everything is the end, not the beginning.
+func TestRepoCursorPastTheEnd(t *testing.T) {
+	repo, _, _ := repoServing(t, archiveOf(t, map[string]string{
+		"c/a.json": serverDoc("io.example/a"),
+	}))
+	if err := repo.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := repo.List(context.Background(), Query{Cursor: "zz.zzz/zzz", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) != 0 || page.NextCursor != "" {
+		t.Fatalf("page = %+v, want the end", page)
+	}
+}

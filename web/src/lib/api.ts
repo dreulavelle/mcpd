@@ -1069,8 +1069,13 @@ export interface Bypass {
 
 export interface BypassStatus {
   active: boolean;
+  /**
+   * How many windows are open. More than one is possible and they are not
+   * comparable: two scoped to different plugins each authorise something the
+   * other does not, so `current` is the broadest rather than the only one.
+   */
+  open?: number;
   current?: Bypass;
-  recent: Bypass[];
   max_minutes: number;
 }
 

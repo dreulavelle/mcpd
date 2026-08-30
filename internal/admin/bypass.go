@@ -11,8 +11,7 @@ import (
 
 // Bypasses opens, reads and closes the windows in which this host stops asking.
 type Bypasses interface {
-	Active(ctx context.Context) (*operations.Bypass, error)
-	List(ctx context.Context, limit int) ([]*operations.Bypass, error)
+	Active(ctx context.Context) ([]*operations.Bypass, error)
 	Open(ctx context.Context, actor string, minutes int, plugin string, ceiling operations.RiskLevel, reason string) (*operations.Bypass, error)
 	RevokeAll(ctx context.Context, actor string) (int64, error)
 	Approved(ctx context.Context) (map[string]int64, error)
@@ -45,34 +44,35 @@ type openBypassRequest struct {
 	Reason  string `json:"reason"`
 }
 
+// bypassStatus answers "is anything unsupervised right now".
+//
+// Deliberately cheap. Every open dashboard polls this on a timer so the banner
+// can appear without a reload, so the common answer -- nothing is open -- has
+// to cost one indexed read and nothing else. The count of what a window let
+// through scans the operations for their authority, so it is asked for only
+// when there is a window to ask about.
 func (s *Server) bypassStatus(ctx context.Context) (map[string]any, error) {
-	active, err := s.opts.Bypasses.Active(ctx)
+	open, err := s.opts.Bypasses.Active(ctx)
 	if err != nil {
 		return nil, err
 	}
-	recent, err := s.opts.Bypasses.List(ctx, 20)
-	if err != nil {
-		return nil, err
+
+	out := map[string]any{
+		"active":      len(open) > 0,
+		"open":        len(open),
+		"max_minutes": operations.MaxBypassMinutes,
 	}
+	if len(open) == 0 {
+		return out, nil
+	}
+
 	approved, err := s.opts.Bypasses.Approved(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	now := time.Now()
-	views := make([]bypassView, 0, len(recent))
-	for _, b := range recent {
-		views = append(views, viewBypass(b, now, approved[b.ID]))
-	}
-
-	out := map[string]any{
-		"active":      active != nil,
-		"recent":      views,
-		"max_minutes": operations.MaxBypassMinutes,
-	}
-	if active != nil {
-		out["current"] = viewBypass(active, now, approved[active.ID])
-	}
+	// The broadest, which the store sorts first. It is the one worth warning
+	// about; the count beside it says whether there are others.
+	out["current"] = viewBypass(open[0], time.Now(), approved[open[0].ID])
 	return out, nil
 }
 

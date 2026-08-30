@@ -84,6 +84,12 @@ export function BypassControl() {
                 {status.current.created_by}
                 {status.current.reason ? ` — ${status.current.reason}` : ""}.
               </p>
+              {(status.open ?? 1) > 1 && (
+                <p className="text-sm">
+                  {status.open} windows are open. Closing starts the asking
+                  again for all of them.
+                </p>
+              )}
               <p className="text-sm text-muted-foreground">
                 {status.current.approved === 0
                   ? "Nothing has used it yet."

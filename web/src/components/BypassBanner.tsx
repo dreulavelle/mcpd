@@ -59,6 +59,8 @@ export function BypassBanner() {
             Opened by {b.created_by}
             {b.reason ? ` — ${b.reason}` : ""}.
             {b.approved > 0 && ` ${b.approved} so far.`}
+            {(status.open ?? 1) > 1 &&
+              ` ${status.open} windows are open; this is the widest.`}
           </span>
         </div>
         {admin && (

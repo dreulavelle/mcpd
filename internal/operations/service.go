@@ -30,10 +30,14 @@ type Policy struct {
 	// asked at all. Its zero value asks about everything, which is what an
 	// unconfigured deployment must keep doing.
 	AutoApprove AutoApprovalPolicy
-	// Bypass is a window somebody opened to stop being asked, or nil. It is
-	// consulted only after the rules have declined, and it cannot override an
+	// Bypasses are the windows somebody opened to stop being asked. Consulted
+	// only after the rules have declined, and none of them can override an
 	// exclusion; see applyBypass.
-	Bypass *Bypass
+	//
+	// All of them rather than the broadest, because two windows scoped to
+	// different plugins are not comparable -- neither authorises what the
+	// other does -- and choosing between them would leave one open and inert.
+	Bypasses []*Bypass
 }
 
 // applyBypass lets an open window authorise a change the rules declined.
@@ -47,15 +51,18 @@ type Policy struct {
 // A decision the rules already made is returned untouched, so a bypass can
 // never make a change *less* likely to be approved, and the reason recorded
 // when a rule authorised something still names that rule.
-func applyBypass(d AutoApprovalDecision, b *Bypass, req AutoApprovalRequest, now time.Time) AutoApprovalDecision {
-	if d.AutoApprove || b == nil || d.Excluded() {
+func applyBypass(d AutoApprovalDecision, windows []*Bypass, req AutoApprovalRequest, now time.Time) AutoApprovalDecision {
+	if d.AutoApprove || len(windows) == 0 || d.Excluded() {
 		return d
 	}
-	covers, reason := b.Covers(req, now)
-	if !covers {
-		return d
+	for _, b := range windows {
+		covers, reason := b.Covers(req, now)
+		if !covers {
+			continue
+		}
+		return AutoApprovalDecision{AutoApprove: true, Bypass: b, Reason: reason}
 	}
-	return AutoApprovalDecision{AutoApprove: true, Bypass: b, Reason: reason}
+	return d
 }
 
 // Service owns the approval workflow. It is the only thing that moves an
@@ -272,7 +279,7 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 		Reversible: reversible,
 	})
 	now := s.now()
-	decision = applyBypass(decision, policy.Bypass, AutoApprovalRequest{
+	decision = applyBypass(decision, policy.Bypasses, AutoApprovalRequest{
 		Plugin: op.Plugin, Action: op.Action, Principal: op.RequestedBy,
 		Risk: op.Risk, Reversible: reversible,
 	}, now)
