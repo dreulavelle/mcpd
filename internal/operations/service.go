@@ -30,6 +30,32 @@ type Policy struct {
 	// asked at all. Its zero value asks about everything, which is what an
 	// unconfigured deployment must keep doing.
 	AutoApprove AutoApprovalPolicy
+	// Bypass is a window somebody opened to stop being asked, or nil. It is
+	// consulted only after the rules have declined, and it cannot override an
+	// exclusion; see applyBypass.
+	Bypass *Bypass
+}
+
+// applyBypass lets an open window authorise a change the rules declined.
+//
+// Only ever consulted after the rules have had their say, and never allowed to
+// reverse an exclusion. A rule that authorises nothing is somebody writing
+// "never" about a specific action; a window opened to get through an evening
+// must not cancel it, or the carve-out an operator wrote most deliberately
+// would be the one most easily lost.
+//
+// A decision the rules already made is returned untouched, so a bypass can
+// never make a change *less* likely to be approved, and the reason recorded
+// when a rule authorised something still names that rule.
+func applyBypass(d AutoApprovalDecision, b *Bypass, req AutoApprovalRequest, now time.Time) AutoApprovalDecision {
+	if d.AutoApprove || b == nil || d.Excluded() {
+		return d
+	}
+	covers, reason := b.Covers(req, now)
+	if !covers {
+		return d
+	}
+	return AutoApprovalDecision{AutoApprove: true, Bypass: b, Reason: reason}
 }
 
 // Service owns the approval workflow. It is the only thing that moves an
@@ -245,13 +271,27 @@ func (s *Service) autoApprove(ctx context.Context, op *Operation, reversible boo
 		Risk:       op.Risk,
 		Reversible: reversible,
 	})
+	now := s.now()
+	decision = applyBypass(decision, policy.Bypass, AutoApprovalRequest{
+		Plugin: op.Plugin, Action: op.Action, Principal: op.RequestedBy,
+		Risk: op.Risk, Reversible: reversible,
+	}, now)
+
 	if !decision.AutoApprove {
 		s.log.DebugContext(ctx, "this change is being put to a person",
 			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
 			"risk", op.Risk, "reason", decision.Reason)
 		return op
 	}
-	now := s.now()
+	if decision.Bypass != nil {
+		// Warn, not info. A change running because somebody switched the
+		// asking off is the line in the log that explains an approval nobody
+		// remembers giving.
+		s.log.WarnContext(ctx, "a change was authorised by a bypass rather than by a rule",
+			"operation_id", op.ID, "plugin", op.Plugin, "action", op.Action,
+			"risk", op.Risk, "bypass", decision.Bypass.ID,
+			"opened_by", decision.Bypass.CreatedBy, "expires", decision.Bypass.ExpiresAt)
+	}
 	// The same guard every approval passes. A standing rule decides who
 	// authorises, not what may be authorised: an expired proposal is still
 	// expired, and the transition table is still the transition table.

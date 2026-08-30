@@ -81,6 +81,10 @@ type App struct {
 	settings      *settings.Store
 	tls           *servertls.Materials
 
+	// bypasses are the windows in which this host stops asking. Read on every
+	// proposal; see activeBypass for why it is not cached.
+	bypasses *sqlite.BypassStore
+
 	// calls is the record of who called what. Distinct from the audit trail,
 	// which is for administrative acts and mutations inside the transaction
 	// that made them, and from the counters, which cannot name a caller.
@@ -241,6 +245,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		outbox:     sqlite.NewOutboxStore(db, time.Now),
 		audit:      sqlite.NewAuditStore(db),
 		calls:      sqlite.NewToolCallStore(db, time.Now),
+		bypasses:   sqlite.NewBypassStore(db, time.Now),
 		mcpStore:   sqlite.NewMCPServerStore(db, time.Now),
 		mcpServers: map[string]mcpservers.Server{},
 		catalog:    buildCatalog(cfg.Catalog, metrics, log),
@@ -578,6 +583,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			Pruner:            a.audit,
 			Backup:            a.backups,
 			Calls:             a.calls,
+			Bypasses:          a.bypasses,
 			PublicURL:         a.publicURL,
 			FrontendPublicURL: a.frontendPublicURL,
 			Accounts:          a.accounts,
@@ -1243,7 +1249,31 @@ func (a *App) approvalPolicy(ctx context.Context) operations.Policy {
 			// answer: "nothing" in a dropdown is the empty level here.
 			Unmatched: inlineCeiling(a.settings.FieldString(ctx, settings.KeyApprovalUnmatched)),
 		},
+		Bypass: a.activeBypass(ctx),
 	}
+}
+
+// activeBypass reads the window in force, or nil.
+//
+// Queried rather than cached, because the thing that makes a bypass safe is
+// that it stops applying the moment it expires -- and a cache is a place for a
+// closed window to keep authorising changes. A proposal already costs several
+// writes; one indexed read against a table with a handful of rows is not the
+// part worth optimising.
+//
+// A failure to read is a failure to find one, which leaves every change going
+// to a person. That is the direction to fail in.
+func (a *App) activeBypass(ctx context.Context) *operations.Bypass {
+	if a.bypasses == nil {
+		return nil
+	}
+	b, err := a.bypasses.Active(ctx)
+	if err != nil {
+		a.log.WarnContext(ctx, "could not read whether a bypass is open; "+
+			"changes will be put to a person", "error", err)
+		return nil
+	}
+	return b
 }
 
 // inlineCeiling turns the stored enum into the policy's own vocabulary.
