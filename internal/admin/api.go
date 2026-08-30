@@ -60,6 +60,10 @@ type Options struct {
 	// stops mcpd for good.
 	Restart func(reason string) error
 
+	// Calls is the record of who called what, or nil when this host is not
+	// keeping one.
+	Calls CallLedger
+
 	// Backup writes and restores this whole instance as one encrypted file.
 	// Nil leaves the routes answering "not configured" rather than offering a
 	// page whose every button fails.
@@ -446,6 +450,12 @@ func (s *Server) routes() {
 	// reach, every stored credential. Reading what one *would* hold is already
 	// enough to describe this host's shape, and taking one exports it, so both
 	// are administrator's work rather than an operator's.
+	// Who called what. Administrator for the same reason the log is: a row
+	// names which systems were reached and by whom, which is a wider view than
+	// any one account's own work.
+	api("GET /api/calls", s.handleListCalls, auth.CapAdmin)
+	api("GET /api/calls/callers", s.handleListCallers, auth.CapAdmin)
+
 	api("GET /api/backup", s.handleBackupStatus, auth.CapAdmin)
 	api("POST /api/backup", s.handleCreateBackup, auth.CapAdmin)
 	api("POST /api/backup/restore", s.handleStageRestore, auth.CapAdmin)

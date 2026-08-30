@@ -17,7 +17,7 @@ import (
 func metricsDashboard(t *testing.T, role auth.Role, public bool) *Server {
 	t.Helper()
 	m := observability.NewMetrics()
-	m.ToolCall("cnmaestro", "devices", observability.OutcomeOK, 25*time.Millisecond)
+	m.ToolCall(context.Background(), "cnmaestro", "devices", observability.OutcomeOK, 25*time.Millisecond)
 	return NewServer(Options{
 		Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Verifier:      roleVerifier{role: role},
@@ -97,7 +97,7 @@ func TestMetrics_AbsentWhenSwitchedOff(t *testing.T) {
 // when the endpoint is off.
 func TestMetrics_NilRecordsNothingAndDoesNotPanic(t *testing.T) {
 	var m *observability.Metrics
-	m.ToolCall("p", "t", observability.OutcomeOK, time.Second)
+	m.ToolCall(context.Background(), "p", "t", observability.OutcomeOK, time.Second)
 	m.MutationProposal("p", "a", observability.OutcomeRateLimited)
 	m.UpstreamRequest("p", "ok", time.Second)
 	m.CatalogRequest("s", "fresh")

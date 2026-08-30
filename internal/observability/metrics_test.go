@@ -30,10 +30,10 @@ func mustContain(t *testing.T, body string, lines ...string) {
 
 func TestMetrics_ToolCallsCarryPluginToolAndOutcome(t *testing.T) {
 	m := NewMetrics()
-	m.ToolCall("cnmaestro", "devices", OutcomeOK, 50*time.Millisecond)
-	m.ToolCall("cnmaestro", "devices", OutcomeError, time.Second)
-	m.ToolCall("cnmaestro", "alarms", OutcomeRateLimited, 0)
-	m.ToolCall("weather", "getWeather", OutcomeDenied, 0)
+	m.ToolCall(context.Background(), "cnmaestro", "devices", OutcomeOK, 50*time.Millisecond)
+	m.ToolCall(context.Background(), "cnmaestro", "devices", OutcomeError, time.Second)
+	m.ToolCall(context.Background(), "cnmaestro", "alarms", OutcomeRateLimited, 0)
+	m.ToolCall(context.Background(), "weather", "getWeather", OutcomeDenied, 0)
 
 	mustContain(t, expose(t, m),
 		`mcpd_tool_calls_total{outcome="ok",plugin="cnmaestro",tool="devices"} 1`,
@@ -48,15 +48,15 @@ func TestMetrics_ToolCallsCarryPluginToolAndOutcome(t *testing.T) {
 // and hide exactly the latency the histogram exists to show.
 func TestMetrics_RefusedCallsAreCountedButNotTimed(t *testing.T) {
 	m := NewMetrics()
-	m.ToolCall("cnmaestro", "devices", OutcomeRateLimited, 0)
-	m.ToolCall("cnmaestro", "devices", OutcomeDenied, 0)
+	m.ToolCall(context.Background(), "cnmaestro", "devices", OutcomeRateLimited, 0)
+	m.ToolCall(context.Background(), "cnmaestro", "devices", OutcomeDenied, 0)
 
 	body := expose(t, m)
 	if strings.Contains(body, "mcpd_tool_call_duration_seconds_count") {
 		t.Errorf("refused calls were timed:\n%s", body)
 	}
 
-	m.ToolCall("cnmaestro", "devices", OutcomeOK, 100*time.Millisecond)
+	m.ToolCall(context.Background(), "cnmaestro", "devices", OutcomeOK, 100*time.Millisecond)
 	mustContain(t, expose(t, m),
 		`mcpd_tool_call_duration_seconds_count{plugin="cnmaestro",tool="devices"} 1`)
 }
@@ -100,7 +100,7 @@ func TestMetrics_AGaugeThatCannotAnswerReportsNothing(t *testing.T) {
 	m.AddGauge("mcpd_test_unreachable", "A gauge whose source is down.",
 		[]string{"state"},
 		func(context.Context) []Sample { return nil })
-	m.ToolCall("p", "t", OutcomeOK, time.Millisecond)
+	m.ToolCall(context.Background(), "p", "t", OutcomeOK, time.Millisecond)
 
 	body := expose(t, m)
 	if strings.Contains(body, "mcpd_test_unreachable") {
