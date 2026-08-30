@@ -267,6 +267,21 @@ type AutoApprovalDecision struct {
 	// Reason is the explanation, recorded in the audit trail when the
 	// decision was to proceed.
 	Reason string
+	// Bypass is the window that authorised this, when one did. It is set
+	// instead of Rule, never beside it: a change authorised because somebody
+	// had switched the asking off did not match a rule, and recording it as
+	// though it had would put a standing authorisation in the trail that
+	// nobody wrote.
+	Bypass *Bypass
+}
+
+// Excluded reports that a rule refused this outright.
+//
+// An exclusion is somebody writing "never" about a specific action, and it is
+// the one decline a bypass must not override. Distinguished from a grant that
+// merely did not reach far enough, which a bypass may.
+func (d AutoApprovalDecision) Excluded() bool {
+	return d.Rule != nil && d.Rule.authorisesNothing()
 }
 
 // RuleID returns the deciding rule's identifier, or "" when none matched.
@@ -283,6 +298,9 @@ func (d AutoApprovalDecision) RuleID() string {
 // empty for an approval: a change recorded as authorised by nothing is a
 // change the trail cannot explain.
 func (d AutoApprovalDecision) Authority() string {
+	if d.Bypass != nil {
+		return BypassAuthority(d.Bypass.ID)
+	}
 	if d.Rule != nil {
 		return d.Rule.ID
 	}

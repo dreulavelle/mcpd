@@ -60,6 +60,10 @@ type Options struct {
 	// stops mcpd for good.
 	Restart func(reason string) error
 
+	// Bypasses are the windows in which this host stops asking, or nil when
+	// they are not configured.
+	Bypasses Bypasses
+
 	// Calls is the record of who called what, or nil when this host is not
 	// keeping one.
 	Calls CallLedger
@@ -433,6 +437,13 @@ func (s *Server) routes() {
 	// Answering "which rule would apply" computes over configuration and
 	// changes nothing, so it needs no more than reading the rules does.
 	api("POST /api/approval-policy/evaluate", s.handleEvaluateApprovalPolicy, auth.CapRead)
+	// Whether anything is unsupervised right now is readable by anyone who can
+	// see the approval queue: a window nobody can see is worse than no window.
+	// Opening or closing one decides when the gate is skipped, which is the
+	// same right as editing the rules.
+	api("GET /api/approval-policy/bypass", s.handleBypassStatus, auth.CapRead)
+	api("POST /api/approval-policy/bypass", s.handleOpenBypass, auth.CapAdmin)
+	api("DELETE /api/approval-policy/bypass", s.handleRevokeBypasses, auth.CapAdmin)
 	// Starting and stopping a tunnel changes what an external service can
 	// reach, so it takes administrator rights rather than read.
 	// Version, resources and releases are readable by anyone who may read.
