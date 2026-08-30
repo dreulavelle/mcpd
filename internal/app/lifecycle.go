@@ -100,6 +100,9 @@ func (a *App) Run(ctx context.Context) error {
 	a.startWorker("sso-state-housekeeper", workerCtx, a.purgeSSOStates)
 
 	a.startWorker("history-retention", workerCtx, a.pruneHistory)
+	// Asks each imported remote server what it offers, on a timer, so a tool
+	// that changed under an approval is caught without anybody looking.
+	a.startWorker("mcp-rediscovery", workerCtx, a.rediscover)
 
 	// Anything approved while the process was down still needs executing. The
 	// event announcing it was consumed, or never delivered, so a startup scan

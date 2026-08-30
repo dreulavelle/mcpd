@@ -101,6 +101,70 @@ type Server struct {
 	ExtraHeaders []KeyValueInput `json:"extra_headers,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
+
+	// Discovery is when this server was last asked what it offers, and how
+	// that went. Zero on a server nothing has asked yet.
+	Discovery Discovery `json:"discovery"`
+}
+
+// Discovery is what is known about the last time a server was asked for its
+// tools.
+//
+// Three facts rather than one, because a single "last checked" cannot say the
+// thing that matters when a server starts failing. The tools on screen were
+// confirmed at LastSucceeded; the attempt at LastAttempted may have failed;
+// and Error says how. Collapsing them would either hide that checking is
+// failing, or present a failed attempt's timestamp as the age of the data.
+type Discovery struct {
+	// LastAttempted is when discovery last ran, successfully or not. The
+	// schedule reads this, so a server that is refusing connections is retried
+	// on the ordinary interval rather than as fast as the loop comes round.
+	LastAttempted time.Time `json:"last_attempted,omitempty"`
+	// LastSucceeded is when the tools on record were last confirmed. It stops
+	// advancing while a server is failing, which is the honest age of what the
+	// dashboard is showing.
+	LastSucceeded time.Time `json:"last_succeeded,omitempty"`
+	// Error is what the most recent attempt said, empty when it worked.
+	Error string `json:"error,omitempty"`
+}
+
+// MarshalJSON omits a timestamp that has not happened.
+//
+// Written by hand because `omitempty` does not omit a zero time.Time -- it
+// tests emptiness by the zero *value* of the type, and a struct is never
+// empty. Without this a server nothing has ever asked serialises as
+// "0001-01-01T00:00:00Z", the browser reads a present field, and the page
+// says the tool list was confirmed in the year 1 rather than saying it has
+// never been checked.
+func (d Discovery) MarshalJSON() ([]byte, error) {
+	// A named type without the method, so this does not recurse.
+	type wire struct {
+		LastAttempted *time.Time `json:"last_attempted,omitempty"`
+		LastSucceeded *time.Time `json:"last_succeeded,omitempty"`
+		Error         string     `json:"error,omitempty"`
+	}
+	out := wire{Error: d.Error}
+	if !d.LastAttempted.IsZero() {
+		out.LastAttempted = &d.LastAttempted
+	}
+	if !d.LastSucceeded.IsZero() {
+		out.LastSucceeded = &d.LastSucceeded
+	}
+	return json.Marshal(out)
+}
+
+// Stale reports whether a server has not been successfully checked within the
+// window given. A server never checked is stale.
+func (d Discovery) Stale(now time.Time, within time.Duration) bool {
+	return d.LastSucceeded.IsZero() || now.Sub(d.LastSucceeded) > within
+}
+
+// Due reports whether the schedule should try this server now.
+//
+// Judged on the attempt rather than the success, so a server that is down is
+// retried once per interval instead of on every pass.
+func (d Discovery) Due(now time.Time, every time.Duration) bool {
+	return d.LastAttempted.IsZero() || now.Sub(d.LastAttempted) >= every
 }
 
 // Effective is the document as this host acts on it: what the publisher wrote,
