@@ -246,6 +246,23 @@ func (ix *Index) Snapshot(ctx context.Context) (*Snapshot, error) {
 	return ix.current()
 }
 
+// Invalidate drops the held enumeration so the next read rebuilds it.
+//
+// For a source that changes without being asked -- the operator's own list,
+// re-read on its own schedule. Without this the index would keep answering
+// from an enumeration taken before the change, and a server somebody added to
+// their catalogue would appear up to a day later for no reason they could see.
+//
+// It drops rather than rebuilds: enumerating every catalogue is work, and
+// doing it because a file changed would make one source's schedule everybody
+// else's. The next browse pays for it, which is the same deal every other
+// staleness here strikes.
+func (ix *Index) Invalidate() {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	ix.snap = nil
+}
+
 func (ix *Index) current() (*Snapshot, error) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
