@@ -1,6 +1,7 @@
 import { useCallback, useState, type FormEvent } from "react";
 import {
   api, ApiError, type ApiKey, type Group, type Role,
+  type Caller,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Copyable, Loading, Notice, PageHeader } from "@/components/chrome";
@@ -31,6 +32,7 @@ const ROLES: [Role, string][] = [
 export function Keys() {
   const [keys, setKeys] = useState<ApiKey[] | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [activity, setActivity] = useState<Record<string, Caller>>({});
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   // The secret lives here and nowhere else: never in storage, and gone from
@@ -43,6 +45,13 @@ export function Keys() {
       .then((r) => { setKeys(r.keys ?? []); setError(""); })
       .catch(() => setError("Couldn't load keys."));
     api.groups().then((r) => setGroups(r.groups ?? [])).catch(() => undefined);
+    // One request for the page rather than one per key. A host not keeping a
+    // call record answers 501, and the column reads "Nothing yet" -- which is
+    // the truthful thing to say when nothing is being recorded.
+    api.callers(30)
+      .then((r) => setActivity(Object.fromEntries(
+        (r.callers ?? []).map((c) => [c.principal, c]))))
+      .catch(() => setActivity({}));
   }, []);
   usePoll(load, 30_000);
 
@@ -86,13 +95,20 @@ export function Keys() {
                   <TableHead>Name</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Can reach</TableHead>
+                  <TableHead>Has reached</TableHead>
                   <TableHead>Last used</TableHead>
                   <TableHead className="w-px" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {keys.map((k) => (
-                  <KeyRow key={k.id} apiKey={k} notify={notify} onChanged={load} />
+                  <KeyRow
+                    key={k.id}
+                    apiKey={k}
+                    activity={activity[`key:${k.id}`]}
+                    notify={notify}
+                    onChanged={load}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -103,8 +119,31 @@ export function Keys() {
   );
 }
 
-function KeyRow({ apiKey, notify, onChanged }: {
+/**
+ * What a key has actually reached, from the call ledger.
+ *
+ * Empty is a real answer and not a gap: a key that has never called anything
+ * is the clearest candidate for revoking, so it says so rather than showing a
+ * blank cell.
+ */
+function Reached({ activity }: { activity?: Caller }) {
+  if (!activity) {
+    return <span className="text-xs">Nothing yet</span>;
+  }
+  return (
+    <span className="text-xs">
+      {(activity.plugins ?? []).join(", ") || "Nothing yet"}
+      <span className="block text-muted-foreground">
+        {activity.calls} call{activity.calls === 1 ? "" : "s"}
+        {activity.denied > 0 && `, ${activity.denied} refused`}
+      </span>
+    </span>
+  );
+}
+
+function KeyRow({ apiKey, activity, notify, onChanged }: {
   apiKey: ApiKey;
+  activity?: Caller;
   notify: Notify;
   onChanged: () => void;
 }) {
@@ -151,6 +190,13 @@ function KeyRow({ apiKey, notify, onChanged }: {
       </TableCell>
       <TableCell className="text-muted-foreground">
         {reachLabel(apiKey.reaches)}
+      </TableCell>
+      {/* What it is permitted to reach and what it has actually reached are
+          different facts, and the gap between them is the whole of a grant
+          review. A key permitted three integrations that has only ever touched
+          one is the case worth seeing. */}
+      <TableCell className="text-muted-foreground">
+        <Reached activity={activity} />
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">
         {apiKey.last_used_at
