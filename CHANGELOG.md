@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.7.0](https://github.com/dreulavelle/mcpd/compare/v0.6.1...v0.7.0) (2026-08-30)
+
+
+### Features
+
+* **approvals:** a window that stops the asking, and closes on its own ([618acf7](https://github.com/dreulavelle/mcpd/commit/618acf721ce4dc15ad331775b59ba21b1ca69b26))
+* **approvals:** a window that stops the asking, and closes on its own ([06df3c4](https://github.com/dreulavelle/mcpd/commit/06df3c4687abb2d4a664a452dafb9c313cf9d19c))
+* **backup:** take a whole instance as one encrypted file, and put it back ([0bc381d](https://github.com/dreulavelle/mcpd/commit/0bc381d5c12a4c33914c3f2671292a465392285c))
+* **backup:** take a whole instance as one encrypted file, and put it back ([5617a9b](https://github.com/dreulavelle/mcpd/commit/5617a9bb8b1af3925c9492465f018615cf403616))
+* **mcpservers:** re-ask each remote server what it offers, on a timer ([312e91f](https://github.com/dreulavelle/mcpd/commit/312e91f825bd026f76128d7cc30103917ea6ad4d))
+* **mcpservers:** re-ask each remote server what it offers, on a timer ([d49b1e9](https://github.com/dreulavelle/mcpd/commit/d49b1e900fca92313cbb980cfcb0d041cee2b654))
+* **notify:** tell an operator what happened, and never ask them to approve it ([ad86393](https://github.com/dreulavelle/mcpd/commit/ad86393f85fe1b5d1be877f5e3d68b896f4a2e2b))
+* **notify:** tell an operator what happened, and never ask them to approve it ([3cfbca3](https://github.com/dreulavelle/mcpd/commit/3cfbca3d85b1514ebe67c7b75388cab6c1814757))
+* **observability:** record who called what, and show it ([4150e98](https://github.com/dreulavelle/mcpd/commit/4150e9845a1860cefd4ac120f97ee4bce29255de))
+* **observability:** record who called what, and show it ([5e6862b](https://github.com/dreulavelle/mcpd/commit/5e6862b62af98b18fc08afda019377015e0bec58))
+* reach MCP servers whose documents declare no credential, and import client configs ([#99](https://github.com/dreulavelle/mcpd/issues/99)) ([478359a](https://github.com/dreulavelle/mcpd/commit/478359a46059d16840434839bfa5afcae27d593c))
+* **registry:** a catalogue of your own, fetched from wherever you keep it ([42c7aa2](https://github.com/dreulavelle/mcpd/commit/42c7aa2c5eccdc9055f8f2566413c7c485f97462))
+* **registry:** a catalogue of your own, fetched from wherever you keep it ([46e2b7a](https://github.com/dreulavelle/mcpd/commit/46e2b7a5c151e7fed183b073b7e53c8f91c9567d))
+
+
+### Fixes
+
+* **dashboard:** let the Settings tab be the only way into users and groups ([e12233a](https://github.com/dreulavelle/mcpd/commit/e12233a72219241bc5dc381c6900cca71b508a02))
+* three bugs a review of the last four features turned up, and their docs ([cf6ed42](https://github.com/dreulavelle/mcpd/commit/cf6ed4232c275de36f5a2251ec495feb9a083d19))
+* three bugs a review of the last four features turned up, and their docs ([12632ea](https://github.com/dreulavelle/mcpd/commit/12632ea0901825ff493fde54e868a16b187a5131))
+
 ## [0.6.1](https://github.com/dreulavelle/mcpd/compare/v0.6.0...v0.6.1) (2026-08-27)
 
 
