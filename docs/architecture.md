@@ -44,7 +44,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/settings` | Runtime configuration in the database |
 | `internal/mcpservers` | server.json, and the snapshot of a remote server's tools, with its age |
 | `internal/plugins/mcpremote` | Mounting a remote MCP server as a plugin |
-| `internal/registry` | Browsing the public catalogues of MCP servers |
+| `internal/registry` | Browsing the public catalogues of MCP servers, and the operator's own |
 | `internal/messaging` | In-process bus and outbox publisher |
 | `internal/cachestore` | The bounded, timed map every cache is built on |
 | `internal/servertls` | Self-signed CA and certificate issuance |

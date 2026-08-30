@@ -258,6 +258,12 @@ const (
 
 	// Whether every tool call is written down, and for how long. See the group
 	// below for why this is separate from the history retention beside it.
+	// An operator's own catalogue of servers they permit here, fetched as a
+	// tarball from wherever they keep it under review.
+	KeyCatalogRepoURL   = "catalog.repo_url"
+	KeyCatalogRepoToken = "catalog.repo_token"
+	KeyCatalogRepoHours = "catalog.repo_refresh_hours"
+
 	// Where this host sends its own events, and in what shape. Empty means
 	// nowhere, which is the default; see the group below.
 	KeyNotifyURL    = "notifications.url"
@@ -593,6 +599,40 @@ func schema() []Group {
 						"is only noticed when somebody looks, so this looks on a " +
 						"timer. A changed tool stops being served until it is " +
 						"approved again. Zero checks only when you press Discover.",
+				},
+			},
+		},
+		{
+			Name:    "catalog",
+			Title:   "Your own catalogue",
+			Section: SectionSettings,
+			Help: "A list of the servers you permit here, kept where you keep " +
+				"things under review. The public catalogues answer what exists " +
+				"in the world; this answers what is allowed on this host.",
+			Fields: []Field{
+				{
+					Key: KeyCatalogRepoURL, Label: "Archive address",
+					Kind: KindString, Group: "catalog", Apply: ApplyLive,
+					Placeholder: "https://api.github.com/repos/you/catalog/tarball/main",
+					Help: "A gzipped tar archive holding server.json documents. " +
+						"GitHub serves one at /repos/{owner}/{repo}/tarball/{ref}; " +
+						"GitLab and Gitea have their own archive paths, and any " +
+						"file server will do. Empty adds no catalogue.",
+				},
+				{
+					Key: KeyCatalogRepoToken, Label: "Token",
+					Kind: KindSecret, Group: "catalog", Apply: ApplyLive,
+					Help: "For a private repository. Sent as a bearer credential, " +
+						"and dropped if the address redirects to another host.",
+				},
+				{
+					Key: KeyCatalogRepoHours, Label: "Re-read every",
+					Kind: KindInt, Group: "catalog", Apply: ApplyLive,
+					Default: 6, Min: intPtr(0), Max: intPtr(720),
+					Unit: "hours",
+					Help: "Hours. A fetch that fails leaves the previous list in " +
+						"place, so a git host being down does not empty your " +
+						"catalogue. Zero re-reads only on a restart.",
 				},
 			},
 		},

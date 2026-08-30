@@ -82,6 +82,10 @@ type App struct {
 	settings      *settings.Store
 	tls           *servertls.Materials
 
+	// repoCatalog is the operator's own list of permitted servers, or a source
+	// with nothing in it when no address is set.
+	repoCatalog *registry.Repo
+
 	// notifier tells an operator about this host's own events. Nil-safe: it
 	// sends nothing until an address is configured.
 	notifier *notify.Notifier
@@ -253,9 +257,10 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		bypasses:   sqlite.NewBypassStore(db, time.Now),
 		mcpStore:   sqlite.NewMCPServerStore(db, time.Now),
 		mcpServers: map[string]mcpservers.Server{},
-		catalog:    buildCatalog(cfg.Catalog, metrics, log),
-		serving:    make(chan struct{}),
-		health:     observability.NewHealthRegistry(2 * time.Second),
+		catalog:    nil, // built below, once settings can be read
+
+		serving: make(chan struct{}),
+		health:  observability.NewHealthRegistry(2 * time.Second),
 
 		pluginOverrides: sqlite.NewPluginOverrideStore(db, time.Now),
 		overrideCache:   map[string]sqlite.PluginOverride{},
@@ -290,6 +295,20 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	}
 	a.settings = settings.NewStore(db, cipher, time.Now)
 	a.notifier = notify.New(log.With("component", "notify"), a.notifyConfig)
+
+	// Built here rather than in the struct literal above, because both of them
+	// read settings and the store did not exist until this line. The catalogue
+	// contacts nothing at construction, so building it later costs nothing.
+	a.repoCatalog = registry.NewRepo(registry.RepoOptions{
+		UserAgent: "mcpd/" + Version,
+		URL: func(ctx context.Context) string {
+			return a.settings.String(ctx, settings.KeyCatalogRepoURL, "")
+		},
+		Token: func(ctx context.Context) string {
+			return a.settings.String(ctx, settings.KeyCatalogRepoToken, "")
+		},
+	})
+	a.catalog = buildCatalog(cfg.Catalog, a.repoCatalog, metrics, log)
 	a.backups = a.newBackupService(cfg, db, log)
 	// Passed only when there is one. A nil *settings.Cipher handed to an
 	// interface parameter is a non-nil interface holding a nil pointer, which
