@@ -269,7 +269,12 @@ func (g *gaugeSource) Collect(ch chan<- prometheus.Metric) {
 }
 
 // ToolCall records one tool call.
-func (m *Metrics) ToolCall(plugin, tool, outcome string, d time.Duration) {
+// ToolCall counts one call.
+//
+// The context is accepted and ignored on purpose. Who made the call belongs in
+// the ledger, not in a label: one series per credential is unbounded
+// cardinality, and the endpoint would degrade as an operator issues keys.
+func (m *Metrics) ToolCall(_ context.Context, plugin, tool, outcome string, d time.Duration) {
 	if m == nil {
 		return
 	}

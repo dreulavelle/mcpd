@@ -1014,6 +1014,43 @@ export async function stageRestore(
   return response.json();
 }
 
+/**
+ * One recorded tool call.
+ *
+ * Deliberately without arguments or results. A row says a named principal
+ * called a named tool and how it ended; what was asked for is not kept, which
+ * is the same line the logging draws.
+ */
+export interface ToolCall {
+  id: number;
+  at: string;
+  principal: string;
+  role?: string;
+  plugin: string;
+  tool: string;
+  outcome: "ok" | "error" | "denied" | "rate_limited";
+  /**
+   * Microseconds, and absent for a call that never ran — refused by the gate
+   * or by a rate limit. Absent is not zero: an in-process plugin answering in
+   * 63us is a real measurement that rounds to zero milliseconds.
+   */
+  duration_us?: number;
+  correlation_id?: string;
+}
+
+/** One caller's activity, for deciding whether a credential should still exist. */
+export interface Caller {
+  principal: string;
+  role?: string;
+  calls: number;
+  errors: number;
+  denied: number;
+  first_seen: string;
+  last_seen: string;
+  /** What it actually reached, which is not what it is permitted to reach. */
+  plugins?: string[];
+}
+
 /** One published release, as the update check reports it. */
 export interface Release {
   version: string;
@@ -1393,6 +1430,23 @@ export const api = {
    */
   restart: () =>
     request<{ status: string; note: string }>("/api/restart", { method: "POST" }),
+
+  calls: (params: {
+    principal?: string; plugin?: string; outcome?: string;
+    hours?: number; limit?: number; before?: string;
+  } = {}) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== "") q.set(k, String(v));
+    }
+    const query = q.toString();
+    return request<{ calls: ToolCall[]; count: number; next: string }>(
+      `/api/calls${query ? `?${query}` : ""}`);
+  },
+
+  callers: (days = 7) =>
+    request<{ callers: Caller[]; count: number; days: number }>(
+      `/api/calls/callers?days=${days}`),
 
   backupStatus: () => request<BackupStatus>("/api/backup"),
 

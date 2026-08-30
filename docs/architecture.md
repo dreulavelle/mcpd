@@ -35,6 +35,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/auth` | Principals, roles, capabilities, static tokens |
 | `internal/auth/users` | Accounts, passwords, browser sessions, registration |
 | `internal/observability` | Logging, redaction, health, metrics, and the copy of the log the dashboard streams |
+| `internal/storage/sqlite` (`toolcalls.go`) | The call ledger: who called what, and how it ended |
 | `internal/auth/sso` | Signing in through Google, GitHub, Entra, or the operator's own provider |
 | `internal/auth/groups` | Groups, membership, and the one union that decides reach |
 | `internal/auth/apikeys` | Bearer credentials this host issued, and the verifier over them |
@@ -102,6 +103,18 @@ cannot carry parameters, so the thing approved is exactly the thing reviewed.
 issuing an upstream write and recording its result, the operation lands in
 `indeterminate`, not `failed`. Calling it a failure invites a retry, and the
 retry double-applies the change.
+
+**Three questions, three records, and they are not interchangeable.** The
+counters say how often a tool was called and how long it took, aggregated and
+scrapeable — they carry no principal, because one Prometheus series per
+credential is unbounded cardinality. The audit trail says who authorised a
+change, hash-chained, written inside the transaction that made it. The call
+ledger says who called what, one row per call, pruned on its own retention.
+
+None of them can do another's job, and the temptation is always to make one of
+them try. A ledger row carries names and outcomes: never a call's arguments and
+never its result, which is the same line the logging draws and for the same
+reason.
 
 **Access is per plugin.** A credential lists the plugins it may reach.
 Everything else returns 404 rather than 403, so an agent scoped to one
