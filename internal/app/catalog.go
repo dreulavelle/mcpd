@@ -57,9 +57,6 @@ import (
 //
 // Nothing here reaches the network. A source is constructed, not contacted.
 func buildCatalog(cfg config.Catalog, repo *registry.Repo, observe registry.CacheObserver, log *slog.Logger) *registry.Index {
-	if !cfg.Enabled() {
-		return nil
-	}
 	agent := "mcpd/" + Version
 	shared := registry.NewCacheStore(0)
 	options := registry.CacheOptions{Store: shared, Observe: observe}
@@ -75,9 +72,35 @@ func buildCatalog(cfg config.Catalog, repo *registry.Repo, observe registry.Cach
 	// Uncached, unlike the four below. It is already held in memory and
 	// refreshed on its own schedule; a cache in front would be a second
 	// staleness with no fetch to save.
+	//
+	// Added before the switch below and not governed by it. `catalog.enabled`
+	// says whether this host browses the *public* catalogues, which is a
+	// question about reaching third parties; an operator who turned those off
+	// and then wrote their own list has answered it, and disabling the thing
+	// they built on purpose would be silent and unexplainable.
 	if repo != nil {
 		sources = append(sources, repo)
 	}
+	if cfg.Enabled() {
+		sources = append(sources, publicSources(cfg, agent, options, log)...)
+	}
+	if len(sources) == 0 {
+		// Nothing configured at all: no self-hosted list and every public
+		// catalogue off. Nil rather than an empty index, so the handler says
+		// "no server catalogue is configured" instead of failing every browse.
+		return nil
+	}
+	// An index rather than a per-request merge. It enumerates each catalogue
+	// once a day and answers from what it holds, which is what makes a page a
+	// consistent length, a count a count, and a search one rule -- see
+	// registry.Index. Nothing is fetched until somebody opens the Marketplace,
+	// so a host nobody browses pays for none of it.
+	return registry.NewIndex(sources, registry.IndexOptions{Log: log})
+}
+
+// publicSources builds the catalogues this deployment browses on the internet.
+func publicSources(cfg config.Catalog, agent string, options registry.CacheOptions, log *slog.Logger) []registry.Client {
+	var sources []registry.Client
 	if cfg.Official {
 		sources = append(sources, registry.NewCached(
 			registry.NewOfficial(registry.OfficialOptions{UserAgent: agent}), options))
@@ -112,19 +135,7 @@ func buildCatalog(cfg config.Catalog, repo *registry.Repo, observe registry.Cach
 		sources = append(sources, registry.NewCached(
 			registry.NewSmithery(registry.SmitheryOptions{UserAgent: agent}), options))
 	}
-	if len(sources) == 0 {
-		// Every configured source dropped out -- PulseMCP switched on with a
-		// credential that would not resolve, and no self-hosted list. Nil
-		// rather than an empty index, so the handler says "no server catalogue
-		// is configured" instead of failing every browse.
-		return nil
-	}
-	// An index rather than a per-request merge across the four. It enumerates
-	// each catalogue once a day and answers from what it holds, which is what
-	// makes a page a consistent length, a count a count, and a search one rule
-	// -- see registry.Index. Nothing is fetched until somebody opens the
-	// Marketplace, so a host nobody browses pays for none of it.
-	return registry.NewIndex(sources, registry.IndexOptions{Log: log})
+	return sources
 }
 
 // catalogAPI hands the dashboard the catalogue, or nothing when every source

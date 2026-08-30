@@ -108,10 +108,10 @@ var ErrSortUnavailable = errors.New("registry: that order is not available here"
 // The caller's own scope is exact: name a catalogue and that is the listing.
 // A name this host does not have is refused rather than ignored, because
 // ignoring it would answer a request to see one catalogue with a page of all
-// four and nothing saying the filter had been dropped.
+// of them and nothing saying the filter had been dropped.
 //
-// The most-used order narrows by capability. Three of the four catalogues
-// publish no count of how often a server is called, and there is no honest
+// The most-used order narrows by capability. Every catalogue but one
+// publishes no count of how often a server is called, and there is no honest
 // place to put them in an order built on one: sorting them below a server with
 // a single call says this host measured them at zero, and it did not. So they
 // are left out of that listing and reported as left out, which is the same
@@ -495,7 +495,7 @@ func (m *Multi) fill(ctx context.Context, q Query, limit int, pending []*sourceW
 // be imported here.
 //
 // A floor and an estimate, and the shape of it is forced by what the sources
-// will say. Only two of the four report how much they hold: Smithery sends a
+// will say. Only two of the public catalogues report how much they hold: Smithery sends a
 // totalCount, and Docker's catalogue arrives as one document whose length is
 // the count. The official registry and PulseMCP page an opaque cursor and
 // report no size at all, so nothing here knows how many of their twenty-odd

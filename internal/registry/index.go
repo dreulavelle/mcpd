@@ -190,7 +190,7 @@ func (ix *Index) Snapshot(ctx context.Context) (*Snapshot, error) {
 		// Somebody else is already asking the catalogues. With a snapshot in
 		// hand there is no reason to wait for theirs; without one there is
 		// nothing to serve, so wait rather than starting a second enumeration
-		// of the same four catalogues.
+		// of the same catalogues.
 		if snap != nil {
 			return snap, nil
 		}

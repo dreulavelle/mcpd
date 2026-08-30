@@ -55,6 +55,8 @@ Run mcpd next to your infrastructure, connect the systems you want ChatGPT to re
 * **SSO and local accounts** — sign in with Google, Microsoft Entra, GitHub, or any OIDC provider, alongside local users.
 * **API keys for automation** — give scripts and agents their own identities and permissions.
 * **Backup and restore** — take the whole instance as one encrypted file, put it back, or move it to another machine. See [`docs/backup.md`](docs/backup.md).
+* **Know what happened** — every tool call recorded with who made it, and outbound notifications when a remote server changes a tool or somebody stops the asking. See [`docs/notifications.md`](docs/notifications.md).
+* **Your own catalogue** — keep the list of servers you permit in a git repository, reviewed like anything else. See [`docs/catalog.md`](docs/catalog.md).
 * **Self-hosted and lightweight** — one binary with the dashboard, database, MCP host, and tunnel management built in. No runtime to install, no database server to maintain.
 * **Docker or bare metal** — deploy wherever your infrastructure already lives.
 
