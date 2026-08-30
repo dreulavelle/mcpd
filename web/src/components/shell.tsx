@@ -7,6 +7,7 @@ import { signedInAs, useCan, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { BypassBanner } from "./BypassBanner";
 
 function NavLink({ item, badge, onNavigate }: {
   item: NavItem;
@@ -222,7 +223,12 @@ export function Shell({ badges, onSignOut, version, children }: {
         </header>
 
         <main className="min-w-0 flex-1 px-4 py-6 lg:px-8 lg:py-8">
-          <div className="mx-auto max-w-6xl">{children}</div>
+          <div className="mx-auto max-w-6xl">
+            {/* Above the page rather than inside one, because the failure this
+                guards against is somebody opening a window and forgetting. */}
+            <BypassBanner />
+            {children}
+          </div>
         </main>
       </div>
     </div>

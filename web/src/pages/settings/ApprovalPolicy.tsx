@@ -8,6 +8,7 @@ import { riskLabel } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
+import { BypassControl } from "./BypassControl";
 import { SettingsForm } from "@/components/SettingsForm";
 import { Chip } from "@/components/status";
 import { useNotify } from "@/components/toast";
@@ -220,6 +221,10 @@ export function ApprovalPolicy() {
           much may be settled in the conversation. They were on the general
           settings page, a section away from the rules they time. */}
       <ApprovalTimings />
+
+      {/* Beside the rules it temporarily outranks, so the trade is visible in
+          one place: this is the alternative to widening one of them. */}
+      <BypassControl />
 
       {unreadable ? (
         <Notice tone="problem" icon={<TriangleAlert />}>
