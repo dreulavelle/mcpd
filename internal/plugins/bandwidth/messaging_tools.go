@@ -40,6 +40,7 @@ func (p *Plugin) registerMessagingTools(r *plugins.Registry) {
 // "did this text arrive" does not have; every one carried here is charged to
 // the context of every conversation, used or not.
 type MessagesInput struct {
+	Account     string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	MessageID   string `json:"message_id,omitempty" jsonschema:"one message by its id"`
 	From        string `json:"from,omitempty" jsonschema:"the sending number, in E.164 such as +19195551234"`
 	To          string `json:"to,omitempty" jsonschema:"the receiving number, in E.164"`
@@ -72,6 +73,10 @@ func (p *Plugin) searchMessages(ctx context.Context, in MessagesInput) (Listing,
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
 	q := url.Values{}
 	set(q, "messageId", in.MessageID)
 	set(q, "sourceTn", in.From)
@@ -92,8 +97,8 @@ func (p *Plugin) searchMessages(ctx context.Context, in MessagesInput) (Listing,
 	var env messagesEnvelope
 	// The messaging API says users where the voice API says accounts, for the
 	// same id. Bandwidth's history, not a mistake here.
-	err := p.client.get(ctx, hostMessaging,
-		fmt.Sprintf("/api/v2/users/%s/messages", p.client.AccountID()), q, &env)
+	err = p.client.get(ctx, hostMessaging,
+		fmt.Sprintf("/api/v2/users/%s/messages", account), q, &env)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
@@ -110,6 +115,7 @@ func (p *Plugin) searchMessages(ctx context.Context, in MessagesInput) (Listing,
 
 // MediaInput continues a media listing.
 type MediaInput struct {
+	Account           string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	ContinuationToken string `json:"continuation_token,omitempty" jsonschema:"continue a previous listing from its next_page_token"`
 }
 
@@ -117,12 +123,16 @@ func (p *Plugin) listMedia(ctx context.Context, in MediaInput) (Listing, error) 
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
 	q := url.Values{}
 	set(q, "continuationToken", in.ContinuationToken)
 
 	var items []Record
-	err := p.client.get(ctx, hostMessaging,
-		fmt.Sprintf("/api/v2/users/%s/media", p.client.AccountID()), q, &items)
+	err = p.client.get(ctx, hostMessaging,
+		fmt.Sprintf("/api/v2/users/%s/media", account), q, &items)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err

@@ -51,6 +51,7 @@ func (p *Plugin) registerNumberTools(r *plugins.Registry) {
 
 // TollFreeInput names the number to check.
 type TollFreeInput struct {
+	Account     string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	PhoneNumber string `json:"phone_number" jsonschema:"the toll-free number in E.164, such as +18005551234"`
 }
 
@@ -58,19 +59,25 @@ func (p *Plugin) getTollFreeVerification(ctx context.Context, in TollFreeInput) 
 	if err := p.ready(); err != nil {
 		return nil, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return nil, err
+	}
 	if in.PhoneNumber == "" {
 		return nil, fmt.Errorf("bandwidth: a phone number is required, in E.164 " +
 			"such as +18005551234")
 	}
 	var out Record
-	err := p.client.get(ctx, hostAPI,
+	err = p.client.get(ctx, hostAPI,
 		fmt.Sprintf("/api/v2/accounts/%s/phoneNumbers/%s/tollFreeVerification",
-			p.client.AccountID(), url.PathEscape(in.PhoneNumber)), nil, &out)
+			account, url.PathEscape(in.PhoneNumber)), nil, &out)
 	p.note(err, nil)
 	return out, err
 }
 
-// UseCasesInput takes nothing. It exists so the tool has a schema.
+// UseCasesInput takes nothing, and takes no account either: this is
+// Bandwidth's own reference list, the same for every customer. It exists so
+// the tool has a schema.
 type UseCasesInput struct{}
 
 func (p *Plugin) listTollFreeUseCases(ctx context.Context, _ UseCasesInput) (Listing, error) {
@@ -78,9 +85,10 @@ func (p *Plugin) listTollFreeUseCases(ctx context.Context, _ UseCasesInput) (Lis
 		return Listing{}, err
 	}
 	var items []Record
+	var err error
 	// Account-free: this is Bandwidth's own reference list, the same for
 	// everybody, which is why the path carries no account id.
-	err := p.client.get(ctx, hostAPI, "/api/v2/tollFreeVerification/useCases", nil, &items)
+	err = p.client.get(ctx, hostAPI, "/api/v2/tollFreeVerification/useCases", nil, &items)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
@@ -90,6 +98,7 @@ func (p *Plugin) listTollFreeUseCases(ctx context.Context, _ UseCasesInput) (Lis
 
 // EndpointsInput narrows a listing of endpoints.
 type EndpointsInput struct {
+	Account      string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	EndpointType string `json:"endpoint_type,omitempty" jsonschema:"narrow to one kind of endpoint"`
 	EndpointID   string `json:"endpoint_id,omitempty" jsonschema:"one endpoint by id, to read it on its own"`
 }
@@ -98,13 +107,16 @@ func (p *Plugin) listEndpoints(ctx context.Context, in EndpointsInput) (Listing,
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
-	account := p.client.AccountID()
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
 
 	// Note the prefix: Bandwidth serves endpoints and number lookup under /v2
 	// on the same host that serves toll-free verification under /api/v2.
 	if in.EndpointID != "" {
 		var one Record
-		err := p.client.get(ctx, hostAPI,
+		err = p.client.get(ctx, hostAPI,
 			fmt.Sprintf("/v2/accounts/%s/endpoints/%s", account,
 				url.PathEscape(in.EndpointID)), nil, &one)
 		p.note(err, nil)
@@ -118,7 +130,7 @@ func (p *Plugin) listEndpoints(ctx context.Context, in EndpointsInput) (Listing,
 	set(q, "endpointType", in.EndpointType)
 
 	var items []Record
-	err := p.client.get(ctx, hostAPI,
+	err = p.client.get(ctx, hostAPI,
 		fmt.Sprintf("/v2/accounts/%s/endpoints", account), q, &items)
 	p.note(err, nil)
 	if err != nil {
@@ -129,6 +141,7 @@ func (p *Plugin) listEndpoints(ctx context.Context, in EndpointsInput) (Listing,
 
 // LookupInput names the lookup request to read.
 type LookupInput struct {
+	Account   string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	RequestID string `json:"request_id" jsonschema:"the id returned when the bulk lookup was submitted"`
 }
 
@@ -136,13 +149,17 @@ func (p *Plugin) getNumberLookup(ctx context.Context, in LookupInput) (Record, e
 	if err := p.ready(); err != nil {
 		return nil, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return nil, err
+	}
 	if in.RequestID == "" {
 		return nil, fmt.Errorf("bandwidth: a lookup request id is required")
 	}
 	var out Record
-	err := p.client.get(ctx, hostAPI,
+	err = p.client.get(ctx, hostAPI,
 		fmt.Sprintf("/v2/accounts/%s/phoneNumberLookup/bulk/%s",
-			p.client.AccountID(), url.PathEscape(in.RequestID)), nil, &out)
+			account, url.PathEscape(in.RequestID)), nil, &out)
 	p.note(err, nil)
 	return out, err
 }

@@ -10,17 +10,23 @@ import (
 
 // Type declares the integration and what an instance of it needs.
 //
-// One instance reads one Bandwidth account. A credential scoped to four
-// accounts is configured four times, which is the shape mcpd already has for
-// two of anything -- and it keeps "which account did that answer come from"
-// answerable from the instance name rather than from a parameter somebody
-// forgot to pass.
+// One instance answers for every account the credential reaches. That is not
+// the shape the other integrations take -- two Observiums are two instances --
+// and the difference is in the credential rather than in the preference: a
+// Bandwidth API credential is scoped to a set of accounts when it is made and
+// says so in the token it issues, so the host already knows what it may read
+// and there is nothing for an operator to repeat.
+//
+// It is also the shape the question takes. "Are any of our ports stuck" is
+// about the estate, and somebody asking it should not have to know how many
+// accounts there are, nor get four answers they have to add up.
 func Type() plugins.Type {
 	return plugins.Type{
 		Name:  "bandwidth",
 		Title: "Bandwidth",
-		Description: "Calls, conferences, recordings, messages and toll-free " +
-			"verification on one Bandwidth account. Read-only.",
+		Description: "Calls, messages, numbers, port-ins, 10DLC registration " +
+			"and E911, across every Bandwidth account this credential " +
+			"reaches. Read-only.",
 		Settings: []settings.Field{
 			{
 				Key: "client_id", Label: "Client ID", Kind: settings.KindString,
@@ -41,12 +47,12 @@ func Type() plugins.Type {
 					"API, so nothing here can warn you before it lapses.",
 			},
 			{
-				Key: "account_id", Label: "Account", Kind: settings.KindString,
-				Required:    true,
-				Placeholder: "5009021",
-				Help: "The account number shown beside the account name in the " +
-					"Bandwidth console. One instance reads one account; add a " +
-					"second instance for a second account.",
+				Key: "default_account_id", Label: "Default account",
+				Kind: settings.KindString, Placeholder: "5009021",
+				Help: "Optional. The credential already says which accounts it " +
+					"reaches, and any of them can be named on a call. This only " +
+					"decides what a question that names none should mean — " +
+					"leave it empty and one will be asked for.",
 			},
 			{
 				Key: "environment", Label: "Estate", Kind: settings.KindEnum,

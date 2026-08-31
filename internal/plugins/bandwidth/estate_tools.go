@@ -53,6 +53,7 @@ func (p *Plugin) registerEstateTools(r *plugins.Registry) {
 
 // SitesInput names one site, or none for a listing.
 type SitesInput struct {
+	Account      string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	SiteID       string `json:"site_id,omitempty" jsonschema:"one site by id, to read it in full"`
 	WithSipPeers bool   `json:"with_sip_peers,omitempty" jsonschema:"also fetch the SIP peers on the site; requires site_id"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"most sites to return; the configured ceiling applies whatever this says"`
@@ -70,12 +71,16 @@ func (p *Plugin) listSites(ctx context.Context, in SitesInput) (SiteOutput, erro
 	if err := p.ready(); err != nil {
 		return SiteOutput{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return SiteOutput{}, err
+	}
 	if in.WithSipPeers && in.SiteID == "" {
 		return SiteOutput{}, fmt.Errorf("bandwidth: with_sip_peers needs a " +
 			"site_id — SIP peers belong to one site, and fetching them for " +
 			"every site would be a call per site")
 	}
-	base := fmt.Sprintf("/accounts/%s/sites", p.client.AccountID())
+	base := fmt.Sprintf("/accounts/%s/sites", account)
 
 	if in.SiteID == "" {
 		rec, err := p.client.getXML(ctx, base, nil)
@@ -116,6 +121,7 @@ func (p *Plugin) listSites(ctx context.Context, in SitesInput) (SiteOutput, erro
 
 // SipPeersInput names the site, and optionally one peer on it.
 type SipPeersInput struct {
+	Account               string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	SiteID                string `json:"site_id" jsonschema:"the site the peers belong to, from list_sites"`
 	SipPeerID             string `json:"sip_peer_id,omitempty" jsonschema:"one peer by id, to read it in full"`
 	WithMessagingSettings bool   `json:"with_messaging_settings,omitempty" jsonschema:"also fetch the messaging application bound to the peer; requires sip_peer_id"`
@@ -134,12 +140,16 @@ func (p *Plugin) listSipPeers(ctx context.Context, in SipPeersInput) (SipPeerOut
 	if err := p.ready(); err != nil {
 		return SipPeerOutput{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return SipPeerOutput{}, err
+	}
 	if in.SiteID == "" {
 		return SipPeerOutput{}, fmt.Errorf("bandwidth: a site_id is required; " +
 			"SIP peer ids are unique within a site rather than across the account")
 	}
 	base := fmt.Sprintf("/accounts/%s/sites/%s/sippeers",
-		p.client.AccountID(), url.PathEscape(in.SiteID))
+		account, url.PathEscape(in.SiteID))
 
 	if in.SipPeerID == "" {
 		rec, err := p.client.getXML(ctx, base, nil)
@@ -176,6 +186,7 @@ func (p *Plugin) listSipPeers(ctx context.Context, in SipPeersInput) (SipPeerOut
 
 // ApplicationsInput names one application, or none for a listing.
 type ApplicationsInput struct {
+	Account          string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	ApplicationID    string `json:"application_id,omitempty" jsonschema:"one application by id, to read it in full"`
 	WithAssociations bool   `json:"with_associations,omitempty" jsonschema:"also fetch the SIP peers using this application; requires application_id"`
 	Limit            int    `json:"limit,omitempty" jsonschema:"most applications to return; the configured ceiling applies whatever this says"`
@@ -196,11 +207,15 @@ func (p *Plugin) listApplications(ctx context.Context, in ApplicationsInput) (Ap
 	if err := p.ready(); err != nil {
 		return ApplicationOutput{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return ApplicationOutput{}, err
+	}
 	if in.WithAssociations && in.ApplicationID == "" {
 		return ApplicationOutput{}, fmt.Errorf("bandwidth: with_associations " +
 			"needs an application_id")
 	}
-	base := fmt.Sprintf("/accounts/%s/applications", p.client.AccountID())
+	base := fmt.Sprintf("/accounts/%s/applications", account)
 
 	if in.ApplicationID == "" {
 		rec, err := p.client.getXML(ctx, base, nil)
@@ -241,6 +256,7 @@ func (p *Plugin) listApplications(ctx context.Context, in ApplicationsInput) (Ap
 
 // E911Input selects what to read from the emergency-calling records.
 type E911Input struct {
+	Account       string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	LocationID    string `json:"location_id,omitempty" jsonschema:"one location by id, to read it in full"`
 	WithEndpoints bool   `json:"with_endpoints,omitempty" jsonschema:"also list the endpoints attached to locations"`
 	Limit         int    `json:"limit,omitempty" jsonschema:"most locations to return; the configured ceiling applies whatever this says"`
@@ -258,7 +274,11 @@ func (p *Plugin) listE911Locations(ctx context.Context, in E911Input) (E911Outpu
 	if err := p.ready(); err != nil {
 		return E911Output{}, err
 	}
-	base := fmt.Sprintf("/accounts/%s/e911s", p.client.AccountID())
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return E911Output{}, err
+	}
+	base := fmt.Sprintf("/accounts/%s/e911s", account)
 
 	var out E911Output
 	if in.LocationID != "" {

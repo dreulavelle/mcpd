@@ -83,12 +83,14 @@ func (p *Plugin) Descriptor() plugins.Descriptor {
 		Version: "1.0.0",
 		Title:   "Bandwidth",
 		Description: "Calls, messages, numbers, port-ins, 10DLC registration " +
-			"and E911 on one Bandwidth account. Read-only.",
+			"and E911, across every Bandwidth account this credential " +
+			"reaches. Read-only.",
 	}
 }
 
 // Register declares the plugin's tools.
 func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
+	p.registerAccountTools(r)
 	p.registerVoiceTools(r)
 	p.registerMessagingTools(r)
 	p.registerNumberTools(r)

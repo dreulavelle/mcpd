@@ -35,14 +35,21 @@ type Config struct {
 	ClientID     string `yaml:"client_id" json:"client_id"`
 	ClientSecret string `yaml:"client_secret" json:"client_secret"`
 
-	// AccountID is which Bandwidth account this instance reads.
+	// DefaultAccountID is the account to read when a caller does not name one.
 	//
-	// Required, and deliberately not guessed from the credential even when it
-	// is scoped to exactly one. A credential covering four accounts would
-	// otherwise make the answer depend on how it happened to be created, and
-	// two instances reading two accounts is the arrangement mcpd already has
-	// a shape for.
-	AccountID string `yaml:"account_id" json:"account_id"`
+	// Optional, because the credential already says which accounts it may
+	// reach and there is no reason to make an operator repeat it. A tool call
+	// may name any account the credential covers, so one instance answers for
+	// the whole estate -- which is what somebody asking "are any of our ports
+	// stuck" means, and they should not have to know how many accounts there
+	// are to ask it.
+	//
+	// Setting one is still useful where an estate has an obvious main account
+	// and the rest are incidental: it decides what an unqualified question
+	// means. Left empty with several accounts in scope, an unqualified
+	// question is refused and told to pick, which is better than answering
+	// confidently about the wrong one.
+	DefaultAccountID string `yaml:"default_account_id" json:"default_account_id"`
 
 	// Environment selects the estate: "production" or "test".
 	Environment string `yaml:"environment" json:"environment"`
@@ -92,7 +99,7 @@ func (c *Config) withDefaults() {
 
 	c.ClientID = strings.TrimSpace(c.ClientID)
 	c.ClientSecret = strings.TrimSpace(c.ClientSecret)
-	c.AccountID = strings.TrimSpace(c.AccountID)
+	c.DefaultAccountID = strings.TrimSpace(c.DefaultAccountID)
 	c.APIURL = strings.TrimRight(c.APIURL, "/")
 	c.VoiceURL = strings.TrimRight(c.VoiceURL, "/")
 	c.MessagingURL = strings.TrimRight(c.MessagingURL, "/")
@@ -100,11 +107,12 @@ func (c *Config) withDefaults() {
 
 // Configured reports whether enough was supplied to reach the API.
 //
-// All three, because a credential without an account has nothing to read and
-// an account without a credential cannot be read. A plugin that is not
-// configured still mounts, so its settings form has somewhere to live.
+// The credential and nothing else. Which accounts it reaches is the
+// credential's own business, and it says so in the token it issues. A plugin
+// that is not configured still mounts, so its settings form has somewhere to
+// live.
 func (c Config) Configured() bool {
-	return c.ClientID != "" && c.ClientSecret != "" && c.AccountID != ""
+	return c.ClientID != "" && c.ClientSecret != ""
 }
 
 // Validate rejects a configuration that cannot work.
@@ -112,10 +120,10 @@ func (c Config) Validate() error {
 	if !c.Configured() {
 		return nil
 	}
-	if strings.ContainsAny(c.AccountID, "/?#") {
-		return fmt.Errorf("bandwidth: account id %q is not an account id; it "+
-			"is the number shown beside the account name in the Bandwidth "+
-			"console, such as 5009021", c.AccountID)
+	if strings.ContainsAny(c.DefaultAccountID, "/?#") {
+		return fmt.Errorf("bandwidth: default account id %q is not an account "+
+			"id; it is the number shown beside the account name in the "+
+			"Bandwidth console, such as 5009021", c.DefaultAccountID)
 	}
 	for _, u := range []string{c.APIURL, c.VoiceURL, c.MessagingURL} {
 		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {

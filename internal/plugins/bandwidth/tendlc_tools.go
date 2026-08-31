@@ -72,6 +72,7 @@ func (e tenDLCEnvelope) records() []Record {
 
 // CampaignsInput names one campaign, or none for a listing.
 type CampaignsInput struct {
+	Account          string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	CampaignID       string `json:"campaign_id,omitempty" jsonschema:"one campaign by id, such as CEXMPL1"`
 	WithHistory      bool   `json:"with_history,omitempty" jsonschema:"also fetch the campaign's status history; requires campaign_id"`
 	WithPhoneNumbers bool   `json:"with_phone_numbers,omitempty" jsonschema:"also fetch the numbers assigned to the campaign; requires campaign_id"`
@@ -96,12 +97,16 @@ func (p *Plugin) listCampaigns(ctx context.Context, in CampaignsInput) (TenDLCOu
 	if err := p.ready(); err != nil {
 		return TenDLCOutput{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return TenDLCOutput{}, err
+	}
 	if (in.WithHistory || in.WithPhoneNumbers) && in.CampaignID == "" {
 		return TenDLCOutput{}, fmt.Errorf("bandwidth: with_history and " +
 			"with_phone_numbers need a campaign_id")
 	}
 	base := fmt.Sprintf("%s/accounts/%s/tendlc/campaigns",
-		dashboardPrefix, p.client.AccountID())
+		dashboardPrefix, account)
 
 	if in.CampaignID == "" {
 		return p.tenDLCList(ctx, base, in.Page, p.client.limit(in.Limit))
@@ -109,7 +114,7 @@ func (p *Plugin) listCampaigns(ctx context.Context, in CampaignsInput) (TenDLCOu
 
 	one := base + "/" + url.PathEscape(in.CampaignID)
 	var env tenDLCEnvelope
-	err := p.client.get(ctx, hostAPI, one, nil, &env)
+	err = p.client.get(ctx, hostAPI, one, nil, &env)
 	p.note(err, nil)
 	if err != nil {
 		return TenDLCOutput{}, err
@@ -140,6 +145,7 @@ func (p *Plugin) listCampaigns(ctx context.Context, in CampaignsInput) (TenDLCOu
 
 // BrandsInput names one brand, or none for a listing.
 type BrandsInput struct {
+	Account      string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	BrandID      string `json:"brand_id,omitempty" jsonschema:"one brand by id, such as BEXMPL6"`
 	WithHistory  bool   `json:"with_history,omitempty" jsonschema:"also fetch the brand's status history; requires brand_id"`
 	WithVettings bool   `json:"with_vettings,omitempty" jsonschema:"also fetch the brand's vetting record, which says why it passed or failed; requires brand_id"`
@@ -151,12 +157,16 @@ func (p *Plugin) listBrands(ctx context.Context, in BrandsInput) (TenDLCOutput, 
 	if err := p.ready(); err != nil {
 		return TenDLCOutput{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return TenDLCOutput{}, err
+	}
 	if (in.WithHistory || in.WithVettings) && in.BrandID == "" {
 		return TenDLCOutput{}, fmt.Errorf("bandwidth: with_history and " +
 			"with_vettings need a brand_id")
 	}
 	base := fmt.Sprintf("%s/accounts/%s/tendlc/brands",
-		dashboardPrefix, p.client.AccountID())
+		dashboardPrefix, account)
 
 	if in.BrandID == "" {
 		return p.tenDLCList(ctx, base, in.Page, p.client.limit(in.Limit))
@@ -164,7 +174,7 @@ func (p *Plugin) listBrands(ctx context.Context, in BrandsInput) (TenDLCOutput, 
 
 	one := base + "/" + url.PathEscape(in.BrandID)
 	var env tenDLCEnvelope
-	err := p.client.get(ctx, hostAPI, one, nil, &env)
+	err = p.client.get(ctx, hostAPI, one, nil, &env)
 	p.note(err, nil)
 	if err != nil {
 		return TenDLCOutput{}, err

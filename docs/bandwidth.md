@@ -14,12 +14,19 @@ Three things about that credential are worth knowing before you make one,
 because none of them can be changed afterwards.
 
 **Its accounts are fixed at creation.** A credential is scoped to one or more
-account numbers. One mcpd instance reads one account, so if you want all four
-of yours, configure the integration four times — the instance name is then what
-answers "which account did that come from", rather than a parameter somebody
-forgot to pass. At startup mcpd reads the accounts out of the token's own
-claims and refuses to run if the account you configured is not among them,
-naming both sides. That mistake otherwise shows up as a 404 on every call.
+account numbers, and the token it issues says which — so mcpd already knows
+what it may read, and there is nothing for you to repeat in settings.
+
+One instance answers for all of them. Every tool takes an optional `account`,
+and `list_accounts` is where an agent finds out what the options are. That is
+deliberately not the shape the other integrations take — two Observiums are two
+instances — and the difference is in the credential rather than in taste. It is
+also the shape the question takes: *are any of our ports stuck* is about the
+estate, and somebody asking it should not have to know how many accounts there
+are, nor get four answers to add up.
+
+An account the credential does not cover is refused here, naming both sides,
+rather than sent upstream to return a 404 that explains nothing.
 
 **Its roles are fixed at creation too**, and Bandwidth's roles are *not* split
 into read and write. "Campaign management" grants creating a campaign as well
@@ -92,7 +99,8 @@ complete one is worse than the failure.
 
 ### Everything else
 
-`list_numbers` (in service or disconnected, whole account or one site or one
+`list_accounts` (what this credential reaches, and what an unqualified question
+means), `list_numbers` (in service or disconnected, whole account or one site or one
 SIP peer, with a totals-only mode), `search_available_numbers`,
 `get_number_options`, `list_orders` (purchases or disconnects),
 `list_sites`, `list_sip_peers`, `list_applications`, `list_e911_locations`,
@@ -126,11 +134,21 @@ telephone call with the same credential these reads use. The allow-list is what
 stands between those two facts, which is why adding a read means adding a line
 to it on purpose.
 
-## Two Bandwidth accounts
+## Which account a question is about
 
-Add the integration twice, with the same client id and secret and a different
-account id. Nothing is shared between the instances: separate clients, separate
-tokens, separate health.
+In order: the `account` on the call, then the **default account** in settings,
+then the only account the credential covers if there is exactly one.
+
+With several accounts in scope and none of those settling it, the call is
+**refused and told to pick**. That is the important case. Answering about
+whichever account happened to come first would be worse than failing: *no
+port-ins are stuck* reads exactly the same whether it is true of the estate or
+true of one account nobody meant, and there is nothing in the answer to tell
+them apart.
+
+The default is optional and only decides what an unqualified question means.
+Set it where an estate has an obvious main account and the rest are incidental;
+leave it empty and an agent will be asked which one.
 
 ## One thing XML cannot say
 

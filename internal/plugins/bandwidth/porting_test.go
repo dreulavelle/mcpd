@@ -34,7 +34,7 @@ func dashboardServer(t *testing.T, routes map[string]string) *httptest.Server {
 func portingPlugin(t *testing.T, srv *httptest.Server) *Plugin {
 	t.Helper()
 	return newFor(t, Config{
-		ClientID: "client", ClientSecret: "shh", AccountID: "5009021",
+		ClientID: "client", ClientSecret: "shh", DefaultAccountID: "5009021",
 		APIURL: srv.URL, VoiceURL: srv.URL, MessagingURL: srv.URL,
 	}, srv.Client())
 }

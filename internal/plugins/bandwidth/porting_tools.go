@@ -63,6 +63,7 @@ func (p *Plugin) registerPortingTools(r *plugins.Registry) {
 
 // PortInsInput narrows a listing of port-in orders.
 type PortInsInput struct {
+	Account       string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	Status        string `json:"status,omitempty" jsonschema:"order status, such as PENDING SUBMITTED FOE EXCEPTION COMPLETE or CANCELLED"`
 	PhoneNumber   string `json:"phone_number,omitempty" jsonschema:"a number on the order, in 10-digit form such as 9195551234"`
 	CreatedAfter  string `json:"created_after,omitempty" jsonschema:"earliest order creation date, as YYYY-MM-DD"`
@@ -73,6 +74,10 @@ type PortInsInput struct {
 
 func (p *Plugin) listPortIns(ctx context.Context, in PortInsInput) (Listing, error) {
 	if err := p.ready(); err != nil {
+		return Listing{}, err
+	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
 		return Listing{}, err
 	}
 	limit := p.client.limit(in.Limit)
@@ -87,7 +92,7 @@ func (p *Plugin) listPortIns(ctx context.Context, in PortInsInput) (Listing, err
 	}
 
 	rec, err := p.client.getXML(ctx,
-		fmt.Sprintf("/accounts/%s/portins", p.client.AccountID()), q)
+		fmt.Sprintf("/accounts/%s/portins", account), q)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
@@ -103,6 +108,7 @@ func (p *Plugin) listPortIns(ctx context.Context, in PortInsInput) (Listing, err
 
 // PortInInput names one port-in order and says how much of it to read.
 type PortInInput struct {
+	Account        string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	OrderID        string `json:"order_id" jsonschema:"the port-in order id, as returned by list_port_ins"`
 	WithHistory    bool   `json:"with_history,omitempty" jsonschema:"also fetch the order's status history, which is what shows when and why it changed"`
 	WithNotes      bool   `json:"with_notes,omitempty" jsonschema:"also fetch the notes on the order, where a rejection reason is usually written"`
@@ -126,11 +132,15 @@ func (p *Plugin) getPortIn(ctx context.Context, in PortInInput) (PortInOutput, e
 	if err := p.ready(); err != nil {
 		return PortInOutput{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return PortInOutput{}, err
+	}
 	if in.OrderID == "" {
 		return PortInOutput{}, fmt.Errorf("bandwidth: a port-in order id is required")
 	}
 	base := fmt.Sprintf("/accounts/%s/portins/%s",
-		p.client.AccountID(), url.PathEscape(in.OrderID))
+		account, url.PathEscape(in.OrderID))
 
 	order, err := p.client.getXML(ctx, base, nil)
 	p.note(err, nil)
@@ -173,13 +183,18 @@ func (p *Plugin) getPortIn(ctx context.Context, in PortInInput) (PortInOutput, e
 
 // BulkPortInsInput narrows a listing of bulk port-in orders.
 type BulkPortInsInput struct {
-	Status string `json:"status,omitempty" jsonschema:"order status"`
-	Page   int    `json:"page,omitempty" jsonschema:"1-based page number"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"most orders to return; the configured ceiling applies whatever this says"`
+	Account string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
+	Status  string `json:"status,omitempty" jsonschema:"order status"`
+	Page    int    `json:"page,omitempty" jsonschema:"1-based page number"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"most orders to return; the configured ceiling applies whatever this says"`
 }
 
 func (p *Plugin) listBulkPortIns(ctx context.Context, in BulkPortInsInput) (Listing, error) {
 	if err := p.ready(); err != nil {
+		return Listing{}, err
+	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
 		return Listing{}, err
 	}
 	limit := p.client.limit(in.Limit)
@@ -191,7 +206,7 @@ func (p *Plugin) listBulkPortIns(ctx context.Context, in BulkPortInsInput) (List
 	}
 
 	rec, err := p.client.getXML(ctx,
-		fmt.Sprintf("/accounts/%s/bulkPortins", p.client.AccountID()), q)
+		fmt.Sprintf("/accounts/%s/bulkPortins", account), q)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
@@ -201,6 +216,7 @@ func (p *Plugin) listBulkPortIns(ctx context.Context, in BulkPortInsInput) (List
 
 // BulkPortInInput names one bulk order.
 type BulkPortInInput struct {
+	Account     string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	OrderID     string `json:"order_id" jsonschema:"the bulk port-in order id, as returned by list_bulk_port_ins"`
 	WithNumbers bool   `json:"with_numbers,omitempty" jsonschema:"also fetch every number on the order and its own state"`
 }
@@ -216,11 +232,15 @@ func (p *Plugin) getBulkPortIn(ctx context.Context, in BulkPortInInput) (BulkPor
 	if err := p.ready(); err != nil {
 		return BulkPortInOutput{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return BulkPortInOutput{}, err
+	}
 	if in.OrderID == "" {
 		return BulkPortInOutput{}, fmt.Errorf("bandwidth: a bulk port-in order id is required")
 	}
 	base := fmt.Sprintf("/accounts/%s/bulkPortins/%s",
-		p.client.AccountID(), url.PathEscape(in.OrderID))
+		account, url.PathEscape(in.OrderID))
 
 	order, err := p.client.getXML(ctx, base, nil)
 	p.note(err, nil)
@@ -241,6 +261,7 @@ func (p *Plugin) getBulkPortIn(ctx context.Context, in BulkPortInInput) (BulkPor
 
 // TollFreeValidationInput reads one validation or lists them.
 type TollFreeValidationInput struct {
+	Account      string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	ValidationID string `json:"validation_id,omitempty" jsonschema:"one validation by id; omit to list them"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"most validations to return; the configured ceiling applies whatever this says"`
 }
@@ -249,7 +270,11 @@ func (p *Plugin) listTollFreePortValidations(ctx context.Context, in TollFreeVal
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
-	base := fmt.Sprintf("/accounts/%s/tollFreePortingValidations", p.client.AccountID())
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
+	base := fmt.Sprintf("/accounts/%s/tollFreePortingValidations", account)
 
 	if in.ValidationID != "" {
 		rec, err := p.client.getXML(ctx, base+"/"+url.PathEscape(in.ValidationID), nil)

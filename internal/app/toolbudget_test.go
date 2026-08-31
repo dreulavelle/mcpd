@@ -209,7 +209,7 @@ func allPluginsApp(t *testing.T) *App {
 		"extremecloudiq": {Enabled: true, Settings: map[string]any{
 			"base_url": "https://extremecloudiq.invalid", "api_token": "t"}},
 		"bandwidth": {Enabled: true, Settings: map[string]any{
-			"client_id": "i", "client_secret": "s", "account_id": "5009021"}},
+			"client_id": "i", "client_secret": "s"}},
 	}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
 		ID: "wildcard", SecretRef: "env:MCPD_TOKEN_WILDCARD",

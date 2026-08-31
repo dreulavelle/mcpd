@@ -56,6 +56,7 @@ func (p *Plugin) registerInventoryTools(r *plugins.Registry) {
 
 // NumbersInput selects which numbers to list.
 type NumbersInput struct {
+	Account    string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	State      string `json:"state,omitempty" jsonschema:"inservice (default) or disconnected"`
 	SiteID     string `json:"site_id,omitempty" jsonschema:"list only numbers on this site"`
 	SipPeerID  string `json:"sip_peer_id,omitempty" jsonschema:"list only numbers on this SIP peer; requires site_id"`
@@ -68,12 +69,15 @@ func (p *Plugin) listNumbers(ctx context.Context, in NumbersInput) (Listing, err
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
 	if in.SipPeerID != "" && in.SiteID == "" {
 		return Listing{}, fmt.Errorf("bandwidth: a sip_peer_id needs the " +
 			"site_id it belongs to — SIP peer ids are unique within a site, " +
 			"not across the account")
 	}
-	account := p.client.AccountID()
 	disconnected := in.State == "disconnected"
 
 	var path string
@@ -128,6 +132,7 @@ func (p *Plugin) listNumbers(ctx context.Context, in NumbersInput) (Listing, err
 
 // AvailableNumbersInput describes the numbers to look for.
 type AvailableNumbersInput struct {
+	Account  string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	AreaCode string `json:"area_code,omitempty" jsonschema:"three-digit area code such as 918"`
 	Prefix   string `json:"prefix,omitempty" jsonschema:"six-digit NPA-NXX such as 918555"`
 	State    string `json:"state,omitempty" jsonschema:"two-letter state code such as OK"`
@@ -140,6 +145,10 @@ type AvailableNumbersInput struct {
 
 func (p *Plugin) searchAvailableNumbers(ctx context.Context, in AvailableNumbersInput) (Listing, error) {
 	if err := p.ready(); err != nil {
+		return Listing{}, err
+	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
 		return Listing{}, err
 	}
 	q := url.Values{}
@@ -156,7 +165,7 @@ func (p *Plugin) searchAvailableNumbers(ctx context.Context, in AvailableNumbers
 	q.Set("quantity", strconv.Itoa(quantity))
 
 	rec, err := p.client.getXML(ctx,
-		fmt.Sprintf("/accounts/%s/availableNumbers", p.client.AccountID()), q)
+		fmt.Sprintf("/accounts/%s/availableNumbers", account), q)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
@@ -170,6 +179,7 @@ func (p *Plugin) searchAvailableNumbers(ctx context.Context, in AvailableNumbers
 
 // NumberOptionsInput names one number, or none for a listing.
 type NumberOptionsInput struct {
+	Account     string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	PhoneNumber string `json:"phone_number,omitempty" jsonschema:"one number in 10-digit form such as 9195551234; omit to list every number with options set"`
 	Limit       int    `json:"limit,omitempty" jsonschema:"most rows to return; the configured ceiling applies whatever this says"`
 }
@@ -178,7 +188,11 @@ func (p *Plugin) getNumberOptions(ctx context.Context, in NumberOptionsInput) (L
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
-	base := fmt.Sprintf("/accounts/%s/tnoptions", p.client.AccountID())
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
+	base := fmt.Sprintf("/accounts/%s/tnoptions", account)
 
 	if in.PhoneNumber != "" {
 		rec, err := p.client.getXML(ctx, base+"/"+url.PathEscape(in.PhoneNumber), nil)
@@ -199,6 +213,7 @@ func (p *Plugin) getNumberOptions(ctx context.Context, in NumberOptionsInput) (L
 
 // OrdersInput narrows a listing of orders, or names one.
 type OrdersInput struct {
+	Account string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	Kind    string `json:"kind,omitempty" jsonschema:"purchases (default) for orders that bought numbers, or disconnects for orders that gave them up"`
 	OrderID string `json:"order_id,omitempty" jsonschema:"one order by id, to read it in full; purchases only"`
 	Status  string `json:"status,omitempty" jsonschema:"order status such as COMPLETE PARTIAL FAILED or BACKORDERED"`
@@ -210,10 +225,14 @@ func (p *Plugin) listOrders(ctx context.Context, in OrdersInput) (Listing, error
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
 	if in.Kind == "disconnects" {
 		return p.listDisconnects(ctx, DisconnectsInput{Page: in.Page, Limit: in.Limit})
 	}
-	base := fmt.Sprintf("/accounts/%s/orders", p.client.AccountID())
+	base := fmt.Sprintf("/accounts/%s/orders", account)
 
 	if in.OrderID != "" {
 		rec, err := p.client.getXML(ctx, base+"/"+url.PathEscape(in.OrderID), nil)
@@ -246,12 +265,17 @@ func (p *Plugin) listOrders(ctx context.Context, in OrdersInput) (Listing, error
 // arriving and numbers leaving are the same question with the arrow reversed,
 // and two tools made a model choose between halves of one answer.
 type DisconnectsInput struct {
-	Page  int `json:"page,omitempty" jsonschema:"1-based page number"`
-	Limit int `json:"limit,omitempty" jsonschema:"most orders to return; the configured ceiling applies whatever this says"`
+	Account string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
+	Page    int    `json:"page,omitempty" jsonschema:"1-based page number"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"most orders to return; the configured ceiling applies whatever this says"`
 }
 
 func (p *Plugin) listDisconnects(ctx context.Context, in DisconnectsInput) (Listing, error) {
 	if err := p.ready(); err != nil {
+		return Listing{}, err
+	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
 		return Listing{}, err
 	}
 	limit := p.client.limit(in.Limit)
@@ -262,7 +286,7 @@ func (p *Plugin) listDisconnects(ctx context.Context, in DisconnectsInput) (List
 	}
 
 	rec, err := p.client.getXML(ctx,
-		fmt.Sprintf("/accounts/%s/disconnects", p.client.AccountID()), q)
+		fmt.Sprintf("/accounts/%s/disconnects", account), q)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err

@@ -3,10 +3,12 @@ package bandwidth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -43,8 +45,8 @@ type Client struct {
 	messaging string
 	api       string
 
-	accountID string
-	maxItems  int
+	defaultAccount string
+	maxItems       int
 
 	observe func(outcome string, d time.Duration)
 	now     func() time.Time
@@ -63,15 +65,15 @@ func NewClient(hc *http.Client, cfg Config, now func() time.Time,
 		observe = func(string, time.Duration) {}
 	}
 	return &Client{
-		http:      guarded,
-		tokens:    newTokenSource(guarded, cfg.APIURL, cfg.ClientID, cfg.ClientSecret, now),
-		voice:     cfg.VoiceURL,
-		messaging: cfg.MessagingURL,
-		api:       cfg.APIURL,
-		accountID: cfg.AccountID,
-		maxItems:  cfg.MaxItems,
-		observe:   observe,
-		now:       now,
+		http:           guarded,
+		tokens:         newTokenSource(guarded, cfg.APIURL, cfg.ClientID, cfg.ClientSecret, now),
+		voice:          cfg.VoiceURL,
+		messaging:      cfg.MessagingURL,
+		api:            cfg.APIURL,
+		defaultAccount: cfg.DefaultAccountID,
+		maxItems:       cfg.MaxItems,
+		observe:        observe,
+		now:            now,
 	}
 }
 
@@ -87,8 +89,58 @@ func (c *Client) base(h host) string {
 	}
 }
 
-// AccountID is which account this client reads, for a message that names it.
-func (c *Client) AccountID() string { return c.accountID }
+// DefaultAccount is the account an unqualified call reads, or empty.
+func (c *Client) DefaultAccount() string { return c.defaultAccount }
+
+// resolveAccount decides which account a call is about.
+//
+// In order: what the caller asked for, then the configured default, then the
+// only account the credential covers if there is exactly one. With several in
+// scope and nothing to choose between them, the call is refused and told what
+// the options are -- because the alternative is answering confidently about
+// whichever account happened to be first, and an operator reading "no port-ins
+// are stuck" has no way to tell that it was about the wrong account.
+//
+// A named account is checked against the credential's own claim, so the
+// mistake comes back as a sentence rather than as a 404 on every path.
+func (c *Client) resolveAccount(ctx context.Context, requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+
+	// The claim is cached with the token, so this is not a request per call.
+	// A credential that declines to name its accounts leaves this empty, and
+	// then nothing below can validate -- which is handled rather than fatal.
+	covered, err := c.Accounts(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	if requested != "" {
+		if len(covered) == 0 || slices.Contains(covered, requested) {
+			return requested, nil
+		}
+		return "", fmt.Errorf("bandwidth: this credential does not cover "+
+			"account %s. It covers %s. A credential's accounts are fixed when "+
+			"it is created, so reading %s needs a credential that includes it",
+			requested, strings.Join(covered, ", "), requested)
+	}
+
+	if c.defaultAccount != "" {
+		return c.defaultAccount, nil
+	}
+	switch len(covered) {
+	case 1:
+		return covered[0], nil
+	case 0:
+		return "", errors.New("bandwidth: no account was given and this " +
+			"credential does not say which it covers. Name one on the call, " +
+			"or set a default account in settings")
+	default:
+		return "", fmt.Errorf("bandwidth: this credential covers %s. Name "+
+			"which one to read on the call, or set a default account in "+
+			"settings so an unqualified question has an answer",
+			strings.Join(covered, ", "))
+	}
+}
 
 // Accounts reports which accounts the credential may reach.
 func (c *Client) Accounts(ctx context.Context) ([]string, error) {
@@ -221,30 +273,34 @@ func (c *Client) Probe(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(accounts) == 0 {
-		// Not fatal. The claim is the credential describing itself, and a
-		// credential that declines to is still usable -- the first real read
-		// will say so either way.
-		return nil, nil
+	if len(accounts) == 0 || c.defaultAccount == "" {
+		// Nothing to check. A credential that declines to name its accounts is
+		// still usable, and an instance with no default is the ordinary case
+		// now -- the caller names the account.
+		return accounts, nil
 	}
-	for _, a := range accounts {
-		if a == c.accountID {
-			return accounts, nil
-		}
+	if slices.Contains(accounts, c.defaultAccount) {
+		return accounts, nil
 	}
-	return accounts, fmt.Errorf("bandwidth: this credential does not cover "+
-		"account %s. It covers %s. A credential's accounts are fixed when it "+
-		"is created, so either point this instance at one of those or make a "+
-		"credential that includes %s",
-		c.accountID, strings.Join(accounts, ", "), c.accountID)
+	// A default that cannot work is a misconfiguration worth refusing at
+	// startup, because every unqualified call would otherwise fail later with
+	// a 404 that says nothing about why.
+	return accounts, fmt.Errorf("bandwidth: the default account %s is not one "+
+		"this credential covers. It covers %s. Change the default, or leave it "+
+		"empty and name an account on each call",
+		c.defaultAccount, strings.Join(accounts, ", "))
 }
 
 // Describe says where this instance reads from and what its read-only
 // guarantee rests on, for the startup log and the health report.
 func (c *Client) Describe() string {
-	return fmt.Sprintf("Bandwidth account %s at %s, %s and %s, restricted to a "+
-		"named list of read endpoints by its transport",
-		c.accountID, redactURL(c.api), redactURL(c.voice), redactURL(c.messaging))
+	scope := "whichever account a call names"
+	if c.defaultAccount != "" {
+		scope = "account " + c.defaultAccount + " by default"
+	}
+	return fmt.Sprintf("Bandwidth at %s, %s and %s, reading %s, restricted to "+
+		"a named list of read endpoints by its transport",
+		redactURL(c.api), redactURL(c.voice), redactURL(c.messaging), scope)
 }
 
 // limit caps a caller's page size to what this instance allows.

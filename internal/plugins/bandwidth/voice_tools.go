@@ -87,6 +87,7 @@ func (p *Plugin) registerVoiceTools(r *plugins.Registry) {
 
 // CallsInput narrows a listing of calls.
 type CallsInput struct {
+	Account         string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	To              string `json:"to,omitempty" jsonschema:"the number that was called, in E.164 such as +19195551234"`
 	From            string `json:"from,omitempty" jsonschema:"the number that placed the call, in E.164"`
 	StartedAfter    string `json:"started_after,omitempty" jsonschema:"earliest call start, as an ISO-8601 instant such as 2026-08-31T00:00:00Z"`
@@ -123,6 +124,10 @@ func (p *Plugin) listCalls(ctx context.Context, in CallsInput) (Listing, error) 
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
 	q := url.Values{}
 	set(q, "to", in.To)
 	set(q, "from", in.From)
@@ -134,8 +139,8 @@ func (p *Plugin) listCalls(ctx context.Context, in CallsInput) (Listing, error) 
 	q.Set("pageSize", strconv.Itoa(limit))
 
 	var items []Record
-	err := p.client.get(ctx, hostVoice,
-		fmt.Sprintf("/api/v2/accounts/%s/calls", p.client.AccountID()), q, &items)
+	err = p.client.get(ctx, hostVoice,
+		fmt.Sprintf("/api/v2/accounts/%s/calls", account), q, &items)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
@@ -145,19 +150,24 @@ func (p *Plugin) listCalls(ctx context.Context, in CallsInput) (Listing, error) 
 
 // CallInput names one call.
 type CallInput struct {
-	CallID string `json:"call_id" jsonschema:"the call id, as returned by list_calls"`
+	Account string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
+	CallID  string `json:"call_id" jsonschema:"the call id, as returned by list_calls"`
 }
 
 func (p *Plugin) getCall(ctx context.Context, in CallInput) (Record, error) {
 	if err := p.ready(); err != nil {
 		return nil, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return nil, err
+	}
 	if in.CallID == "" {
 		return nil, fmt.Errorf("bandwidth: a call id is required")
 	}
 	var out Record
-	err := p.client.get(ctx, hostVoice,
-		fmt.Sprintf("/api/v2/accounts/%s/calls/%s", p.client.AccountID(),
+	err = p.client.get(ctx, hostVoice,
+		fmt.Sprintf("/api/v2/accounts/%s/calls/%s", account,
 			url.PathEscape(in.CallID)), nil, &out)
 	p.note(err, nil)
 	return out, err
@@ -165,6 +175,7 @@ func (p *Plugin) getCall(ctx context.Context, in CallInput) (Record, error) {
 
 // ConferencesInput narrows a listing of conferences.
 type ConferencesInput struct {
+	Account       string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	Name          string `json:"name,omitempty" jsonschema:"exact conference name"`
 	CreatedAfter  string `json:"created_after,omitempty" jsonschema:"earliest creation time, as an ISO-8601 instant"`
 	CreatedBefore string `json:"created_before,omitempty" jsonschema:"latest creation time, as an ISO-8601 instant"`
@@ -176,6 +187,10 @@ func (p *Plugin) listConferences(ctx context.Context, in ConferencesInput) (List
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
 	q := url.Values{}
 	set(q, "name", in.Name)
 	set(q, "minCreatedTime", in.CreatedAfter)
@@ -185,8 +200,8 @@ func (p *Plugin) listConferences(ctx context.Context, in ConferencesInput) (List
 	q.Set("pageSize", strconv.Itoa(limit))
 
 	var items []Record
-	err := p.client.get(ctx, hostVoice,
-		fmt.Sprintf("/api/v2/accounts/%s/conferences", p.client.AccountID()), q, &items)
+	err = p.client.get(ctx, hostVoice,
+		fmt.Sprintf("/api/v2/accounts/%s/conferences", account), q, &items)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
@@ -196,6 +211,7 @@ func (p *Plugin) listConferences(ctx context.Context, in ConferencesInput) (List
 
 // ConferenceInput names one conference, and optionally one member of it.
 type ConferenceInput struct {
+	Account      string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	ConferenceID string `json:"conference_id" jsonschema:"the conference id, as returned by list_conferences"`
 	MemberID     string `json:"member_id,omitempty" jsonschema:"one member of the conference, to read that participant instead of the whole conference"`
 }
@@ -204,22 +220,27 @@ func (p *Plugin) getConference(ctx context.Context, in ConferenceInput) (Record,
 	if err := p.ready(); err != nil {
 		return nil, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return nil, err
+	}
 	if in.ConferenceID == "" {
 		return nil, fmt.Errorf("bandwidth: a conference id is required")
 	}
 	path := fmt.Sprintf("/api/v2/accounts/%s/conferences/%s",
-		p.client.AccountID(), url.PathEscape(in.ConferenceID))
+		account, url.PathEscape(in.ConferenceID))
 	if in.MemberID != "" {
 		path += "/members/" + url.PathEscape(in.MemberID)
 	}
 	var out Record
-	err := p.client.get(ctx, hostVoice, path, nil, &out)
+	err = p.client.get(ctx, hostVoice, path, nil, &out)
 	p.note(err, nil)
 	return out, err
 }
 
 // RecordingsInput selects whose recordings to list.
 type RecordingsInput struct {
+	Account       string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	CallID        string `json:"call_id,omitempty" jsonschema:"list only this call's recordings"`
 	ConferenceID  string `json:"conference_id,omitempty" jsonschema:"list only this conference's recordings"`
 	To            string `json:"to,omitempty" jsonschema:"the number that was called, in E.164; account-wide listings only"`
@@ -233,12 +254,15 @@ func (p *Plugin) listRecordings(ctx context.Context, in RecordingsInput) (Listin
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
 	if in.CallID != "" && in.ConferenceID != "" {
 		return Listing{}, fmt.Errorf("bandwidth: give a call id or a conference " +
 			"id, not both — they are different collections")
 	}
 
-	account := p.client.AccountID()
 	var path string
 	q := url.Values{}
 	switch {
@@ -257,7 +281,7 @@ func (p *Plugin) listRecordings(ctx context.Context, in RecordingsInput) (Listin
 	}
 
 	var items []Record
-	err := p.client.get(ctx, hostVoice, path, q, &items)
+	err = p.client.get(ctx, hostVoice, path, q, &items)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
@@ -271,6 +295,7 @@ func (p *Plugin) listRecordings(ctx context.Context, in RecordingsInput) (Listin
 
 // RecordingInput names one recording.
 type RecordingInput struct {
+	Account           string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	CallID            string `json:"call_id" jsonschema:"the call the recording belongs to"`
 	RecordingID       string `json:"recording_id" jsonschema:"the recording id, as returned by list_recordings"`
 	WithTranscription bool   `json:"with_transcription,omitempty" jsonschema:"also fetch the transcription text, when one was made"`
@@ -290,12 +315,16 @@ func (p *Plugin) getRecording(ctx context.Context, in RecordingInput) (Recording
 	if err := p.ready(); err != nil {
 		return RecordingOutput{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return RecordingOutput{}, err
+	}
 	if in.CallID == "" || in.RecordingID == "" {
 		return RecordingOutput{}, fmt.Errorf("bandwidth: both a call id and a " +
 			"recording id are required")
 	}
 	base := fmt.Sprintf("/api/v2/accounts/%s/calls/%s/recordings/%s",
-		p.client.AccountID(), url.PathEscape(in.CallID), url.PathEscape(in.RecordingID))
+		account, url.PathEscape(in.CallID), url.PathEscape(in.RecordingID))
 
 	var out RecordingOutput
 	if err := p.client.get(ctx, hostVoice, base, nil, &out.Recording); err != nil {
@@ -321,6 +350,7 @@ func (p *Plugin) getRecording(ctx context.Context, in RecordingInput) (Recording
 
 // TranscriptionsInput names the call whose live transcriptions to read.
 type TranscriptionsInput struct {
+	Account         string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	CallID          string `json:"call_id" jsonschema:"the call id, as returned by list_calls"`
 	TranscriptionID string `json:"transcription_id,omitempty" jsonschema:"one transcription, to return its text rather than the list"`
 }
@@ -329,15 +359,19 @@ func (p *Plugin) listTranscriptions(ctx context.Context, in TranscriptionsInput)
 	if err := p.ready(); err != nil {
 		return Listing{}, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
 	if in.CallID == "" {
 		return Listing{}, fmt.Errorf("bandwidth: a call id is required")
 	}
 	path := fmt.Sprintf("/api/v2/accounts/%s/calls/%s/transcriptions",
-		p.client.AccountID(), url.PathEscape(in.CallID))
+		account, url.PathEscape(in.CallID))
 
 	if in.TranscriptionID != "" {
 		var one Record
-		err := p.client.get(ctx, hostVoice,
+		err = p.client.get(ctx, hostVoice,
 			path+"/"+url.PathEscape(in.TranscriptionID), nil, &one)
 		p.note(err, nil)
 		if err != nil {
@@ -347,7 +381,7 @@ func (p *Plugin) listTranscriptions(ctx context.Context, in TranscriptionsInput)
 	}
 
 	var items []Record
-	err := p.client.get(ctx, hostVoice, path, nil, &items)
+	err = p.client.get(ctx, hostVoice, path, nil, &items)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
@@ -356,15 +390,21 @@ func (p *Plugin) listTranscriptions(ctx context.Context, in TranscriptionsInput)
 }
 
 // StatisticsInput takes nothing. It exists so the tool has a schema.
-type StatisticsInput struct{}
+type StatisticsInput struct {
+	Account string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
+}
 
-func (p *Plugin) getStatistics(ctx context.Context, _ StatisticsInput) (Record, error) {
+func (p *Plugin) getStatistics(ctx context.Context, in StatisticsInput) (Record, error) {
 	if err := p.ready(); err != nil {
 		return nil, err
 	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return nil, err
+	}
 	var out Record
-	err := p.client.get(ctx, hostVoice,
-		fmt.Sprintf("/api/v2/accounts/%s/statistics", p.client.AccountID()), nil, &out)
+	err = p.client.get(ctx, hostVoice,
+		fmt.Sprintf("/api/v2/accounts/%s/statistics", account), nil, &out)
 	p.note(err, nil)
 	return out, err
 }
