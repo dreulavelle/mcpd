@@ -180,21 +180,41 @@ func (d *Directory) explain(err error) error {
 	if errors.As(err, &req) {
 		switch req.StatusCode {
 		case http.StatusUnauthorized:
-			return errors.New("OpenAI rejected that admin key. Admin keys are made " +
-				"under Settings, Organization, Admin keys -- the runtime key that " +
-				"runs the tunnel will not work here")
+			return errors.New("OpenAI did not recognise that admin key.\n\n" +
+				"Admin keys are made at platform.openai.com under " +
+				"Settings > Organization > Admin keys. They are a different " +
+				"thing from the runtime API key a tunnel uses to carry " +
+				"traffic, and pasting a runtime key here is always refused.\n\n" +
+				"Check the whole value was copied, and that the key has not " +
+				"been revoked.")
 		case http.StatusForbidden:
-			// The permission sits on the principal that made the key, not on
-			// the key, so this is fixed under Organization, People, Roles --
-			// not by making another key.
-			return errors.New("that key is not allowed to manage tunnels. The " +
-				"person who created it needs a role with Tunnels: Manage, under " +
-				"Settings, Organization, People, Roles")
+			// The permission is evaluated against the person who created the
+			// key rather than against the key, so the obvious remedy -- make
+			// another key -- produces an identical refusal. Saying that first
+			// is the whole value of this message.
+			return errors.New("OpenAI accepted that admin key but will not let " +
+				"it manage tunnels.\n\n" +
+				"Making another key will not help. The permission comes from " +
+				"the OpenAI role of the person who created the key, not from " +
+				"the key itself, so a replacement made by the same person is " +
+				"refused in exactly the same way.\n\n" +
+				"Two ways forward:\n" +
+				"  1. Give that person a role including \"Tunnels: Manage\", at " +
+				"platform.openai.com under Settings > Organization > People, " +
+				"then open their member row and change the role. Try the same " +
+				"key again before making a new one.\n" +
+				"  2. Or have somebody who already holds that role create the " +
+				"admin key, and paste theirs instead.\n\n" +
+				"Only an organization owner can change roles. If that is not " +
+				"you, this is the sentence to send them.")
 		case http.StatusBadRequest:
 			if strings.Contains(req.ResponseBody, "organization_id") ||
 				strings.Contains(req.Message, "organization_id") {
-				return errors.New("that organization ID was not accepted. Find it " +
-					"under Settings, Organization, General -- it starts with org_")
+				return errors.New("OpenAI did not accept that organization ID.\n\n" +
+					"Find it at platform.openai.com under " +
+					"Settings > Organization > General. It begins with " +
+					"\"org_\" -- an organization name, an email address or a " +
+					"project ID will not work in its place.")
 			}
 		}
 	}
