@@ -82,8 +82,8 @@ func (p *Plugin) Descriptor() plugins.Descriptor {
 		Name:    p.deps.Instance,
 		Version: "1.0.0",
 		Title:   "Bandwidth",
-		Description: "Calls, conferences, recordings, messages and toll-free " +
-			"verification on one Bandwidth account. Read-only.",
+		Description: "Calls, messages, numbers, port-ins, 10DLC registration " +
+			"and E911 on one Bandwidth account. Read-only.",
 	}
 }
 
@@ -92,6 +92,10 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	p.registerVoiceTools(r)
 	p.registerMessagingTools(r)
 	p.registerNumberTools(r)
+	p.registerPortingTools(r)
+	p.registerInventoryTools(r)
+	p.registerEstateTools(r)
+	p.registerTenDLCTools(r)
 	return nil
 }
 

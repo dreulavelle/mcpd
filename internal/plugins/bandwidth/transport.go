@@ -60,6 +60,62 @@ var allowed = []rule{
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tollFreeVerification/webhooks/subscriptions$`), "listing toll-free verification webhooks"},
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/tollFreeVerification/useCases$`), "listing toll-free use cases"},
 
+	// The Dashboard API, served from the gateway under /api/v2. Everything
+	// below is XML, and everything below is a GET -- the Dashboard's writes
+	// (ordering numbers, submitting a port, disconnecting a line) are exactly
+	// what this integration exists not to do.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/portins$`), "listing port-in orders"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/portins/[^/]+$`), "reading one port-in order"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/portins/[^/]+/history$`), "reading a port-in order's history"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/portins/[^/]+/notes$`), "reading a port-in order's notes"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/portins/[^/]+/loas$`), "checking a port-in order's letter of authorisation"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/bulkPortins$`), "listing bulk port-in orders"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/bulkPortins/[^/]+$`), "reading one bulk port-in order"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/bulkPortins/[^/]+/tnList$`), "reading a bulk port-in order's numbers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tollFreePortingValidations$`), "listing toll-free porting validations"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tollFreePortingValidations/[^/]+$`), "reading one toll-free porting validation"},
+
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/inserviceNumbers$`), "listing numbers in service"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/inserviceNumbers/totals$`), "counting numbers in service"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/discnumbers$`), "listing disconnected numbers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/discnumbers/totals$`), "counting disconnected numbers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/availableNumbers$`), "searching numbers available to order"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tnoptions$`), "listing per-number options"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tnoptions/[^/]+$`), "reading one number's options"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/orders$`), "listing number orders"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/orders/[^/]+$`), "reading one number order"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/disconnects$`), "listing disconnect orders"},
+
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/sites$`), "listing sites"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/sites/[^/]+$`), "reading one site"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/sites/[^/]+/totaltns$`), "counting one site's numbers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/sites/[^/]+/inserviceNumbers$`), "listing one site's numbers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/sites/[^/]+/sippeers$`), "listing a site's SIP peers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/sites/[^/]+/sippeers/[^/]+$`), "reading one SIP peer"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/sites/[^/]+/sippeers/[^/]+/tns$`), "listing a SIP peer's numbers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/sites/[^/]+/sippeers/[^/]+/totaltns$`), "counting a SIP peer's numbers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/sites/[^/]+/sippeers/[^/]+/products/messaging/applicationSettings$`), "reading a SIP peer's messaging application"},
+
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/applications$`), "listing applications"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/applications/[^/]+$`), "reading one application"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/applications/[^/]+/associatedsippeers$`), "reading which SIP peers use an application"},
+
+	// Emergency calling. Read-only matters more here than anywhere: these
+	// records are the address emergency services are given.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/e911s$`), "listing emergency-calling endpoints"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/e911s/locations$`), "listing emergency-service addresses"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/e911s/locations/[^/]+$`), "reading one emergency-service address"},
+
+	// 10DLC. JSON rather than XML, on the same host and the same prefix.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/campaigns$`), "listing 10DLC campaigns"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/campaigns/[^/]+$`), "reading one 10DLC campaign"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/campaigns/[^/]+/history$`), "reading a campaign's history"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/campaigns/[^/]+/phoneNumbers$`), "listing a campaign's numbers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands$`), "listing 10DLC brands"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands/[^/]+$`), "reading one 10DLC brand"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands/[^/]+/history$`), "reading a brand's history"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands/[^/]+/vettings$`), "reading a brand's vetting record"},
+
 	// The v2 root rather than /api/v2. Bandwidth serves these two from the
 	// same host under different prefixes, which is theirs to explain.
 	{http.MethodGet, regexp.MustCompile(`^/v2/accounts/[^/]+/endpoints$`), "listing endpoints"},

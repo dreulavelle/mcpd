@@ -1,6 +1,6 @@
 # Bandwidth
 
-Calls, conferences, recordings, messages and toll-free verification on one
+Calls, messages, number inventory, porting, 10DLC registration and E911 on one
 Bandwidth account. Read-only.
 
 ## The credential
@@ -51,14 +51,52 @@ cover what you want to read:
 
 ## What it reads
 
-Fourteen tools across three of Bandwidth's hosts, which serve one product each
-rather than one API under one root:
+Twenty-nine tools across four addresses. Bandwidth serves one product per host
+rather than one API under one root, and the Dashboard API — which is most of
+what a telephony operator actually asks about — is reached through the gateway
+under `/api/v2`:
 
-| Host | What |
-|---|---|
-| `voice.bandwidth.com` | calls, conferences, recordings, transcriptions, statistics |
-| `messaging.bandwidth.com` | messages, stored media |
-| `api.bandwidth.com` | toll-free verification, endpoints, number lookup |
+| Address | Format | What |
+|---|---|---|
+| `voice.bandwidth.com` | JSON | calls, conferences, recordings, transcriptions, statistics |
+| `messaging.bandwidth.com` | JSON | messages, stored media |
+| `api.bandwidth.com` | JSON | toll-free verification, endpoints, number lookup |
+| `api.bandwidth.com/api/v2` | **XML** | numbers, orders, sites, SIP peers, applications, porting, E911 |
+| `api.bandwidth.com/api/v2/…/tendlc` | JSON | 10DLC campaigns and brands |
+
+The Dashboard half speaks XML and the rest speaks JSON. That is a fact about
+Bandwidth, not a choice worth propagating into twenty-nine tools, so XML is
+decoded into the same shape JSON decodes to and nothing above that line knows
+the difference.
+
+### Porting
+
+The tools most likely to answer a ticket:
+
+* **`list_port_ins`** — port-in orders, by status, date or a number on them.
+* **`get_port_in`** — one order, and on request its **status history**, its
+  **notes**, and whether a letter of authorisation is on file. This is the one
+  that answers *why has this not moved*: the order itself carries a single word
+  of status, and the reason a losing carrier rejected something is written in
+  the notes. Asking for all three is one call.
+* **`list_bulk_port_ins`** / **`get_bulk_port_in`** — bulk orders, which carry
+  many numbers under one request and are tracked separately. A number missing
+  from `list_port_ins` may be on one of these.
+* **`list_tollfree_port_validations`** — a toll-free number is validated before
+  it can port, and a failed validation is the usual reason a toll-free port
+  never starts.
+
+An enrichment that fails does not fail the order: `get_port_in` returns what it
+read and names what it could not, because a partial answer presented as a
+complete one is worse than the failure.
+
+### Everything else
+
+`list_numbers` (in service or disconnected, whole account or one site or one
+SIP peer, with a totals-only mode), `search_available_numbers`,
+`get_number_options`, `list_orders` (purchases or disconnects),
+`list_sites`, `list_sip_peers`, `list_applications`, `list_e911_locations`,
+`list_campaigns` and `list_brands`.
 
 Two absences are deliberate.
 
@@ -70,6 +108,10 @@ mistake that is expensive before it is useless.
 **No message bodies**, because Bandwidth does not store them. `search_messages`
 answers "did that text arrive" from status and error code, which is the
 question people actually have.
+
+**No letter-of-authorisation documents.** `get_port_in` will say whether one is
+on file; it will not fetch it. An LOA is a scan, usually of somebody's
+signature.
 
 ## The read-only guarantee
 
@@ -90,12 +132,26 @@ Add the integration twice, with the same client id and secret and a different
 account id. Nothing is shared between the instances: separate clients, separate
 tokens, separate health.
 
+## One thing XML cannot say
+
+XML has no way to mark a list, so a collection with one member is
+indistinguishable from a single value: `<TelephoneNumber>` appearing once
+decodes to a map and appearing twice decodes to a slice. Code written against
+the two-member case then breaks on the account that happens to have one number
+— silently, in production, because the fixture had two.
+
+Nothing can fix that from the document; the information is genuinely absent. So
+it is fixed at the call site, where the element name is known, by `listOf`.
+Every collection here goes through it and comes back a slice whether it held
+none, one, or nine.
+
+The same applies to failure: the Dashboard answers some refusals with **200 and
+an error inside the body**. Left alone that reads as an empty result, which is
+the worst possible outcome — a model told nothing is there will say so with
+confidence. Every Dashboard read checks for it.
+
 ## What is not here yet
 
-The **Dashboard API** — phone number inventory, sites, SIP peers, orders,
-port-ins, E911 locations and notification recipients, 10DLC campaigns and
-brands, and applications. It is a second phase rather than a second product:
-Bandwidth serves it from the same gateway at `api.bandwidth.com/api/v2`, under
-the **same** OAuth2 credential, so no new secret is needed. What it does need
-is an XML decoder, because that half of Bandwidth speaks XML where this half
-speaks JSON.
+Nothing of the read surface. Writes are out of scope by design, and the
+remaining reads are ones nobody has asked for: SIP credentials, per-number
+feature orders, and the `serviceActivation` endpoints.

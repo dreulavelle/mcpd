@@ -54,6 +54,46 @@ func TestGuardRefusesEverythingThatIsNotAllowedRead(t *testing.T) {
 			http.MethodGet, "/api/v2/accounts/5009021/calls/c-1/recordings/r-1/media",
 			false, "allow-list",
 		},
+
+		// The Dashboard half. Reads allowed:
+		"listing port-ins": {
+			http.MethodGet, "/api/v2/accounts/5009021/portins", true, "",
+		},
+		"a port-in order's notes": {
+			http.MethodGet, "/api/v2/accounts/5009021/portins/p-1/notes", true, "",
+		},
+		"E911 locations": {
+			http.MethodGet, "/api/v2/accounts/5009021/e911s/locations", true, "",
+		},
+		"10DLC campaigns": {
+			http.MethodGet, "/api/v2/accounts/5009021/tendlc/campaigns", true, "",
+		},
+		// ...and the writes that the same credential is perfectly capable of.
+		// Each of these changes something in the real world, which is why the
+		// allow-list is the guarantee rather than the credential.
+		"submitting a port-in": {
+			http.MethodPost, "/api/v2/accounts/5009021/portins", false, "only reads",
+		},
+		"ordering numbers": {
+			http.MethodPost, "/api/v2/accounts/5009021/orders", false, "only reads",
+		},
+		"disconnecting numbers": {
+			http.MethodPost, "/api/v2/accounts/5009021/disconnects", false, "only reads",
+		},
+		"changing an E911 address": {
+			http.MethodPut, "/api/v2/accounts/5009021/e911s/locations/l-1", false, "only reads",
+		},
+		"deleting a site": {
+			http.MethodDelete, "/api/v2/accounts/5009021/sites/407", false, "only reads",
+		},
+		"creating a 10DLC campaign": {
+			http.MethodPost, "/api/v2/accounts/5009021/tendlc/campaigns", false, "only reads",
+		},
+		// Fetching a letter of authorisation document itself is absent on
+		// purpose: it is a scan, usually of somebody's signature.
+		"downloading an LOA document": {
+			http.MethodGet, "/api/v2/accounts/5009021/portins/p-1/loas/f-1", false, "allow-list",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			req, err := http.NewRequest(tc.method, "https://voice.bandwidth.com"+tc.path, nil)

@@ -56,7 +56,7 @@ var toolListBudget = map[string]int{
 	"observium":      29_000,
 	"cnmaestro":      23_000,
 	"extremecloudiq": 26_000,
-	"bandwidth":      16_000,
+	"bandwidth":      37_000,
 }
 
 // budgetTotal bounds every plugin at once, which is what the aggregate
@@ -70,11 +70,19 @@ var toolListBudget = map[string]int{
 // integration -- a host with two is the ordinary case -- so this bounds the
 // worst arrangement rather than the likely one.
 //
-// Bandwidth is the cheapest of the six per tool, at about 950 bytes against
-// observium's 1,850, because every one of its listings returns the same flat
-// shape. Output schemas are the largest line item and one shape reused across
-// nine tools is paid for once.
-const budgetTotal = 125_000
+// Bandwidth is the cheapest of the six per tool, at about 1,100 bytes against
+// observium's 1,850, because most of its listings return the same flat shape.
+// Output schemas are the largest line item and one shape reused across a dozen
+// tools is paid for once.
+//
+// It is also by some way the largest at 29 tools and 37,000 bytes, and that is
+// a deliberate trade rather than an oversight. Bandwidth is not one API: it is
+// voice, messaging, number inventory, porting, 10DLC registration and E911,
+// which are six products a telephony operator treats as one system and asks
+// questions across. Splitting them into six plugins would divide the cost by
+// six only for a host that mounted one of them, and nobody mounts one -- the
+// question "why is this number not receiving texts" crosses four.
+const budgetTotal = 150_000
 
 func TestToolList_StaysWithinItsContextBudget(t *testing.T) {
 	h := allPluginsApp(t).Handler()

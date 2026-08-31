@@ -23,11 +23,16 @@ const (
 	hostVoice host = iota
 	hostMessaging
 	// hostAPI is the gateway: toll-free verification, endpoints and number
-	// lookup. It is also where the Dashboard XML API is served, under
-	// /api/v2, which is how a later phase reaches numbers and E911 on this
-	// same credential.
+	// lookup.
 	hostAPI
 )
+
+// dashboardPrefix is where the gateway serves the Dashboard API.
+//
+// The same credential reaches it. That is worth stating because Bandwidth's
+// own documentation sends people to dashboard.bandwidth.com with a separate
+// username and password, and the gateway route means neither is needed here.
+const dashboardPrefix = "/api/v2"
 
 // Client talks to Bandwidth's read endpoints.
 type Client struct {
@@ -153,6 +158,53 @@ func (c *Client) do(ctx context.Context, h host, path string, query url.Values) 
 	}
 	c.observe("ok", elapsed)
 	return body, nil
+}
+
+// getXML performs one authenticated read against the Dashboard API and decodes
+// the XML into the same shape a JSON response decodes to.
+//
+// path is written without the /api/v2 prefix, so a call site reads the way
+// Bandwidth's own documentation writes it.
+func (c *Client) getXML(ctx context.Context, path string, query url.Values) (Record, error) {
+	raw, err := c.do(ctx, hostAPI, dashboardPrefix+path, query)
+	if err != nil {
+		return nil, err
+	}
+	out, err := decodeXML(raw)
+	if err != nil {
+		return nil, fmt.Errorf("bandwidth: %s answered %s with something this "+
+			"integration could not read: %w", redactURL(c.api), path, err)
+	}
+	// The Dashboard reports its own failures inside a 200 as often as through
+	// a status code, which is why this is checked here rather than left to the
+	// status handling in do.
+	if err := dashboardError(out, path); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// dashboardError turns an error carried inside a successful response into one.
+//
+// The Dashboard answers some refusals with 200 and an <ErrorCode> in the body.
+// Left alone, that reads as an empty result -- the worst possible outcome,
+// because a model told nothing is there will say so with confidence.
+func dashboardError(rec Record, path string) error {
+	code := text(rec, "ErrorCode")
+	description := text(rec, "Description")
+	if code == "" && description == "" {
+		// The other shape: a nested <Error> element.
+		if inner, ok := rec["Error"].(Record); ok {
+			code, description = text(inner, "Code"), text(inner, "Description")
+		}
+	}
+	if code == "" && description == "" {
+		return nil
+	}
+	if description == "" {
+		description = "no description given"
+	}
+	return fmt.Errorf("bandwidth: %s refused the read (%s): %s", path, code, description)
 }
 
 // Probe makes the cheapest authenticated call there is: the token exchange
