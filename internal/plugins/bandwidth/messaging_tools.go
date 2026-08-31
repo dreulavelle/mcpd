@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
@@ -93,8 +94,8 @@ func (p *Plugin) searchMessages(ctx context.Context, in MessagesInput) (Listing,
 	set(q, "carrierName", in.Carrier)
 	set(q, "campaignId", in.CampaignID)
 	set(q, "messageType", in.MessageType)
-	set(q, "fromDateTime", in.SentAfter)
-	set(q, "toDateTime", in.SentBefore)
+	set(q, "fromDateTime", normaliseMessagingTime(in.SentAfter))
+	set(q, "toDateTime", normaliseMessagingTime(in.SentBefore))
 	set(q, "sort", in.Sort)
 	set(q, "pageToken", in.PageToken)
 	limit := p.client.limit(in.Limit)
@@ -108,8 +109,7 @@ func (p *Plugin) searchMessages(ctx context.Context, in MessagesInput) (Listing,
 	// reads it as the whole history.
 	var note string
 	if len(q) == 1 {
-		since := p.deps.Now().Add(-defaultMessageWindow).UTC().Format(time.RFC3339)
-		q.Set("fromDateTime", since)
+		q.Set("fromDateTime", messagingTime(p.deps.Now().Add(-defaultMessageWindow)))
 		note = "no filter was given, so this covers the last 24 hours only — " +
 			"narrow by number, status or date to look further back"
 	}
@@ -161,4 +161,37 @@ func (p *Plugin) listMedia(ctx context.Context, in MediaInput) (Listing, error) 
 		return Listing{}, err
 	}
 	return capped(items, p.client.limit(0)), nil
+}
+
+// messagingTime formats an instant the way the messaging API insists on.
+//
+// Milliseconds and a literal Z. RFC 3339 without them is refused --
+// "'fromDateTime' has invalid date format, e.g valid format
+// 2020-12-30T23:59:59.000Z" -- which is a distinction no caller should have to
+// know and every caller would otherwise have to discover.
+func messagingTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// normaliseMessagingTime rewrites whatever a caller supplied into that form.
+//
+// A model asked for "messages since yesterday" produces RFC 3339, because that
+// is what every other tool here takes. Refusing it, or passing it through to be
+// refused upstream, would make this one endpoint an exception for no reason a
+// caller can see. Anything unparseable is passed through untouched so the API's
+// own complaint reaches whoever wrote it.
+func normaliseMessagingTime(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	for _, layout := range []string{
+		"2006-01-02T15:04:05.000Z", time.RFC3339Nano, time.RFC3339,
+		"2006-01-02T15:04:05", "2006-01-02",
+	} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return messagingTime(t)
+		}
+	}
+	return value
 }

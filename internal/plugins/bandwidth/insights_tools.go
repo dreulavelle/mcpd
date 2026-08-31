@@ -62,7 +62,7 @@ type AggregateCallsInput struct {
 	To         string `json:"to,omitempty" jsonschema:"only traffic to this number, in E.164"`
 	From       string `json:"from,omitempty" jsonschema:"only traffic from this number, in E.164"`
 	Direction  string `json:"direction,omitempty" jsonschema:"INBOUND or OUTBOUND"`
-	CallType   string `json:"call_type,omitempty" jsonschema:"LOCAL INTERSTATE INTRASTATE INTERNATIONAL TOLLFREE-IN TOLLFREE-OUT or EMERGENCY"`
+	CallType   string `json:"call_type,omitempty" jsonschema:"LOCAL INTERSTATE INTRASTATE INTERNATIONAL TOLLFREE_IN TOLLFREE_OUT EMERGENCY OPERATOR INFORMATION or UNDETERMINED"`
 	SubAccount string `json:"sub_account,omitempty" jsonschema:"only traffic on this sub-account"`
 }
 
@@ -99,7 +99,10 @@ func (p *Plugin) aggregateCalls(ctx context.Context, in AggregateCallsInput) (Ag
 	set(q, "toPhoneNumber[eq]", in.To)
 	set(q, "fromPhoneNumber[eq]", in.From)
 	set(q, "direction[eq]", strings.ToUpper(in.Direction))
-	set(q, "callType[eq]", strings.ToUpper(in.CallType))
+	// The enum is the underscore form. A caller writing TOLLFREE-OUT, which is
+	// how Bandwidth's own prose spells it, is asking for the right thing in
+	// the wrong dialect and should not be punished for it.
+	set(q, "callType[eq]", strings.ReplaceAll(strings.ToUpper(in.CallType), "-", "_"))
 	set(q, "subAccount[eq]", in.SubAccount)
 	set(q, "timestamp[gte]", in.Since)
 	set(q, "timestamp[lte]", in.Until)
@@ -112,14 +115,41 @@ func (p *Plugin) aggregateCalls(ctx context.Context, in AggregateCallsInput) (Ag
 		out.Note = note
 	}
 
-	var series []Record
-	err = p.client.get(ctx, hostInsights, "/v1/monitors/voice/"+segment, q, &series)
+	// Insights answers in a {links, data, errors} envelope rather than with a
+	// bare array. Decoding straight into a slice would have failed on every
+	// successful response as well as every failed one; the 500 that exposed
+	// this showed the envelope in its own error body.
+	var env struct {
+		Data any `json:"data"`
+	}
+	err = p.client.get(ctx, hostInsights, "/v1/monitors/voice/"+segment, q, &env)
 	p.note(err, nil)
 	if err != nil {
 		return AggregateOutput{}, err
 	}
-	out.Series = series
+	out.Series = seriesOf(env.Data)
 	return out, nil
+}
+
+// seriesOf normalises the envelope's data into rows.
+//
+// The shape varies by monitor -- a list of buckets for most, a single object
+// for an aggregate over one slice -- so it is taken as it comes and wrapped
+// where it is not already a list.
+func seriesOf(data any) []Record {
+	switch v := data.(type) {
+	case []any:
+		out := make([]Record, 0, len(v))
+		for _, item := range v {
+			if rec, ok := item.(map[string]any); ok {
+				out = append(out, rec)
+			}
+		}
+		return out
+	case map[string]any:
+		return []Record{v}
+	}
+	return nil
 }
 
 // historyNote warns when a window reaches past what Insights keeps.

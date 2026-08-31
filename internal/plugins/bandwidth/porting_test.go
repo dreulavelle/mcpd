@@ -200,7 +200,10 @@ func TestAggregateCallsSendsDeepObjectFilters(t *testing.T) {
 			return
 		}
 		gotPath, gotQuery = r.URL.Path, r.URL.Query()
-		_, _ = io.WriteString(w, `[{"timestamp":"2026-08-01T00:00:00Z","value":42}]`)
+		// The envelope, which is what Insights actually sends. This fixture
+		// used to be a bare array, which is what the code wrongly expected.
+		_, _ = io.WriteString(w,
+			`{"links":null,"errors":null,"data":[{"timestamp":"2026-08-01T00:00:00Z","value":42}]}`)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -222,7 +225,7 @@ func TestAggregateCallsSendsDeepObjectFilters(t *testing.T) {
 	for name, want := range map[string]string{
 		"accountId[eq]":  "5009021",
 		"direction[eq]":  "OUTBOUND",
-		"callType[eq]":   "TOLLFREE-OUT",
+		"callType[eq]":   "TOLLFREE_OUT",
 		"timestamp[gte]": "2026-08-01T00:00:00Z",
 	} {
 		if got := gotQuery.Get(name); got != want {
@@ -359,5 +362,87 @@ func TestSearchMessagesSuppliesAWindowWhenNothingElseNarrows(t *testing.T) {
 	}
 	if out.Note != "" {
 		t.Errorf("a filtered search should carry no window caveat: %q", out.Note)
+	}
+}
+
+// The messaging API wants milliseconds and a literal Z, and refuses plain
+// RFC 3339: "'fromDateTime' has invalid date format, e.g valid format
+// 2020-12-30T23:59:59.000Z". The window this tool supplies was in the refused
+// form, so an unfiltered search failed on the very filter added to make it work.
+func TestMessagingTimesCarryMilliseconds(t *testing.T) {
+	if got := messagingTime(fixedNow); got != "2026-08-31T12:00:00.000Z" {
+		t.Fatalf("messagingTime = %q", got)
+	}
+	// A caller writing plain RFC 3339 -- which every other tool here takes --
+	// is asking for the right thing and must not be refused for the dialect.
+	for in, want := range map[string]string{
+		"2026-08-31T12:00:00Z":     "2026-08-31T12:00:00.000Z",
+		"2026-08-31T12:00:00.000Z": "2026-08-31T12:00:00.000Z",
+		"2026-08-31":               "2026-08-31T00:00:00.000Z",
+		"":                         "",
+		"whenever":                 "whenever",
+	} {
+		if got := normaliseMessagingTime(in); got != want {
+			t.Errorf("normaliseMessagingTime(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Insights answers in a {links, data, errors} envelope, not a bare array, so
+// decoding straight into a slice could never have worked on any response.
+func TestAggregateCallsUnwrapsTheEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == tokenPath {
+			_, _ = io.WriteString(w, `{"access_token":"`+
+				jwt(t, `{"accounts":["5009021"]}`)+`","expires_in":3600}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"links":null,"errors":null,"data":[
+			{"timestamp":"2026-08-01T00:00:00Z","value":42},
+			{"timestamp":"2026-08-02T00:00:00Z","value":17}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := newFor(t, Config{
+		ClientID: "client", ClientSecret: "shh",
+		APIURL: srv.URL, VoiceURL: srv.URL, MessagingURL: srv.URL, InsightsURL: srv.URL,
+	}, srv.Client())
+
+	got, err := p.aggregateCalls(context.Background(), AggregateCallsInput{Metric: "minutes"})
+	if err != nil {
+		t.Fatalf("aggregateCalls: %v", err)
+	}
+	if len(got.Series) != 2 {
+		t.Fatalf("want 2 buckets, got %d: %v", len(got.Series), got.Series)
+	}
+}
+
+// The call type enum is the underscore form. Bandwidth's own prose writes
+// TOLLFREE-OUT, so a caller copying it is asking for the right thing in the
+// wrong dialect.
+func TestCallTypeAcceptsEitherDialect(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == tokenPath {
+			_, _ = io.WriteString(w, `{"access_token":"`+
+				jwt(t, `{"accounts":["5009021"]}`)+`","expires_in":3600}`)
+			return
+		}
+		got = r.URL.Query()
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := newFor(t, Config{
+		ClientID: "client", ClientSecret: "shh",
+		APIURL: srv.URL, VoiceURL: srv.URL, MessagingURL: srv.URL, InsightsURL: srv.URL,
+	}, srv.Client())
+
+	for _, in := range []string{"TOLLFREE-OUT", "tollfree_out"} {
+		if _, err := p.aggregateCalls(context.Background(),
+			AggregateCallsInput{Metric: "minutes", CallType: in}); err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		if got.Get("callType[eq]") != "TOLLFREE_OUT" {
+			t.Errorf("%s became %q, want TOLLFREE_OUT", in, got.Get("callType[eq]"))
+		}
 	}
 }
