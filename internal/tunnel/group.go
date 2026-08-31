@@ -22,6 +22,14 @@ import (
 type Group struct {
 	log *slog.Logger
 
+	// OnFailure is told when any tunnel in the group stops serving. Set once
+	// by the composition root, before Apply; nil where nobody is listening.
+	//
+	// It lives here rather than on Config because it is a property of the
+	// host rather than of any one tunnel, and every manager the group builds
+	// should reach the same place.
+	OnFailure func(plugin, tunnelID, reason string)
+
 	mu       sync.RWMutex
 	managers map[string]*Manager
 	order    []string
@@ -110,6 +118,7 @@ func (g *Group) Apply(ctx context.Context, configs []Config, factory ServerFacto
 		}
 
 		m := NewManager(cfg, factory, g.log.With("tunnel", key))
+		m.onFailure = g.OnFailure
 		g.mu.Lock()
 		g.managers[key] = m
 		g.mu.Unlock()
@@ -171,6 +180,7 @@ func (g *Group) Rebuild(ctx context.Context, plugin string, factory ServerFactor
 	}
 
 	m := NewManager(cfg, factory, g.log.With("tunnel", key))
+	m.onFailure = g.OnFailure
 	g.mu.Lock()
 	g.managers[key] = m
 	g.mu.Unlock()

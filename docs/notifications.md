@@ -24,6 +24,7 @@ Every event is a statement about something that already happened.
 | `mcpservers.tools_changed` | A remote server added, changed or withdrew a tool. Anything added or changed has just stopped being served until it is approved again. |
 | `mcpservers.discovery_failed` | A scheduled check of what a server offers failed, so its tool list is no longer being confirmed. Only from the schedule — somebody who pressed **Discover** is already looking at the failure. |
 | `approvals.bypass_opened` | Somebody stopped the asking. This is the one the feature earns its place with: a window opened and forgotten is what the banner and this both exist to prevent, and a message is the half that reaches somebody who has closed the tab. |
+| `tunnels.disconnected` | A connector stopped serving. Nothing restarts one that has stopped, and the container's healthcheck validates the configuration rather than the connection — so without this, a dead tunnel is discovered by somebody trying to use it. |
 | `notifications.test` | You pressed **Send a test**. |
 
 ## Where it sends
