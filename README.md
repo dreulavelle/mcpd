@@ -68,6 +68,7 @@ mcpd currently ships with:
 * **Observium** — inspect devices, interfaces, sensors, alerts, capacity, and network health.
 * **Cambium cnMaestro** — query wireless networks, devices, clients, alarms, topology, and statistics.
 * **Extreme Networks ExtremeCloud IQ** — access points, switches, connected clients, alerts, sites, and what's going wrong with any of them.
+* **Bandwidth** — calls, messages, number inventory, port-in orders and why they stalled, 10DLC registration, and E911 addresses.
 * **Echo** — a reference plugin demonstrating the plugin and approval system.
 
 The infrastructure integrations are read-only — they look, they don't touch. Need something else? Build your own plugin with the included Go SDK, connect a remote MCP server, or find one in the marketplace.

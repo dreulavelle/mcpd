@@ -56,6 +56,7 @@ var toolListBudget = map[string]int{
 	"observium":      29_000,
 	"cnmaestro":      23_000,
 	"extremecloudiq": 26_000,
+	"bandwidth":      42_000,
 }
 
 // budgetTotal bounds every plugin at once, which is what the aggregate
@@ -63,11 +64,25 @@ var toolListBudget = map[string]int{
 //
 // It is a headroom figure over the sum of the per-plugin ceilings rather than
 // a target of its own, so it moves when an integration is added or grows: it
-// went from 85,000 to 100,000 when extremecloudiq arrived with nine tools, and
-// to 110,000 when that plugin gained its five diagnostics tools. Nobody in
-// practice mounts every integration -- a host with two is the ordinary case --
-// so this bounds the worst arrangement rather than the likely one.
-const budgetTotal = 110_000
+// went from 85,000 to 100,000 when extremecloudiq arrived with nine tools, to
+// 110,000 when that plugin gained its five diagnostics tools, and to 125,000
+// when bandwidth arrived with fourteen. Nobody in practice mounts every
+// integration -- a host with two is the ordinary case -- so this bounds the
+// worst arrangement rather than the likely one.
+//
+// Bandwidth is the cheapest of the six per tool, at about 1,100 bytes against
+// observium's 1,850, because most of its listings return the same flat shape.
+// Output schemas are the largest line item and one shape reused across a dozen
+// tools is paid for once.
+//
+// It is also by some way the largest at 31 tools and 42,000 bytes, and that is
+// a deliberate trade rather than an oversight. Bandwidth is not one API: it is
+// voice, messaging, number inventory, porting, 10DLC registration and E911,
+// which are six products a telephony operator treats as one system and asks
+// questions across. Splitting them into six plugins would divide the cost by
+// six only for a host that mounted one of them, and nobody mounts one -- the
+// question "why is this number not receiving texts" crosses four.
+const budgetTotal = 155_000
 
 func TestToolList_StaysWithinItsContextBudget(t *testing.T) {
 	h := allPluginsApp(t).Handler()
@@ -193,6 +208,8 @@ func allPluginsApp(t *testing.T) *App {
 			"client_id": "i", "client_secret": "s"}},
 		"extremecloudiq": {Enabled: true, Settings: map[string]any{
 			"base_url": "https://extremecloudiq.invalid", "api_token": "t"}},
+		"bandwidth": {Enabled: true, Settings: map[string]any{
+			"client_id": "i", "client_secret": "s"}},
 	}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
 		ID: "wildcard", SecretRef: "env:MCPD_TOKEN_WILDCARD",
