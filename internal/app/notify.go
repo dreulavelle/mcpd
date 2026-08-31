@@ -82,6 +82,32 @@ func (a *App) notifyBypassOpened(ctx context.Context, b *operations.Bypass) {
 	})
 }
 
+// notifyTunnelFailed reports that a connector has stopped serving.
+//
+// This is the gap the 31 August outage fell through. The tunnels stopped
+// around midnight; nothing restarts one that has stopped, and the container's
+// healthcheck validates the configuration rather than the connection -- so
+// mcpd sat reporting healthy for nine hours with nothing reaching it, and the
+// first anybody knew was somebody trying to use it the next morning.
+//
+// A tunnel that has stopped is not going to fix itself, which is precisely
+// what makes it worth interrupting somebody for. It says so plainly, because
+// "reconnecting" would invite waiting for something that is not going to
+// happen.
+//
+// Background context rather than a request's: there is no caller here. This
+// is reached from the tunnel's own goroutine, and the alternative is a
+// cancelled context that would drop the event at the moment it matters.
+func (a *App) notifyTunnelFailed(plugin, tunnelID, reason string) {
+	a.notifier.Notify(context.Background(), notify.Event{
+		Kind:     "tunnels.disconnected",
+		Severity: notify.SeverityWarning,
+		Title:    fmt.Sprintf("The %s connector has stopped", plugin),
+		Text: fmt.Sprintf("It is not serving and will not restart on its own; "+
+			"a person has to start it again from the Tunnels page. %s", reason),
+	})
+}
+
 // sendTestNotification answers "did I type the address correctly".
 //
 // Sent rather than queued, and its error returned, because the whole point is

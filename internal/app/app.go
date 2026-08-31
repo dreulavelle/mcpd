@@ -959,6 +959,11 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 	a.tunnelCheck = tunnel.NewChecker(a.pluginHTTPClient(), log, 24*time.Hour)
 
 	a.tunnels = tunnel.NewGroup(log.With("component", "tunnel"))
+	// Set before anything is applied, so the first tunnel built already
+	// reports. A connector that stops is the one failure here that nothing
+	// else notices: no watchdog restarts it and the healthcheck does not look
+	// at it.
+	a.tunnels.OnFailure = a.notifyTunnelFailed
 	a.tunnelFactory = func(principal *auth.Principal) (*sdkmcp.Server, error) {
 		granted := authorizer.VisiblePlugins(principal, a.manager.Names())
 		if len(granted) == 0 {

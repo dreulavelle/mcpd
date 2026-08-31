@@ -426,3 +426,55 @@ func TestReconfigure_DoesNotInterleaveWithAnother(t *testing.T) {
 	defer cancel()
 	_ = m.Stop(stopCtx)
 }
+
+// A tunnel that stops does not restart itself, and the container's healthcheck
+// validates configuration rather than the connection -- so this callback is
+// the only thing that reaches a person. That gap is what let the tunnels sit
+// dead from midnight until somebody tried to use them the next morning.
+//
+// It fires once per failure rather than once per report of one: the
+// rejected-credential path calls fail twice deliberately, because Stop resets
+// the state and would otherwise erase the explanation an operator needs.
+func TestFailReportsOncePerFailure(t *testing.T) {
+	var got []string
+	m := NewManager(Config{Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
+	m.onFailure = func(plugin, tunnelID, reason string) {
+		got = append(got, plugin+"|"+tunnelID+"|"+reason)
+	}
+
+	m.fail(errors.New("the control plane rejected the key"))
+	m.fail(errors.New("the control plane rejected the key"))
+
+	if len(got) != 1 {
+		t.Fatalf("want one report, got %d: %v", len(got), got)
+	}
+	if want := "graylog|tunnel_abc|the control plane rejected the key"; got[0] != want {
+		t.Errorf("reported %q, want %q", got[0], want)
+	}
+	if s := m.Status(); s.State != StateFailed {
+		t.Errorf("state = %s, want %s", s.State, StateFailed)
+	}
+}
+
+// A group hands its callback to every tunnel it builds, so one set at the
+// composition root covers tunnels added later too.
+func TestGroupPassesTheFailureHookToItsManagers(t *testing.T) {
+	var called int
+	g := NewGroup(discardLogger())
+	g.OnFailure = func(string, string, string) { called++ }
+
+	if err := g.Apply(t.Context(), []Config{
+		{Plugin: "graylog", TunnelID: "tunnel_abc", APIKey: "k",
+			Principal: testConfig().Principal},
+	}, testFactory()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	m := g.Lookup("graylog")
+	if m == nil {
+		t.Fatal("the tunnel was not built")
+	}
+	m.fail(errors.New("boom"))
+	if called != 1 {
+		t.Fatalf("the group's hook was not given to the manager: called %d times", called)
+	}
+}
