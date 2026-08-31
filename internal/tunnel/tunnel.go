@@ -198,6 +198,11 @@ type Manager struct {
 	factory ServerFactory
 	log     *slog.Logger
 
+	// onFailure is told when this tunnel stops serving, so that something
+	// which will not restart on its own can reach a person. Set by the group
+	// from the composition root, and nil wherever nobody is listening.
+	onFailure func(plugin, tunnelID, reason string)
+
 	// ops serialises the lifecycle transitions -- Start, Stop, Reconfigure --
 	// end to end.
 	//
@@ -477,11 +482,21 @@ func (m *Manager) Enabled() bool {
 
 func (m *Manager) fail(err error) {
 	m.mu.Lock()
+	was := m.state
 	m.state = StateFailed
 	m.message = err.Error()
 	m.connectedAt = nil
+	plugin, tunnelID := m.cfg.Plugin, m.cfg.TunnelID
 	m.mu.Unlock()
 	m.log.Error("tunnel failed", "error", err)
+
+	// Once per failure rather than once per report of one. The
+	// rejected-credential path calls this twice deliberately -- Stop resets
+	// the state and would erase the explanation -- and nobody needs telling
+	// the same thing twice.
+	if m.onFailure != nil && was != StateFailed {
+		m.onFailure(plugin, tunnelID, err.Error())
+	}
 }
 
 // redactKey removes the API key from an error before it reaches a log line or
