@@ -113,10 +113,12 @@ func explainRequestFailure(status int, path string, body []byte) error {
 
 	case http.StatusUnauthorized:
 		return fmt.Errorf("extremecloudiq: the API rejected our token. An "+
-			"ExtremeCloud IQ API token expires at the time it was created "+
-			"with, and an expired one is refused exactly like a revoked one -- "+
-			"so check its expiry under Global Settings, API Token Management, "+
-			"as well as whether it still exists. Reaching %s", redactURL(path))
+			"expired token is refused exactly like a revoked one, so check "+
+			"both. The key is made in Extreme Platform ONE, under your "+
+			"profile's API keys -- not the ExtremeCloud IQ page called API "+
+			"Token Management, which issues for the retired v1 API and is a "+
+			"dead end that reads like a permissions problem. Reaching %s",
+			redactURL(path))
 
 	case http.StatusForbidden:
 		return fmt.Errorf("extremecloudiq: not permitted to read %s. "+
