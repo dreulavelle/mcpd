@@ -60,7 +60,7 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 		}
 	}
 
-	client := NewClient(httpClient, cfg, now, observe)
+	client := NewClient(httpClient, cfg, deps.Log, now, observe)
 
 	// The credential is not kept on the config the plugin holds, so a dump of
 	// it -- a log line, an error, the settings page -- cannot carry one. The

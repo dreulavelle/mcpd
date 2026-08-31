@@ -139,3 +139,46 @@ func TestListNumbersRefusesASipPeerWithoutItsSite(t *testing.T) {
 		t.Fatalf("want a message naming site_id, got %v", err)
 	}
 }
+
+// Half of Bandwidth speaks JSON and half speaks XML. A Dashboard read that
+// asks for JSON is answered with a refusal rather than a translation, so the
+// Accept header has to match the half being asked -- which it did not, and
+// every Dashboard call failed.
+func TestAcceptMatchesTheHalfOfBandwidthBeingAsked(t *testing.T) {
+	seen := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == tokenPath {
+			_, _ = io.WriteString(w, `{"access_token":"`+
+				jwt(t, `{"accounts":["5009021"]}`)+`","expires_in":3600}`)
+			return
+		}
+		seen[r.URL.Path] = r.Header.Get("Accept")
+		if strings.Contains(r.URL.Path, "/portins") {
+			_, _ = io.WriteString(w, `<LnpOrderSummaryResponse></LnpOrderSummaryResponse>`)
+			return
+		}
+		_, _ = io.WriteString(w, `[]`)
+	}))
+	t.Cleanup(srv.Close)
+	p := portingPlugin(t, srv)
+
+	if _, err := p.listCalls(context.Background(), CallsInput{}); err != nil {
+		t.Fatalf("listCalls: %v", err)
+	}
+	if _, err := p.listPortIns(context.Background(), PortInsInput{}); err != nil {
+		t.Fatalf("listPortIns: %v", err)
+	}
+
+	for path, accept := range seen {
+		want := acceptJSON
+		if strings.Contains(path, "/portins") {
+			want = acceptXML
+		}
+		if accept != want {
+			t.Errorf("%s asked for %q, want %q", path, accept, want)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("want 2 upstream calls, got %d: %v", len(seen), seen)
+	}
+}

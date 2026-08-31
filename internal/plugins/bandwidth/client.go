@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -40,6 +41,7 @@ const dashboardPrefix = "/api/v2"
 type Client struct {
 	http   *http.Client
 	tokens *tokenSource
+	log    *slog.Logger
 
 	voice     string
 	messaging string
@@ -54,7 +56,7 @@ type Client struct {
 
 // NewClient builds a client. The http client it is given is wrapped so every
 // request goes through the read-only guard.
-func NewClient(hc *http.Client, cfg Config, now func() time.Time,
+func NewClient(hc *http.Client, cfg Config, log *slog.Logger, now func() time.Time,
 	observe func(string, time.Duration),
 ) *Client {
 	if hc == nil {
@@ -64,8 +66,12 @@ func NewClient(hc *http.Client, cfg Config, now func() time.Time,
 	if observe == nil {
 		observe = func(string, time.Duration) {}
 	}
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
 	return &Client{
 		http:           guarded,
+		log:            log,
 		tokens:         newTokenSource(guarded, cfg.APIURL, cfg.ClientID, cfg.ClientSecret, now),
 		voice:          cfg.VoiceURL,
 		messaging:      cfg.MessagingURL,
@@ -147,12 +153,20 @@ func (c *Client) Accounts(ctx context.Context) ([]string, error) {
 	return c.tokens.Accounts(ctx)
 }
 
+// The two things Bandwidth answers with. Sent as Accept, because half of it
+// speaks JSON and half speaks XML and a request that asks for the wrong one is
+// answered with a refusal rather than a translation.
+const (
+	acceptJSON = "application/json"
+	acceptXML  = "application/xml"
+)
+
 // get performs one authenticated read and decodes the result into out.
 //
 // query is applied as-is; a nil value is a call with no parameters. out may be
 // nil for a caller that only wants to know the call succeeded.
 func (c *Client) get(ctx context.Context, h host, path string, query url.Values, out any) error {
-	raw, err := c.do(ctx, h, path, query)
+	raw, err := c.do(ctx, h, path, query, acceptJSON)
 	if err != nil {
 		return err
 	}
@@ -168,7 +182,7 @@ func (c *Client) get(ctx context.Context, h host, path string, query url.Values,
 }
 
 // do performs one authenticated read and returns the body.
-func (c *Client) do(ctx context.Context, h host, path string, query url.Values) ([]byte, error) {
+func (c *Client) do(ctx context.Context, h host, path string, query url.Values, accept string) ([]byte, error) {
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
 		return nil, err
@@ -184,7 +198,7 @@ func (c *Client) do(ctx context.Context, h host, path string, query url.Values) 
 		return nil, fmt.Errorf("bandwidth: build the request for %s: %w", path, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", accept)
 
 	started := c.now()
 	resp, err := c.http.Do(req)
@@ -204,6 +218,17 @@ func (c *Client) do(ctx context.Context, h host, path string, query url.Values) 
 		return nil, fmt.Errorf("bandwidth: reading the response from %s: %w", path, err)
 	}
 
+	// What a support call turns on: what was asked, and what the upstream
+	// said about it. Never the body and never the query -- a successful body
+	// here is somebody's call detail, their numbers and who they called, which
+	// is the one thing this must not spill into a log file that leaves the
+	// machine. The status is the part that distinguishes a wrong credential
+	// from a missing role from a path nobody has permission for, and without
+	// it a failed call leaves nothing behind at all.
+	c.log.DebugContext(ctx, "bandwidth API call",
+		"path", path, "status", resp.StatusCode,
+		"bytes", len(body), "took", elapsed)
+
 	if resp.StatusCode >= 300 {
 		c.observe("error", elapsed)
 		return nil, explainRequestFailure(resp.StatusCode, path, body)
@@ -218,7 +243,7 @@ func (c *Client) do(ctx context.Context, h host, path string, query url.Values) 
 // path is written without the /api/v2 prefix, so a call site reads the way
 // Bandwidth's own documentation writes it.
 func (c *Client) getXML(ctx context.Context, path string, query url.Values) (Record, error) {
-	raw, err := c.do(ctx, hostAPI, dashboardPrefix+path, query)
+	raw, err := c.do(ctx, hostAPI, dashboardPrefix+path, query, acceptXML)
 	if err != nil {
 		return nil, err
 	}
