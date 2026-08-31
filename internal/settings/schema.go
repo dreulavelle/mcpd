@@ -660,10 +660,11 @@ func schema() []Group {
 				{
 					Key: KeyNotifyFormat, Label: "Shape",
 					Kind: KindEnum, Group: "notifications", Apply: ApplyLive,
-					Default: "json", Options: []string{"json", "slack", "ntfy"},
-					Help: "Slack also fits Mattermost and Discord's " +
-						"Slack-compatible endpoint. JSON is mcpd's own event, for " +
-						"anything else.",
+					Default: "json", Options: []string{"json", "slack", "discord", "ntfy"},
+					Help: "Discord posts an embed coloured by severity; paste the " +
+						"webhook Discord gave you, with or without its /slack " +
+						"suffix. Slack fits Slack and Mattermost. JSON is mcpd's " +
+						"own event, for anything else.",
 				},
 				{
 					Key: KeyNotifyTopic, Label: "ntfy topic",

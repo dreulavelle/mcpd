@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -212,5 +213,114 @@ func TestRunStopsWithItsContext(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not stop when its context ended")
+	}
+}
+
+// Discord is the one shape that carries a colour, which is the whole reason it
+// is not just the slack shape pointed somewhere else: a warning has to be
+// distinguishable from routine news at a glance.
+func TestEncodeDiscord(t *testing.T) {
+	for _, tc := range []struct {
+		severity Severity
+		want     int
+	}{
+		{SeverityWarning, discordAmber},
+		{SeverityInfo, discordBlue},
+	} {
+		t.Run(string(tc.severity), func(t *testing.T) {
+			body, err := encode(Config{Format: FormatDiscord}, Event{
+				Title: "A title", Text: "Some text", Severity: tc.severity,
+			})
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			var got struct {
+				Embeds []struct {
+					Title       string `json:"title"`
+					Description string `json:"description"`
+					Color       int    `json:"color"`
+					Timestamp   string `json:"timestamp"`
+				} `json:"embeds"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatalf("the payload is not JSON Discord would accept: %v", err)
+			}
+			if len(got.Embeds) != 1 {
+				t.Fatalf("want one embed, got %d", len(got.Embeds))
+			}
+			e := got.Embeds[0]
+			if e.Title != "A title" || e.Description != "Some text" {
+				t.Errorf("title/description = %q/%q", e.Title, e.Description)
+			}
+			if e.Color != tc.want {
+				t.Errorf("colour = %d, want %d", e.Color, tc.want)
+			}
+			if _, err := time.Parse(time.RFC3339, e.Timestamp); err != nil {
+				t.Errorf("timestamp %q is not RFC 3339: %v", e.Timestamp, err)
+			}
+		})
+	}
+}
+
+// Discord refuses an over-long embed outright, so an untruncated event would
+// be delivered as nothing at all.
+func TestEncodeDiscordStaysUnderTheLimits(t *testing.T) {
+	body, err := encode(Config{Format: FormatDiscord}, Event{
+		Title: strings.Repeat("t", discordTitleLimit+50),
+		Text:  strings.Repeat("x", discordDescriptionLimit+50),
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var got struct {
+		Embeds []struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+		} `json:"embeds"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if n := len([]rune(got.Embeds[0].Title)); n > discordTitleLimit {
+		t.Errorf("title is %d characters, over the %d limit", n, discordTitleLimit)
+	}
+	if n := len([]rune(got.Embeds[0].Description)); n > discordDescriptionLimit {
+		t.Errorf("description is %d characters, over the %d limit", n, discordDescriptionLimit)
+	}
+}
+
+// Truncation counts characters, because Discord's limits do -- and slicing
+// bytes would split a multi-byte rune and send invalid UTF-8 as well.
+func TestTruncateKeepsRunesWhole(t *testing.T) {
+	got := truncate(strings.Repeat("é", 10), 5)
+	if n := len([]rune(got)); n != 5 {
+		t.Fatalf("want 5 runes, got %d (%q)", n, got)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("truncation produced invalid UTF-8: %q", got)
+	}
+}
+
+// Discord publishes one webhook at three addresses, and the /slack one is what
+// most instructions hand you. Posting a Discord embed there is a 400 with
+// nothing in it to say why, so the shape the operator chose wins.
+func TestDiscordEndpointDropsACompatibilitySuffix(t *testing.T) {
+	const bare = "https://discord.com/api/webhooks/123/abc"
+	for name, url := range map[string]string{
+		"bare":           bare,
+		"slack suffix":   bare + "/slack",
+		"github suffix":  bare + "/github",
+		"trailing slash": bare + "/slack/",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := endpoint(Config{URL: url, Format: FormatDiscord}); got != bare {
+				t.Errorf("endpoint = %q, want %q", got, bare)
+			}
+		})
+	}
+	// Every other shape posts exactly where it was told.
+	withSuffix := bare + "/slack"
+	if got := endpoint(Config{URL: withSuffix, Format: FormatSlack}); got != withSuffix {
+		t.Errorf("the slack shape must post to the address it was given, got %q", got)
 	}
 }

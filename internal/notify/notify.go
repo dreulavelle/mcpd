@@ -58,6 +58,25 @@ const (
 	FormatSlack Format = "slack"
 	// FormatNtfy posts ntfy's publishing shape, with the topic in the body.
 	FormatNtfy Format = "ntfy"
+	// FormatDiscord posts a Discord embed, which carries a colour.
+	FormatDiscord Format = "discord"
+)
+
+// Discord's documented ceilings. A payload over one of them is refused
+// outright, so a long event would otherwise be delivered as nothing at all.
+const (
+	discordTitleLimit       = 256
+	discordDescriptionLimit = 4096
+)
+
+// The two colours, as Discord wants them: one integer, not a CSS string.
+//
+// Amber and blue rather than red and green. Nothing mcpd sends is an
+// emergency -- every event is a statement about something that already
+// happened -- and a wall of red trains somebody to close the channel.
+const (
+	discordAmber = 0xE8A33D
+	discordBlue  = 0x5865F2
 )
 
 // Config is where and how to send.
@@ -181,7 +200,7 @@ func (n *Notifier) post(ctx context.Context, cfg Config, e Event) error {
 	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(cfg), bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("notify: build request: %w", err)
 	}
@@ -204,6 +223,28 @@ func (n *Notifier) post(ctx context.Context, cfg Config, e Event) error {
 	return nil
 }
 
+// endpoint is where a payload of this shape has to be posted.
+//
+// Discord publishes one webhook at three addresses: the bare one takes
+// Discord's own payload, and the /slack and /github suffixes take somebody
+// else's. Somebody who chooses the discord shape and pastes the /slack address
+// -- which is the address half the internet tells you to use -- would
+// otherwise get a 400 with nothing in it to say why. The suffix is dropped
+// rather than obeyed, because the shape the operator picked is the one they
+// meant.
+func endpoint(cfg Config) string {
+	if cfg.Format != FormatDiscord {
+		return cfg.URL
+	}
+	trimmed := strings.TrimRight(cfg.URL, "/")
+	for _, suffix := range []string{"/slack", "/github"} {
+		if strings.HasSuffix(trimmed, suffix) {
+			return strings.TrimSuffix(trimmed, suffix)
+		}
+	}
+	return cfg.URL
+}
+
 // encode renders an event in the shape the receiver expects.
 func encode(cfg Config, e Event) ([]byte, error) {
 	switch cfg.Format {
@@ -214,6 +255,26 @@ func encode(cfg Config, e Event) ([]byte, error) {
 		// another, and this is a line of text either way.
 		return json.Marshal(map[string]string{
 			"text": strings.TrimSpace(e.Title + "\n" + e.Text),
+		})
+
+	case FormatDiscord:
+		// An embed rather than a content string, because the colour is the
+		// point: a warning has to be distinguishable from routine news at a
+		// glance, and Discord offers no other way to say so.
+		//
+		// This is a deliberate exception to the rule the slack shape follows.
+		// That rule exists because one payload has to render in Slack,
+		// Mattermost and Discord at once, and a block kit that is beautiful in
+		// one fails to render at all in another. A Discord-only shape does not
+		// carry that constraint, so it can say more.
+		return json.Marshal(map[string]any{
+			"embeds": []any{map[string]any{
+				"title":       truncate(e.Title, discordTitleLimit),
+				"description": truncate(e.Text, discordDescriptionLimit),
+				"color":       discordColour(e.Severity),
+				"timestamp":   time.Now().UTC().Format(time.RFC3339),
+				"footer":      map[string]string{"text": "mcpd"},
+			}},
 		})
 
 	case FormatNtfy:
@@ -239,6 +300,26 @@ func encode(cfg Config, e Event) ([]byte, error) {
 			"at":       time.Now().UTC().Format(time.RFC3339),
 		})
 	}
+}
+
+func discordColour(s Severity) int {
+	if s == SeverityWarning {
+		return discordAmber
+	}
+	return discordBlue
+}
+
+// truncate cuts a string to n characters, marking that it was cut.
+//
+// Counted in runes rather than bytes: Discord's limits are character counts,
+// and slicing a byte at a time would also split a multi-byte one and produce
+// invalid UTF-8 in the bargain.
+func truncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-1]) + "\u2026"
 }
 
 func ntfyPriority(s Severity) int {
