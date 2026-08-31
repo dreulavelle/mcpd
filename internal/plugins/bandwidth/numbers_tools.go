@@ -34,21 +34,13 @@ func (p *Plugin) registerInventoryTools(r *plugins.Registry) {
 	}, p.searchAvailableNumbers)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "get_number_options",
-		Title: "Get a number's options",
-		Description: "The per-number settings on this account — call forwarding, " +
-			"CNAM, and the rest. Give a number to read one, or omit it to list " +
-			"every number that has options set.",
-		Idempotent: true,
-	}, p.getNumberOptions)
-
-	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_orders",
 		Title: "List number orders",
-		Description: "Orders on this account and their state: by default the " +
-			"ones that bought numbers, or ask for disconnects to see the ones " +
-			"that gave numbers up. Give an order id to read one in full. " +
-			"Port-ins are a third kind and are tracked separately, under " +
+		Description: "Orders on this account and their state. Three kinds: " +
+			"purchases bought numbers, disconnects gave numbers up, and " +
+			"number_options changed a number's settings — assigning it to a " +
+			"10DLC campaign, or setting SMS or CNAM. Give an order id to read " +
+			"one in full. Port-ins are a fourth kind, tracked separately under " +
 			"list_port_ins.",
 		Idempotent: true,
 	}, p.listOrders)
@@ -177,45 +169,11 @@ func (p *Plugin) searchAvailableNumbers(ctx context.Context, in AvailableNumbers
 	return capped(items, quantity), nil
 }
 
-// NumberOptionsInput names one number, or none for a listing.
-type NumberOptionsInput struct {
-	Account     string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
-	PhoneNumber string `json:"phone_number,omitempty" jsonschema:"one number in 10-digit form such as 9195551234; omit to list every number with options set"`
-	Limit       int    `json:"limit,omitempty" jsonschema:"most rows to return; the configured ceiling applies whatever this says"`
-}
-
-func (p *Plugin) getNumberOptions(ctx context.Context, in NumberOptionsInput) (Listing, error) {
-	if err := p.ready(); err != nil {
-		return Listing{}, err
-	}
-	account, err := p.client.resolveAccount(ctx, in.Account)
-	if err != nil {
-		return Listing{}, err
-	}
-	base := fmt.Sprintf("/accounts/%s/tnoptions", account)
-
-	if in.PhoneNumber != "" {
-		rec, err := p.client.getXML(ctx, base+"/"+url.PathEscape(in.PhoneNumber), nil)
-		p.note(err, nil)
-		if err != nil {
-			return Listing{}, err
-		}
-		return Listing{Items: []Record{rec}, Returned: 1}, nil
-	}
-
-	rec, err := p.client.getXML(ctx, base, nil)
-	p.note(err, nil)
-	if err != nil {
-		return Listing{}, err
-	}
-	return capped(listOf(rec, "", "TnOptionOrder"), p.client.limit(in.Limit)), nil
-}
-
 // OrdersInput narrows a listing of orders, or names one.
 type OrdersInput struct {
 	Account string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
-	Kind    string `json:"kind,omitempty" jsonschema:"purchases (default) for orders that bought numbers, or disconnects for orders that gave them up"`
-	OrderID string `json:"order_id,omitempty" jsonschema:"one order by id, to read it in full; purchases only"`
+	Kind    string `json:"kind,omitempty" jsonschema:"purchases (default), disconnects, or number_options"`
+	OrderID string `json:"order_id,omitempty" jsonschema:"one order by its order id, to read it in full; not a phone number"`
 	Status  string `json:"status,omitempty" jsonschema:"order status such as COMPLETE PARTIAL FAILED or BACKORDERED"`
 	Page    int    `json:"page,omitempty" jsonschema:"1-based page number"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"most orders to return; the configured ceiling applies whatever this says"`
@@ -230,9 +188,19 @@ func (p *Plugin) listOrders(ctx context.Context, in OrdersInput) (Listing, error
 		return Listing{}, err
 	}
 	if in.Kind == "disconnects" {
-		return p.listDisconnects(ctx, DisconnectsInput{Page: in.Page, Limit: in.Limit})
+		return p.listDisconnects(ctx, DisconnectsInput{
+			Account: in.Account, Page: in.Page, Limit: in.Limit})
 	}
+	// TN option orders are orders like the others, and Bandwidth files them
+	// under the same word. They were briefly a tool of their own that took a
+	// phone number, which is what /tnoptions/{id} does not take: the id is the
+	// order's, and passing a number got a 400 saying so.
 	base := fmt.Sprintf("/accounts/%s/orders", account)
+	element := "Order"
+	if in.Kind == "number_options" {
+		base = fmt.Sprintf("/accounts/%s/tnoptions", account)
+		element = "TnOptionOrder"
+	}
 
 	if in.OrderID != "" {
 		rec, err := p.client.getXML(ctx, base+"/"+url.PathEscape(in.OrderID), nil)
@@ -256,7 +224,7 @@ func (p *Plugin) listOrders(ctx context.Context, in OrdersInput) (Listing, error
 	if err != nil {
 		return Listing{}, err
 	}
-	return capped(listOf(rec, "", "Order"), limit), nil
+	return capped(listOf(rec, "", element), limit), nil
 }
 
 // DisconnectsInput narrows a listing of disconnect orders.

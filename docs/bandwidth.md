@@ -119,7 +119,7 @@ is why there is a test pinning them.
 `list_accounts` (what this credential reaches, and what an unqualified question
 means), `list_numbers` (in service or disconnected, whole account or one site or one
 SIP peer, with a totals-only mode), `search_available_numbers`,
-`get_number_options`, `list_orders` (purchases or disconnects),
+`list_orders` (purchases, disconnects, or number_options),
 `list_sites`, `list_sip_peers`, `list_applications`, `list_e911_locations`,
 `list_campaigns` and `list_brands`.
 
@@ -166,6 +166,20 @@ them apart.
 The default is optional and only decides what an unqualified question means.
 Set it where an estate has an obvious main account and the rest are incidental;
 leave it empty and an agent will be asked which one.
+
+## Error codes
+
+`get_error_reason` turns the `error_code` on a failed message into words: what
+it means, who refused it — Bandwidth or the carrier beyond it — and whether
+sending the same message again might work.
+
+It is answered from a table compiled into the binary rather than from the API,
+because Bandwidth publishes these on a documentation page and serves them
+nowhere. That makes the lookup free and available when the API is not, and it
+goes stale when Bandwidth adds a code. So a code the table does not hold says
+*that*, points at the page, and still answers the useful half from the range:
+4000s are Bandwidth refusing, 4700s a carrier refusing, 5000s and 5600s are
+service failures worth retrying.
 
 ## One thing XML cannot say
 

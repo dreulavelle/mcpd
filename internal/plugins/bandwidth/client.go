@@ -1,6 +1,7 @@
 package bandwidth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -253,6 +254,14 @@ func (c *Client) getXML(ctx context.Context, path string, query url.Values) (Rec
 	raw, err := c.do(ctx, hostAPI, dashboardPrefix+path, query, acceptXML)
 	if err != nil {
 		return nil, err
+	}
+	// 204, or a 200 with nothing in it, is Bandwidth saying the collection is
+	// empty -- an account with no port-in orders, which is the ordinary state
+	// of most accounts most of the time. Decoding that as XML fails, and
+	// reporting the failure would turn "you have no ports in flight" into "the
+	// integration is broken".
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return Record{}, nil
 	}
 	out, err := decodeXML(raw)
 	if err != nil {

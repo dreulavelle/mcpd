@@ -99,6 +99,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	p.registerEstateTools(r)
 	p.registerTenDLCTools(r)
 	p.registerInsightsTools(r)
+	p.registerErrorCodeTools(r)
 	return nil
 }
 

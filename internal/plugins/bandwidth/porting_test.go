@@ -261,3 +261,56 @@ func TestAggregateCallsWarnsPastTheRetentionWindow(t *testing.T) {
 		t.Errorf("a one-day window should need no warning: %q", note)
 	}
 }
+
+// Bandwidth answers an empty collection with 204 and no body. Decoding that as
+// XML fails, and reporting the failure turns "you have no ports in flight" --
+// the ordinary state of most accounts -- into "the integration is broken".
+func TestAnEmptyCollectionIsNotAFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == tokenPath {
+			_, _ = io.WriteString(w, `{"access_token":"`+
+				jwt(t, `{"accounts":["5009021"]}`)+`","expires_in":3600}`)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	p := portingPlugin(t, srv)
+
+	got, err := p.listPortIns(context.Background(), PortInsInput{})
+	if err != nil {
+		t.Fatalf("204 was reported as a failure: %v", err)
+	}
+	if got.Returned != 0 || len(got.Items) != 0 {
+		t.Fatalf("want an empty listing, got %+v", got)
+	}
+}
+
+// A 403 is Bandwidth's only signal that a role is missing and it does not say
+// which, so the body it does send is worth quoting before this package guesses.
+func TestForbiddenQuotesWhatBandwidthSaid(t *testing.T) {
+	err := explainRequestFailure(http.StatusForbidden,
+		"/api/v2/accounts/5009125/tendlc/campaigns/CMOECJY",
+		[]byte(`{"message":"missing scope tendlc:read"}`))
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if !strings.Contains(err.Error(), "missing scope tendlc:read") {
+		t.Errorf("the upstream's own words were dropped: %v", err)
+	}
+	// 10DLC reads are governed by Campaign management, which was not mapped.
+	if !strings.Contains(err.Error(), "Campaign management") {
+		t.Errorf("the 10DLC role was not suggested: %v", err)
+	}
+}
+
+// A 400 says which parameter it objected to, and no guess made from the path
+// beats being told.
+func TestBadRequestLeadsWithTheUpstreamsExplanation(t *testing.T) {
+	err := explainRequestFailure(http.StatusBadRequest,
+		"/api/v2/accounts/5009021/tnoptions/4053959300",
+		[]byte("<Response><Description>Invalid order id</Description></Response>"))
+	if err == nil || !strings.Contains(err.Error(), "Invalid order id") {
+		t.Fatalf("the explanation was dropped: %v", err)
+	}
+}

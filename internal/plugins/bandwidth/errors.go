@@ -19,8 +19,16 @@ func roleFor(path string) string {
 	switch {
 	case strings.Contains(path, "/phoneNumberLookup"):
 		return "TN lookup"
-	case strings.Contains(path, "/tollFreeVerification"):
+	case strings.Contains(path, "/tollFreeVerification"), strings.Contains(path, "/tendlc"):
 		return "Campaign management"
+	case strings.Contains(path, "/portins"), strings.Contains(path, "/bulkPortins"):
+		return "Porting"
+	case strings.Contains(path, "/orders"), strings.Contains(path, "/availableNumbers"):
+		return "Ordering"
+	case strings.Contains(path, "/disconnects"), strings.Contains(path, "/discnumbers"):
+		return "Disconnect"
+	case strings.Contains(path, "/tnoptions"):
+		return "Line features"
 	case strings.Contains(path, "/messages"), strings.Contains(path, "/media"):
 		return "Messaging insights"
 	case strings.Contains(path, "/statistics"):
@@ -81,11 +89,23 @@ func explainRequestFailure(status int, path string, body []byte) error {
 			"not an expiry to wait out -- it usually means the credential's "+
 			"secret was rotated or revoked in the Bandwidth console", path)
 
+	case http.StatusBadRequest:
+		// The body leads here. Bandwidth says which parameter it objected to,
+		// and no guess made from the path beats being told.
+		return fmt.Errorf("bandwidth: %s rejected the request: %s", path,
+			summarise(status, body))
+
 	case http.StatusForbidden:
 		msg := fmt.Sprintf("bandwidth: not permitted to read %s. Bandwidth "+
 			"authorises by the roles and accounts the API credential was "+
 			"created with, so this is about how the credential was made "+
 			"rather than whether it is valid", path)
+		// What Bandwidth said, before what this package guesses. A 403 body
+		// names the missing entitlement often enough to be worth quoting, and
+		// it is an error description rather than anybody's data.
+		if detail := summarise(status, body); detail != "" && len(body) > 0 {
+			msg += ". Bandwidth said: " + detail
+		}
 		if role := roleFor(path); role != "" {
 			msg += fmt.Sprintf(". This read most likely needs the %q role", role)
 		}
