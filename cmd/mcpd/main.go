@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -68,17 +69,6 @@ func run() error {
 		return err
 	}
 
-	// Built before the database opens, because everything below has to be able
-	// to report a failure. How much it says and in what shape are settings, so
-	// it starts on the defaults and the control below hands it the stored
-	// values the moment they can be read.
-	// The third value is the copy the dashboard's Logs page reads. Kept
-	// always rather than behind a setting: the cost is one more render of a
-	// line already being rendered, and a setting whose only effect is that a
-	// page is empty is a setting that gets diagnosed as a bug.
-	log, logControl, logStream := observability.NewStreamingLogger(
-		os.Stdout, slog.LevelInfo, "json", true)
-
 	if *checkOnly {
 		for _, w := range cfg.Warnings() {
 			fmt.Fprintln(os.Stderr, "warning:", w)
@@ -105,7 +95,33 @@ func run() error {
 		return nil
 	}
 
+	// Built before the database opens, because everything below has to be able
+	// to report a failure. How much it says and in what shape are settings, so
+	// it starts on the defaults and the control below hands it the stored
+	// values the moment they can be read.
+	// The third value is the copy the dashboard's Logs page reads. Kept
+	// always rather than behind a setting: the cost is one more render of a
+	// line already being rendered, and a setting whose only effect is that a
+	// page is empty is a setting that gets diagnosed as a bug.
+	//
+	// It is built after the -check path returns, so the healthcheck -- which
+	// runs -check every thirty seconds -- neither creates the log file nor
+	// rotates one.
+	logDst, logFile := logDestination(cfg)
+	if logFile != nil {
+		defer logFile.Close()
+	}
+	log, logControl, logStream := observability.NewStreamingLogger(
+		logDst, slog.LevelInfo, "json", true)
+
 	log.Info("starting mcpd", "version", app.Version, "config", *configPath)
+	if logFile != nil {
+		log.Info("logging to file",
+			"path", logFile.Path(),
+			"max_size_mb", observability.MaxLogSize>>20,
+			"rotate_after", observability.MaxLogAge.String(),
+			"keep", observability.RetainedLogs)
+	}
 
 	// SIGINT and SIGTERM both begin a graceful drain. A second signal is left
 	// to the default handler, so an operator can always force an exit.
@@ -122,6 +138,28 @@ func run() error {
 	}
 	log.Info("mcpd stopped")
 	return nil
+}
+
+// logDestination opens the rotating log file and returns what the logger
+// should write to.
+//
+// Both the file and stdout, deliberately. The file is what survives the
+// container being recreated -- and a container is recreated on every upgrade,
+// which is one of the two times an operator most wants the log that came
+// before it. stdout is what `docker logs` and journald read, and somebody
+// reaching for either should not find half the story.
+//
+// A file that cannot be opened is reported and left behind rather than being
+// fatal. A host with a full or read-only disk still has a container log, and
+// refusing to start over a degraded log would turn it into an outage.
+func logDestination(cfg *config.Config) (io.Writer, *observability.RotatingFile) {
+	path := filepath.Join(cfg.LogDir(), "mcpd.log")
+	f, err := observability.OpenRotatingFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcpd: file logging is off (%v); logging to stdout only\n", err)
+		return os.Stdout, nil
+	}
+	return io.MultiWriter(os.Stdout, f), f
 }
 
 // resolveEnvPath decides which .env to read.

@@ -34,7 +34,7 @@ services:
     ports:
       - "${MCPD_PORT:-8080}:8080"
       - "${MCPD_FRONTEND_PORT:-80}:8081"
-    # Config, database, TLS material and plugins. Back this up.
+    # Config, database, TLS material, logs and plugins. Back this up.
     volumes:
       - ./data:/var/lib/mcpd
     # Not an HTTP probe: with self-signed TLS the listener speaks mcpd's own CA.

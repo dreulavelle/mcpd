@@ -25,9 +25,9 @@ mirrors the role-to-capability map from `internal/auth/principal.go` — if that
 map changes, this one has to follow.
 
 The container's data lives in `./data` — one bind mount holding `config.yaml`,
-the database, TLS material and out-of-process plugins. It is generated on
-first start if it is empty, and the container runs as the host user's uid so
-what lands there is yours to read and edit.
+the database, TLS material, the rotating log in `logs/` and out-of-process
+plugins. It is generated on first start if it is empty, and the container runs
+as the host user's uid so what lands there is yours to read and edit.
 
 It used to be `./.data`, because a distroless image forced the volume to be
 owned by uid 65532 and a directory the host user could not read broke
