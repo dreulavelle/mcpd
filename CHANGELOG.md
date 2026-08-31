@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/dreulavelle/mcpd/compare/v0.7.0...v0.7.1) (2026-08-31)
+
+
+### Documentation
+
+* say why a merge commit must not repeat the branch's subject ([d58b358](https://github.com/dreulavelle/mcpd/commit/d58b358f1ae45a3399055238b7f73e353070f47f))
+
 ## [0.7.0](https://github.com/dreulavelle/mcpd/compare/v0.6.1...v0.7.0) (2026-08-30)
 
 
