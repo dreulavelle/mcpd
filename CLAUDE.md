@@ -157,5 +157,13 @@ there was one. Table-driven where it fits.
 Conventional commits, branch names `type/short-description`. Commit bodies
 explain the reasoning, not the diff.
 
+**A merge commit must not repeat the branch's subject.** release-please reads
+every commit in the range, so a `--no-ff` merge whose subject is the same
+conventional commit as the change underneath it puts that change in the
+changelog twice. Either squash, or give the merge a plain subject
+(`Merge branch 'feat/thing'`) that release-please ignores. 0.7.0 shipped with
+every entry duplicated for exactly this reason and had to be corrected by hand
+before it was tagged.
+
 `gofmt`, `go vet`, and the tests must pass before Go work is finished. Prefer
 the standard library; every dependency is a thing to keep in step.
