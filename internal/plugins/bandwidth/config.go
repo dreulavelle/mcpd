@@ -13,6 +13,8 @@ const (
 	defaultAPIURL       = "https://api.bandwidth.com"
 	defaultVoiceURL     = "https://voice.bandwidth.com"
 	defaultMessagingURL = "https://messaging.bandwidth.com"
+	// Insights has no test estate of its own; the production host serves both.
+	defaultInsightsURL = "https://insights.bandwidth.com"
 )
 
 // The test estate, which Bandwidth calls test or uat. Messaging has no
@@ -59,6 +61,7 @@ type Config struct {
 	APIURL       string `yaml:"api_url" json:"api_url"`
 	VoiceURL     string `yaml:"voice_url" json:"voice_url"`
 	MessagingURL string `yaml:"messaging_url" json:"messaging_url"`
+	InsightsURL  string `yaml:"insights_url" json:"insights_url"`
 
 	// MaxItems caps how many rows one listing returns. Reported in the result
 	// when it bites, so a caller narrows their question rather than silently
@@ -90,6 +93,9 @@ func (c *Config) withDefaults() {
 		// No test host of its own; the production one serves both estates.
 		c.MessagingURL = defaultMessagingURL
 	}
+	if c.InsightsURL == "" {
+		c.InsightsURL = defaultInsightsURL
+	}
 	if c.MaxItems <= 0 {
 		c.MaxItems = defaultMaxItems
 	}
@@ -103,6 +109,7 @@ func (c *Config) withDefaults() {
 	c.APIURL = strings.TrimRight(c.APIURL, "/")
 	c.VoiceURL = strings.TrimRight(c.VoiceURL, "/")
 	c.MessagingURL = strings.TrimRight(c.MessagingURL, "/")
+	c.InsightsURL = strings.TrimRight(c.InsightsURL, "/")
 }
 
 // Configured reports whether enough was supplied to reach the API.
@@ -125,7 +132,7 @@ func (c Config) Validate() error {
 			"id; it is the number shown beside the account name in the "+
 			"Bandwidth console, such as 5009021", c.DefaultAccountID)
 	}
-	for _, u := range []string{c.APIURL, c.VoiceURL, c.MessagingURL} {
+	for _, u := range []string{c.APIURL, c.VoiceURL, c.MessagingURL, c.InsightsURL} {
 		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 			return fmt.Errorf("bandwidth: %q is not an http or https address", u)
 		}

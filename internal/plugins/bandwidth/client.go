@@ -28,6 +28,9 @@ const (
 	// hostAPI is the gateway: toll-free verification, endpoints and number
 	// lookup.
 	hostAPI
+	// hostInsights serves aggregates computed over traffic rather than the
+	// traffic itself, which is why it is a fifth address rather than a path.
+	hostInsights
 )
 
 // dashboardPrefix is where the gateway serves the Dashboard API.
@@ -46,6 +49,7 @@ type Client struct {
 	voice     string
 	messaging string
 	api       string
+	insights  string
 
 	defaultAccount string
 	maxItems       int
@@ -76,6 +80,7 @@ func NewClient(hc *http.Client, cfg Config, log *slog.Logger, now func() time.Ti
 		voice:          cfg.VoiceURL,
 		messaging:      cfg.MessagingURL,
 		api:            cfg.APIURL,
+		insights:       cfg.InsightsURL,
 		defaultAccount: cfg.DefaultAccountID,
 		maxItems:       cfg.MaxItems,
 		observe:        observe,
@@ -90,6 +95,8 @@ func (c *Client) base(h host) string {
 		return c.voice
 	case hostMessaging:
 		return c.messaging
+	case hostInsights:
+		return c.insights
 	default:
 		return c.api
 	}

@@ -58,7 +58,7 @@ cover what you want to read:
 
 ## What it reads
 
-Twenty-nine tools across four addresses. Bandwidth serves one product per host
+Thirty-one tools across five addresses. Bandwidth serves one product per host
 rather than one API under one root, and the Dashboard API — which is most of
 what a telephony operator actually asks about — is reached through the gateway
 under `/api/v2`:
@@ -70,6 +70,7 @@ under `/api/v2`:
 | `api.bandwidth.com` | JSON | toll-free verification, endpoints, number lookup |
 | `api.bandwidth.com/api/v2` | **XML** | numbers, orders, sites, SIP peers, applications, porting, E911 |
 | `api.bandwidth.com/api/v2/…/tendlc` | JSON | 10DLC campaigns and brands |
+| `insights.bandwidth.com` | JSON | voice traffic aggregates |
 
 The Dashboard half speaks XML and the rest speaks JSON. That is a fact about
 Bandwidth, not a choice worth propagating into twenty-nine tools, so XML is
@@ -96,6 +97,22 @@ The tools most likely to answer a ticket:
 An enrichment that fails does not fail the order: `get_port_in` returns what it
 read and names what it could not, because a partial answer presented as a
 complete one is worse than the failure.
+
+### Aggregates
+
+`aggregate_calls` answers *how much* and *is it getting worse* — minutes of
+use, completed and failed call counts, connection rates, average durations,
+sliced by time and narrowable by number, direction or call type. `list_calls`
+cannot answer either question: it returns individual calls.
+
+Insights keeps **one year**. A window reaching further back comes back empty
+rather than refused, and "no traffic" reads identically to "not kept", so the
+answer says which it is.
+
+Its filters are deepObject-style — the comparison is part of the parameter
+name, `timestamp[gte]=…` rather than a value. A mistyped name there is ignored
+rather than refused, so the answer comes back unfiltered and looks right, which
+is why there is a test pinning them.
 
 ### Everything else
 

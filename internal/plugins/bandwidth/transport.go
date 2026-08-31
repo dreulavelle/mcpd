@@ -116,6 +116,11 @@ var allowed = []rule{
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands/[^/]+/history$`), "reading a brand's history"},
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands/[^/]+/vettings$`), "reading a brand's vetting record"},
 
+	// Insights, on its own host. One path with the monitor as its last
+	// segment, so a monitor added by Bandwidth needs no change here -- but a
+	// path outside /v1/monitors/voice still does.
+	{http.MethodGet, regexp.MustCompile(`^/v1/monitors/voice/[^/]+$`), "reading a voice traffic aggregate"},
+
 	// The v2 root rather than /api/v2. Bandwidth serves these two from the
 	// same host under different prefixes, which is theirs to explain.
 	{http.MethodGet, regexp.MustCompile(`^/v2/accounts/[^/]+/endpoints$`), "listing endpoints"},

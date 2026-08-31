@@ -5,8 +5,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // dashboardServer answers the token exchange and a set of XML paths.
@@ -180,5 +182,82 @@ func TestAcceptMatchesTheHalfOfBandwidthBeingAsked(t *testing.T) {
 	}
 	if len(seen) != 2 {
 		t.Fatalf("want 2 upstream calls, got %d: %v", len(seen), seen)
+	}
+}
+
+// Insights answers "how much" and "is it getting worse", which list_calls
+// cannot: it returns individual calls. The filters go on the parameter name
+// rather than the value, which is the API's own deepObject convention and easy
+// to get wrong silently -- a mistyped name is ignored, not refused, so the
+// answer comes back unfiltered and looks right.
+func TestAggregateCallsSendsDeepObjectFilters(t *testing.T) {
+	var gotPath string
+	var gotQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == tokenPath {
+			_, _ = io.WriteString(w, `{"access_token":"`+
+				jwt(t, `{"accounts":["5009021"]}`)+`","expires_in":3600}`)
+			return
+		}
+		gotPath, gotQuery = r.URL.Path, r.URL.Query()
+		_, _ = io.WriteString(w, `[{"timestamp":"2026-08-01T00:00:00Z","value":42}]`)
+	}))
+	t.Cleanup(srv.Close)
+
+	p := newFor(t, Config{
+		ClientID: "client", ClientSecret: "shh",
+		APIURL: srv.URL, VoiceURL: srv.URL, MessagingURL: srv.URL, InsightsURL: srv.URL,
+	}, srv.Client())
+
+	got, err := p.aggregateCalls(context.Background(), AggregateCallsInput{
+		Metric: "minutes", Direction: "outbound", CallType: "tollfree-out",
+		Since: "2026-08-01T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("aggregateCalls: %v", err)
+	}
+	if gotPath != "/v1/monitors/voice/minutes-of-use" {
+		t.Errorf("path = %q", gotPath)
+	}
+	for name, want := range map[string]string{
+		"accountId[eq]":  "5009021",
+		"direction[eq]":  "OUTBOUND",
+		"callType[eq]":   "TOLLFREE-OUT",
+		"timestamp[gte]": "2026-08-01T00:00:00Z",
+	} {
+		if got := gotQuery.Get(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	if len(got.Series) != 1 {
+		t.Errorf("series = %v", got.Series)
+	}
+}
+
+// An unknown metric is refused with the set named, rather than sent upstream
+// to 404 on a path segment nobody can guess.
+func TestAggregateCallsNamesTheMetricsItKnows(t *testing.T) {
+	srv := dashboardServer(t, nil)
+	p := portingPlugin(t, srv)
+
+	_, err := p.aggregateCalls(context.Background(), AggregateCallsInput{Metric: "everything"})
+	if err == nil {
+		t.Fatal("an unknown metric was accepted")
+	}
+	for _, want := range []string{"minutes", "connection_rate"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the message does not name %s: %v", want, err)
+		}
+	}
+}
+
+// A window beyond what Insights keeps comes back empty rather than refused,
+// and "no traffic" reads identically to "not kept". The answer says which.
+func TestAggregateCallsWarnsPastTheRetentionWindow(t *testing.T) {
+	if note := historyNote(fixedNow.Add(-2*365*24*time.Hour).Format(time.RFC3339), fixedNow); note == "" {
+		t.Error("a two-year-old window drew no warning")
+	}
+	if note := historyNote(fixedNow.Add(-24*time.Hour).Format(time.RFC3339), fixedNow); note != "" {
+		t.Errorf("a one-day window should need no warning: %q", note)
 	}
 }
