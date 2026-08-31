@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/dreulavelle/mcpd/compare/v0.7.1...v0.8.0) (2026-08-31)
+
+
+### Features
+
+* **notify:** a Discord shape that says how much attention it wants ([2a59d4e](https://github.com/dreulavelle/mcpd/commit/2a59d4e2989e1db4ef4039dae48960b0800ca025))
+* **observability:** keep the log in a file that outlives the container ([6f6f330](https://github.com/dreulavelle/mcpd/commit/6f6f330d03003ee4d543441b1e8da4efdb0a9816))
+* **tunnels:** tell somebody when a connector stops ([b67f4b4](https://github.com/dreulavelle/mcpd/commit/b67f4b48c20d9a9030a03c693a0b8d2e8a07d455))
+
+
+### Fixes
+
+* **extremecloudiq:** stop reporting a sliding session window as the key's expiry ([6f36f23](https://github.com/dreulavelle/mcpd/commit/6f36f23f41daacbc474c6de2ec701d8df49917a4))
+
 ## [0.7.1](https://github.com/dreulavelle/mcpd/compare/v0.7.0...v0.7.1) (2026-08-31)
 
 
