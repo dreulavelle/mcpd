@@ -118,8 +118,11 @@ func TestForbiddenNamesTheLikelyRole(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("403 on %s does not suggest %q: %v", path, want, err)
 		}
-		if !strings.Contains(err.Error(), "cannot be edited after it is created") {
-			t.Errorf("403 on %s does not say roles are fixed: %v", path, err)
+		// A role guess reads as a diagnosis, so the message must also carry
+		// the case where the credential already has every role -- otherwise
+		// it sends somebody hunting for a role that does not exist.
+		if !strings.Contains(err.Error(), "not enabled for the product") {
+			t.Errorf("403 on %s offers only the role explanation: %v", path, err)
 		}
 	}
 }

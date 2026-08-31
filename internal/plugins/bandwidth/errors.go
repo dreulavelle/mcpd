@@ -107,11 +107,19 @@ func explainRequestFailure(status int, path string, body []byte) error {
 			msg += ". Bandwidth said: " + detail
 		}
 		if role := roleFor(path); role != "" {
-			msg += fmt.Sprintf(". This read most likely needs the %q role", role)
+			msg += fmt.Sprintf(". If the credential is missing a role, this "+
+				"read most likely wants %q", role)
 		}
-		return fmt.Errorf("%s. A credential's roles and accounts cannot be "+
-			"edited after it is created: check them in the console, and make "+
-			"a new credential if they are wrong", msg)
+		// Said plainly, because the opposite advice wastes the most time. A
+		// role guess reads as a diagnosis, and somebody whose credential
+		// already has every role will go looking for a role that does not
+		// exist. A 403 on a credential that is fully scoped is not about the
+		// credential at all: it is Bandwidth saying this account is not
+		// provisioned for the product behind that path.
+		return fmt.Errorf("%s. If it already has every role, this is not a "+
+			"role: a fully scoped credential that is still refused means the "+
+			"account is not enabled for the product this path belongs to, "+
+			"which is something only Bandwidth can turn on", msg)
 
 	case http.StatusNotFound:
 		return fmt.Errorf("bandwidth: %s returned nothing. Either it does not "+

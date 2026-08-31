@@ -302,6 +302,12 @@ func TestForbiddenQuotesWhatBandwidthSaid(t *testing.T) {
 	if !strings.Contains(err.Error(), "Campaign management") {
 		t.Errorf("the 10DLC role was not suggested: %v", err)
 	}
+	// A role guess reads as a diagnosis. Somebody whose credential already has
+	// every role would go hunting for a role that does not exist, so the
+	// message has to name the other explanation itself.
+	if !strings.Contains(err.Error(), "not enabled for the product") {
+		t.Errorf("the message does not cover a fully scoped credential: %v", err)
+	}
 }
 
 // A 400 says which parameter it objected to, and no guess made from the path

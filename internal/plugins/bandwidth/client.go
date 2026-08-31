@@ -233,8 +233,11 @@ func (c *Client) do(ctx context.Context, h host, path string, query url.Values, 
 	// machine. The status is the part that distinguishes a wrong credential
 	// from a missing role from a path nobody has permission for, and without
 	// it a failed call leaves nothing behind at all.
+	// The host as well as the path. Bandwidth serves five, the same path
+	// shape appears on more than one of them, and a log line that names only
+	// the path cannot say which product refused a call.
 	c.log.DebugContext(ctx, "bandwidth API call",
-		"path", path, "status", resp.StatusCode,
+		"host", redactURL(c.base(h)), "path", path, "status", resp.StatusCode,
 		"bytes", len(body), "took", elapsed)
 
 	if resp.StatusCode >= 300 {
