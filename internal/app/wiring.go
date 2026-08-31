@@ -15,6 +15,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/plugins/bandwidth"
 	"github.com/spoked/mcpd/internal/plugins/cnmaestro"
 	"github.com/spoked/mcpd/internal/plugins/echoplugin"
 	"github.com/spoked/mcpd/internal/plugins/external"
@@ -90,6 +91,7 @@ func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, er
 func builtinTypes() (*plugins.Catalog, error) {
 	return plugins.NewCatalog(
 		echoplugin.Type(),
+		bandwidth.Type(),
 		cnmaestro.Type(),
 		extremecloudiq.Type(),
 		graylog.Type(),
