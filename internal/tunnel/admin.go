@@ -228,6 +228,12 @@ func (d *Directory) explain(err error) error {
 			return &refusal{ReasonAdminKeyRejected,
 				"OpenAI did not recognise that admin key."}
 		case http.StatusForbidden:
+			// Two things gate this independently: the org role of whoever made
+			// the key, and the scopes chosen for the key itself. An earlier
+			// version of this said the role was the whole story and that
+			// making another key would not help -- which is wrong, and worse
+			// than saying nothing, because regenerating the key is exactly
+			// what fixes the common case. The dashboard lays out both.
 			return &refusal{ReasonTunnelsManageRequired,
 				"That admin key is not allowed to manage tunnels."}
 		case http.StatusBadRequest:

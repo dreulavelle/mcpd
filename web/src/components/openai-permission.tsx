@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -45,15 +45,32 @@ const EXPLANATIONS: Record<OpenAIReason, Explanation> = {
   openai_tunnels_manage_required: {
     title: "That key cannot manage tunnels",
     lede:
-      "Making another key will not help. The permission comes from the OpenAI " +
-      "role of whoever created the key, not from the key itself — so a " +
-      "replacement made by the same person is refused identically.",
+      "Two separate things gate this, and if you are an organisation owner it " +
+      "is almost certainly the second: the org role of whoever created the " +
+      "key, and the scopes chosen for the key itself. A key can lack a " +
+      "permission its creator holds.",
     steps: [
       {
-        do: "Give that person a role carrying Tunnels: Read and Manage. Permissions are organisation-wide, not per project.",
+        do:
+          "Check the key's own permissions. A key created as Restricted without " +
+          "the tunnel scopes is refused even for an owner. Set it to All, or " +
+          "include api.organization.tunnel.read and .write.",
+        where: { label: "Organization → Admin keys", href: ADMIN_KEYS_URL },
+      },
+      {
+        do:
+          "If it already says All, regenerate the key. OpenAI has issued keys " +
+          "missing scopes they should have had, and regenerating is their own " +
+          "advice for it.",
+        where: { label: "Organization → Admin keys", href: ADMIN_KEYS_URL },
+      },
+      {
+        do:
+          "Only if you are not an owner: check your role carries Tunnels: Read " +
+          "and Manage. Owners have it by default. Permissions are " +
+          "organisation-wide, not per project.",
         where: { label: "Organization → People → Roles", href: ROLES_URL },
       },
-      { do: "Then try the same admin key again. There is no need to issue a new one." },
     ],
     handoff:
       "Please add the tunnel permissions to my OpenAI role: " +
@@ -61,7 +78,7 @@ const EXPLANATIONS: Record<OpenAIReason, Explanation> = {
       "(shown as Tunnels: Read and Manage). They are organisation-level, at " +
       ROLES_URL + ". I need them to create an MCP tunnel.",
     footnote:
-      "Only an organisation owner can change roles. If that is not you, copy the request above and send it to someone who is.",
+      "The request above is only needed if your role is the problem — an owner already has these, and only an owner can grant them to someone else.",
   },
   openai_admin_key_rejected: {
     title: "OpenAI did not recognise that admin key",
@@ -106,20 +123,55 @@ export function OpenAIPermissionDialog({
   detail?: string;
   onClose: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  // "" until pressed, then what actually happened. A button that reports
+  // nothing is indistinguishable from one that is broken.
+  const [copied, setCopied] = useState<"" | "done" | "select">("");
+  const box = useRef<HTMLTextAreaElement>(null);
   const it = EXPLANATIONS[reason];
 
+  /**
+   * Copy, by whichever route this browser allows.
+   *
+   * navigator.clipboard exists only in a secure context, and mcpd's dashboard
+   * is served over plain HTTP on purpose -- it is an internal interface and
+   * the TLS is on the MCP listener instead. So on every ordinary install,
+   * reached by LAN address, the modern API is simply absent and the older
+   * execCommand path is the one that runs.
+   *
+   * If both are refused the text is left selected and the button says to press
+   * the shortcut, because the failure the user must never meet is a button
+   * that appears to do nothing.
+   */
   async function copy() {
     if (!it.handoff) return;
-    try {
-      await navigator.clipboard.writeText(it.handoff);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access is refused in some browsers and over plain HTTP.
-      // The text is on screen and selectable either way, so there is nothing
-      // to recover from and nothing worth saying about it.
+
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(it.handoff);
+        return done("done");
+      } catch {
+        // Refused despite being available -- a permissions policy, usually.
+        // Fall through rather than give up.
+      }
     }
+
+    const field = box.current;
+    if (field) {
+      field.focus();
+      field.select();
+      try {
+        if (document.execCommand("copy")) return done("done");
+      } catch {
+        // Deprecated and occasionally disabled. The selection stands either
+        // way, which is what makes the last resort usable.
+      }
+    }
+    done("select");
+  }
+
+  function done(how: "done" | "select") {
+    setCopied(how);
+    setTimeout(() => setCopied(""), 4000);
   }
 
   return (
@@ -161,10 +213,27 @@ export function OpenAIPermissionDialog({
         {it.handoff && (
           <div className="space-y-2 rounded-md border bg-muted/40 p-3">
             <p className="text-xs font-medium">Send this to your organisation owner</p>
-            <p className="text-xs text-muted-foreground">{it.handoff}</p>
-            <Button type="button" variant="outline" size="sm" onClick={copy}>
-              {copied ? "Copied" : "Copy request"}
-            </Button>
+            {/* A textarea rather than a paragraph: it is selectable, and it
+                is what execCommand can copy from when the clipboard API is
+                not available. Read-only, so nobody edits what they send. */}
+            <textarea
+              ref={box}
+              readOnly
+              value={it.handoff}
+              rows={4}
+              aria-label="Request to send to your organisation owner"
+              className="w-full resize-none rounded border bg-background p-2 text-xs text-muted-foreground"
+            />
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={copy}>
+                {copied === "done" ? "Copied" : "Copy request"}
+              </Button>
+              {copied === "select" && (
+                <span className="text-xs text-muted-foreground">
+                  Selected — press {navigator.platform?.startsWith("Mac") ? "⌘C" : "Ctrl+C"} to copy.
+                </span>
+              )}
+            </div>
           </div>
         )}
 

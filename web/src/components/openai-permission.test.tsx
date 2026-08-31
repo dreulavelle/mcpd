@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import {
   isOpenAIReason, OpenAIPermissionDialog,
 } from "@/components/openai-permission";
@@ -15,10 +15,12 @@ describe("OpenAI refusals", () => {
     expect(isOpenAIReason("tunnel_failed")).toBe(false);
   });
 
-  // The fact that decides what somebody does next is that another key will not
-  // help. It led the old message too, but a toast flattened the whole thing
-  // into one line and buried it.
-  it("leads with the reason a new key will not help", () => {
+  // This said the opposite once: that the permission comes from the creator's
+  // role and another key would not help. That is wrong -- admin keys carry
+  // their own scopes, an owner can issue a key weaker than themselves, and
+  // regenerating is OpenAI's own advice. Telling an owner not to do the thing
+  // that fixes it is worse than saying nothing.
+  it("names both gates, and does not tell an owner a new key is pointless", () => {
     render(
       <OpenAIPermissionDialog
         reason="openai_tunnels_manage_required"
@@ -26,14 +28,18 @@ describe("OpenAI refusals", () => {
         onClose={() => {}}
       />,
     );
-    expect(screen.getByText(/Making another key will not help/)).toBeInTheDocument();
-    // The permission named the way OpenAI's own settings name it. It appears
-    // twice on purpose: once as the step, once inside the request to forward.
-    expect(screen.getAllByText(/Tunnels: Read and Manage/).length).toBeGreaterThan(0);
-    // And a link straight to where it is granted, rather than a path to read.
-    const link = screen.getByRole("link", { name: /Organization → People → Roles/ });
-    expect(link).toHaveAttribute(
-      "href", "https://platform.openai.com/settings/organization/people/roles");
+    // Both gates named, and the key's own scopes first, because that is the
+    // one an owner has not already satisfied.
+    expect(screen.getByText(/scopes chosen for the key itself/)).toBeInTheDocument();
+    expect(screen.getByText(/Restricted without the tunnel scopes/)).toBeInTheDocument();
+    expect(screen.getByText(/regenerate the key/)).toBeInTheDocument();
+    // The claim that got this wrong must not come back.
+    expect(screen.queryByText(/Making another key will not help/)).toBeNull();
+    // Links straight to where each is changed, rather than a path to read.
+    expect(screen.getAllByRole("link", { name: /Organization → Admin keys/ })[0])
+      .toHaveAttribute("href", "https://platform.openai.com/settings/organization/admin-keys");
+    expect(screen.getByRole("link", { name: /Organization → People → Roles/ }))
+      .toHaveAttribute("href", "https://platform.openai.com/settings/organization/people/roles");
   });
 
   // The reader is frequently not the person who can grant it, so the request
@@ -45,6 +51,38 @@ describe("OpenAI refusals", () => {
     expect(screen.getByText(/Send this to your organisation owner/)).toBeInTheDocument();
     expect(screen.getByText(/api\.organization\.tunnel\.write/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy request" })).toBeInTheDocument();
+  });
+
+  // The dashboard is served over plain HTTP on purpose, so navigator.clipboard
+  // does not exist on any ordinary install reached by LAN address. The button
+  // silently did nothing there, which is worse than having no button: the
+  // reader cannot tell it from a broken one.
+  it("still reports something when the clipboard API is unavailable", () => {
+    const clipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    Object.defineProperty(window, "isSecureContext", { value: false, configurable: true });
+    // jsdom implements neither, which is exactly the situation being tested.
+    document.execCommand = undefined as unknown as typeof document.execCommand;
+
+    render(
+      <OpenAIPermissionDialog reason="openai_tunnels_manage_required" onClose={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy request" }));
+
+    // The text is selected and the button says so, rather than pretending.
+    expect(screen.getByText(/press .* to copy/i)).toBeInTheDocument();
+
+    Object.defineProperty(navigator, "clipboard", { value: clipboard, configurable: true });
+  });
+
+  // The request has to be selectable for the fallback to be usable at all.
+  it("puts the request somewhere it can be selected", () => {
+    render(
+      <OpenAIPermissionDialog reason="openai_tunnels_manage_required" onClose={() => {}} />,
+    );
+    const box = screen.getByLabelText("Request to send to your organisation owner");
+    expect(box).toHaveAttribute("readonly");
+    expect((box as HTMLTextAreaElement).value).toMatch(/api\.organization\.tunnel\.write/);
   });
 
   it("explains an admin key confused with a runtime key", () => {
