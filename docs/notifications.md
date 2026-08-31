@@ -30,9 +30,23 @@ Every event is a statement about something that already happened.
 
 Three shapes, because the receivers people actually have want different ones.
 
-**`slack`** — one `text` field. Also fits Mattermost and Discord's
-Slack-compatible endpoint. Blocks are deliberately not used: a payload that
-renders beautifully in one of them fails to render at all in another.
+**`slack`** — one `text` field, for Slack and Mattermost. Blocks are
+deliberately not used: a payload that renders beautifully in one of them fails
+to render at all in another.
+
+**`discord`** — one embed, coloured by severity: amber for a warning, blue for
+anything else. This is the one place the no-blocks rule is set aside, and the
+reason it can be is that the rule exists to stop a single payload having to
+render in three products at once. A Discord-only shape does not carry that
+constraint, and the colour earns its keep — it is the only way Discord gives
+to tell a warning from routine news at a glance.
+
+Paste the webhook Discord gave you. If the address you have ends in `/slack`
+— which is what most instructions hand you, because it is the one the `slack`
+shape wants — the suffix is dropped rather than obeyed, since the shape you
+picked is the one you meant. Nothing red is ever sent: everything here is a
+statement about something that already happened, and a channel full of red
+is one people mute.
 
 **`ntfy`** — ntfy's publishing format, with the topic in the body. A warning is
 sent at priority 4 rather than 5; deciding on your behalf that mcpd should
