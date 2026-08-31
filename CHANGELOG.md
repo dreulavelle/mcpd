@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/dreulavelle/mcpd/compare/v0.8.0...v0.9.0) (2026-08-31)
+
+
+### Features
+
+* **bandwidth:** read a Bandwidth estate — numbers, porting, messaging and 10DLC ([#106](https://github.com/dreulavelle/mcpd/issues/106)) ([11f6147](https://github.com/dreulavelle/mcpd/commit/11f614788d8282a513dc4dc3299178affaec6750))
+
 ## [0.8.0](https://github.com/dreulavelle/mcpd/compare/v0.7.1...v0.8.0) (2026-08-31)
 
 
