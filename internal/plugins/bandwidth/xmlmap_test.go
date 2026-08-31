@@ -1,6 +1,7 @@
 package bandwidth
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -135,5 +136,89 @@ func TestASuccessfulResponseIsNotMistakenForAnError(t *testing.T) {
 	}
 	if err := dashboardError(rec, "/accounts/1/tns"); err != nil {
 		t.Fatalf("a good response was reported as an error: %v", err)
+	}
+}
+
+// The bug this exists for: /disconnects returned 108 kB, /tnoptions 175 kB and
+// /applications 31 kB, and all three were reported as zero rows because the
+// element name guessed here did not match the one Bandwidth used. An operator
+// told their estate is empty believes it.
+func TestCollectFindsAListWhateverTheWrapperIsCalled(t *testing.T) {
+	for name, body := range map[string]string{
+		"a wrapper nobody guessed": `<Response><SomethingNobodyGuessed>
+			<Item><Id>1</Id></Item><Item><Id>2</Id></Item>
+		</SomethingNobodyGuessed></Response>`,
+		"directly under the root": `<Response>
+			<Item><Id>1</Id></Item><Item><Id>2</Id></Item>
+		</Response>`,
+		"nested two deep": `<Response><Outer><Inner>
+			<Item><Id>1</Id></Item><Item><Id>2</Id></Item>
+		</Inner></Outer></Response>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec, err := decodeXML([]byte(body))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			// Deliberately the wrong names, which is the situation in
+			// production: the guess is a preference, not a requirement.
+			got, note := collect(rec, "WrongContainer", "WrongElement")
+			if len(got) != 2 {
+				t.Fatalf("want 2 records, got %d (note %q)", len(got), note)
+			}
+			if note != "" {
+				t.Errorf("a found list should carry no caveat: %q", note)
+			}
+		})
+	}
+}
+
+// A genuinely empty collection must stay empty and silent, or every empty
+// answer grows a warning and the warning stops meaning anything.
+func TestCollectStaysQuietOnAGenuinelyEmptyResponse(t *testing.T) {
+	rec, err := decodeXML([]byte(`<Response><TotalCount>0</TotalCount><Links></Links></Response>`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, note := collect(rec, "Things", "Thing")
+	if len(got) != 0 {
+		t.Fatalf("want no records, got %v", got)
+	}
+	if note != "" {
+		t.Errorf("an empty collection should need no caveat: %q", note)
+	}
+}
+
+// And when there is content that cannot be read as a list, the count must not
+// be presented as a count. "Unknown" and "none" are different answers.
+func TestCollectRefusesToCallUnreadableContentEmpty(t *testing.T) {
+	rec, err := decodeXML([]byte(
+		`<Response><TotalCount>3</TotalCount><Payload>something structured</Payload></Response>`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, note := collect(rec, "Things", "Thing")
+	if len(got) != 0 {
+		t.Fatalf("got %v", got)
+	}
+	if note == "" {
+		t.Fatal("content that was not recognised was reported as an empty collection")
+	}
+	if !strings.Contains(note, "unknown rather than none") {
+		t.Errorf("the caveat does not distinguish unknown from none: %q", note)
+	}
+}
+
+// The Dashboard refuses a size without a page -- in as many words on /orders,
+// and as a bare 404 elsewhere, which reads as an empty collection and is not.
+func TestSetPageAlwaysSendsBoth(t *testing.T) {
+	q := url.Values{}
+	setPage(q, 0, 200)
+	if q.Get("page") != "1" || q.Get("size") != "200" {
+		t.Fatalf("page/size = %q/%q, want 1/200", q.Get("page"), q.Get("size"))
+	}
+	setPage(q, 3, 50)
+	if q.Get("page") != "3" || q.Get("size") != "50" {
+		t.Fatalf("page/size = %q/%q, want 3/50", q.Get("page"), q.Get("size"))
 	}
 }

@@ -320,3 +320,44 @@ func TestBadRequestLeadsWithTheUpstreamsExplanation(t *testing.T) {
 		t.Fatalf("the explanation was dropped: %v", err)
 	}
 }
+
+// The messaging API refuses a search with no filter at all, so "show me
+// messages" failed outright. A window is supplied, and said out loud so nobody
+// reads a day as the whole history.
+func TestSearchMessagesSuppliesAWindowWhenNothingElseNarrows(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == tokenPath {
+			_, _ = io.WriteString(w, `{"access_token":"`+
+				jwt(t, `{"accounts":["5009021"]}`)+`","expires_in":3600}`)
+			return
+		}
+		got = r.URL.Query()
+		_, _ = io.WriteString(w, `{"totalCount":0,"messages":[]}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := portingPlugin(t, srv)
+
+	out, err := p.searchMessages(context.Background(), MessagesInput{})
+	if err != nil {
+		t.Fatalf("searchMessages: %v", err)
+	}
+	if got.Get("fromDateTime") == "" {
+		t.Fatal("an unfiltered search sent no filter, which the API refuses")
+	}
+	if !strings.Contains(out.Note, "24 hours") {
+		t.Errorf("the window was not disclosed: %q", out.Note)
+	}
+
+	// A caller who did narrow it gets exactly what they asked for.
+	out, err = p.searchMessages(context.Background(), MessagesInput{To: "+19195551234"})
+	if err != nil {
+		t.Fatalf("searchMessages: %v", err)
+	}
+	if got.Get("fromDateTime") != "" {
+		t.Errorf("a filtered search had a window imposed on it: %v", got)
+	}
+	if out.Note != "" {
+		t.Errorf("a filtered search should carry no window caveat: %q", out.Note)
+	}
+}

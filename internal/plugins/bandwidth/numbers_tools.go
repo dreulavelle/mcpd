@@ -101,10 +101,7 @@ func (p *Plugin) listNumbers(ctx context.Context, in NumbersInput) (Listing, err
 	limit := p.client.limit(in.Limit)
 	q := url.Values{}
 	if !in.TotalsOnly {
-		q.Set("size", strconv.Itoa(limit))
-		if in.Page > 0 {
-			q.Set("page", strconv.Itoa(in.Page))
-		}
+		setPage(q, in.Page, limit)
 	}
 
 	rec, err := p.client.getXML(ctx, path, q)
@@ -115,11 +112,12 @@ func (p *Plugin) listNumbers(ctx context.Context, in NumbersInput) (Listing, err
 	if in.TotalsOnly {
 		return Listing{Items: []Record{rec}, Returned: 1}, nil
 	}
-	items := listOf(rec, "TelephoneNumbers", "TelephoneNumber")
-	if len(items) == 0 {
-		items = listOf(rec, "", "TelephoneNumber")
+	items, note := collect(rec, "TelephoneNumbers", "TelephoneNumber")
+	out := capped(items, limit)
+	if out.Note == "" {
+		out.Note = note
 	}
-	return capped(items, limit), nil
+	return out, nil
 }
 
 // AvailableNumbersInput describes the numbers to look for.
@@ -162,11 +160,12 @@ func (p *Plugin) searchAvailableNumbers(ctx context.Context, in AvailableNumbers
 	if err != nil {
 		return Listing{}, err
 	}
-	items := listOf(rec, "TelephoneNumberList", "TelephoneNumber")
-	if len(items) == 0 {
-		items = listOf(rec, "", "TelephoneNumber")
+	items, note := collect(rec, "TelephoneNumberList", "TelephoneNumber")
+	out := capped(items, quantity)
+	if out.Note == "" {
+		out.Note = note
 	}
-	return capped(items, quantity), nil
+	return out, nil
 }
 
 // OrdersInput narrows a listing of orders, or names one.
@@ -214,17 +213,19 @@ func (p *Plugin) listOrders(ctx context.Context, in OrdersInput) (Listing, error
 	limit := p.client.limit(in.Limit)
 	q := url.Values{}
 	set(q, "status", in.Status)
-	q.Set("size", strconv.Itoa(limit))
-	if in.Page > 0 {
-		q.Set("page", strconv.Itoa(in.Page))
-	}
+	setPage(q, in.Page, limit)
 
 	rec, err := p.client.getXML(ctx, base, q)
 	p.note(err, nil)
 	if err != nil {
 		return Listing{}, err
 	}
-	return capped(listOf(rec, "", element), limit), nil
+	items, note := collect(rec, "", element)
+	out := capped(items, limit)
+	if out.Note == "" {
+		out.Note = note
+	}
+	return out, nil
 }
 
 // DisconnectsInput narrows a listing of disconnect orders.
@@ -248,10 +249,7 @@ func (p *Plugin) listDisconnects(ctx context.Context, in DisconnectsInput) (List
 	}
 	limit := p.client.limit(in.Limit)
 	q := url.Values{}
-	q.Set("size", strconv.Itoa(limit))
-	if in.Page > 0 {
-		q.Set("page", strconv.Itoa(in.Page))
-	}
+	setPage(q, in.Page, limit)
 
 	rec, err := p.client.getXML(ctx,
 		fmt.Sprintf("/accounts/%s/disconnects", account), q)
@@ -259,5 +257,10 @@ func (p *Plugin) listDisconnects(ctx context.Context, in DisconnectsInput) (List
 	if err != nil {
 		return Listing{}, err
 	}
-	return capped(listOf(rec, "", "DisconnectTelephoneNumberOrder"), limit), nil
+	items, note := collect(rec, "", "DisconnectTelephoneNumberOrder")
+	out := capped(items, limit)
+	if out.Note == "" {
+		out.Note = note
+	}
+	return out, nil
 }

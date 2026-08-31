@@ -5,9 +5,15 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
+
+// defaultMessageWindow is how far back an otherwise unfiltered message search
+// reaches. The API requires at least one filter and this is the least
+// surprising one to supply.
+const defaultMessageWindow = 24 * time.Hour
 
 // What has been sent and received.
 
@@ -94,6 +100,20 @@ func (p *Plugin) searchMessages(ctx context.Context, in MessagesInput) (Listing,
 	limit := p.client.limit(in.Limit)
 	q.Set("limit", strconv.Itoa(limit))
 
+	// The messaging API refuses a search with no filter at all -- "Missing
+	// search params, requires one of ..." -- so an unqualified "show me
+	// messages" fails rather than returning recent ones. A window is supplied
+	// when nothing else narrows it, because the caller's question is almost
+	// always "lately", and the answer says a window was chosen so that nobody
+	// reads it as the whole history.
+	var note string
+	if len(q) == 1 {
+		since := p.deps.Now().Add(-defaultMessageWindow).UTC().Format(time.RFC3339)
+		q.Set("fromDateTime", since)
+		note = "no filter was given, so this covers the last 24 hours only — " +
+			"narrow by number, status or date to look further back"
+	}
+
 	var env messagesEnvelope
 	// The messaging API says users where the voice API says accounts, for the
 	// same id. Bandwidth's history, not a mistake here.
@@ -106,6 +126,9 @@ func (p *Plugin) searchMessages(ctx context.Context, in MessagesInput) (Listing,
 
 	out := capped(env.Messages, limit)
 	out.NextPageToken = env.PageInfo.NextPageToken
+	if out.Note == "" {
+		out.Note = note
+	}
 	if env.TotalCount > out.Returned && out.Note == "" {
 		out.Note = fmt.Sprintf("%d matched; %d returned. Use page_token to "+
 			"continue.", env.TotalCount, out.Returned)

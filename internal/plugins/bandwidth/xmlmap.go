@@ -4,6 +4,9 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -139,6 +142,93 @@ func appendChild(out Record, name string, value any) {
 // A missing container is an empty slice rather than an error: Bandwidth omits
 // the container entirely when a collection is empty, and an account with no
 // numbers is not a failure.
+func collect(rec Record, container, element string) (items []Record, note string) {
+	if items = listOf(rec, container, element); len(items) > 0 {
+		return items, ""
+	}
+	// The named shape found nothing. Either the collection really is empty, or
+	// the names are wrong -- and those two must not look the same. Guessing an
+	// element name wrong once reported four endpoints as empty while Bandwidth
+	// was returning a hundred kilobytes, which is the worst kind of wrong an
+	// integration can be: an operator told their estate is empty believes it.
+	if items = discoverList(rec); len(items) > 0 {
+		return items, ""
+	}
+	if hasContent(rec) {
+		return nil, "the response carried data this integration did not " +
+			"recognise as a list, so the count above is not a count of what " +
+			"exists — treat it as unknown rather than none"
+	}
+	return nil, ""
+}
+
+// discoverList finds a repeated element anywhere in a decoded response.
+//
+// Bandwidth's Dashboard wraps collections differently per endpoint -- some in a
+// plural container, some directly under the response -- and there are dozens of
+// endpoints. Naming every shape correctly is a guess repeated dozens of times,
+// and a wrong guess is silent. So the names are a preference and this is the
+// floor: whatever the wrapper is called, a list is a repeated element, and that
+// is findable without knowing its name.
+func discoverList(node any) []Record {
+	rec, ok := node.(Record)
+	if !ok {
+		return nil
+	}
+	// Widest first: a slice at this level is the collection, and descending
+	// before checking would find a repeated field inside the first row
+	// instead.
+	for _, key := range sortedKeys(rec) {
+		if list, ok := rec[key].([]any); ok {
+			out := make([]Record, 0, len(list))
+			for _, item := range list {
+				if r, ok := item.(Record); ok {
+					out = append(out, r)
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		}
+	}
+	for _, key := range sortedKeys(rec) {
+		if found := discoverList(rec[key]); len(found) > 0 {
+			return found
+		}
+	}
+	return nil
+}
+
+// hasContent reports whether a decoded response carried anything beyond the
+// bookkeeping every Dashboard answer has.
+func hasContent(rec Record) bool {
+	for key, value := range rec {
+		switch key {
+		case "ResultCount", "TotalCount", "Links", "Link", "#text":
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return true
+			}
+		case nil:
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func sortedKeys(rec Record) []string {
+	out := make([]string, 0, len(rec))
+	for k := range rec {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func listOf(rec Record, container, element string) []Record {
 	node := any(rec)
 	if container != "" {
@@ -188,4 +278,19 @@ func text(rec Record, key string) string {
 		return s
 	}
 	return ""
+}
+
+// setPage writes the Dashboard's paging pair.
+//
+// Both, always. The Dashboard refuses a size without a page -- "Page parameter
+// is required", in as many words, on /orders -- and answers the same complaint
+// elsewhere as a bare 404, which reads as an empty collection and is not one.
+// Sending page 1 by default costs nothing and removes a whole class of failure
+// that does not look like a failure.
+func setPage(q url.Values, page, size int) {
+	if page <= 0 {
+		page = 1
+	}
+	q.Set("page", strconv.Itoa(page))
+	q.Set("size", strconv.Itoa(size))
 }

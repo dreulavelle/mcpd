@@ -88,10 +88,7 @@ func (p *Plugin) listSites(ctx context.Context, in SitesInput) (SiteOutput, erro
 		if err != nil {
 			return SiteOutput{}, err
 		}
-		items := listOf(rec, "Sites", "Site")
-		if len(items) == 0 {
-			items = listOf(rec, "", "Site")
-		}
+		items, _ := collect(rec, "Sites", "Site")
 		c := capped(items, p.client.limit(in.Limit))
 		return SiteOutput{Sites: c.Items, Returned: c.Returned, Note: c.Note}, nil
 	}
@@ -109,10 +106,7 @@ func (p *Plugin) listSites(ctx context.Context, in SitesInput) (SiteOutput, erro
 		if err != nil {
 			out.Note = "the site was read; its SIP peers were not: " + err.Error()
 		} else {
-			peers := listOf(rec, "SipPeers", "SipPeer")
-			if len(peers) == 0 {
-				peers = listOf(rec, "", "SipPeer")
-			}
+			peers, _ := collect(rec, "SipPeers", "SipPeer")
 			out.SipPeers = peers
 		}
 	}
@@ -157,10 +151,7 @@ func (p *Plugin) listSipPeers(ctx context.Context, in SipPeersInput) (SipPeerOut
 		if err != nil {
 			return SipPeerOutput{}, err
 		}
-		items := listOf(rec, "SipPeers", "SipPeer")
-		if len(items) == 0 {
-			items = listOf(rec, "", "SipPeer")
-		}
+		items, _ := collect(rec, "SipPeers", "SipPeer")
 		c := capped(items, p.client.limit(in.Limit))
 		return SipPeerOutput{SipPeers: c.Items, Returned: c.Returned, Note: c.Note}, nil
 	}
@@ -223,10 +214,7 @@ func (p *Plugin) listApplications(ctx context.Context, in ApplicationsInput) (Ap
 		if err != nil {
 			return ApplicationOutput{}, err
 		}
-		items := listOf(rec, "Applications", "Application")
-		if len(items) == 0 {
-			items = listOf(rec, "", "Application")
-		}
+		items, _ := collect(rec, "Applications", "Application")
 		c := capped(items, p.client.limit(in.Limit))
 		return ApplicationOutput{Applications: c.Items, Returned: c.Returned, Note: c.Note}, nil
 	}
@@ -244,10 +232,7 @@ func (p *Plugin) listApplications(ctx context.Context, in ApplicationsInput) (Ap
 		if err != nil {
 			out.Note = "the application was read; its associations were not: " + err.Error()
 		} else {
-			peers := listOf(rec, "AssociatedSipPeers", "AssociatedSipPeer")
-			if len(peers) == 0 {
-				peers = listOf(rec, "", "AssociatedSipPeer")
-			}
+			peers, _ := collect(rec, "AssociatedSipPeers", "AssociatedSipPeer")
 			out.AssociatedSipPeers = peers
 		}
 	}
@@ -295,10 +280,7 @@ func (p *Plugin) listE911Locations(ctx context.Context, in E911Input) (E911Outpu
 		if err != nil {
 			return E911Output{}, err
 		}
-		items := listOf(rec, "Locations", "Location")
-		if len(items) == 0 {
-			items = listOf(rec, "", "Location")
-		}
+		items, _ := collect(rec, "Locations", "Location")
 		c := capped(items, p.client.limit(in.Limit))
 		out = E911Output{Locations: c.Items, Returned: c.Returned, Note: c.Note}
 	}
@@ -308,10 +290,7 @@ func (p *Plugin) listE911Locations(ctx context.Context, in E911Input) (E911Outpu
 		if err != nil {
 			out.Note = appendNote(out.Note, "the endpoints were not read: "+err.Error())
 		} else {
-			eps := listOf(rec, "Endpoints", "Endpoint")
-			if len(eps) == 0 {
-				eps = listOf(rec, "", "Endpoint")
-			}
+			eps, _ := collect(rec, "Endpoints", "Endpoint")
 			out.Endpoints = eps
 		}
 	}

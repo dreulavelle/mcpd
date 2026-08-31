@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strconv"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -86,10 +85,7 @@ func (p *Plugin) listPortIns(ctx context.Context, in PortInsInput) (Listing, err
 	set(q, "tn", in.PhoneNumber)
 	set(q, "startDate", in.CreatedAfter)
 	set(q, "endDate", in.CreatedBefore)
-	q.Set("size", strconv.Itoa(limit))
-	if in.Page > 0 {
-		q.Set("page", strconv.Itoa(in.Page))
-	}
+	setPage(q, in.Page, limit)
 
 	rec, err := p.client.getXML(ctx,
 		fmt.Sprintf("/accounts/%s/portins", account), q)
@@ -97,13 +93,12 @@ func (p *Plugin) listPortIns(ctx context.Context, in PortInsInput) (Listing, err
 	if err != nil {
 		return Listing{}, err
 	}
-	items := listOf(rec, "LnpOrderSummary", "")
-	if len(items) == 0 {
-		// The Dashboard has more than one name for this collection depending
-		// on the endpoint's age; both are tried rather than assuming.
-		items = listOf(rec, "", "LnpOrderSummary")
+	items, note := collect(rec, "", "LnpOrderSummary")
+	out := capped(items, limit)
+	if out.Note == "" {
+		out.Note = note
 	}
-	return capped(items, limit), nil
+	return out, nil
 }
 
 // PortInInput names one port-in order and says how much of it to read.
@@ -157,14 +152,14 @@ func (p *Plugin) getPortIn(ctx context.Context, in PortInInput) (PortInOutput, e
 		if rec, err := p.client.getXML(ctx, base+"/history", nil); err != nil {
 			missing = append(missing, "history ("+err.Error()+")")
 		} else {
-			out.History = listOf(rec, "", "OrderHistory")
+			out.History, _ = collect(rec, "", "OrderHistory")
 		}
 	}
 	if in.WithNotes {
 		if rec, err := p.client.getXML(ctx, base+"/notes", nil); err != nil {
 			missing = append(missing, "notes ("+err.Error()+")")
 		} else {
-			out.Notes = listOf(rec, "", "Note")
+			out.Notes, _ = collect(rec, "", "Note")
 		}
 	}
 	if in.WithAuthLetter {
@@ -172,7 +167,7 @@ func (p *Plugin) getPortIn(ctx context.Context, in PortInInput) (PortInOutput, e
 		if rec, err := p.client.getXML(ctx, base+"/loas", q); err != nil {
 			missing = append(missing, "letter of authorisation ("+err.Error()+")")
 		} else {
-			out.AuthLetters = listOf(rec, "", "FileData")
+			out.AuthLetters, _ = collect(rec, "", "FileData")
 		}
 	}
 	if len(missing) > 0 {
@@ -200,10 +195,7 @@ func (p *Plugin) listBulkPortIns(ctx context.Context, in BulkPortInsInput) (List
 	limit := p.client.limit(in.Limit)
 	q := url.Values{}
 	set(q, "status", in.Status)
-	q.Set("size", strconv.Itoa(limit))
-	if in.Page > 0 {
-		q.Set("page", strconv.Itoa(in.Page))
-	}
+	setPage(q, in.Page, limit)
 
 	rec, err := p.client.getXML(ctx,
 		fmt.Sprintf("/accounts/%s/bulkPortins", account), q)
@@ -211,7 +203,12 @@ func (p *Plugin) listBulkPortIns(ctx context.Context, in BulkPortInsInput) (List
 	if err != nil {
 		return Listing{}, err
 	}
-	return capped(listOf(rec, "", "BulkPortinSummary"), limit), nil
+	items, note := collect(rec, "", "BulkPortinSummary")
+	out := capped(items, limit)
+	if out.Note == "" {
+		out.Note = note
+	}
+	return out, nil
 }
 
 // BulkPortInInput names one bulk order.
@@ -253,7 +250,7 @@ func (p *Plugin) getBulkPortIn(ctx context.Context, in BulkPortInInput) (BulkPor
 		if rec, err := p.client.getXML(ctx, base+"/tnList", nil); err != nil {
 			out.Note = "the order was read; its number list was not: " + err.Error()
 		} else {
-			out.Numbers = listOf(rec, "", "TelephoneNumber")
+			out.Numbers, _ = collect(rec, "", "TelephoneNumber")
 		}
 	}
 	return out, nil
@@ -290,7 +287,12 @@ func (p *Plugin) listTollFreePortValidations(ctx context.Context, in TollFreeVal
 	if err != nil {
 		return Listing{}, err
 	}
-	return capped(listOf(rec, "", "TollFreePortingValidation"), p.client.limit(in.Limit)), nil
+	items, note := collect(rec, "", "TollFreePortingValidation")
+	out := capped(items, p.client.limit(in.Limit))
+	if out.Note == "" {
+		out.Note = note
+	}
+	return out, nil
 }
 
 // joinAnd joins a list the way a sentence does.
