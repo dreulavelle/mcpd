@@ -3,6 +3,7 @@ package extremecloudiq
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -173,9 +174,20 @@ func (p *Plugin) Start(ctx context.Context) error {
 	if info.DataCenter != "" {
 		fields = append(fields, "data_centre", info.DataCenter)
 	}
+	if issued, ok := info.Issued(); ok {
+		fields = append(fields, "token_issued", issued.UTC().Format(time.RFC3339))
+	}
 	if expiry, ok := info.Expiry(p.deps.Now()); ok {
 		p.setExpiry(expiry)
 		fields = append(fields, "token_expires", expiry.UTC().Format(time.RFC3339))
+	} else if info.IsSession(p.deps.Now()) {
+		// Said once, at Info, so the absence of an expiry is explained rather
+		// than looking like something that failed to be read.
+		fields = append(fields, "token_expiry", "not reported; the API describes "+
+			"a per-request session whose window slides, not this key's own expiry")
+	}
+	if len(info.Scopes) > 0 {
+		fields = append(fields, "scopes", strings.Join(info.Scopes, ","))
 	}
 	p.deps.Log.Info("extremecloudiq ready", fields...)
 
@@ -225,8 +237,8 @@ func (p *Plugin) Check(_ context.Context) plugins.Health {
 	if !expires.IsZero() {
 		if left := expires.Sub(p.deps.Now()); left <= 0 {
 			return plugins.Degraded("the API token expired on " +
-				expires.UTC().Format(time.RFC3339) + "; issue a new one under " +
-				"Global Settings, API Token Management")
+				expires.UTC().Format(time.RFC3339) + "; issue a new one in " +
+				"Extreme Platform ONE, under your profile's API keys")
 		} else if left < tokenExpiryWarning {
 			return plugins.Degraded("working, but the API token expires in " +
 				humanSeconds(int(left/time.Second)) + ", on " +

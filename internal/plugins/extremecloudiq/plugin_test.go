@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -38,7 +39,8 @@ func TestStart_ProbesTheTokenAndLogsWhichEstateItReaches(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = append(reached, r.URL.Path)
 		_, _ = io.WriteString(w, `{"user_name":"api@example.net","role":"MONITOR",`+
-			`"owner_id":42,"data_center":"US-EAST","expires_in":7776000}`)
+			`"owner_id":42,"data_center":"US-EAST",`+
+			`"expiration_time":"2026-11-25T12:00:00.000+0000","expires_in":7776000}`)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -54,14 +56,41 @@ func TestStart_ProbesTheTokenAndLogsWhichEstateItReaches(t *testing.T) {
 	}
 }
 
+// The live API mints a session per call: issued_at is the moment of the
+// request and expiration_time is seven days after it. That window is not the
+// key's expiry, and treating it as one warned on every start for ever and
+// pinned this plugin at degraded -- which is what a warning nobody can act on
+// costs.
+func TestCheck_DoesNotWarnAboutASlidingSessionWindow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		issued := fixedNow.Format("2006-01-02T15:04:05.000-0700")
+		expires := fixedNow.Add(7 * 24 * time.Hour).Format("2006-01-02T15:04:05.000-0700")
+		_, _ = io.WriteString(w, `{"user_name":"api@example.net","owner_id":42,`+
+			`"issued_at":"`+issued+`","expiration_time":"`+expires+`","expires_in":604800}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	p := newFor(t, Config{BaseURL: srv.URL, APIToken: "tok"}, srv.Client())
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if h := p.Check(context.Background()); h.State != plugins.HealthyState {
+		t.Fatalf("a sliding session window was reported as a failing credential: %+v", h)
+	}
+}
+
 // A token that is about to stop working is the one thing worth saying before
 // it does: afterwards the API answers 401, which is indistinguishable from a
 // revoked token, and somebody spends an afternoon on it.
 func TestCheck_WarnsBeforeTheTokenExpires(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Three days left, well inside the two-week warning.
+		// Three days left, well inside the two-week warning, and written in
+		// the API's own format -- an offset with no colon, which is not
+		// RFC 3339. expires_in is sent alongside and disagrees on purpose: it
+		// is the token's whole lifetime, and reading it as a countdown is the
+		// bug that made this token permanently seven days from expiring.
 		_, _ = io.WriteString(w, `{"user_name":"api@example.net","owner_id":42,`+
-			`"expires_in":259200}`)
+			`"expiration_time":"2026-08-30T12:00:00.000+0000","expires_in":604800}`)
 	}))
 	t.Cleanup(srv.Close)
 

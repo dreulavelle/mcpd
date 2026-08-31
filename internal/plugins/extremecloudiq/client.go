@@ -367,13 +367,22 @@ func (c *Client) send(ctx context.Context, method, target string, body []byte) (
 //
 // Only the fields this plugin does something with.
 type tokenInfo struct {
-	UserName       string   `json:"user_name"`
-	Role           string   `json:"role"`
-	OwnerID        int64    `json:"owner_id"`
-	DataCenter     string   `json:"data_center"`
-	Scopes         []string `json:"scopes"`
-	ExpirationTime string   `json:"expiration_time"`
-	ExpiresIn      int64    `json:"expires_in"`
+	UserName   string   `json:"user_name"`
+	Role       string   `json:"role"`
+	OwnerID    int64    `json:"owner_id"`
+	DataCenter string   `json:"data_center"`
+	Scopes     []string `json:"scopes"`
+	// IssuedAt is when the credential this call authenticated with was
+	// created. It is the field that says whether ExpirationTime describes the
+	// stored key or a session minted for this request: an issued_at that is
+	// always "now" means the latter, and the expiry beside it is then a
+	// sliding window rather than a deadline.
+	IssuedAt       string `json:"issued_at"`
+	ExpirationTime string `json:"expiration_time"`
+	// ExpiresIn is the token's lifetime in seconds, not what is left of it.
+	// Kept because it is part of the response and its absence would be
+	// mistaken for an oversight; read by nothing, for the reason on Expiry.
+	ExpiresIn int64 `json:"expires_in"`
 }
 
 // Probe makes the cheapest authenticated call there is.
@@ -411,16 +420,94 @@ func (c *Client) Probe(ctx context.Context) (tokenInfo, error) {
 	return info, nil
 }
 
+// xiqTimeLayouts are the shapes ExtremeCloud IQ writes a timestamp in.
+//
+// It sends an ISO 8601 time with milliseconds and a numeric offset carrying no
+// colon -- "2026-09-07T14:50:03.000+0000". RFC 3339 requires either a Z or an
+// offset written +00:00, so that value is a near-miss which does not parse as
+// one, and the near-miss was the whole of the bug this list exists for.
+// sessionIssueWindow is how recently a credential must claim to have been
+// issued before the response is read as describing this request's own session.
+// Generous, because the comparison is against a remote clock: anything inside
+// it is this call, and a stored key issued five minutes ago is not a case
+// worth warning about either.
+const sessionIssueWindow = 5 * time.Minute
+
+var xiqTimeLayouts = []string{
+	"2006-01-02T15:04:05.999-0700",
+	"2006-01-02T15:04:05-0700",
+	// Last rather than first, and only in case a future version emits one.
+	time.RFC3339,
+}
+
 // Expiry reports when the token stops working, and whether that is knowable.
 //
-// The API gives both a timestamp and a countdown; the countdown is the one
-// that is always populated, and the timestamp is the one worth showing.
+// expiration_time is the only authority, and expires_in is deliberately not a
+// fallback. It is the token's whole lifetime rather than what is left of it,
+// so now+expires_in is a deadline that moves forward every time mcpd starts.
+// That is not a hypothesis: two starts 49 minutes apart reported expiries
+// exactly 49 minutes apart, when a countdown would have named the same instant
+// twice. A token issued for seven days therefore sat permanently seven days
+// from expiring -- inside the fourteen-day warning window for ever, so the
+// plugin was pinned at degraded and every start warned about a date that could
+// never arrive.
+//
+// An expiry that cannot be read is reported as unknown. A date invented here
+// is worse than no date at all: the caller cannot tell the two apart, and one
+// of them cries wolf until nobody reads the warning that matters.
 func (t tokenInfo) Expiry(now time.Time) (time.Time, bool) {
-	if parsed, err := time.Parse(time.RFC3339, t.ExpirationTime); err == nil {
-		return parsed, true
+	expiry, ok := parseXIQTime(t.ExpirationTime)
+	if !ok {
+		return time.Time{}, false
 	}
-	if t.ExpiresIn > 0 {
-		return now.Add(time.Duration(t.ExpiresIn) * time.Second), true
+	// A response describing a credential minted moments ago is describing this
+	// request's own session, not the key sitting in settings.
+	if t.IsSession(now) {
+		return time.Time{}, false
+	}
+	return expiry, true
+}
+
+// IsSession reports whether the response describes the session this call just
+// created rather than the stored credential.
+//
+// ExtremeCloud IQ answers /auth/apitoken/info with issued_at set to the moment
+// of the request and expiration_time seven days after it, so the pair slides
+// forward on every probe. That is a renewable window rather than a deadline,
+// and it is not the API key's expiry -- the key is what authenticated the call
+// that produced the window.
+//
+// Warning on it meant claiming, on every single start, that a working
+// credential was days from death, and pinning the plugin at degraded to match.
+// A warning that is always on is one people learn to scroll past, which costs
+// them the one that matters.
+func (t tokenInfo) IsSession(now time.Time) bool {
+	issued, ok := parseXIQTime(t.IssuedAt)
+	if !ok {
+		return false
+	}
+	skew := now.Sub(issued)
+	if skew < 0 {
+		skew = -skew
+	}
+	return skew < sessionIssueWindow
+}
+
+// Issued reports when the credential was created, and whether that is
+// knowable.
+func (t tokenInfo) Issued() (time.Time, bool) {
+	return parseXIQTime(t.IssuedAt)
+}
+
+func parseXIQTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range xiqTimeLayouts {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, true
+		}
 	}
 	return time.Time{}, false
 }
