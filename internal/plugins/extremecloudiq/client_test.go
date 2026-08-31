@@ -190,7 +190,7 @@ func TestExplainRequestFailure_SaysWhatToDo(t *testing.T) {
 		body   string
 		want   string
 	}{
-		{http.StatusUnauthorized, ``, "expires at the time it was created"},
+		{http.StatusUnauthorized, ``, "Extreme Platform ONE"},
 		{http.StatusForbidden, ``, "scopes"},
 		{http.StatusTooManyRequests, ``, "per account per hour"},
 		{http.StatusBadRequest, `{"error_message":"startTime is required"}`, "milliseconds"},
@@ -239,13 +239,89 @@ func TestProbe_RefusesSomethingThatIsNotTheAPI(t *testing.T) {
 		t.Errorf("data centre = %q; it is what explains two tokens on one "+
 			"address reading two different estates", info.DataCenter)
 	}
-	// An expiry is only useful before it happens; afterwards it is a 401
-	// indistinguishable from a revoked token.
-	expiry, ok := info.Expiry(fixedNow)
-	if !ok {
-		t.Fatal("a token with expires_in reported no expiry")
+	// expires_in is the token's whole lifetime, not what is left of it, so it
+	// cannot name an expiry. See TestExpiry.
+	if _, ok := info.Expiry(fixedNow); ok {
+		t.Error("expires_in alone named an expiry; it is a lifetime, not a countdown")
 	}
-	if want := fixedNow.Add(30 * 24 * time.Hour); !expiry.Equal(want) {
-		t.Errorf("expiry = %s, want %s", expiry, want)
+}
+
+// The bug this defends against: ExtremeCloud IQ sends expiration_time as
+// "2026-09-07T14:50:03.000+0000", which is not RFC 3339 -- the offset has no
+// colon. Parsing it as one failed silently and an expiry was invented from
+// expires_in instead, which is the token's whole lifetime rather than its
+// remainder. A seven-day token therefore sat permanently seven days from
+// expiring: inside the fourteen-day warning window for ever, so the plugin was
+// pinned at degraded and warned on every start about a date that never came.
+func TestExpiry(t *testing.T) {
+	want := time.Date(2026, 9, 7, 14, 50, 3, 0, time.UTC)
+
+	for name, tc := range map[string]struct {
+		info  tokenInfo
+		want  time.Time
+		known bool
+	}{
+		"the offset the API actually sends": {
+			info:  tokenInfo{ExpirationTime: "2026-09-07T14:50:03.000+0000"},
+			want:  want,
+			known: true,
+		},
+		"the same instant with no milliseconds": {
+			info:  tokenInfo{ExpirationTime: "2026-09-07T14:50:03+0000"},
+			want:  want,
+			known: true,
+		},
+		"a non-UTC offset keeps its zone": {
+			info:  tokenInfo{ExpirationTime: "2026-09-07T09:50:03.000-0500"},
+			want:  want,
+			known: true,
+		},
+		"RFC 3339, should a future version emit one": {
+			info:  tokenInfo{ExpirationTime: "2026-09-07T14:50:03Z"},
+			want:  want,
+			known: true,
+		},
+		"expires_in is not an expiry": {
+			info:  tokenInfo{ExpiresIn: 604800},
+			known: false,
+		},
+		"a timestamp that will not parse is unknown, not invented": {
+			info:  tokenInfo{ExpirationTime: "whenever", ExpiresIn: 604800},
+			known: false,
+		},
+		"absent is unknown": {
+			info:  tokenInfo{},
+			known: false,
+		},
+		// The live API answers with issued_at set to the moment of the
+		// request and expiration_time seven days after it, so the pair slides
+		// forward on every probe. That window belongs to the session the call
+		// created, not to the key that authenticated it, and reporting it as
+		// an expiry warned on every start for ever.
+		"a session minted by this very call is not the key's expiry": {
+			info: tokenInfo{
+				IssuedAt:       fixedNow.Format("2006-01-02T15:04:05.000-0700"),
+				ExpirationTime: fixedNow.Add(7 * 24 * time.Hour).Format("2006-01-02T15:04:05.000-0700"),
+			},
+			known: false,
+		},
+		"a key issued long before this call still reports its expiry": {
+			info: tokenInfo{
+				IssuedAt:       fixedNow.Add(-90 * 24 * time.Hour).Format("2006-01-02T15:04:05.000-0700"),
+				ExpirationTime: "2026-09-07T14:50:03.000+0000",
+			},
+			want:  want,
+			known: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := tc.info.Expiry(fixedNow)
+			if ok != tc.known {
+				t.Fatalf("knowable = %v, want %v", ok, tc.known)
+			}
+			if tc.known && !got.Equal(tc.want) {
+				t.Errorf("expiry = %s, want %s", got.UTC(), tc.want)
+			}
+		})
 	}
 }

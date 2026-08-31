@@ -126,8 +126,14 @@ type Config struct {
 	// address is regionless, so there is no per-tenant value to get right.
 	BaseURL string `yaml:"base_url" json:"base_url"`
 
-	// APIToken is an ExtremeCloud IQ API token, from Global Settings > API
-	// Token Management, and is the only credential this integration takes.
+	// APIToken is a Platform ONE API key, made under your profile's API keys
+	// at extremeplatformone.com, and is the only credential this integration
+	// takes. It is sent as a plain bearer token; nothing is exchanged for it.
+	//
+	// Deliberately not the ExtremeCloud IQ page called API Token Management.
+	// That one issues for the v1 API, retired for most tenants in January
+	// 2024, and following it is a dead end that reads like a permissions
+	// problem. See docs/extremecloudiq.md.
 	//
 	// An account's own username and password would authenticate too, via
 	// POST /login, and are deliberately not offered. Three reasons, and the
