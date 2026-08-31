@@ -36,6 +36,45 @@ behind and disagree with what mcpd is running get named at startup, so the two
 never quietly differ. See [`configs/example.yaml`](configs/example.yaml) for
 what a fuller file can still declare.
 
+## Where the log goes
+
+mcpd writes its log to a file as well as to stdout, and rotates it itself.
+
+```
+data/logs/mcpd.log                      the active file
+data/logs/mcpd-2026-08-31T05-14-02Z.log rotated, named for when it was retired
+```
+
+The active file is rotated when it reaches **20 MB** or when it has been
+collecting for **7 days**, whichever comes first, and the **5** most recent
+rotated files are kept. So the log is at most six files and 120 MB, and the
+ceiling is arithmetic rather than a hope — mcpd runs on your hardware, and a
+log that can fill your disk is a fault.
+
+It is written to `logs/` beside the database rather than kept only in the
+container, because the container log dies with the container. Recreating it is
+what an upgrade does, so the default arrangement threw away the log covering
+the period an operator most wants to read about. The file is in the one bind
+mount, so it outlives the container.
+
+Nothing is buffered in memory: a record is written to the file as it is
+logged, so a process that is killed loses no line it had already written. The
+Logs page in the dashboard holds the last 500 lines for somebody who has just
+opened it — that is a view, not the record.
+
+The path is derived from `storage.path` rather than configured. A fifth key in
+the config file would be a second authority for something the storage path
+already answers, and the policy has to be readable before the database it
+would otherwise be stored in is open. The **level** and the **format** (JSON or
+text) *are* settings, on the Settings page, and take effect without a restart.
+JSON is the default: it stays readable to a person scanning the file and
+parses cleanly for anything — an agent included — reading it in bulk.
+
+Both the age and size limits survive a restart. The age of a file is measured
+from the timestamp of the first record inside it, not from when mcpd last
+opened it, so a file that has been collecting for a fortnight across three
+restarts still rotates.
+
 ## Where the secrets are
 
 There are no plaintext passwords on disk, and there never were. Account

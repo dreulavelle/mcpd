@@ -145,6 +145,21 @@ func (c *Config) PluginsDir() string {
 	return filepath.Join(c.StorageDir(), "plugins")
 }
 
+// LogDir is where mcpd writes its own log files.
+//
+// Beside the database rather than inside the image, for the reason the data
+// directory exists at all: it is the one bind mount, so a log outlives the
+// container being replaced -- which is exactly the moment somebody wants to
+// read it.
+//
+// Derived rather than configured. A fifth key in this file would be a second
+// authority for something the storage path already answers, and the file is
+// deliberately down to the few settings that must be readable before the
+// database is open.
+func (c *Config) LogDir() string {
+	return filepath.Join(c.StorageDir(), "logs")
+}
+
 // TLS configures HTTPS on the MCP listener.
 //
 // The dashboard listener is deliberately not covered. The two have different

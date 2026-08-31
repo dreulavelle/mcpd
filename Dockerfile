@@ -116,9 +116,9 @@ RUN addgroup -g 1000 mcpd \
 
 USER mcpd:mcpd
 
-# One directory: config.yaml, the database, TLS material and plugins. A named
-# volume inherits ownership from the image's directory on first use, which is
-# what makes `docker run` with no bind mount work.
+# One directory: config.yaml, the database, TLS material, logs and plugins. A
+# named volume inherits ownership from the image's directory on first use,
+# which is what makes `docker run` with no bind mount work.
 VOLUME ["/var/lib/mcpd"]
 
 # 8080 is the MCP endpoint; 8081 is the admin dashboard. Both are
