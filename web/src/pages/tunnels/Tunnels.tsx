@@ -1,6 +1,9 @@
 import { useCallback, useState } from "react";
 import { Waypoints } from "lucide-react";
 import {
+  isOpenAIReason, OpenAIPermissionDialog, type OpenAIReason,
+} from "@/components/openai-permission";
+import {
   api, ApiError,
   type ChatGPTAccount, type OpenAITunnel, type TunnelInfo, type TunnelStatus,
 } from "@/lib/api";
@@ -27,6 +30,11 @@ const CHATGPT_CONNECTORS = "https://chatgpt.com/#settings/Connectors";
 export function Tunnels() {
   const [info, setInfo] = useState<TunnelInfo | null>(null);
   const [error, setError] = useState("");
+  // A refusal from OpenAI is several paragraphs of instruction, which a toast
+  // cannot carry: newlines collapse and the numbered steps run together. It
+  // gets a dialog; everything else stays a toast.
+  const [refused, setRefused] = useState<{ reason: OpenAIReason; detail: string } | null>(null);
+
   const notify = useNotify();
   const admin = useCan("admin");
 
@@ -52,6 +60,13 @@ export function Tunnels() {
 
   return (
     <>
+      {refused && (
+        <OpenAIPermissionDialog
+          reason={refused.reason}
+          detail={refused.detail}
+          onClose={() => setRefused(null)}
+        />
+      )}
       <PageHeader
         title="Tunnels"
         lede={
@@ -76,7 +91,8 @@ export function Tunnels() {
 
       {info?.can_manage && admin && (
         <Add plugins={plugins} workspaces={info.workspaces ?? []}
-             accounts={accounts} onDone={load} notify={notify} />
+             accounts={accounts} onDone={load} notify={notify}
+             onRefused={setRefused} />
       )}
 
       {!info ? <Loading rows={4} /> : rows.length === 0 ? (
@@ -105,7 +121,7 @@ export function Tunnels() {
                              assigned={assignments[row.id]}
                              account={accountOf[row.id] ?? row.account_id}
                              accounts={accounts}
-                             onDone={load} notify={notify} />
+                             onDone={load} notify={notify} onRefused={setRefused} />
                 ))}
               </TableBody>
             </Table>
@@ -123,11 +139,30 @@ interface Row extends OpenAITunnel {
 /** No account chosen, and more than one to choose from. The tunnel will not
  *  start, and saying so here is the difference between a fixable mistake and
  *  a connector that silently does nothing. */
+// showFailure decides where a failure is shown.
+//
+// A refusal from OpenAI carries instructions -- which permission, granted
+// where, by whom -- and a toast flattens them into one line with the numbered
+// steps run together. Those get a dialog. Everything else is a toast, because
+// everything else is one sentence.
+function showFailure(
+  e: unknown,
+  fallback: string,
+  notify: Notify,
+  onRefused: (r: { reason: OpenAIReason; detail: string }) => void,
+) {
+  if (e instanceof ApiError && isOpenAIReason(e.code)) {
+    onRefused({ reason: e.code, detail: e.detail });
+    return;
+  }
+  notify("problem", e instanceof ApiError ? e.detail : fallback);
+}
+
 function needsAccount(account: string | undefined, accounts: ChatGPTAccount[]): boolean {
   return !account && accounts.length > 1;
 }
 
-function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, notify }: {
+function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, notify, onRefused }: {
   row: Row;
   info: TunnelInfo;
   plugins: string[];
@@ -139,6 +174,7 @@ function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, no
   accounts: ChatGPTAccount[];
   onDone: () => void;
   notify: Notify;
+  onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
 }) {
   const state = row.status?.state;
   const admin = useCan("admin");
@@ -156,7 +192,7 @@ function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, no
     try {
       await api.assignTunnel(row.id, to === "*" ? "" : to, withAccount);
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't change that.");
+      showFailure(e, "Couldn't change that.", notify, onRefused);
     } finally {
       onDone();
     }
@@ -170,7 +206,7 @@ function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, no
       await api.deleteTunnel(row.id, account ?? row.account_id);
       notify("good", "Deleted.");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't delete it.");
+      showFailure(e, "Couldn't delete it.", notify, onRefused);
     } finally {
       onDone();
     }
@@ -260,12 +296,13 @@ function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, no
   );
 }
 
-function Add({ plugins, workspaces, accounts, onDone, notify }: {
+function Add({ plugins, workspaces, accounts, onDone, notify, onRefused }: {
   plugins: string[];
   workspaces: string[];
   accounts: ChatGPTAccount[];
   onDone: () => void;
   notify: Notify;
+  onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
 }) {
   const [name, setName] = useState("");
   const [plugin, setPlugin] = useState("");
@@ -288,7 +325,7 @@ function Add({ plugins, workspaces, accounts, onDone, notify }: {
       notify("good", "Made. Give it about 30 seconds to become active in ChatGPT.");
       setName("");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't make it.");
+      showFailure(e, "Couldn't make it.", notify, onRefused);
     } finally {
       setBusy(false);
       onDone();
