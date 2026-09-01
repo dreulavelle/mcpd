@@ -35,10 +35,17 @@ type accountView struct {
 	// CanManage, Missing and Problem describe this account's own access to its
 	// organisation. Per account rather than per host: one workspace's expired
 	// admin key says nothing about another's.
-	CanManage bool      `json:"can_manage"`
-	Missing   string    `json:"missing,omitempty"`
-	Problem   string    `json:"problem,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	CanManage bool   `json:"can_manage"`
+	Missing   string `json:"missing,omitempty"`
+	Problem   string `json:"problem,omitempty"`
+	// Workspaces are the ChatGPT workspaces this account's own tunnels sit in.
+	//
+	// Per account, because an account is an organisation: offering every
+	// workspace the host has ever seen would let a tunnel be created in one
+	// the selected account cannot reach, and the refusal arrives after the
+	// tunnel is made rather than while it is being chosen.
+	Workspaces []string  `json:"workspaces"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // availableTunnel is a tunnel in an organisation, with the account it was
