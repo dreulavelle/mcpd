@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
@@ -57,6 +58,24 @@ func (p *Plugin) registerRecordTools(r *plugins.Registry) {
 			"one. The notes carry what the losing carrier actually said.",
 		Idempotent: true,
 	}, p.listCSRs)
+	plugins.Tool(r, plugins.ToolSpec{
+		Name:  "list_portout_passcodes",
+		Title: "List port-out protection passcodes",
+		Description: "The passcodes protecting numbers on this account from " +
+			"being ported away, and which numbers carry one.\n\n" +
+			"Read it to answer \"is this number protected\" and \"the losing " +
+			"carrier is asking us for the PIN\". A number with no passcode is " +
+			"portable by anyone who knows the account details, which is the " +
+			"finding worth acting on.",
+		// The passcode itself comes back, and it is the thing that stops a
+		// competitor taking a customer's number. That makes seeing it the
+		// privilege rather than a step towards one, which is exactly what this
+		// field is for -- the tool changes nothing and is still not an
+		// ordinary read.
+		Capability: auth.CapAdmin,
+		Idempotent: true,
+	}, p.listPortoutPasscodes)
+
 }
 
 // CNAMInput narrows a listing of caller-ID name orders, or names one.
@@ -208,4 +227,32 @@ func (p *Plugin) orderPage(ctx context.Context, path string, q url.Values,
 		out.Note = note
 	}
 	return out, nil
+}
+
+// PasscodesInput narrows a listing of port-out protection passcodes.
+type PasscodesInput struct {
+	Account     string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
+	PhoneNumber string `json:"phone_number,omitempty" jsonschema:"one number, in 10-digit form; omit for every protected number on the account"`
+	Limit       int    `json:"limit,omitempty" jsonschema:"most numbers to return; the configured ceiling applies whatever this says"`
+}
+
+func (p *Plugin) listPortoutPasscodes(ctx context.Context, in PasscodesInput) (Listing, error) {
+	if err := p.ready(); err != nil {
+		return Listing{}, err
+	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
+	limit := p.client.limit(in.Limit)
+	q := url.Values{}
+	set(q, "tn", normaliseTN(in.PhoneNumber))
+	setPage(q, 0, limit)
+	return p.orderPage(ctx, fmt.Sprintf("/accounts/%s/tnPortoutPasscodes", account),
+		q, "TelephoneNumber", limit)
+}
+
+// tenDLCSubNotes reads a notes sub-resource, keeping collect's note.
+func (p *Plugin) tenDLCSubNotes(ctx context.Context, path string) ([]Record, string, error) {
+	return p.tenDLCSub(ctx, path, "Notes", "Note")
 }
