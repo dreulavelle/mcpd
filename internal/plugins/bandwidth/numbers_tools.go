@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -187,6 +188,27 @@ func (p *Plugin) listOrders(ctx context.Context, in OrdersInput) (Listing, error
 		return Listing{}, err
 	}
 	if in.Kind == "disconnects" {
+		// One disconnect order by id, which the listing cannot answer: a
+		// disconnect that failed says why in its notes, and until now the only
+		// readable thing was that it existed.
+		if id := strings.TrimSpace(in.OrderID); id != "" {
+			base := fmt.Sprintf("/accounts/%s/disconnects/%s", account, url.PathEscape(id))
+			out, err := p.readOrder(ctx, base)
+			if err != nil {
+				return Listing{}, err
+			}
+			notes, note, err := p.tenDLCSubNotes(ctx, base+"/notes")
+			switch {
+			case err != nil:
+				out.Note = "the order was read; its notes were not: " + shortErr(err)
+			case note != "":
+				out.Note = "notes: " + note
+			default:
+				out.Items = append(out.Items, notes...)
+				out.Returned = len(out.Items)
+			}
+			return out, nil
+		}
 		return p.listDisconnects(ctx, DisconnectsInput{
 			Account: in.Account, Page: in.Page, Limit: in.Limit})
 	}

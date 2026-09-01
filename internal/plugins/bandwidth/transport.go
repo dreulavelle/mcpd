@@ -136,6 +136,15 @@ var allowed = []rule{
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/csrs/[^/]+$`), "reading one customer service record request"},
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/csrs/[^/]+/notes$`), "reading a customer service record's notes"},
 
+	// One disconnect order and why it failed. The listing says an order
+	// exists; the notes say what went wrong with it.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/disconnects/[^/]+$`), "reading one disconnect order"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/disconnects/[^/]+/notes$`), "reading a disconnect order's notes"},
+
+	// Port-out protection. This returns the passcode itself, so the tool that
+	// reads it is capability-gated -- see list_portout_passcodes.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tnPortoutPasscodes$`), "listing port-out protection passcodes"},
+
 	// Where Bandwidth sends order notifications.
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/subscriptions$`), "listing notification subscriptions"},
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/subscriptions/[^/]+$`), "reading one notification subscription"},
