@@ -472,6 +472,14 @@ export interface ChatGPTAccount {
   missing?: string;
   problem?: string;
   created_at: string;
+  /**
+   * The ChatGPT workspaces this account's own tunnels sit in.
+   *
+   * Per account because an account is an organisation: offering every
+   * workspace the host has seen would let a tunnel be created in one the
+   * selected account cannot reach.
+   */
+  workspaces?: string[];
 }
 
 /**
