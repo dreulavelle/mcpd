@@ -67,7 +67,7 @@ func TestEffectiveGrants_IsTheUnion(t *testing.T) {
 	if !slices.Equal(granted, want) {
 		t.Fatalf("granted = %v, want %v", granted, want)
 	}
-	p := u.Principal("ses", granted)
+	p := u.Principal("ses", granted, nil)
 	if p.CanAccessPlugin("cnmaestro") {
 		t.Error("a group must not widen a user's own grant")
 	}
@@ -141,7 +141,7 @@ func TestRegister_JoinsTheDefaultGroup(t *testing.T) {
 	if !slices.Equal(granted, []string{"echo"}) {
 		t.Fatalf("granted = %v, want [echo]", granted)
 	}
-	if u.Principal("ses", granted).Can(auth.CapRead) {
+	if u.Principal("ses", granted, nil).Can(auth.CapRead) {
 		t.Error("a pending account holds a capability")
 	}
 
@@ -153,7 +153,7 @@ func TestRegister_JoinsTheDefaultGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("effective grants: %v", err)
 	}
-	p := approved.Principal("ses", granted)
+	p := approved.Principal("ses", granted, nil)
 	if !p.Can(auth.CapRead) || !p.CanAccessPlugin("echo") {
 		t.Errorf("an approved account in the default group reaches %v and holds read=%v; "+
 			"approving was supposed to be one decision", granted, p.Can(auth.CapRead))

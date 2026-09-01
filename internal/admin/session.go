@@ -30,6 +30,11 @@ type Accounts interface {
 	// taking them out of one -- take effect on their next call.
 	EffectiveGrants(ctx context.Context, userID string) ([]string, error)
 
+	// EffectiveCeiling is what an account's groups permit it to *do*, as
+	// opposed to what it may reach. nil means no group restricts it and its
+	// role stands.
+	EffectiveCeiling(ctx context.Context, userID string) ([]auth.Capability, error)
+
 	Count(ctx context.Context) (int, error)
 	CreateFirst(ctx context.Context, email, password, displayName string) (*users.User, error)
 	Create(ctx context.Context, req users.CreateRequest) (*users.User, error)
@@ -366,7 +371,19 @@ func (s *Server) principalFor(w http.ResponseWriter, r *http.Request) (*auth.Pri
 					"could not resolve what this account may reach")
 				return nil, false
 			}
-			return user.Principal(sess.ID, granted), true
+			ceiling, err := s.opts.Accounts.EffectiveCeiling(r.Context(), user.ID)
+			if err != nil {
+				// Refusing beats guessing, exactly as above. Falling back to
+				// no ceiling would hand somebody the full rights of their role
+				// because a table could not be read, which is the wrong
+				// direction to fail in.
+				s.opts.Log.Error("could not resolve capability ceiling",
+					"account", user.ID, "error", err)
+				s.writeError(w, r, http.StatusInternalServerError,
+					"could not resolve what this account may do")
+				return nil, false
+			}
+			return user.Principal(sess.ID, granted, ceiling), true
 		}
 		if !errors.Is(err, users.ErrNotFound) {
 			s.opts.Log.Error("could not resolve a dashboard session", "error", err)

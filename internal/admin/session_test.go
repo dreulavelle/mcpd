@@ -22,6 +22,8 @@ import (
 // credential wins. A database would only add setup between the assertion and
 // the thing asserted.
 type fakeAccounts struct {
+	// ceiling, when set, is what this account's groups permit it to do.
+	ceiling  []auth.Capability
 	user     *users.User
 	session  *users.Session
 	token    string
@@ -96,6 +98,13 @@ func (f *fakeAccounts) EffectiveGrants(_ context.Context, id string) ([]string, 
 		return []string{}, nil
 	}
 	return f.user.Plugins, nil
+}
+
+// EffectiveCeiling reports no ceiling, which is what a fake with no groups
+// means: the account's role stands unchanged. A test that wants a restricted
+// account sets one explicitly.
+func (f *fakeAccounts) EffectiveCeiling(context.Context, string) ([]auth.Capability, error) {
+	return f.ceiling, nil
 }
 
 func (f *fakeAccounts) Count(context.Context) (int, error) { return f.count, nil }
@@ -441,7 +450,7 @@ func TestUserRoleCannotAdminister(t *testing.T) {
 	if got := req(http.MethodGet, "/api/health"); got == http.StatusForbidden {
 		t.Error("GET /api/health was refused; a user may see the host's state")
 	}
-	if !accounts.user.Principal("ses", accounts.user.Plugins).Can(auth.CapApprove) {
+	if !accounts.user.Principal("ses", accounts.user.Plugins, nil).Can(auth.CapApprove) {
 		t.Error("a user must be able to approve; that is the point of the two roles")
 	}
 }

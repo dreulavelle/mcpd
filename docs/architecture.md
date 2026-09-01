@@ -617,11 +617,43 @@ caller may *do* — read, propose, approve, administer — and `roleCapabilities
 is the only thing that knows the difference. A **group** decides what a caller
 may *reach*: which plugins, and nothing else.
 
-**Capability-carrying groups are a non-goal, not an omission.** With two roles
-and four capabilities, a second bundle-of-rights mechanism would mean "why can
-this person approve" is answerable only by reading both, and neither would be
-explainable on its own. If the capability set ever needs to be finer than two
-roles, the answer is more roles, in the one map that already decides.
+**A group may take capabilities away, and may never give them.** This is the
+one asymmetry that makes two mechanisms tolerable. A second bundle-of-rights
+mechanism that *granted* would mean "why can this person approve" is answerable
+only by reading both and knowing which wins; one that grants and one that
+removes is answerable in one direction, and the answer is always the smaller of
+the two.
+
+So a group carries an optional **ceiling**: the set of capabilities it permits
+its members. `Principal.Can` intersects it with the role's own set, which is
+what makes a ceiling incapable of widening anything — an ordinary user in a
+group permitting `admin` is still not an administrator, because the role never
+granted it.
+
+Three states, and collapsing any two of them is a bug:
+
+| stored | means |
+|---|---|
+| `NULL` | this group imposes no ceiling; each member's role stands |
+| `[]` | permits nothing — suspends its members without deleting them |
+| `["read"]` | members may only read, whatever their role allows |
+
+`NULL` is what every group created before this existed means, and must keep
+meaning, which is why the column is nullable rather than defaulted to `[]`.
+
+Where a subject belongs to several groups, the declared ceilings **union**:
+being organised into a second, more permissive group must not take away what
+the first allowed. Groups declaring no ceiling are ignored rather than treated
+as permitting everything — otherwise ordinary membership of a general group
+would undo every restriction, which is precisely the shape of the grant bug
+described below.
+
+Note the two rules point in opposite directions and that is deliberate. For
+*reach*, a subject's own grant wins and groups fill in when it has none. For
+*capabilities*, the role grants and groups narrow. Both follow the same
+principle — the narrower wins — applied to mechanisms that start from opposite
+defaults: a subject's plugin list is a statement of what it should reach, and a
+role is a bundle nobody writes per subject.
 
 **A subject's own grant is the whole answer; groups apply only when it has
 none.** `groups.Effective` is the only function in the process that works this
