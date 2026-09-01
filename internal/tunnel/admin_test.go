@@ -45,29 +45,37 @@ func TestCreateNeedsAName(t *testing.T) {
 func TestDiagnosisReadsTheStatusNotTheText(t *testing.T) {
 	d := NewDirectory("sk-admin-test", "org_test", "")
 
-	unauthorised := d.explain(&tcadmin.RequestError{StatusCode: 401}).Error()
-	if !strings.Contains(unauthorised, "Admin keys") {
-		t.Errorf("401 = %q, want it to name admin keys", unauthorised)
-	}
-
-	forbidden := d.explain(&tcadmin.RequestError{StatusCode: 403}).Error()
-	if !strings.Contains(forbidden, "Tunnels: Manage") {
-		t.Errorf("403 = %q, want it to name the missing permission", forbidden)
+	// The reason is the contract, not the sentence beside it: the dashboard
+	// branches on it to decide which explanation to lay out, and prose cannot
+	// be branched on.
+	for status, want := range map[int]string{
+		401: ReasonAdminKeyRejected,
+		403: ReasonTunnelsManageRequired,
+	} {
+		got := d.explain(&tcadmin.RequestError{StatusCode: status})
+		if Reason(got) != want {
+			t.Errorf("%d reason = %q, want %q", status, Reason(got), want)
+		}
+		// Short enough to read in a toast. The explanation lives in the page.
+		if len(got.Error()) > 120 {
+			t.Errorf("%d message is %d characters; it has to fit a toast: %q",
+				status, len(got.Error()), got.Error())
+		}
 	}
 
 	missingOrg := d.explain(&tcadmin.RequestError{
 		StatusCode: 400,
 		Message:    "Exactly one of organization_id, workspace_id, or tenant_id must be provided",
-	}).Error()
-	if !strings.Contains(missingOrg, "org_") {
-		t.Errorf("400 = %q, want it to name the organization ID", missingOrg)
+	})
+	if Reason(missingOrg) != ReasonOrgIDRejected {
+		t.Errorf("400 reason = %q, want %q", Reason(missingOrg), ReasonOrgIDRejected)
 	}
 
 	// The trap: a plain error whose text happens to contain a status-like
 	// number must not be diagnosed at all.
-	plain := d.explain(errors.New("dial tcp: request req_c403a99 failed")).Error()
-	if strings.Contains(plain, "Tunnels: Manage") {
-		t.Errorf("a request id containing 403 was misdiagnosed: %q", plain)
+	plain := d.explain(errors.New("dial tcp: request req_c403a99 failed"))
+	if Reason(plain) != "" {
+		t.Errorf("a request id containing 403 was misdiagnosed as %q", Reason(plain))
 	}
 }
 

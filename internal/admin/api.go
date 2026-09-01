@@ -1460,6 +1460,25 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int, 
 	})
 }
 
+// writeUpstreamError answers a refusal from OpenAI with the reason beside the
+// sentence.
+//
+// The reason is what the dashboard branches on to show the right explanation.
+// Without it the page can only print the sentence, and the sentence is
+// deliberately too short to act on -- the acting-on is a laid-out page, not a
+// paragraph flattened into a toast.
+func (s *Server) writeUpstreamError(w http.ResponseWriter, r *http.Request, status int, err error) {
+	body := map[string]string{
+		"error":          "upstream_refused",
+		"detail":         err.Error(),
+		"correlation_id": observability.CorrelationID(r.Context()),
+	}
+	if reason := tunnel.Reason(err); reason != "" {
+		body["error"] = reason
+	}
+	s.writeJSON(w, r, status, body)
+}
+
 func parseLimit(raw string, fallback, max int) int {
 	if raw == "" {
 		return fallback
@@ -1692,7 +1711,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	created, err := dir.Create(r.Context(),
 		tunnelName(body.Name, body.Plugin), "Created by mcpd", body.Workspace)
 	if err != nil {
-		s.writeError(w, r, http.StatusBadGateway, err.Error())
+		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
 		return
 	}
 	// Assigning is the point of creating: a tunnel nothing is bound to is an
@@ -1759,7 +1778,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := dir.Delete(r.Context(), id); err != nil {
-		s.writeError(w, r, http.StatusBadGateway, err.Error())
+		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
 		return
 	}
 	// Whatever was pointing at it now points at nothing, so the assignment

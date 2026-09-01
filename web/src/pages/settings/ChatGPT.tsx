@@ -88,10 +88,12 @@ export function ChatGPT() {
 
       {!rows ? <Loading rows={3} /> : rows.length === 0 ? (
         <Notice tone="neutral">
-          No accounts yet, so no tunnel can connect. Add one with an OpenAI key
-          that has Tunnels: Read and Use. An admin key and organization ID are
-          optional, and are what lets tunnels be created from the Tunnels page
-          rather than pasted in by hand.
+          No accounts yet, so no tunnel can connect. Add one with an OpenAI
+          runtime key whose role has Tunnels: Read and Use — that is the key a
+          tunnel carries traffic with. An admin key and organization ID are
+          optional and separate: they let tunnels be created from the Tunnels
+          page rather than pasted in by hand, and they need a role with
+          Tunnels: Manage.
         </Notice>
       ) : (
         <Card className="mt-4 overflow-hidden p-0">
@@ -342,7 +344,10 @@ function AccountDialog({ account, onClose, onSaved }: {
                 onChange={(e) => setAdminKey(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Lets tunnels be made from the Tunnels page.
+                Optional. Lets tunnels be created from the Tunnels page instead
+                of pasted in by hand. Made under Settings → Organization →
+                Admin keys, and only works if whoever created it has a role
+                including <span className="font-medium">Tunnels: Manage</span>.
               </p>
             </div>
             <div className="space-y-1.5">
@@ -352,7 +357,9 @@ function AccountDialog({ account, onClose, onSaved }: {
                 onChange={(e) => setOrgID(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Required with an admin key; it cannot list anything alone.
+                Required with an admin key — it cannot list anything alone.
+                Settings → Organization → General, starting{" "}
+                <span className="font-medium">org_</span>.
               </p>
             </div>
           </div>

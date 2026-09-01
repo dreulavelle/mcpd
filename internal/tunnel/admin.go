@@ -171,6 +171,51 @@ func (d *Directory) client() (*tcadmin.AdminTunnelClient, error) {
 // It reads the typed error rather than searching the message, because the
 // message ends with a request id -- and a request id is hex, so one containing
 // "403" would otherwise be diagnosed as a permissions problem.
+// Reasons a request to OpenAI's control plane was refused.
+//
+// Stable strings rather than prose, because the dashboard renders the
+// explanation and prose cannot be branched on. What each one means for an
+// operator is written once, in the page that shows it -- a paragraph is not a
+// thing an error return should carry, and flattened into a toast it is worse
+// than no explanation at all.
+const (
+	// ReasonAdminKeyRejected: the key is not an admin key, or is revoked.
+	ReasonAdminKeyRejected = "openai_admin_key_rejected"
+	// ReasonTunnelsManageRequired: the key is real, and its creator's role
+	// does not carry tunnel management.
+	ReasonTunnelsManageRequired = "openai_tunnels_manage_required"
+	// ReasonOrgIDRejected: the organization id is not one.
+	ReasonOrgIDRejected = "openai_org_id_rejected"
+)
+
+// refusal is an error that names why OpenAI said no.
+type refusal struct {
+	reason string
+	msg    string
+}
+
+func (r *refusal) Error() string { return r.msg }
+
+// Reason reports why OpenAI refused, or "" for anything else.
+//
+// The dashboard branches on this to decide which explanation to show, so it is
+// the contract rather than the message beside it.
+func Reason(err error) string {
+	var r *refusal
+	if errors.As(err, &r) {
+		return r.reason
+	}
+	return ""
+}
+
+// explain turns the control plane's rejection into something an operator can
+// act on.
+//
+// It reads the typed error rather than searching the message, because the
+// message ends with a request id -- and a request id is hex, so one containing
+// "403" would otherwise be diagnosed as a permissions problem.
+//
+// One sentence each. The rest belongs where it can be laid out.
 func (d *Directory) explain(err error) error {
 	if err == nil {
 		return nil
@@ -180,21 +225,22 @@ func (d *Directory) explain(err error) error {
 	if errors.As(err, &req) {
 		switch req.StatusCode {
 		case http.StatusUnauthorized:
-			return errors.New("OpenAI rejected that admin key. Admin keys are made " +
-				"under Settings, Organization, Admin keys -- the runtime key that " +
-				"runs the tunnel will not work here")
+			return &refusal{ReasonAdminKeyRejected,
+				"OpenAI did not recognise that admin key."}
 		case http.StatusForbidden:
-			// The permission sits on the principal that made the key, not on
-			// the key, so this is fixed under Organization, People, Roles --
-			// not by making another key.
-			return errors.New("that key is not allowed to manage tunnels. The " +
-				"person who created it needs a role with Tunnels: Manage, under " +
-				"Settings, Organization, People, Roles")
+			// Two things gate this independently: the org role of whoever made
+			// the key, and the scopes chosen for the key itself. An earlier
+			// version of this said the role was the whole story and that
+			// making another key would not help -- which is wrong, and worse
+			// than saying nothing, because regenerating the key is exactly
+			// what fixes the common case. The dashboard lays out both.
+			return &refusal{ReasonTunnelsManageRequired,
+				"That admin key is not allowed to manage tunnels."}
 		case http.StatusBadRequest:
 			if strings.Contains(req.ResponseBody, "organization_id") ||
 				strings.Contains(req.Message, "organization_id") {
-				return errors.New("that organization ID was not accepted. Find it " +
-					"under Settings, Organization, General -- it starts with org_")
+				return &refusal{ReasonOrgIDRejected,
+					"OpenAI did not accept that organization ID."}
 			}
 		}
 	}
