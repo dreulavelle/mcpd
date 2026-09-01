@@ -2,6 +2,7 @@ package bandwidth
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -18,6 +19,23 @@ func (p *Plugin) registerAccountTools(r *plugins.Registry) {
 			"takes an account, and this is where the numbers come from.",
 		Idempotent: true,
 	}, p.listAccounts)
+	plugins.Tool(r, plugins.ToolSpec{
+		Name:  "list_products",
+		Title: "List what is enabled on an account",
+		Description: "The Bandwidth products and features enabled on an " +
+			"account — messaging, voice termination and origination, toll-free, " +
+			"E911, campaign management and the rest, each with the individual " +
+			"features switched on under it.\n\n" +
+			"Read this first when a call fails with a permissions or " +
+			"entitlement error rather than a bad argument. Bandwidth refuses a " +
+			"product an account does not hold in the same shape it refuses a " +
+			"credential that lacks a role, and from the error alone the two look " +
+			"alike; this says which it is. It is also the fastest way to answer " +
+			"\"can this account do X at all\" without trying X and reading the " +
+			"refusal.",
+		Idempotent: true,
+	}, p.listProducts)
+
 }
 
 // AccountsInput takes nothing. It exists so the tool has a schema.
@@ -54,6 +72,49 @@ func (p *Plugin) listAccounts(ctx context.Context, _ AccountsInput) (AccountsOut
 	case out.Default == "" && len(accounts) > 1:
 		out.Note = "no default is set, so a call that names no account is " +
 			"refused rather than answered about an arbitrary one"
+	}
+	return out, nil
+}
+
+// ProductsInput names the account to describe.
+type ProductsInput struct {
+	Account string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
+}
+
+// listProducts reports what the account is entitled to.
+//
+// The endpoint's own description is "Discover what is currently enabled on the
+// account", and it is the answer to a question this integration otherwise makes
+// people guess at. A Bandwidth refusal for a product the account does not hold
+// and one for a credential missing a role are the same status with a similar
+// body, and the difference decides whether somebody edits an API credential or
+// asks Bandwidth to sell them something.
+//
+// It came out of exactly that: every 10DLC read here failed with an entitlement
+// message for months, and it was the path that was wrong. Had this existed, the
+// first call would have shown Campaign Management enabled and moved the
+// investigation somewhere useful on day one.
+func (p *Plugin) listProducts(ctx context.Context, in ProductsInput) (Listing, error) {
+	if err := p.ready(); err != nil {
+		return Listing{}, err
+	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
+	rec, err := p.client.getXML(ctx, fmt.Sprintf("/accounts/%s/products", account), nil)
+	p.note(err, nil)
+	if err != nil {
+		return Listing{}, err
+	}
+	items, note := collect(rec, "Products", "Product")
+	out := Listing{Items: items, Returned: len(items), Note: note}
+	if len(items) == 0 && note == "" {
+		// An account with no products is not a thing that exists; an empty
+		// answer here means the shape changed, and reporting "nothing is
+		// enabled" would be worse than saying so.
+		out.Note = "no products came back, which no live account should report — " +
+			"treat this as unknown rather than as nothing being enabled"
 	}
 	return out, nil
 }

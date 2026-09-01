@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -58,6 +60,21 @@ func (p *Plugin) registerPortingTools(r *plugins.Registry) {
 			"starts. Give an id to read one.",
 		Idempotent: true,
 	}, p.listTollFreePortValidations)
+	plugins.Tool(r, plugins.ToolSpec{
+		Name:  "list_port_outs",
+		Title: "List port-out orders",
+		Description: "Port-out orders — numbers being moved away from Bandwidth " +
+			"to another carrier. Give an order id to read one.\n\n" +
+			"This is the other half of \"why did this number stop working\", and " +
+			"the half that is invisible from the port-in tools: a number that " +
+			"has left is not a fault, it is a completed order somebody else " +
+			"raised. Check here before treating a dead number as an outage.\n\n" +
+			"Paging is by cursor rather than by number: page_token takes the " +
+			"order id to start from, and \"1\" means the beginning. With no " +
+			"filters the result covers the last two years.",
+		Idempotent: true,
+	}, p.listPortOuts)
+
 }
 
 // PortInsInput narrows a listing of port-in orders.
@@ -313,4 +330,70 @@ func joinAnd(items []string) string {
 		out += s
 	}
 	return out + " and " + items[len(items)-1]
+}
+
+// PortOutsInput narrows a listing of port-out orders, or names one.
+type PortOutsInput struct {
+	Account     string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
+	OrderID     string `json:"order_id,omitempty" jsonschema:"one port-out order by id; omit to list"`
+	Status      string `json:"status,omitempty" jsonschema:"order status, such as complete pending or cancelled"`
+	PhoneNumber string `json:"phone_number,omitempty" jsonschema:"a number on the order, in 10-digit form such as 9195551234"`
+	// PageToken is a cursor rather than an index. Bandwidth's own parameter is
+	// called "page" and takes the port-out id to start from, with "1" as the
+	// convention for the beginning -- so an integer page number, which every
+	// other listing here takes, would be silently wrong past the first page.
+	PageToken string `json:"page_token,omitempty" jsonschema:"the order id to start the page from; omit or pass 1 for the first page"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"most orders to return; the configured ceiling applies whatever this says"`
+}
+
+func (p *Plugin) listPortOuts(ctx context.Context, in PortOutsInput) (Listing, error) {
+	if err := p.ready(); err != nil {
+		return Listing{}, err
+	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
+	base := fmt.Sprintf("/accounts/%s/portouts", account)
+
+	if id := strings.TrimSpace(in.OrderID); id != "" {
+		rec, err := p.client.getXML(ctx, base+"/"+url.PathEscape(id), nil)
+		p.note(err, nil)
+		if err != nil {
+			return Listing{}, err
+		}
+		return Listing{Items: []Record{rec}, Returned: 1}, nil
+	}
+
+	limit := p.client.limit(in.Limit)
+	q := url.Values{}
+	// Both are required by the endpoint rather than optional, so they are set
+	// unconditionally and the cursor defaults to the documented "1".
+	page := strings.TrimSpace(in.PageToken)
+	if page == "" {
+		page = "1"
+	}
+	q.Set("page", page)
+	q.Set("size", strconv.Itoa(limit))
+	set(q, "status", in.Status)
+	set(q, "tn", in.PhoneNumber)
+
+	rec, err := p.client.getXML(ctx, base, q)
+	p.note(err, nil)
+	if err != nil {
+		return Listing{}, err
+	}
+	items, note := collect(rec, "", "lnpPortInfoForGivenStatus")
+	out := capped(items, limit)
+	if out.Note == "" {
+		out.Note = note
+	}
+	if len(items) >= limit {
+		if out.Note != "" {
+			out.Note += " "
+		}
+		out.Note += "paging here is by cursor: pass the last order's id as " +
+			"page_token to continue."
+	}
+	return out, nil
 }

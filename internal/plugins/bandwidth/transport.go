@@ -111,6 +111,15 @@ var allowed = []rule{
 	// paths these replaced are the Registration Center, a different product
 	// that these accounts are not enabled for -- so every 10DLC read failed
 	// with an entitlement error for a campaign that plainly exists.
+	// What the account is entitled to. Read when a refusal might be an
+	// entitlement rather than a credential; the two look alike from the error.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/products$`), "listing the account's enabled products"},
+
+	// Port-outs: numbers leaving. The mirror of the port-in reads above, and
+	// the half that explains a number that stopped working without any fault.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/portouts$`), "listing port-out orders"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/portouts/[^/]+$`), "reading one port-out order"},
+
 	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/campaigns$`), "listing 10DLC campaigns"},
 	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/campaigns/[^/]+$`), "reading one 10DLC campaign"},
 	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/campaigns/[^/]+/tn$`), "listing a campaign's numbers"},

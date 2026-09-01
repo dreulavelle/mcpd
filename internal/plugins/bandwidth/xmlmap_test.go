@@ -222,3 +222,51 @@ func TestSetPageAlwaysSendsBoth(t *testing.T) {
 		t.Fatalf("page/size = %q/%q, want 3/50", q.Get("page"), q.Get("size"))
 	}
 }
+
+// A collection holding exactly one row must not read as an empty collection.
+//
+// discoverList looks for a repeated element, which cannot see a list of one.
+// Measured against a live account: a port-out listing returned nothing at
+// limit=1 and two rows at limit=2, because the element name was wrong and only
+// the plural case could be rescued. A listing narrowed to a single match is one
+// of the most common things anybody asks for.
+func TestCollect_FindsACollectionOfOne(t *testing.T) {
+	// The shape the Dashboard actually sends, with the element named something
+	// the caller guessed wrong.
+	one := Record{
+		"TotalCount": "1",
+		"Links":      "",
+		"lnpPortInfoForGivenStatus": Record{
+			"OrderId":          "e271c0ed",
+			"ProcessingStatus": "COMPLETE",
+		},
+	}
+	items, note := collect(one, "", "SomeNameNobodyGuessed")
+	if len(items) != 1 {
+		t.Fatalf("a collection of one should yield one row, got %d (note %q)", len(items), note)
+	}
+	if items[0]["OrderId"] != "e271c0ed" {
+		t.Errorf("the wrong record was returned: %v", items[0])
+	}
+
+	// Two candidates and no repetition is ambiguous, and a wrong row is worse
+	// than saying the shape was not recognised.
+	ambiguous := Record{
+		"TotalCount": "2",
+		"Alpha":      Record{"OrderId": "a"},
+		"Beta":       Record{"OrderId": "b"},
+	}
+	items, note = collect(ambiguous, "", "SomeNameNobodyGuessed")
+	if len(items) != 0 {
+		t.Errorf("two candidates cannot be disambiguated; got %d rows", len(items))
+	}
+	if note == "" {
+		t.Error("an unrecognised shape must say so rather than read as empty")
+	}
+
+	// And the named element still wins when it is right.
+	items, _ = collect(one, "", "lnpPortInfoForGivenStatus")
+	if len(items) != 1 {
+		t.Errorf("the named lookup should still work, got %d", len(items))
+	}
+}

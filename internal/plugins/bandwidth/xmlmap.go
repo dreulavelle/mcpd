@@ -154,6 +154,22 @@ func collect(rec Record, container, element string) (items []Record, note string
 	if items = discoverList(rec); len(items) > 0 {
 		return items, ""
 	}
+	// A collection with exactly one row in it.
+	//
+	// discoverList looks for a *repeated* element, which is a sound way to find
+	// a list whose wrapper is named something nobody guessed -- and it cannot
+	// see a list of one, because one row is not repeated. That gap is not
+	// theoretical: a port-out listing returned nothing at limit=1 and two rows
+	// at limit=2, from the same account, because the element name here was
+	// wrong and discovery could only rescue the plural case.
+	//
+	// A listing narrowed to a single match -- searching porting orders by phone
+	// number, say -- is one of the most common things anybody asks for, and
+	// reporting it as empty is the failure this file already warns about
+	// elsewhere: an operator told nothing is there believes it.
+	if items = discoverSingle(rec); len(items) > 0 {
+		return items, ""
+	}
 	if hasContent(rec) {
 		return nil, "the response carried data this integration did not " +
 			"recognise as a list, so the count above is not a count of what " +
@@ -197,6 +213,74 @@ func discoverList(node any) []Record {
 		}
 	}
 	return nil
+}
+
+// discoverSingle finds a collection that happens to hold one row.
+//
+// Deliberately narrow, because the shape it looks for is ambiguous by nature: a
+// lone nested record could be the single row of a listing, or it could be a
+// detail response that was never a listing at all. So it only fires after both
+// named lookup and repeated-element discovery have failed, and only when the
+// response carries exactly one candidate -- ignoring the bookkeeping every
+// Dashboard answer wraps its payload in.
+//
+// One level of descent, then stop. Deeper recursion would eventually find some
+// nested object in any response and call it a row, which is how a heuristic
+// stops being one.
+func discoverSingle(node any) []Record {
+	rec, ok := node.(Record)
+	if !ok {
+		return nil
+	}
+	var found []Record
+	for _, key := range sortedKeys(rec) {
+		switch key {
+		case "ResultCount", "TotalCount", "Links", "Link", "#text":
+			continue
+		}
+		inner, ok := rec[key].(Record)
+		if !ok {
+			continue
+		}
+		found = append(found, inner)
+		if len(found) > 1 {
+			// More than one candidate and no repetition to disambiguate them.
+			// Returning either would be a guess, and a wrong row is worse than
+			// the caller being told the shape was not recognised.
+			return nil
+		}
+	}
+	if len(found) != 1 {
+		return nil
+	}
+	// The single candidate may be the row, or a container holding it. One more
+	// look, and no further.
+	if inner := onlyRecord(found[0]); inner != nil {
+		return []Record{inner}
+	}
+	return found
+}
+
+// onlyRecord returns the sole nested record of rec, when rec is a container
+// carrying exactly one and nothing else of its own.
+func onlyRecord(rec Record) Record {
+	var found Record
+	for _, key := range sortedKeys(rec) {
+		switch key {
+		case "ResultCount", "TotalCount", "Links", "Link", "#text":
+			continue
+		}
+		if inner, ok := rec[key].(Record); ok {
+			if found != nil {
+				return nil
+			}
+			found = inner
+			continue
+		}
+		// A scalar of its own means this is the row, not a wrapper around one.
+		return nil
+	}
+	return found
 }
 
 // hasContent reports whether a decoded response carried anything beyond the
