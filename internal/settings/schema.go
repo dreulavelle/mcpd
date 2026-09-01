@@ -430,6 +430,50 @@ func PluginTunnelAccountKey(plugin string) string {
 	return "tunnel.plugin." + plugin + ".account"
 }
 
+// A tunnel's own assignment: which plugin it serves and whose credential it
+// connects with.
+//
+// Keyed by the tunnel rather than by the plugin, and that is the whole point.
+// Keying by plugin allowed exactly one tunnel per plugin, so pointing a second
+// ChatGPT account at a plugin silently overwrote the first account's binding --
+// the first account did not lose access, it lost its tunnel, and mcpd stopped
+// running it with nothing said. A tunnel is the thing that carries one identity
+// and serves one plugin, so a tunnel is the thing to key on. Several tunnels
+// may now name the same plugin, which is what lets two workspaces share one
+// integration without duplicating its configuration.
+const tunnelKeyPrefix = "tunnel."
+
+// TunnelPluginKey names the plugin a tunnel serves. An empty value is the
+// aggregate: everything the account's grant allows.
+func TunnelPluginKey(tunnelID string) string {
+	return tunnelKeyPrefix + tunnelID + ".plugin"
+}
+
+// TunnelAccountKey names the ChatGPT account a tunnel connects with.
+func TunnelAccountKey(tunnelID string) string {
+	return tunnelKeyPrefix + tunnelID + ".account"
+}
+
+// TunnelIDFromKey reverses TunnelPluginKey, returning "" for anything else.
+//
+// The suffix is checked as well as the prefix because "tunnel." also begins
+// the settings that configure tunnelling generally -- tunnel.enabled,
+// tunnel.plugins -- and reading one of those as a tunnel id would invent a
+// tunnel called "enabled".
+func TunnelIDFromKey(key string) string {
+	const suffix = ".plugin"
+	if !strings.HasPrefix(key, tunnelKeyPrefix) || !strings.HasSuffix(key, suffix) {
+		return ""
+	}
+	id := key[len(tunnelKeyPrefix) : len(key)-len(suffix)]
+	// "tunnel.plugin.<name>.plugin" is not a thing, but the old key space
+	// shares this prefix and must not be mistaken for the new one.
+	if id == "" || strings.Contains(id, ".") {
+		return ""
+	}
+	return id
+}
+
 // PluginFromTunnelKey reverses PluginTunnelKey, returning "" for anything else.
 func PluginFromTunnelKey(key string) string {
 	const prefix = "tunnel.plugin."

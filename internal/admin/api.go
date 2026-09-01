@@ -861,6 +861,7 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 			if list, err := dir.List(r.Context()); err != nil {
 				view.Problem = err.Error()
 			} else {
+				list = ours(list, resp.Assignments)
 				for _, t := range list {
 					resp.Available = append(resp.Available, availableTunnel{
 						TunnelInfo:  t,
@@ -1709,7 +1710,7 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	created, err := dir.Create(r.Context(),
-		tunnelName(body.Name, body.Plugin), "Created by mcpd", body.Workspace)
+		tunnelName(body.Name, body.Plugin), createdByMCPD, body.Workspace)
 	if err != nil {
 		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
 		return
@@ -1813,13 +1814,12 @@ func (s *Server) assign(r *http.Request, id, plugin, accountID string) error {
 	if s.opts.Settings == nil {
 		return fmt.Errorf("settings are unavailable")
 	}
-	key := settings.KeyTunnelID
-	accountKey := settings.KeyTunnelAccount
-	if plugin != "" {
-		key = settings.PluginTunnelKey(plugin)
-		accountKey = settings.PluginTunnelAccountKey(plugin)
-	}
-	encoded, err := json.Marshal(id)
+	// Written against the tunnel rather than against the plugin. Keying by
+	// plugin meant a second tunnel pointed at the same system overwrote the
+	// first tunnel's binding: the first account kept its access and lost its
+	// connector, silently. Several tunnels may now serve one plugin, which is
+	// how two ChatGPT workspaces share one integration.
+	encodedPlugin, err := json.Marshal(plugin)
 	if err != nil {
 		return err
 	}
@@ -1827,11 +1827,56 @@ func (s *Server) assign(r *http.Request, id, plugin, accountID string) error {
 	if err != nil {
 		return err
 	}
-	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, []settings.Change{
-		{Key: key, Value: string(encoded)},
-		{Key: accountKey, Value: string(encodedAccount)},
-	})
+	changes := []settings.Change{
+		{Key: settings.TunnelPluginKey(id), Value: string(encodedPlugin)},
+		{Key: settings.TunnelAccountKey(id), Value: string(encodedAccount)},
+	}
+	// The aggregate keeps its own keys as well, because they are what the
+	// startup path reads for the tunnel that serves everything.
+	if plugin == "" {
+		encodedID, err := json.Marshal(id)
+		if err != nil {
+			return err
+		}
+		changes = append(changes,
+			settings.Change{Key: settings.KeyTunnelID, Value: string(encodedID)},
+			settings.Change{Key: settings.KeyTunnelAccount, Value: string(encodedAccount)},
+		)
+	}
+	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, changes)
 }
+
+// ours narrows a tunnel listing to the ones this host has anything to do with.
+//
+// An organisation's tunnels are not all mcpd's. Adding a ChatGPT account
+// listed every tunnel anyone had ever made in that organisation -- other
+// people's connectors, other tools' -- as though they were this host's to
+// assign, which is noise at best and an invitation to take over somebody
+// else's connector at worst.
+//
+// Two things count as ours: a tunnel this host created, which it stamps on
+// creation, and a tunnel this host has assigned, whoever made it. The second
+// matters because an operator who adopted an existing tunnel by assigning it
+// must not watch it vanish from the page for the crime of not having been
+// created here.
+func ours(list []tunnel.TunnelInfo, assigned map[string]string) []tunnel.TunnelInfo {
+	out := make([]tunnel.TunnelInfo, 0, len(list))
+	for _, t := range list {
+		if t.Description == createdByMCPD {
+			out = append(out, t)
+			continue
+		}
+		if _, mine := assigned[t.ID]; mine {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// createdByMCPD is the description this host puts on tunnels it makes, and the
+// only durable mark distinguishing them: the control plane has no field for
+// who created a tunnel.
+const createdByMCPD = "Created by mcpd"
 
 // workspacesIn collects the distinct workspaces the listed tunnels belong to,
 // in a stable order so the dashboard's default does not move between polls.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 )
 
@@ -50,14 +51,20 @@ func NewGroup(log *slog.Logger) *Group {
 
 // Key names a tunnel within the group.
 //
-// A plugin name is the natural key: there is at most one tunnel per plugin,
-// and the empty name is the aggregate. Using the tunnel id instead would key
-// on a value the operator is in the middle of editing.
-func Key(plugin string) string {
-	if plugin == "" {
+// The tunnel id, because a plugin no longer identifies a tunnel: two ChatGPT
+// workspaces sharing one integration is two tunnels serving the same plugin,
+// and keying on the plugin name made the second replace the first in the
+// running group as well as in the settings.
+//
+// This used to key on the plugin, on the reasoning that a tunnel id is a value
+// the operator is in the middle of editing. That stopped being true when
+// tunnels were made from the Tunnels page rather than pasted in: the id comes
+// from the tunnel that was just created and does not change afterwards.
+func Key(tunnelID string) string {
+	if tunnelID == "" {
 		return aggregateKey
 	}
-	return plugin
+	return tunnelID
 }
 
 // aggregateKey names the tunnel serving every plugin a caller is granted.
@@ -73,9 +80,12 @@ func (g *Group) Apply(ctx context.Context, configs []Config, factory ServerFacto
 	wanted := make(map[string]Config, len(configs))
 	order := make([]string, 0, len(configs))
 	for _, cfg := range configs {
-		key := Key(cfg.Plugin)
+		key := Key(cfg.TunnelID)
 		if _, dup := wanted[key]; dup {
-			return fmt.Errorf("tunnel: %s is configured twice", describe(cfg.Plugin))
+			// Two tunnels serving one plugin is ordinary now. One tunnel id
+			// used twice is not: the control plane allows a single client per
+			// tunnel, so the two would compete for the same commands.
+			return fmt.Errorf("tunnel: tunnel %s is configured twice", cfg.TunnelID)
 		}
 		wanted[key] = cfg
 		order = append(order, key)
@@ -163,8 +173,31 @@ func (g *Group) Apply(ctx context.Context, configs []Config, factory ServerFacto
 // alternative of a connector that authenticates with a secret nobody can
 // correct.
 func (g *Group) Rebuild(ctx context.Context, plugin string, factory ServerFactory) error {
-	key := Key(plugin)
+	// Every tunnel serving it, not one. A plugin shared by two ChatGPT
+	// workspaces has a tunnel each, and rebuilding only the first would leave
+	// the second answering with the settings it started with -- which is the
+	// same silent staleness this whole change exists to remove.
+	var keys []string
+	g.mu.RLock()
+	for key, m := range g.managers {
+		if m.Config().Plugin == plugin {
+			keys = append(keys, key)
+		}
+	}
+	g.mu.RUnlock()
+	sort.Strings(keys)
 
+	var errs []error
+	for _, key := range keys {
+		if err := g.rebuildOne(ctx, key, factory); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// rebuildOne restarts the tunnel under one key.
+func (g *Group) rebuildOne(ctx context.Context, key string, factory ServerFactory) error {
 	g.mu.RLock()
 	existing, ok := g.managers[key]
 	g.mu.RUnlock()
@@ -192,7 +225,7 @@ func (g *Group) Rebuild(ctx context.Context, plugin string, factory ServerFactor
 		return fmt.Errorf("tunnel: %s: %w", describe(cfg.Plugin), err)
 	}
 	g.log.InfoContext(ctx, "tunnel rebuilt for a changed plugin",
-		"tunnel", key, "plugin", plugin)
+		"tunnel", key, "plugin", cfg.Plugin)
 	return nil
 }
 
@@ -214,7 +247,21 @@ func (g *Group) Status() []Status {
 func (g *Group) Lookup(plugin string) *Manager {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.managers[Key(plugin)]
+
+	// The keys are tunnel ids now, so a plugin has to be searched for. Stable
+	// order, because a plugin served by two tunnels would otherwise answer
+	// with whichever the map happened to yield.
+	var found []string
+	for key, m := range g.managers {
+		if m.Config().Plugin == plugin {
+			found = append(found, key)
+		}
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	sort.Strings(found)
+	return g.managers[found[0]]
 }
 
 // Start brings up every configured tunnel, and marks the group live so that

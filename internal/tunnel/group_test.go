@@ -96,18 +96,43 @@ func TestARemovedTunnelIsStopped(t *testing.T) {
 
 // The control plane allows one client per tunnel; two would compete for the
 // same commands and neither would work reliably.
-func TestTheSamePluginCannotBeConfiguredTwice(t *testing.T) {
+//
+// One tunnel twice is the fault. Two tunnels serving one plugin is not, and
+// used to be refused here -- which is what stopped two ChatGPT workspaces
+// sharing an integration.
+func TestOneTunnelCannotBeConfiguredTwice(t *testing.T) {
 	g := NewGroup(discardLogger())
+	const id = "tunnel_1123456789abcdef0123456789abcdef"
 
 	err := g.Apply(context.Background(), []Config{
-		groupConfig("echo", "tunnel_1123456789abcdef0123456789abcdef"),
-		groupConfig("echo", "tunnel_2123456789abcdef0123456789abcdef"),
+		groupConfig("echo", id),
+		groupConfig("graylog", id),
 	}, testFactory())
 	if err == nil {
-		t.Fatal("two tunnels for one plugin must be refused")
+		t.Fatal("one tunnel id used twice must be refused")
 	}
-	if !strings.Contains(err.Error(), "echo") {
-		t.Fatalf("error = %v, want it to name the plugin", err)
+	if !strings.Contains(err.Error(), id) {
+		t.Fatalf("error = %v, want it to name the tunnel", err)
+	}
+}
+
+// Two ChatGPT workspaces sharing one integration is two tunnels serving one
+// plugin. It is the arrangement this whole key change exists for.
+func TestTwoTunnelsMayServeOnePlugin(t *testing.T) {
+	g := NewGroup(discardLogger())
+
+	if err := g.Apply(context.Background(), []Config{
+		groupConfig("echo", "tunnel_1123456789abcdef0123456789abcdef"),
+		groupConfig("echo", "tunnel_2123456789abcdef0123456789abcdef"),
+	}, testFactory()); err != nil {
+		t.Fatalf("two tunnels for one plugin were refused: %v", err)
+	}
+	if n := len(g.Status()); n != 2 {
+		t.Fatalf("got %d tunnels, want both", n)
+	}
+	// Lookup answers with one of them, stably, rather than at random.
+	if m := g.Lookup("echo"); m == nil {
+		t.Fatal("neither tunnel is findable by its plugin")
 	}
 }
 

@@ -196,8 +196,8 @@ func TestAnAccountBoundsWhatItsTunnelsReach(t *testing.T) {
 	addAccount(t, a, "Narrow", []string{"something-else"})
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.PluginTunnelKey("echo"),
-			Value: `"tunnel_1123456789abcdef0123456789abcdef"`},
+		{Key: settings.TunnelPluginKey("tunnel_1123456789abcdef0123456789abcdef"),
+			Value: `"echo"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
 		{Key: settings.KeyTunnelID, Value: `"` + main + `"`},
-		{Key: settings.PluginTunnelKey("echo"), Value: `"` + echo + `"`},
+		{Key: settings.TunnelPluginKey(echo), Value: `"echo"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestAPerPluginTunnelCannotReuseTheMainTunnelID(t *testing.T) {
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
 		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
-		{Key: settings.PluginTunnelKey("echo"), Value: `"` + id + `"`},
+		{Key: settings.TunnelPluginKey(id), Value: `"echo"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -361,8 +361,8 @@ func TestAPerPluginTunnelIsScopedWithoutSignIn(t *testing.T) {
 
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.PluginTunnelKey("echo"),
-			Value: `"tunnel_1123456789abcdef0123456789abcdef"`},
+		{Key: settings.TunnelPluginKey("tunnel_1123456789abcdef0123456789abcdef"),
+			Value: `"echo"`},
 	}); err != nil {
 		t.Fatal(err)
 	}

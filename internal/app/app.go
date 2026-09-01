@@ -1057,42 +1057,52 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 		}
 	}
 
-	// Every configured instance, not only the mounted ones: an assignment to a
-	// plugin that has not started is the case worth saying something about.
+	// Every tunnel that has been assigned, keyed by the tunnel rather than by
+	// the plugin. Several may name the same plugin: that is what lets two
+	// ChatGPT workspaces use one integration without a second copy of its
+	// configuration, and keying by plugin is what used to make the second
+	// assignment silently discard the first.
 	mounted := a.manager.Names()
-	for _, inst := range a.instances(ctx) {
-		name := inst.Name
-		id := a.settings.String(ctx, settings.PluginTunnelKey(name), "")
-		if id == "" {
+	seen := make(map[string]bool, len(out))
+	for _, cfg := range out {
+		seen[cfg.TunnelID] = true
+	}
+
+	for _, at := range a.assignedTunnels(ctx) {
+		if at.Plugin == "" {
+			// The aggregate is configured under its own key and was handled
+			// above; a tunnel-keyed row naming no plugin is one whose plugin
+			// was cleared, and it has nothing to serve.
 			continue
 		}
-		if !slices.Contains(mounted, name) {
+		if !slices.Contains(mounted, at.Plugin) {
 			// A tunnel bound to a plugin that is not serving would answer
 			// ChatGPT with an endpoint that has nothing behind it. Skipped, but
 			// said out loud: silently ignoring it is how an assignment that
 			// looks made comes to do nothing.
 			a.log.WarnContext(ctx, "a tunnel is assigned to a plugin that is not running, "+
 				"so it is not being started",
-				"plugin", name, "tunnel_id", id)
+				"plugin", at.Plugin, "tunnel_id", at.TunnelID)
 			continue
 		}
-		if len(out) > 0 && id == out[0].TunnelID {
+		if seen[at.TunnelID] {
 			// One tunnel cannot serve two endpoints, and running two clients
 			// against the same id has them competing for the same commands.
-			a.log.WarnContext(ctx, "ignoring a per-plugin tunnel that reuses the main tunnel's id",
-				"plugin", name)
+			// Two tunnels serving one plugin is fine; one tunnel twice is not.
+			a.log.WarnContext(ctx, "ignoring a tunnel assigned twice",
+				"plugin", at.Plugin, "tunnel_id", at.TunnelID)
 			continue
 		}
 
-		scoped, ok := a.bindAccount(ctx, base, accounts,
-			a.settings.String(ctx, settings.PluginTunnelAccountKey(name), ""), name)
+		scoped, ok := a.bindAccount(ctx, base, accounts, at.Account, at.Plugin)
 		if !ok {
 			continue
 		}
-		scoped.Plugin = name
-		scoped.TunnelID = id
+		scoped.Plugin = at.Plugin
+		scoped.TunnelID = at.TunnelID
 		// Only one client may bind the diagnostics port.
 		scoped.DiagnosticsAddr = ""
+		seen[at.TunnelID] = true
 		out = append(out, scoped)
 	}
 	return out
@@ -1203,10 +1213,8 @@ func (a *App) tunnelAssignments(ctx context.Context) map[string]string {
 	if id := a.settings.String(ctx, settings.KeyTunnelID, ""); id != "" {
 		out[id] = ""
 	}
-	for _, inst := range a.instances(ctx) {
-		if id := a.settings.String(ctx, settings.PluginTunnelKey(inst.Name), ""); id != "" {
-			out[id] = inst.Name
-		}
+	for _, at := range a.assignedTunnels(ctx) {
+		out[at.TunnelID] = at.Plugin
 	}
 	return out
 }

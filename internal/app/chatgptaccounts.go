@@ -227,17 +227,20 @@ func (a *App) pinTunnelsToTheOnlyAccount(ctx context.Context) error {
 		return err
 	}
 
+	// The aggregate keeps its own pair; every other tunnel is keyed by its own
+	// id, so a plugin served by two of them pins each separately rather than
+	// the pair colliding on the plugin name.
 	pairs := [][2]string{{settings.KeyTunnelID, settings.KeyTunnelAccount}}
-	for _, inst := range a.instances(ctx) {
+	for _, at := range a.assignedTunnels(ctx) {
 		pairs = append(pairs, [2]string{
-			settings.PluginTunnelKey(inst.Name),
-			settings.PluginTunnelAccountKey(inst.Name),
+			settings.TunnelPluginKey(at.TunnelID),
+			settings.TunnelAccountKey(at.TunnelID),
 		})
 	}
 
 	var changes []settings.Change
 	for _, pair := range pairs {
-		if a.settings.String(ctx, pair[0], "") == "" {
+		if _, ok, _ := a.settings.Get(ctx, pair[0]); !ok {
 			continue
 		}
 		if a.settings.String(ctx, pair[1], "") != "" {
@@ -318,8 +321,8 @@ func (a *App) RemoveChatGPTAccount(ctx context.Context, actor, id string) error 
 // unassignAccount clears every tunnel assignment naming an account.
 func (a *App) unassignAccount(ctx context.Context, actor, id string) error {
 	keys := []string{settings.KeyTunnelAccount}
-	for _, inst := range a.instances(ctx) {
-		keys = append(keys, settings.PluginTunnelAccountKey(inst.Name))
+	for _, at := range a.assignedTunnels(ctx) {
+		keys = append(keys, settings.TunnelAccountKey(at.TunnelID))
 	}
 
 	var changes []settings.Change
@@ -382,13 +385,9 @@ func (a *App) tunnelAccountAssignments(ctx context.Context) map[string]string {
 			out[id] = acct
 		}
 	}
-	for _, inst := range a.instances(ctx) {
-		id := a.settings.String(ctx, settings.PluginTunnelKey(inst.Name), "")
-		if id == "" {
-			continue
-		}
-		if acct := a.settings.String(ctx, settings.PluginTunnelAccountKey(inst.Name), ""); acct != "" {
-			out[id] = acct
+	for _, at := range a.assignedTunnels(ctx) {
+		if at.Account != "" {
+			out[at.TunnelID] = at.Account
 		}
 	}
 	return out
