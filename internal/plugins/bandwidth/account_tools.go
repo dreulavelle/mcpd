@@ -3,6 +3,8 @@ package bandwidth
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -35,6 +37,19 @@ func (p *Plugin) registerAccountTools(r *plugins.Registry) {
 			"refusal.",
 		Idempotent: true,
 	}, p.listProducts)
+
+	plugins.Tool(r, plugins.ToolSpec{
+		Name:  "list_subscriptions",
+		Title: "List order notification subscriptions",
+		Description: "The callback subscriptions on this account — where " +
+			"Bandwidth sends notifications when an order, a port or a " +
+			"disconnect changes state, and which events each one covers.\n\n" +
+			"Read this when something downstream did not react to an order " +
+			"completing. A missing or wrong subscription looks exactly like a " +
+			"broken integration from the other end, and this is the only place " +
+			"that distinguishes them.",
+		Idempotent: true,
+	}, p.listSubscriptions)
 
 }
 
@@ -117,4 +132,31 @@ func (p *Plugin) listProducts(ctx context.Context, in ProductsInput) (Listing, e
 			"treat this as unknown rather than as nothing being enabled"
 	}
 	return out, nil
+}
+
+// SubscriptionsInput narrows a listing of callback subscriptions, or names one.
+type SubscriptionsInput struct {
+	Account        string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
+	SubscriptionID string `json:"subscription_id,omitempty" jsonschema:"one subscription by id; omit to list"`
+}
+
+func (p *Plugin) listSubscriptions(ctx context.Context, in SubscriptionsInput) (Listing, error) {
+	if err := p.ready(); err != nil {
+		return Listing{}, err
+	}
+	account, err := p.client.resolveAccount(ctx, in.Account)
+	if err != nil {
+		return Listing{}, err
+	}
+	base := fmt.Sprintf("/accounts/%s/subscriptions", account)
+	if id := strings.TrimSpace(in.SubscriptionID); id != "" {
+		return p.readOrder(ctx, base+"/"+url.PathEscape(id))
+	}
+	rec, err := p.client.getXML(ctx, base, nil)
+	p.note(err, nil)
+	if err != nil {
+		return Listing{}, err
+	}
+	items, note := collect(rec, "Subscriptions", "Subscription")
+	return Listing{Items: items, Returned: len(items), Note: note}, nil
 }
