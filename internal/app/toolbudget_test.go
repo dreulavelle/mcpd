@@ -57,6 +57,11 @@ var toolListBudget = map[string]int{
 	"cnmaestro":      23_000,
 	"extremecloudiq": 26_000,
 	"bandwidth":      42_000,
+	// The cheapest of the seven per tool, at about 1,460 bytes against
+	// observium's 1,850, because every listing returns the same flat shape: a
+	// row array, a returned count and a truncation note. Output schemas are the
+	// largest line item and one shape reused across five tools is paid for once.
+	"textable": 12_000,
 }
 
 // budgetTotal bounds every plugin at once, which is what the aggregate
@@ -210,6 +215,8 @@ func allPluginsApp(t *testing.T) *App {
 			"base_url": "https://extremecloudiq.invalid", "api_token": "t"}},
 		"bandwidth": {Enabled: true, Settings: map[string]any{
 			"client_id": "i", "client_secret": "s"}},
+		"textable": {Enabled: true, Settings: map[string]any{
+			"base_url": "https://textable.invalid", "api_key": "svc-token"}},
 	}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
 		ID: "wildcard", SecretRef: "env:MCPD_TOKEN_WILDCARD",

@@ -1763,12 +1763,14 @@ path and a domain name are the same shape.
 What an integration does belongs with the integration. Each has its own
 document when it needs one — [cnmaestro.md](cnmaestro.md),
 [observium.md](observium.md), [graylog.md](graylog.md),
-[extremecloudiq.md](extremecloudiq.md) and [bandwidth.md](bandwidth.md) —
-because the API a plugin talks to changes on someone else's schedule, and
-mixing that into the host's design makes both harder to read.
+[extremecloudiq.md](extremecloudiq.md), [bandwidth.md](bandwidth.md) and
+[textable.md](textable.md) — because the API a plugin talks to changes on
+someone else's schedule, and mixing that into the host's design makes both
+harder to read.
 
-Those documents are worth reading as a set before writing a sixth integration.
-They record the same *kinds* of surprise in five different vendors: where
+Those documents are worth reading as a set before writing a seventh
+integration. They record the same *kinds* of surprise in six different
+vendors: where
 pagination hides, what an empty result is spelled as, which status code means
 two things, what unit a timestamp is in, and what the API will not give you at
 all. A plugin author who expects those categories finds them faster than one
@@ -1776,11 +1778,15 @@ discovering that such categories exist.
 
 They also disagree with each other in an instructive way. The read-only
 guarantee is a method check in `observium`, an allow-list in `graylog` because
-its searches are POSTs, and an allow-list in `extremecloudiq` even though every
+its searches are POSTs, an allow-list in `extremecloudiq` even though every
 read there is a GET — because that API answers `GET
 /account/viq/default-device-password`, and a guarantee that permits a
-credential dump is not the guarantee it says it is. The shape follows from the
-API rather than from a house style.
+credential dump is not the guarantee it says it is — and an allow-list in
+`textable` for a third reason again: every read there is a GET too, but the
+integration is going to grow a delete, and widening a method check from "GET"
+to "GET or DELETE" would permit removing a user, revoking a credential and
+stripping an administrator in the same edit. The shape follows from the API
+rather than from a house style.
 
 What is architectural is the contract every plugin meets.
 
