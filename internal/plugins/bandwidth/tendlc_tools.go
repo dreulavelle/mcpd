@@ -4,15 +4,36 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strconv"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
+// tenDLCBase is where Bandwidth actually serves campaign management.
+//
+// This was wrong, and wrong in a way that looked like somebody else's problem.
+// It used to build /api/v2/accounts/{id}/tendlc/campaigns, which is a real
+// route -- it answers rather than 404s -- but it belongs to the Registration
+// Center, a product these accounts do not have. Bandwidth's refusal says
+// "Account X is not enabled for the Registration Center", which reads as an
+// entitlement to go and buy, and every account failed identically because none
+// of them has it.
+//
+// The documented campaign API is a different path on the same host, under /api
+// rather than /api/v2. Reading a campaign that plainly exists was impossible
+// until this moved.
+//
+// https://dev.bandwidth.com/docs/messaging/campaign-management/csp/campaign-api/
+func tenDLCBase(account string) string {
+	return "/api/accounts/" + url.PathEscape(account) + "/campaignManagement/10dlc"
+}
+
 // 10DLC: who is registered to send messages, and whether they still are.
 //
-// This half of the Dashboard answers JSON rather than XML, in a {data, page}
-// envelope. Bandwidth's arrangement, not a choice made here.
+// Campaign management answers XML, like the rest of the Dashboard. It was read
+// as JSON here, which produced a 406 with an empty body once the paths were
+// corrected -- the endpoint declining to produce a media type it does not
+// serve. Two wrongs that hid each other: while the path was wrong the request
+// never got far enough to be refused for its Accept header.
 
 func (p *Plugin) registerTenDLCTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
@@ -20,9 +41,17 @@ func (p *Plugin) registerTenDLCTools(r *plugins.Registry) {
 		Title: "List 10DLC campaigns",
 		Description: "10DLC campaigns registered on this account — the " +
 			"registrations that allow a number to send A2P messages. Give an id " +
-			"to read one, with its status history and the numbers assigned to " +
-			"it. A campaign that has been suspended or expired is the usual " +
-			"reason messages from a working number start failing.",
+			"to read one, with the numbers assigned to it. A campaign that has " +
+			"been suspended or expired is the usual reason messages from a " +
+			"working number start failing.\n\n" +
+			"For a rejected or partly-working campaign, the fields that matter " +
+			"are Status (The Campaign Registry's view), MnoStatusList (each " +
+			"carrier's own view, which is independent — a campaign can be " +
+			"ACTIVE at TCR and rejected by one carrier) and " +
+			"SecondaryDcaDeclineReason. Compare those against MessageFlow, " +
+			"Sample1 to Sample5, the Optin/Optout/Help keywords and messages, " +
+			"and the TermsAndConditionsLink and PrivacyPolicyLink, which are " +
+			"what a carrier rejects a campaign over.",
 		Idempotent: true,
 	}, p.listCampaigns)
 
@@ -31,50 +60,19 @@ func (p *Plugin) registerTenDLCTools(r *plugins.Registry) {
 		Title: "List 10DLC brands",
 		Description: "10DLC brands on this account — the registered business " +
 			"identity that campaigns hang from. Give an id to read one, with " +
-			"its vetting record and status history. A brand that failed vetting " +
-			"blocks every campaign under it.",
+			"its external vetting record. A brand that failed vetting blocks " +
+			"every campaign under it, so read the brand before concluding a " +
+			"campaign's own fields are at fault. IdentityStatus is the brand's " +
+			"own verification state; a separate vetting record exists only " +
+			"where one was purchased.",
 		Idempotent: true,
 	}, p.listBrands)
-}
-
-// tenDLCEnvelope is the {data, page} wrapper the 10DLC endpoints return.
-//
-// Data is decoded late because its shape varies by endpoint: an object for a
-// single brand, an array for a listing or a history. Decoding it as `any` and
-// sorting it out here beats two response types that differ by one field.
-type tenDLCEnvelope struct {
-	Data any `json:"data"`
-	Page struct {
-		Number        int `json:"pageNumber"`
-		Size          int `json:"pageSize"`
-		TotalElements int `json:"totalElements"`
-		TotalPages    int `json:"totalPages"`
-	} `json:"page"`
-}
-
-// records normalises the envelope's data into a slice, whichever shape it
-// arrived in.
-func (e tenDLCEnvelope) records() []Record {
-	switch v := e.Data.(type) {
-	case []any:
-		out := make([]Record, 0, len(v))
-		for _, item := range v {
-			if rec, ok := item.(map[string]any); ok {
-				out = append(out, rec)
-			}
-		}
-		return out
-	case map[string]any:
-		return []Record{v}
-	}
-	return nil
 }
 
 // CampaignsInput names one campaign, or none for a listing.
 type CampaignsInput struct {
 	Account          string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	CampaignID       string `json:"campaign_id,omitempty" jsonschema:"one campaign by id, such as CEXMPL1"`
-	WithHistory      bool   `json:"with_history,omitempty" jsonschema:"also fetch the campaign's status history; requires campaign_id"`
 	WithPhoneNumbers bool   `json:"with_phone_numbers,omitempty" jsonschema:"also fetch the numbers assigned to the campaign; requires campaign_id"`
 	Page             int    `json:"page,omitempty" jsonschema:"1-based page number"`
 	Limit            int    `json:"limit,omitempty" jsonschema:"most campaigns to return; the configured ceiling applies whatever this says"`
@@ -101,54 +99,64 @@ func (p *Plugin) listCampaigns(ctx context.Context, in CampaignsInput) (TenDLCOu
 	if err != nil {
 		return TenDLCOutput{}, err
 	}
-	if (in.WithHistory || in.WithPhoneNumbers) && in.CampaignID == "" {
-		return TenDLCOutput{}, fmt.Errorf("bandwidth: with_history and " +
-			"with_phone_numbers need a campaign_id")
+	if in.WithPhoneNumbers && in.CampaignID == "" {
+		return TenDLCOutput{}, fmt.Errorf("bandwidth: with_phone_numbers needs " +
+			"a campaign_id")
 	}
-	base := fmt.Sprintf("%s/accounts/%s/tendlc/campaigns",
-		dashboardPrefix, account)
+	base := tenDLCBase(account) + "/campaigns"
 
 	if in.CampaignID == "" {
-		return p.tenDLCList(ctx, base, in.Page, p.client.limit(in.Limit))
+		return p.tenDLCList(ctx, base, "Campaigns", "Campaign",
+			in.Page, p.client.limit(in.Limit))
 	}
 
 	one := base + "/" + url.PathEscape(in.CampaignID)
-	var env tenDLCEnvelope
-	err = p.client.get(ctx, hostAPI, one, nil, &env)
+	rec, err := p.client.getXMLAt(ctx, one, nil)
 	p.note(err, nil)
 	if err != nil {
 		return TenDLCOutput{}, err
 	}
-	out := TenDLCOutput{Items: env.records()}
+	out := TenDLCOutput{Items: unwrap(rec, "Campaign")}
 	out.Returned = len(out.Items)
 
-	var missing []string
-	if in.WithHistory {
-		if recs, err := p.tenDLCSub(ctx, one+"/history"); err != nil {
-			missing = append(missing, "history ("+err.Error()+")")
-		} else {
-			out.History = recs
-		}
-	}
 	if in.WithPhoneNumbers {
-		if recs, err := p.tenDLCSub(ctx, one+"/phoneNumbers"); err != nil {
-			missing = append(missing, "phone numbers ("+err.Error()+")")
-		} else {
+		// /tn, not /phoneNumbers.
+		recs, note, err := p.tenDLCSub(ctx, one+"/tn", "TelephoneNumbers", "TelephoneNumber")
+		switch {
+		case err != nil:
+			out.Note = "the campaign was read; its numbers were not: " + err.Error()
+		case note != "":
+			out.Note = "phone numbers: " + note
+		case len(recs) == 0:
+			out.Note = "no numbers are assigned to this campaign"
+		default:
 			out.PhoneNumbers = recs
 		}
 	}
-	if len(missing) > 0 {
-		out.Note = "the campaign was read; these were not: " + joinAnd(missing)
-	}
 	return out, nil
+}
+
+// unwrap returns a single-record response as a one-element slice.
+//
+// Bandwidth wraps a single entity in a named element on some endpoints and not
+// on others, so the wrapper is unwrapped when it is there and the record is
+// used as-is when it is not. Returning the wrapper itself would give a model a
+// record whose only field is the entity it wanted.
+func unwrap(rec Record, element string) []Record {
+	if inner, ok := rec[element].(Record); ok {
+		return []Record{inner}
+	}
+	if len(rec) == 0 {
+		return nil
+	}
+	return []Record{rec}
 }
 
 // BrandsInput names one brand, or none for a listing.
 type BrandsInput struct {
 	Account      string `json:"account,omitempty" jsonschema:"account number to read; omit for the default account"`
 	BrandID      string `json:"brand_id,omitempty" jsonschema:"one brand by id, such as BEXMPL6"`
-	WithHistory  bool   `json:"with_history,omitempty" jsonschema:"also fetch the brand's status history; requires brand_id"`
-	WithVettings bool   `json:"with_vettings,omitempty" jsonschema:"also fetch the brand's vetting record, which says why it passed or failed; requires brand_id"`
+	WithVettings bool   `json:"with_vettings,omitempty" jsonschema:"also fetch the brand's external vetting record, which says why it passed or failed; requires brand_id"`
 	Page         int    `json:"page,omitempty" jsonschema:"1-based page number"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"most brands to return; the configured ceiling applies whatever this says"`
 }
@@ -161,78 +169,86 @@ func (p *Plugin) listBrands(ctx context.Context, in BrandsInput) (TenDLCOutput, 
 	if err != nil {
 		return TenDLCOutput{}, err
 	}
-	if (in.WithHistory || in.WithVettings) && in.BrandID == "" {
-		return TenDLCOutput{}, fmt.Errorf("bandwidth: with_history and " +
-			"with_vettings need a brand_id")
+	if in.WithVettings && in.BrandID == "" {
+		return TenDLCOutput{}, fmt.Errorf("bandwidth: with_vettings needs a brand_id")
 	}
-	base := fmt.Sprintf("%s/accounts/%s/tendlc/brands",
-		dashboardPrefix, account)
+	base := tenDLCBase(account) + "/brands"
 
 	if in.BrandID == "" {
-		return p.tenDLCList(ctx, base, in.Page, p.client.limit(in.Limit))
+		// /brands/details rather than /brands: the bare listing is abbreviated
+		// and unpaginated, which is the wrong shape for a tool that bounds what
+		// it returns and reports what it left out.
+		return p.tenDLCList(ctx, base+"/details", "Brands", "Brand",
+			in.Page, p.client.limit(in.Limit))
 	}
 
 	one := base + "/" + url.PathEscape(in.BrandID)
-	var env tenDLCEnvelope
-	err = p.client.get(ctx, hostAPI, one, nil, &env)
+	rec, err := p.client.getXMLAt(ctx, one, nil)
 	p.note(err, nil)
 	if err != nil {
 		return TenDLCOutput{}, err
 	}
-	out := TenDLCOutput{Items: env.records()}
+	out := TenDLCOutput{Items: unwrap(rec, "Brand")}
 	out.Returned = len(out.Items)
 
-	var missing []string
-	if in.WithHistory {
-		if recs, err := p.tenDLCSub(ctx, one+"/history"); err != nil {
-			missing = append(missing, "history ("+err.Error()+")")
-		} else {
-			out.History = recs
-		}
-	}
 	if in.WithVettings {
-		if recs, err := p.tenDLCSub(ctx, one+"/vettings"); err != nil {
-			missing = append(missing, "vettings ("+err.Error()+")")
-		} else {
+		// /vetting, singular.
+		recs, note, err := p.tenDLCSub(ctx, one+"/vetting", "Vettings", "Vetting")
+		switch {
+		case err != nil:
+			out.Note = "the brand was read; its vetting record was not: " + err.Error()
+		case note != "":
+			out.Note = "vetting: " + note
+		case len(recs) == 0:
+			out.Note = "this brand has no external vetting record; the brand's " +
+				"own IdentityStatus is what says whether it passed"
+		default:
 			out.Vettings = recs
 		}
-	}
-	if len(missing) > 0 {
-		out.Note = "the brand was read; these were not: " + joinAnd(missing)
 	}
 	return out, nil
 }
 
 // tenDLCList reads one page of a 10DLC collection.
-func (p *Plugin) tenDLCList(ctx context.Context, path string, page, limit int) (TenDLCOutput, error) {
-	q := url.Values{}
-	q.Set("size", strconv.Itoa(limit))
-	if page > 0 {
-		q.Set("page", strconv.Itoa(page))
-	}
+func (p *Plugin) tenDLCList(ctx context.Context, path, container, element string,
+	page, limit int) (TenDLCOutput, error) {
 
-	var env tenDLCEnvelope
-	err := p.client.get(ctx, hostAPI, path, q, &env)
+	q := url.Values{}
+	setPage(q, page, limit)
+
+	rec, err := p.client.getXMLAt(ctx, path, q)
 	p.note(err, nil)
 	if err != nil {
 		return TenDLCOutput{}, err
 	}
-	items := env.records()
-	out := TenDLCOutput{Items: items, Returned: len(items)}
-	// totalElements rather than a short page, because a full page is not
-	// evidence of more and a short one is not evidence of none.
-	if env.Page.TotalElements > len(items) {
-		out.Note = fmt.Sprintf("%d exist; %d returned. Ask for the next page.",
-			env.Page.TotalElements, len(items))
+	// collect falls back to finding a repeated element when the named wrapper
+	// is not the one Bandwidth used. That fallback matters more here than
+	// anywhere else in this package: these element names are the one part of
+	// this endpoint nobody has confirmed against a live response, and a wrong
+	// guess would report a populated account as having no campaigns.
+	items, note := collect(rec, container, element)
+	out := TenDLCOutput{Items: items, Returned: len(items), Note: note}
+	if len(items) == limit {
+		if out.Note != "" {
+			out.Note += " "
+		}
+		out.Note += "a full page came back, so there may be more; ask for the next page"
 	}
 	return out, nil
 }
 
-// tenDLCSub reads a sub-resource that shares the envelope.
-func (p *Plugin) tenDLCSub(ctx context.Context, path string) ([]Record, error) {
-	var env tenDLCEnvelope
-	if err := p.client.get(ctx, hostAPI, path, nil, &env); err != nil {
-		return nil, err
+// tenDLCSub reads a sub-resource of one campaign or brand.
+//
+// The note from collect is returned rather than dropped. Without it, three
+// different outcomes reached a caller as the same empty field: the campaign
+// genuinely has no numbers, the response carried numbers under an element name
+// this package did not recognise, and the sub-resource was not read at all.
+// Only the first is good news, and a model shown an absent field will assume it.
+func (p *Plugin) tenDLCSub(ctx context.Context, path, container, element string) ([]Record, string, error) {
+	rec, err := p.client.getXMLAt(ctx, path, nil)
+	if err != nil {
+		return nil, "", err
 	}
-	return env.records(), nil
+	items, note := collect(rec, container, element)
+	return items, note, nil
 }

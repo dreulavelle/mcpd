@@ -66,7 +66,7 @@ func TestGuardRefusesEverythingThatIsNotAllowedRead(t *testing.T) {
 			http.MethodGet, "/api/v2/accounts/5009021/e911s/locations", true, "",
 		},
 		"10DLC campaigns": {
-			http.MethodGet, "/api/v2/accounts/5009021/tendlc/campaigns", true, "",
+			http.MethodGet, "/api/accounts/5009021/campaignManagement/10dlc/campaigns", true, "",
 		},
 		// ...and the writes that the same credential is perfectly capable of.
 		// Each of these changes something in the real world, which is why the
@@ -87,7 +87,7 @@ func TestGuardRefusesEverythingThatIsNotAllowedRead(t *testing.T) {
 			http.MethodDelete, "/api/v2/accounts/5009021/sites/407", false, "only reads",
 		},
 		"creating a 10DLC campaign": {
-			http.MethodPost, "/api/v2/accounts/5009021/tendlc/campaigns", false, "only reads",
+			http.MethodPost, "/api/accounts/5009021/campaignManagement/10dlc/campaigns", false, "only reads",
 		},
 		// Fetching a letter of authorisation document itself is absent on
 		// purpose: it is a scan, usually of somebody's signature.

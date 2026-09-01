@@ -69,7 +69,7 @@ under `/api/v2`:
 | `messaging.bandwidth.com` | JSON | messages, stored media |
 | `api.bandwidth.com` | JSON | toll-free verification, endpoints, number lookup |
 | `api.bandwidth.com/api/v2` | **XML** | numbers, orders, sites, SIP peers, applications, porting, E911 |
-| `api.bandwidth.com/api/v2/…/tendlc` | JSON | 10DLC campaigns and brands |
+| `api.bandwidth.com/api/…/campaignManagement/10dlc` | XML | 10DLC campaigns and brands |
 | `insights.bandwidth.com` | JSON | voice traffic aggregates |
 
 The Dashboard half speaks XML and the rest speaks JSON. That is a fact about
@@ -198,6 +198,76 @@ The same applies to failure: the Dashboard answers some refusals with **200 and
 an error inside the body**. Left alone that reads as an empty result, which is
 the worst possible outcome — a model told nothing is there will say so with
 confidence. Every Dashboard read checks for it.
+
+## 10DLC was reading the wrong API entirely
+
+Worth recording, because the failure pointed away from itself for weeks.
+
+Every 10DLC read returned:
+
+```
+403  {"errors":[{"type":"forbidden",
+     "description":"Account 5010469 is not enabled for the Registration Center"}]}
+```
+
+That reads as an entitlement to go and buy, and it is a real Bandwidth product
+— so the obvious conclusion was that the account needed enabling. It did not.
+
+This package was calling `/api/v2/accounts/{id}/tendlc/campaigns`, which is the
+**Registration Center**, a different 10DLC product these accounts do not use.
+Campaign management is served at
+`/api/accounts/{id}/campaignManagement/10dlc/campaigns` — same host, under
+`/api` rather than `/api/v2`. The tell was that *all four* accounts failed
+identically while a campaign plainly existed; a per-account entitlement would
+not be uniform.
+
+Correcting the path produced a second failure hiding behind the first:
+
+```
+406  (no body)
+```
+
+Campaign management answers **XML**, like the rest of the Dashboard, and the
+10DLC reads were asking for JSON. While the path was wrong the request never
+got far enough to be refused for its `Accept` header, so the two defects
+concealed each other.
+
+Both are now fixed and verified against a live account.
+
+### Where a rejection actually lives
+
+The fields worth reading on a campaign that is not working:
+
+| field | what it says |
+|---|---|
+| `Status` | The Campaign Registry's view — often `ACTIVE` even when a carrier is refusing |
+| `MnoStatusList` | each carrier's own status, independent of the above |
+| `SharingStatus` / `SecondaryDcaSharingStatus` | whether the downstream aggregator accepted it |
+| `SecondaryDcaDeclineReason` | the carrier's own rejection text, with codes |
+
+The independence matters. A live campaign read during this work was `ACTIVE` at
+TCR and `REGISTERED` with ATT, TMO, CLS and USC, while
+`SecondaryDcaSharingStatus` was `DECLINED` with:
+
+```
+Rejection Code 2139: Invalid Call To Action - The provided opt-in form does not
+contain any phone number input field.
+Rejection Code 2132: Invalid Call To Action - The instructions provided for a
+customer to give SMS opt-in are not sufficient.
+```
+
+Anything that reduced that to "Declined" would have thrown away the entire
+answer, so the raw text is passed through untouched. `list_campaigns`' own
+description points a model at these fields, because a campaign showing `ACTIVE`
+reads as healthy otherwise.
+
+### What has no endpoint
+
+`with_history` is gone from both tools. Campaign management offers Create,
+Update, Fetch, Fetch List, Fetch List By Brand and Deactivate, and no status
+history — the per-carrier state in `MnoStatusList` is what replaces it. Brand
+vetting is `/vetting`, singular, and exists only where vetting was purchased; a
+brand's own `IdentityStatus` is the ordinary answer.
 
 ## What is not here yet
 

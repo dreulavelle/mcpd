@@ -107,14 +107,17 @@ var allowed = []rule{
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/e911s/locations/[^/]+$`), "reading one emergency-service address"},
 
 	// 10DLC. JSON rather than XML, on the same host and the same prefix.
-	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/campaigns$`), "listing 10DLC campaigns"},
-	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/campaigns/[^/]+$`), "reading one 10DLC campaign"},
-	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/campaigns/[^/]+/history$`), "reading a campaign's history"},
-	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/campaigns/[^/]+/phoneNumbers$`), "listing a campaign's numbers"},
-	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands$`), "listing 10DLC brands"},
-	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands/[^/]+$`), "reading one 10DLC brand"},
-	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands/[^/]+/history$`), "reading a brand's history"},
-	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/tendlc/brands/[^/]+/vettings$`), "reading a brand's vetting record"},
+	// Campaign management, under /api rather than /api/v2. The /api/v2/…/tendlc
+	// paths these replaced are the Registration Center, a different product
+	// that these accounts are not enabled for -- so every 10DLC read failed
+	// with an entitlement error for a campaign that plainly exists.
+	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/campaigns$`), "listing 10DLC campaigns"},
+	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/campaigns/[^/]+$`), "reading one 10DLC campaign"},
+	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/campaigns/[^/]+/tn$`), "listing a campaign's numbers"},
+	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/brands$`), "listing 10DLC brands"},
+	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/brands/details$`), "listing 10DLC brands in detail"},
+	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/brands/[^/]+$`), "reading one 10DLC brand"},
+	{http.MethodGet, regexp.MustCompile(`^/api/accounts/[^/]+/campaignManagement/10dlc/brands/[^/]+/vetting$`), "reading a brand's vetting record"},
 
 	// Insights, on its own host. One path with the monitor as its last
 	// segment, so a monitor added by Bandwidth needs no change here -- but a
