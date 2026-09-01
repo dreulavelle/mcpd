@@ -1,9 +1,10 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { api, ApiError, type Group, type GroupMember } from "@/lib/api";
+import { api, ApiError, type Capability, type Group, type GroupMember } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Loading, Notice, PageHeader, Section } from "@/components/chrome";
 import { SettingsTabs } from "./SettingsTabs";
 import { ReachPicker } from "@/components/ReachPicker";
+import { PermissionMatrix } from "@/components/PermissionMatrix";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -182,6 +183,7 @@ function GroupDetail({ group, notify, onChanged }: {
 }) {
   const [members, setMembers] = useState<GroupMember[] | null>(null);
   const [reach, setReach] = useState<string[]>(group.plugins);
+  const [caps, setCaps] = useState<Capability[] | null>(group.capabilities);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -192,11 +194,14 @@ function GroupDetail({ group, notify, onChanged }: {
   }, [group.id]);
   usePoll(load, 30_000);
 
-  async function saveReach() {
+  async function saveGroup() {
     setBusy(true);
     setError("");
     try {
-      await api.updateGroup(group.id, { plugins: reach });
+      // Both sent together: they are one decision about this group, and
+      // saving them separately would leave a window where the reach had moved
+      // and what may be done with it had not.
+      await api.updateGroup(group.id, { plugins: reach, capabilities: caps });
       onChanged();
       notify("good", "Saved.");
     } catch (e) {
@@ -230,8 +235,13 @@ function GroupDetail({ group, notify, onChanged }: {
           id={`reach-${group.id}`} value={reach} onChange={setReach}
           subject="everyone in this group"
         />
+        <div className="pt-3">
+          <PermissionMatrix
+            id={`caps-${group.id}`} value={caps} onChange={setCaps} disabled={busy}
+          />
+        </div>
         <div className="pt-1">
-          <Button size="sm" disabled={busy} onClick={saveReach}>Save</Button>
+          <Button size="sm" disabled={busy} onClick={saveGroup}>Save</Button>
         </div>
       </div>
 

@@ -210,7 +210,7 @@ func TestPending_AuthenticatesAndHoldsNoCapability(t *testing.T) {
 	}
 
 	authorizer := auth.NewAuthorizer()
-	p := signedIn.Principal("ses_test", signedIn.Plugins)
+	p := signedIn.Principal("ses_test", signedIn.Plugins, nil)
 	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove, auth.CapAdmin} {
 		if p.Can(c) {
 			t.Errorf("a pending account holds %q", c)
@@ -258,7 +258,7 @@ func TestApproveRegistration_IsAuditedWithTheActingAdministrator(t *testing.T) {
 	if approved.Status != StatusActive {
 		t.Errorf("status after approval = %q; want active", approved.Status)
 	}
-	if !approved.Principal("ses", approved.Plugins).Can(auth.CapRead) {
+	if !approved.Principal("ses", approved.Plugins, nil).Can(auth.CapRead) {
 		t.Error("an approved account still holds nothing")
 	}
 
@@ -576,7 +576,7 @@ func TestRegister_ThePasswordDoorAlwaysWaits(t *testing.T) {
 	if typed.Status != StatusPending {
 		t.Fatalf("status = %q; an address nobody checked must wait", typed.Status)
 	}
-	p := typed.Principal("ses", typed.Plugins)
+	p := typed.Principal("ses", typed.Plugins, nil)
 	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove} {
 		if p.Can(c) {
 			t.Errorf("an unchecked address walked in holding %q", c)
@@ -644,7 +644,7 @@ func TestRegister_GrantsNoPluginAccess(t *testing.T) {
 
 	// Active, so it holds its capabilities -- and still reaches no
 	// integration, which is a grant an administrator makes deliberately.
-	p := u.Principal("ses", u.Plugins)
+	p := u.Principal("ses", u.Plugins, nil)
 	if !p.Can(auth.CapRead) {
 		t.Error("an approved account holds no capabilities at all")
 	}
@@ -744,7 +744,7 @@ func TestGuardLastAdmin_DoesNotCountAPendingAdministrator(t *testing.T) {
 	if promoted.Status != StatusPending {
 		t.Fatalf("status = %q; promoting must not approve", promoted.Status)
 	}
-	if promoted.Principal("ses", promoted.Plugins).Can(auth.CapAdmin) {
+	if promoted.Principal("ses", promoted.Plugins, nil).Can(auth.CapAdmin) {
 		t.Fatal("a pending account holds admin")
 	}
 

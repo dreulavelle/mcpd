@@ -502,6 +502,14 @@ func (s *Store) Verify(ctx context.Context, secret string) (*auth.Principal, err
 	if err != nil {
 		return nil, err
 	}
+	// What the key's groups permit it to do, which can only narrow the role.
+	// Resolved on every verification rather than stored on the key, for the
+	// same reason grants are: taking a capability away from a group has to
+	// take effect on the next call, not the next restart.
+	ceiling, err := s.groups.CeilingFor(ctx, groups.Key(k.ID))
+	if err != nil {
+		return nil, err
+	}
 	s.touch(ctx, k, now)
 
 	return &auth.Principal{
@@ -511,6 +519,7 @@ func (s *Store) Verify(ctx context.Context, secret string) (*auth.Principal, err
 		DisplayName: k.Name,
 		Role:        k.Role,
 		Plugins:     granted,
+		Ceiling:     ceiling,
 		TokenID:     k.ID,
 	}, nil
 }

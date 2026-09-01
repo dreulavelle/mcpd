@@ -34,7 +34,7 @@ func TestAudit_RecordsTheStableIdentifierNotTheDisplayName(t *testing.T) {
 	}
 
 	// The actor is exactly what the dashboard passes: the principal's id.
-	actor := alice.Principal("ses_1", alice.Plugins).ID
+	actor := alice.Principal("ses_1", alice.Plugins, nil).ID
 	if actor != "user:alice@example.com" {
 		t.Fatalf("principal id = %q, want it built from the address", actor)
 	}
@@ -113,10 +113,10 @@ func TestDisplayName_RenamingDoesNotMoveTheIdentity(t *testing.T) {
 	if after.Email != "alice@example.com" {
 		t.Errorf("email = %q, want it unchanged", after.Email)
 	}
-	if got := after.Principal("ses_1", after.Plugins).ID; got != "user:alice@example.com" {
+	if got := after.Principal("ses_1", after.Plugins, nil).ID; got != "user:alice@example.com" {
 		t.Errorf("principal id = %q, want it unchanged by a rename", got)
 	}
-	if got := after.Principal("ses_1", after.Plugins).DisplayName; got != "Alice" {
+	if got := after.Principal("ses_1", after.Plugins, nil).DisplayName; got != "Alice" {
 		t.Errorf("principal display name = %q, want the new name", got)
 	}
 }

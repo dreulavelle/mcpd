@@ -11,6 +11,9 @@ function group(overrides: Partial<Group> = {}): Group {
     name: "Field engineers",
     description: "",
     plugins: [],
+    // null is the ordinary case: this group imposes no ceiling and each
+    // member's role stands.
+    capabilities: null,
     members: 0,
     created_by: "user:admin@example.com",
     created_at: "2026-08-01T09:00:00Z",

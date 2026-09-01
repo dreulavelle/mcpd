@@ -182,12 +182,36 @@ export interface User {
  * A group is a name and a set of systems. Membership is what hands those
  * systems to an account or a key; nothing else about a group grants anything.
  */
+/** What a caller may do, as opposed to what it may reach. */
+export type Capability = "read" | "propose" | "approve" | "admin";
+
+/** Every capability, in the order the permission matrix shows them. */
+export const CAPABILITIES: Capability[] = ["read", "propose", "approve", "admin"];
+
+/** What each capability lets somebody do, for the matrix's column headings. */
+export const CAPABILITY_LABELS: Record<Capability, string> = {
+  read: "Read",
+  propose: "Propose changes",
+  approve: "Approve changes",
+  admin: "Administer mcpd",
+};
+
 export interface Group {
   id: string;
   name: string;
   description: string;
   /** Empty means the group hands out nothing, which is what a new one does. */
   plugins: string[];
+  /**
+   * What this group permits its members to do, which can only ever narrow what
+   * their role already allows — a role grants, a group takes away.
+   *
+   * `null` means the group imposes no ceiling and each member's role stands.
+   * An empty array is the opposite and is a real setting: a group that permits
+   * nothing, which suspends its members without deleting them. Keep the two
+   * apart; collapsing them hands a suspended group its rights back.
+   */
+  capabilities: Capability[] | null;
   members: number;
   created_by: string;
   created_at: string;
@@ -1320,12 +1344,26 @@ export const api = {
     request<{ group: Group; members: GroupMember[] }>(
       `/api/groups/${encodeURIComponent(id)}`),
 
-  createGroup: (body: { name: string; description?: string; plugins?: string[] }) =>
+  createGroup: (body: {
+    name: string;
+    description?: string;
+    plugins?: string[];
+    capabilities?: Capability[];
+  }) =>
     request<Group>("/api/groups", { method: "POST", body: JSON.stringify(body) }),
 
   updateGroup: (
     id: string,
-    body: { name?: string; description?: string; plugins?: string[] },
+    // `capabilities` absent leaves the ceiling alone, `null` removes it, and an
+    // array sets it — including an empty array, which permits nothing. Three
+    // different requests, so the field is deliberately nullable rather than
+    // optional-only.
+    body: {
+      name?: string;
+      description?: string;
+      plugins?: string[];
+      capabilities?: Capability[] | null;
+    },
   ) =>
     request<Group>(`/api/groups/${encodeURIComponent(id)}`, {
       method: "PATCH",

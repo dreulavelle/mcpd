@@ -2,8 +2,11 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
@@ -33,10 +36,16 @@ type groupView struct {
 	Description string `json:"description"`
 	// Plugins is the grant, exactly as stored. Empty is legitimate and means
 	// the group hands out nothing.
-	Plugins   []string `json:"plugins"`
-	Members   int      `json:"members"`
-	CreatedBy string   `json:"created_by"`
-	CreatedAt string   `json:"created_at"`
+	Plugins []string `json:"plugins"`
+	// Capabilities is the ceiling this group imposes on what its members may
+	// do. null means it imposes none and each member's role stands; an empty
+	// array is a group that permits nothing, which suspends its members
+	// without deleting them. The dashboard has to keep those apart, so this is
+	// a nullable array rather than one that defaults to empty.
+	Capabilities []string `json:"capabilities"`
+	Members      int      `json:"members"`
+	CreatedBy    string   `json:"created_by"`
+	CreatedAt    string   `json:"created_at"`
 }
 
 func viewOfGroup(g *groups.Group) groupView {
@@ -45,9 +54,12 @@ func viewOfGroup(g *groups.Group) groupView {
 		Name:        g.Name,
 		Description: g.Description,
 		Plugins:     nonNil(g.Plugins),
-		Members:     g.Members,
-		CreatedBy:   g.CreatedBy,
-		CreatedAt:   g.CreatedAt.Format(time.RFC3339),
+		// nil stays nil on the wire: a group imposing no ceiling and a group
+		// permitting nothing are different, and nonNil would collapse them.
+		Capabilities: capabilityNames(g.Capabilities),
+		Members:      g.Members,
+		CreatedBy:    g.CreatedBy,
+		CreatedAt:    g.CreatedAt.Format(time.RFC3339),
 	}
 }
 
@@ -132,6 +144,50 @@ type groupRequest struct {
 	Name        *string   `json:"name,omitempty"`
 	Description *string   `json:"description,omitempty"`
 	Plugins     *[]string `json:"plugins,omitempty"`
+	// Capabilities sets the ceiling. Absent leaves it alone; null removes it;
+	// an array sets it, including an empty one. Three distinct requests, which
+	// is why this is a pointer to a pointer's worth of meaning rather than a
+	// plain slice.
+	Capabilities *[]string `json:"capabilities,omitempty"`
+	// capabilitiesSet records whether the caller mentioned the field at all,
+	// which a nil pointer alone cannot distinguish from an explicit null.
+	capabilitiesSet bool `json:"-"`
+}
+
+// UnmarshalJSON records whether "capabilities" was present, so that omitting it
+// and sending null mean different things -- leave the ceiling alone, and remove
+// it. Without this a group could never have its ceiling cleared.
+func (g *groupRequest) UnmarshalJSON(b []byte) error {
+	type alias groupRequest
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(b, &probe); err != nil {
+		return err
+	}
+	*g = groupRequest(a)
+	_, g.capabilitiesSet = probe["capabilities"]
+	return nil
+}
+
+// parseCapabilities turns the wire form into capabilities, refusing a name that
+// is not one rather than dropping it.
+//
+// Dropping would be the wrong direction here, unlike when reading a stored
+// ceiling: this is somebody typing, and a typo that silently widens a group is
+// exactly the failure this whole mechanism exists to prevent.
+func parseCapabilities(raw []string) ([]auth.Capability, error) {
+	out := make([]auth.Capability, 0, len(raw))
+	for _, name := range raw {
+		c := auth.Capability(strings.TrimSpace(name))
+		if !c.Valid() {
+			return nil, fmt.Errorf("%q is not a capability; use read, propose, approve or admin", name)
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +209,14 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Plugins != nil {
 		create.Plugins = *req.Plugins
+	}
+	if req.Capabilities != nil {
+		caps, err := parseCapabilities(*req.Capabilities)
+		if err != nil {
+			s.writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		create.Capabilities = caps
 	}
 	actor := auth.FromContext(r.Context()).ID
 	g, err := s.opts.Groups.Create(r.Context(), actor, create)
@@ -179,12 +243,29 @@ func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &req) {
 		return
 	}
-	actor := auth.FromContext(r.Context()).ID
-	g, err := s.opts.Groups.Update(r.Context(), actor, r.PathValue("id"), groups.UpdateRequest{
+	update := groups.UpdateRequest{
 		Name:        req.Name,
 		Description: req.Description,
 		Plugins:     req.Plugins,
-	})
+	}
+	// Three requests, kept apart: the field absent leaves the ceiling alone,
+	// null removes it, and an array sets it -- including an empty array, which
+	// is a group that permits nothing rather than one that restricts nothing.
+	if req.capabilitiesSet {
+		if req.Capabilities == nil {
+			var none []auth.Capability
+			update.Capabilities = &none
+		} else {
+			caps, err := parseCapabilities(*req.Capabilities)
+			if err != nil {
+				s.writeError(w, r, http.StatusBadRequest, err.Error())
+				return
+			}
+			update.Capabilities = &caps
+		}
+	}
+	actor := auth.FromContext(r.Context()).ID
+	g, err := s.opts.Groups.Update(r.Context(), actor, r.PathValue("id"), update)
 	switch {
 	case errors.Is(err, groups.ErrNotFound):
 		s.writeError(w, r, http.StatusNotFound, "no such group")
@@ -305,4 +386,16 @@ func nonNil(list []string) []string {
 		return []string{}
 	}
 	return list
+}
+
+// capabilityNames renders a ceiling for the wire, keeping nil as null.
+func capabilityNames(caps []auth.Capability) []string {
+	if caps == nil {
+		return nil
+	}
+	out := make([]string, 0, len(caps))
+	for _, c := range caps {
+		out = append(out, string(c))
+	}
+	return out
 }

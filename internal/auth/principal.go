@@ -96,6 +96,21 @@ type Principal struct {
 	// never the credential itself.
 	TokenID string
 
+	// Ceiling narrows what the role allows, and can never widen it.
+	//
+	// It is how a group restricts its members: a role is the grant, and a
+	// group may take away from it. Nil is the ordinary case and means no
+	// group imposed one, so the role stands unchanged -- which is what every
+	// principal that is not an account or a key has always been.
+	//
+	// A ceiling rather than a second grant, deliberately. Two mechanisms that
+	// both *give* rights make "why can this person approve" answerable only by
+	// reading both and knowing which wins; one that gives and one that takes
+	// away is answerable in one direction, and the answer is always the
+	// smaller of the two. It is the same rule this host applies where a tunnel
+	// meets a ChatGPT account, and where a subject's grant meets its groups.
+	Ceiling []Capability
+
 	// Pending reports a registration nobody has approved yet.
 	//
 	// It is separate from the role rather than a role of its own, because it
@@ -123,7 +138,15 @@ func (p *Principal) Can(c Capability) bool {
 	if p == nil || p.Pending {
 		return false
 	}
-	return slices.Contains(roleCapabilities[p.Role], c)
+	if !slices.Contains(roleCapabilities[p.Role], c) {
+		return false
+	}
+	// A ceiling only ever removes. Nil imposes none, which is why every
+	// caller that never had a group keeps exactly the rights it had.
+	if p.Ceiling == nil {
+		return true
+	}
+	return slices.Contains(p.Ceiling, c)
 }
 
 // CanAccessPlugin reports whether the principal may reach a plugin endpoint.

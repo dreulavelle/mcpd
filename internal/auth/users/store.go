@@ -42,6 +42,16 @@ func (s *Store) EffectiveGrants(ctx context.Context, userID string) ([]string, e
 	return s.groups.Effective(ctx, groups.User(userID))
 }
 
+// EffectiveCeiling returns what an account's groups permit it to do.
+//
+// A thin pass-through for the same reason as EffectiveGrants: the rule lives in
+// one function in one package, and this exists so the dashboard can ask without
+// depending on the groups package. nil means no group imposed a ceiling and the
+// account's role stands.
+func (s *Store) EffectiveCeiling(ctx context.Context, userID string) ([]auth.Capability, error) {
+	return s.groups.CeilingFor(ctx, groups.User(userID))
+}
+
 const userColumns = `id, email, password_hash, display_name, role, plugins_json,
 	                 disabled, status, created_at, updated_at, last_login_at`
 

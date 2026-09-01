@@ -83,10 +83,19 @@ type Group struct {
 	Description string
 	// Plugins is the grant. Empty grants nothing; the single element
 	// auth.Wildcard grants every plugin.
-	Plugins   []string
-	CreatedBy string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Plugins []string
+	// Capabilities is what this group permits its members to do, and it can
+	// only ever be narrower than their role already allows -- a group takes
+	// away, it never gives.
+	//
+	// nil means this group imposes no ceiling, which is what every group
+	// created before this existed means. An empty non-nil slice is the
+	// opposite and is a real setting: a group that permits nothing, which
+	// suspends its members without deleting them. The two must not collapse.
+	Capabilities []auth.Capability
+	CreatedBy    string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 	// Members counts the accounts and keys in the group. Populated by List
 	// and ByID, because "delete this group" is a question about who is in it.
 	Members int
@@ -251,6 +260,9 @@ type CreateRequest struct {
 	// Plugins may be empty, and empty is the default. A new group grants
 	// nothing until somebody says what it is for.
 	Plugins []string
+	// Capabilities is the ceiling this group imposes on its members. Nil
+	// imposes none.
+	Capabilities []auth.Capability
 }
 
 // Create makes a group.
@@ -283,10 +295,11 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*G
 		// without the other's row and both proceed.
 		affected, err := tx.ExecAffected(`
 			INSERT INTO groups (id, name, description, plugins_json,
-			                    created_by, created_at, updated_at)
-			SELECT ?,?,?,?,?,?,?
+			                    capabilities_json, created_by, created_at, updated_at)
+			SELECT ?,?,?,?,?,?,?,?
 			 WHERE NOT EXISTS (SELECT 1 FROM groups WHERE lower(name) = lower(?))`,
-			id, name, description, string(encoded), actor, now, now, name)
+			id, name, description, string(encoded),
+			encodeCapabilities(req.Capabilities), actor, now, now, name)
 		if err != nil {
 			return err
 		}
@@ -316,7 +329,7 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*G
 }
 
 const groupColumns = `g.id, g.name, g.description, g.plugins_json,
-	g.created_by, g.created_at, g.updated_at,
+	g.capabilities_json, g.created_by, g.created_at, g.updated_at,
 	(SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id)`
 
 // List returns every group, ordered by name.
@@ -365,6 +378,11 @@ type UpdateRequest struct {
 	Name        *string
 	Description *string
 	Plugins     *[]string
+	// Capabilities sets the ceiling. A nil pointer leaves it alone; a pointer
+	// to a nil slice removes the ceiling entirely, and a pointer to an empty
+	// slice sets a ceiling that permits nothing. Those are three different
+	// requests and the pointer is what keeps them apart.
+	Capabilities *[]auth.Capability
 }
 
 // Update edits a group.
@@ -377,7 +395,8 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 	// An edit that changes nothing writes nothing, and that includes the
 	// updated_at stamp: a group whose modification time moved without anything
 	// about it changing is a row that lies about when it was last decided on.
-	if req.Name == nil && req.Description == nil && req.Plugins == nil {
+	if req.Name == nil && req.Description == nil && req.Plugins == nil &&
+		req.Capabilities == nil {
 		return s.ByID(ctx, id)
 	}
 	var name, description string
@@ -400,9 +419,10 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 	now := s.now().UnixMilli()
 	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
 		var wasName, wasPlugins string
+		var wasCaps sql.NullString
 		if err := tx.QueryRow(
-			`SELECT name, plugins_json FROM groups WHERE id = ?`, id).
-			Scan(&wasName, &wasPlugins); err != nil {
+			`SELECT name, plugins_json, capabilities_json FROM groups WHERE id = ?`, id).
+			Scan(&wasName, &wasPlugins, &wasCaps); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -428,6 +448,20 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 		if req.Description != nil {
 			sets = append(sets, "description = ?")
 			args = append(args, description)
+		}
+		if req.Capabilities != nil {
+			sets = append(sets, "capabilities_json = ?")
+			args = append(args, encodeCapabilities(*req.Capabilities))
+			// Audited like a re-scoping, and for the same reason: it changes
+			// what every member of the group may do. The old value is recorded
+			// beside the new one, because "what did this widen" is
+			// unanswerable from the new one alone.
+			was := "none"
+			if wasCaps.Valid {
+				was = wasCaps.String
+			}
+			detail["capabilities_before"] = was
+			detail["capabilities_after"] = encodeCapabilities(*req.Capabilities)
 		}
 		if req.Plugins != nil {
 			encoded, err := json.Marshal(plugins)
@@ -830,12 +864,13 @@ func scanGroup(row rowScanner) (*Group, error) {
 	var (
 		g        Group
 		plugins  string
+		caps     sql.NullString
 		created  int64
 		updated  int64
 		members  int
 		describe string
 	)
-	err := row.Scan(&g.ID, &g.Name, &describe, &plugins,
+	err := row.Scan(&g.ID, &g.Name, &describe, &plugins, &caps,
 		&g.CreatedBy, &created, &updated, &members)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -845,6 +880,12 @@ func scanGroup(row rowScanner) (*Group, error) {
 	}
 	g.Description = describe
 	g.Plugins = decodeGrants(plugins)
+	// NULL is "no ceiling", an empty array is "permits nothing". Decoding both
+	// to the same nil would quietly turn the second into the first and hand a
+	// suspended group back its rights.
+	if caps.Valid {
+		g.Capabilities = decodeCapabilities(caps.String)
+	}
 	g.CreatedAt = time.UnixMilli(created).UTC()
 	g.UpdatedAt = time.UnixMilli(updated).UTC()
 	g.Members = members
@@ -897,3 +938,116 @@ func newID() (string, error) {
 	}
 	return "grp_" + hex.EncodeToString(b), nil
 }
+
+// decodeCapabilities reads a stored ceiling, dropping anything unrecognised.
+//
+// An unknown capability is dropped rather than refused: the column is written
+// by this host and read by a possibly older one after a rollback, and a name a
+// previous version does not understand must not deny a group its whole ceiling
+// -- which would silently widen its members, since a nil ceiling imposes
+// nothing. Dropping narrows instead, which is the safe direction.
+func decodeCapabilities(encoded string) []auth.Capability {
+	var raw []string
+	if err := json.Unmarshal([]byte(encoded), &raw); err != nil {
+		// Unreadable is not "no ceiling". An empty non-nil slice permits
+		// nothing, which fails closed.
+		return []auth.Capability{}
+	}
+	out := make([]auth.Capability, 0, len(raw))
+	for _, name := range raw {
+		c := auth.Capability(strings.TrimSpace(name))
+		if c.Valid() {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// encodeCapabilities renders a ceiling for storage. Nil becomes SQL NULL, which
+// is how "this group imposes no ceiling" is spelled.
+func encodeCapabilities(caps []auth.Capability) any {
+	if caps == nil {
+		return nil
+	}
+	seen := map[auth.Capability]bool{}
+	out := make([]string, 0, len(caps))
+	for _, c := range caps {
+		if !c.Valid() || seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, string(c))
+	}
+	slices.Sort(out)
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		// Cannot happen for a slice of strings; failing closed rather than
+		// asserting, because the alternative is writing NULL and removing the
+		// ceiling somebody just set.
+		return "[]"
+	}
+	return string(encoded)
+}
+
+// CeilingFor resolves the capability ceiling a subject's groups impose.
+//
+// nil means no group imposed one and the subject's role stands. Otherwise it is
+// the union of the ceilings of the groups that declare one: being added to a
+// second, more permissive group must not take away what the first allowed,
+// because a group is how people are organised and organising somebody twice
+// should not punish them. No group can widen past the role, which Principal.Can
+// enforces by intersecting this with the role's own set.
+//
+// Groups that declare no ceiling are ignored rather than treated as permitting
+// everything. A subject in a restrictive group and an unrestricted one is
+// restricted -- otherwise every ceiling would be undone by ordinary membership
+// of a general group, which is exactly the shape of the grant bug this replaced.
+func (s *Store) CeilingFor(ctx context.Context, subject Subject) ([]auth.Capability, error) {
+	if !subject.Kind.Valid() || strings.TrimSpace(subject.ID) == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Reader().QueryContext(ctx, ceilingQuery,
+		string(subject.Kind), subject.ID)
+	if err != nil {
+		return nil, fmt.Errorf("groups: resolve capabilities for %s: %w", subject.ID, err)
+	}
+	defer rows.Close()
+
+	var declared [][]auth.Capability
+	for rows.Next() {
+		var encoded sql.NullString
+		if err := rows.Scan(&encoded); err != nil {
+			return nil, err
+		}
+		if !encoded.Valid {
+			continue
+		}
+		declared = append(declared, decodeCapabilities(encoded.String))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(declared) == 0 {
+		return nil, nil
+	}
+	seen := map[auth.Capability]bool{}
+	out := []auth.Capability{}
+	for _, list := range declared {
+		for _, c := range list {
+			if seen[c] {
+				continue
+			}
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+const ceilingQuery = `
+	SELECT g.capabilities_json
+	  FROM groups g
+	  JOIN group_members m ON m.group_id = g.id
+	 WHERE (?1 = 'user' AND m.user_id = ?2)
+	    OR (?1 = 'key'  AND m.key_id  = ?2)`

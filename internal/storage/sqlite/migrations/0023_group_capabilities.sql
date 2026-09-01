@@ -1,0 +1,15 @@
+-- What a group may take away.
+--
+-- A role grants capabilities and a group can now narrow them. The two are
+-- deliberately asymmetric: one mechanism gives rights and the other only
+-- removes, so "why can this person approve" is answerable in one direction and
+-- the answer is always the smaller of the two. Two mechanisms that both grant
+-- would make it answerable only by reading both and knowing which wins.
+--
+-- NULL is not "no capabilities" -- it is "this group imposes no ceiling", which
+-- is what every group that exists today means and must keep meaning. An empty
+-- JSON array is the other thing entirely: a group that permits nothing, which
+-- is a real and useful way to suspend a set of people without deleting them.
+-- Those two must never collapse into each other, which is why this column is
+-- nullable rather than defaulted to '[]'.
+ALTER TABLE groups ADD COLUMN capabilities_json TEXT;
