@@ -70,8 +70,8 @@ func TestSeedingPinsTheTunnelsItFound(t *testing.T) {
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelAPIKey, Value: "sk-runtime", Secret: true},
 		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
-		{Key: settings.PluginTunnelKey("echo"),
-			Value: `"tunnel_1123456789abcdef0123456789abcdef"`},
+		{Key: settings.TunnelPluginKey("tunnel_1123456789abcdef0123456789abcdef"),
+			Value: `"echo"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,8 @@ func TestSeedingPinsTheTunnelsItFound(t *testing.T) {
 	if got := a.settings.String(ctx, settings.KeyTunnelAccount, ""); got != seeded {
 		t.Errorf("the main tunnel names %q, want the seeded account", got)
 	}
-	if got := a.settings.String(ctx, settings.PluginTunnelAccountKey("echo"), ""); got != seeded {
+	if got := a.settings.String(ctx,
+		settings.TunnelAccountKey("tunnel_1123456789abcdef0123456789abcdef"), ""); got != seeded {
 		t.Errorf("the echo tunnel names %q, want the seeded account", got)
 	}
 
@@ -283,8 +284,8 @@ func TestAnAccountGrantNarrowsButNeverWidens(t *testing.T) {
 	addAccount(t, a, "Wide", []string{auth.Wildcard})
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.PluginTunnelKey("echo"),
-			Value: `"tunnel_1123456789abcdef0123456789abcdef"`},
+		{Key: settings.TunnelPluginKey("tunnel_1123456789abcdef0123456789abcdef"),
+			Value: `"echo"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
