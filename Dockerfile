@@ -18,7 +18,7 @@ RUN npm run build
 # Cross-compiled from the build platform. Running this under QEMU per target
 # would emulate a Go compiler, which is the slowest part of any multi-arch
 # build -- and Go cross-compiles natively with CGO off.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 
 WORKDIR /src
 

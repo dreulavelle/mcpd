@@ -58,8 +58,8 @@ github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
-github.com/openai/tunnel-client v0.0.12 h1:QiOdvm/o/K589MBIF4bUPJCJK7uhaYTLpeYovAsfQD8=
-github.com/openai/tunnel-client v0.0.12/go.mod h1:VUIDRDrj7pcrAWtwKBv9dKc03bErI2HSeXoN2FFJ/2M=
+github.com/openai/tunnel-client v0.0.13 h1:ebqOEnIebX0z+vPJKr9TNtoZUD+65iZTWveYJDuVQOI=
+github.com/openai/tunnel-client v0.0.13/go.mod h1:aI2oY76cdL22SGooyrD5Fl9zrujiLft/6CvUf7nCMmw=
 github.com/panjf2000/ants/v2 v2.11.3 h1:AfI0ngBoXJmYOpDh9m516vjqoUu2sLrIVgppI9TZVpg=
 github.com/panjf2000/ants/v2 v2.11.3/go.mod h1:8u92CYMUc6gyvTIw8Ru7Mt7+/ESnJahz5EVtqfrilek=
 github.com/pingcap/errors v0.11.4 h1:lFuQV/oaUMGcD2tqt+01ROSmJs75VG1ToEOkZIZ4nE4=
