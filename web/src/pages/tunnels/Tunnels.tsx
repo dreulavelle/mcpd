@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Waypoints } from "lucide-react";
 import {
   isOpenAIReason, OpenAIPermissionDialog, type OpenAIReason,
@@ -90,7 +90,7 @@ export function Tunnels() {
       )}
 
       {info?.can_manage && admin && (
-        <Add plugins={plugins} workspaces={info.workspaces ?? []}
+        <Add plugins={plugins} fallbackWorkspaces={info.workspaces ?? []}
              accounts={accounts} onDone={load} notify={notify}
              onRefused={setRefused} />
       )}
@@ -296,9 +296,10 @@ function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, no
   );
 }
 
-function Add({ plugins, workspaces, accounts, onDone, notify, onRefused }: {
+function Add({ plugins, fallbackWorkspaces, accounts, onDone, notify, onRefused }: {
   plugins: string[];
-  workspaces: string[];
+  /** Used only by an account that reports none of its own. */
+  fallbackWorkspaces: string[];
   accounts: ChatGPTAccount[];
   onDone: () => void;
   notify: Notify;
@@ -313,8 +314,24 @@ function Add({ plugins, workspaces, accounts, onDone, notify, onRefused }: {
   const [account, setAccount] = useState(canMake[0]?.id ?? "");
   // A tunnel scoped only to the Platform organisation silently does not appear
   // in an Enterprise or Edu workspace, so the default is one that has worked.
-  const [workspace, setWorkspace] = useState(workspaces[0] ?? "");
+  const [workspace, setWorkspace] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // The selected account's own workspaces. An account is an organisation, so
+  // offering the union across every account would let a tunnel be created in
+  // one the selected account cannot reach -- and the refusal arrives after
+  // the tunnel is made, not while it is being chosen. The host-wide list is
+  // the fallback only for an account with no tunnels yet, which has no
+  // workspaces of its own to report.
+  const chosen = canMake.find((a) => a.id === account);
+  const workspaces = chosen?.workspaces?.length ? chosen.workspaces : fallbackWorkspaces;
+
+  // Reset when the account changes, or a workspace belonging to the previous
+  // account stays selected and is submitted against this one.
+  useEffect(() => {
+    setWorkspace(workspaces[0] ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account]);
 
   async function add() {
     setBusy(true);

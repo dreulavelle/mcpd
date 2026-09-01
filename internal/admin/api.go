@@ -25,6 +25,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
+	"github.com/spoked/mcpd/internal/cachestore"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
@@ -333,6 +334,14 @@ func (denyAllVerifier) Verify(context.Context, string, *http.Request) (*auth.Pri
 type Server struct {
 	opts Options
 	mux  *http.ServeMux
+
+	// tunnelCache holds each account's tunnel listing for a few seconds, and
+	// tunnelGroup collapses concurrent fetches of the same one. The dashboard
+	// polls this endpoint, so without them every poll was a request to OpenAI
+	// per configured account -- and switching between accounts in the form was
+	// a fresh round trip each time.
+	tunnelCache *cachestore.Store
+	tunnelGroup *cachestore.Group
 }
 
 // NewServer builds the dashboard.
@@ -345,6 +354,8 @@ func NewServer(opts Options) *Server {
 	if opts.Authorizer == nil {
 		opts.Authorizer = auth.NewAuthorizer()
 	}
+	// One entry per ChatGPT account, and a host has a handful.
+	tunnelCache := cachestore.New(32)
 	// A missing verifier must deny everything rather than panic on the first
 	// request. Failing open here would expose the whole dashboard.
 	if opts.Verifier == nil {
@@ -352,6 +363,8 @@ func NewServer(opts Options) *Server {
 		opts.Verifier = denyAllVerifier{}
 	}
 	s := &Server{opts: opts, mux: http.NewServeMux()}
+	s.tunnelCache = tunnelCache
+	s.tunnelGroup = &cachestore.Group{}
 	s.routes()
 	return s
 }
@@ -858,7 +871,7 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 		if dir.Available() {
 			view.CanManage = true
 			resp.CanManage = true
-			if list, err := dir.List(r.Context()); err != nil {
+			if list, err := s.listTunnels(r.Context(), acct.ID, dir); err != nil {
 				view.Problem = err.Error()
 			} else {
 				list = ours(list, resp.Assignments)
@@ -869,6 +882,9 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 						AccountName: acct.Name,
 					})
 				}
+				// This account's own workspaces, not the host's. The page
+				// offers these when a tunnel is made under this account.
+				view.Workspaces = workspacesIn(list)
 				seen = append(seen, list...)
 			}
 		}
@@ -1715,6 +1731,9 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
 		return
 	}
+	// The page reloads next, and a listing that predates this makes the tunnel
+	// somebody just created look as though it does not exist.
+	s.forgetTunnels(account.ID)
 	// Assigning is the point of creating: a tunnel nothing is bound to is an
 	// object in someone's account doing nothing.
 	if err := s.assign(r, created.ID, body.Plugin, account.ID); err != nil {
@@ -1782,6 +1801,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
 		return
 	}
+	s.forgetTunnels(account.ID)
 	// Whatever was pointing at it now points at nothing, so the assignment
 	// goes too: leaving it would keep mcpd trying to run a tunnel that no
 	// longer exists.
