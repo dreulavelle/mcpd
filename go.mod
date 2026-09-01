@@ -1,12 +1,12 @@
 module github.com/spoked/mcpd
 
-go 1.26.2
+go 1.27.0
 
 require (
 	github.com/getsentry/sentry-go v0.48.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/openai/tunnel-client v0.0.12
+	github.com/openai/tunnel-client v0.0.13
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	golang.org/x/crypto v0.55.0
