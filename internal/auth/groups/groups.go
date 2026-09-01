@@ -142,10 +142,11 @@ func (s *Store) Effective(ctx context.Context, subject Subject) ([]string, error
 	}
 	defer rows.Close()
 
-	var lists [][]string
+	var own, fromGroups [][]string
 	for rows.Next() {
+		var isGroup int
 		var encoded string
-		if err := rows.Scan(&encoded); err != nil {
+		if err := rows.Scan(&isGroup, &encoded); err != nil {
 			return nil, err
 		}
 		var list []string
@@ -156,35 +157,68 @@ func (s *Store) Effective(ctx context.Context, subject Subject) ([]string, error
 			// nothing is granted.
 			return nil, fmt.Errorf("groups: decode a grant for %s: %w", subject.ID, err)
 		}
-		lists = append(lists, list)
+		if isGroup == 1 {
+			fromGroups = append(fromGroups, list)
+			continue
+		}
+		own = append(own, list)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return Union(lists...), nil
+
+	// A grant the subject carries itself is the whole answer, and groups apply
+	// only when it carries none.
+	//
+	// These used to be unioned together, and a wildcard group then made every
+	// per-key restriction unenforceable: a key saved as ["bandwidth"], shown in
+	// the dashboard as ["bandwidth"], and belonging to a group granting ["*"],
+	// reached every plugin on the host. Found by an audit against a live
+	// instance, where a key scoped to one integration successfully read
+	// Graylog and Textable through their stored credentials.
+	//
+	// Union was the wrong operation for a reason worth stating: it makes group
+	// membership able to *widen* a subject, so a narrowing written on the
+	// subject itself can never be relied upon. This host already settles the
+	// same question the other way where a tunnel meets a ChatGPT account --
+	// the narrower wins, and assignment can only ever reduce reach.
+	//
+	// Own-grant-wins rather than intersection, because intersection has the
+	// same defect pointing the other way: a key showing ["bandwidth"] whose
+	// groups do not mention bandwidth would reach nothing, and the displayed
+	// scope would be a lie again. What is displayed is now what is reached.
+	if list := Union(own...); len(list) > 0 {
+		return list, nil
+	}
+	return Union(fromGroups...), nil
 }
 
 // effectiveQuery is deliberately one statement covering both subject kinds and
 // both sources of a grant. Two statements would be two places for the rule to
 // live even inside one function.
 const effectiveQuery = `
-	SELECT plugins_json FROM users
+	SELECT 0 AS is_group, plugins_json FROM users
 	 WHERE ?1 = 'user' AND id = ?2
 	UNION ALL
-	SELECT plugins_json FROM api_keys
+	SELECT 0 AS is_group, plugins_json FROM api_keys
 	 WHERE ?1 = 'key' AND id = ?2
 	UNION ALL
-	SELECT g.plugins_json
+	SELECT 1 AS is_group, g.plugins_json
 	  FROM groups g
 	  JOIN group_members m ON m.group_id = g.id
 	 WHERE (?1 = 'user' AND m.user_id = ?2)
 	    OR (?1 = 'key'  AND m.key_id  = ?2)`
 
-// Union folds grant lists into the set a subject actually reaches.
+// Union folds grant lists into one set.
 //
-// The wildcard absorbs: a subject in a group granting everything reaches
-// everything, and listing the named plugins beside it would be the same set
-// rendered as though it were smaller. The result is sorted so that two equal
+// It combines lists from the same source -- several groups, say -- and is no
+// longer what decides a subject's reach on its own; see Effective, where a
+// subject's own grant takes precedence over its groups rather than being
+// unioned with them.
+//
+// The wildcard absorbs: a subject in two groups, one granting everything,
+// reaches everything, and listing the named plugins beside it would be the same
+// set rendered as though it were smaller. The result is sorted so that two equal
 // unions compare equal -- Principal.Equal already sorts before comparing, and
 // a stable order keeps a tunnel from restarting because a group was read in a
 // different order.

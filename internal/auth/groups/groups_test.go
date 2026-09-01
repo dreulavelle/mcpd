@@ -77,10 +77,12 @@ func effective(t *testing.T, s *Store, subject Subject) []string {
 
 // The whole of the model, in one test: what a subject reaches is its own
 // grants unioned with every group it belongs to.
-func TestEffective_IsTheUnionOfDirectGrantsAndEveryGroup(t *testing.T) {
+// Groups union with each other, and a subject with no grant of its own reaches
+// all of them.
+func TestEffective_UnionsTheGroupsOfASubjectThatGrantsItselfNothing(t *testing.T) {
 	s, db := newStore(t)
 	ctx := context.Background()
-	seedUser(t, db, "usr_1", "a@example.com", `["netbox"]`)
+	seedUser(t, db, "usr_1", "a@example.com", `[]`)
 	field := mustGroup(t, s, "Field", "cnmaestro")
 	noc := mustGroup(t, s, "NOC", "echo", "cnmaestro")
 
@@ -90,9 +92,44 @@ func TestEffective_IsTheUnionOfDirectGrantsAndEveryGroup(t *testing.T) {
 		}
 	}
 
-	want := []string{"cnmaestro", "echo", "netbox"}
+	want := []string{"cnmaestro", "echo"}
 	if got := effective(t, s, User("usr_1")); !slices.Equal(got, want) {
-		t.Errorf("granted = %v, want %v; a member of two groups reaches the union", got, want)
+		t.Errorf("granted = %v, want %v; a member of two groups reaches both", got, want)
+	}
+}
+
+// A grant written on the subject is the whole answer, and a group cannot widen
+// past it.
+//
+// This is the vulnerability that made the change: these were unioned, so a key
+// saved as ["bandwidth"] — and displayed as ["bandwidth"] — belonging to a
+// group granting ["*"] reached every plugin on the host. An audit against a
+// live instance found a key scoped to one integration reading Graylog and
+// Textable through their stored credentials. A narrowing that a group can
+// erase is not a narrowing.
+func TestEffective_ASubjectsOwnGrantIsNotWidenedByItsGroups(t *testing.T) {
+	s, db := newStore(t)
+	ctx := context.Background()
+	seedUser(t, db, "usr_1", "a@example.com", `["netbox"]`)
+	everything := mustGroup(t, s, "Everyone", "*")
+	if err := s.AddMember(ctx, "user:admin@example.com", everything.ID, User("usr_1")); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	want := []string{"netbox"}
+	if got := effective(t, s, User("usr_1")); !slices.Equal(got, want) {
+		t.Errorf("granted = %v, want %v; a wildcard group must not erase an "+
+			"explicit grant", got, want)
+	}
+
+	// And a named group is no different: the subject's own list still decides.
+	field := mustGroup(t, s, "Field", "cnmaestro")
+	if err := s.AddMember(ctx, "user:admin@example.com", field.ID, User("usr_1")); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if got := effective(t, s, User("usr_1")); !slices.Equal(got, want) {
+		t.Errorf("granted = %v, want %v; groups apply only to a subject that "+
+			"grants itself nothing", got, want)
 	}
 }
 
@@ -197,7 +234,9 @@ func TestUnion_WildcardAbsorbs(t *testing.T) {
 func TestDelete_NarrowsAndStrandsNobody(t *testing.T) {
 	s, db := newStore(t)
 	ctx := context.Background()
-	seedUser(t, db, "usr_1", "a@example.com", `["netbox"]`)
+	// No grant of its own, so its reach is exactly what its groups give it --
+	// which is what makes deleting one observable here.
+	seedUser(t, db, "usr_1", "a@example.com", `[]`)
 	field := mustGroup(t, s, "Field", "cnmaestro")
 	noc := mustGroup(t, s, "NOC", "echo")
 	for _, g := range []*Group{field, noc} {
@@ -210,7 +249,7 @@ func TestDelete_NarrowsAndStrandsNobody(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	want := []string{"echo", "netbox"}
+	want := []string{"echo"}
 	if got := effective(t, s, User("usr_1")); !slices.Equal(got, want) {
 		t.Errorf("granted = %v, want %v; deleting a group takes its grant and nothing else", got, want)
 	}

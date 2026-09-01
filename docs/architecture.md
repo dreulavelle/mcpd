@@ -623,16 +623,42 @@ this person approve" is answerable only by reading both, and neither would be
 explainable on its own. If the capability set ever needs to be finer than two
 roles, the answer is more roles, in the one map that already decides.
 
-**Effective grants are a union, computed in one place.** What a subject reaches
-is its own grants unioned with the grants of every group it belongs to, and
-`groups.Effective` is the only function in the process that works it out — one
-SQL statement covering both subject kinds and both sources, so there is nothing
-to keep in step. It is the same arrangement `Principal.Can` has for
+**A subject's own grant is the whole answer; groups apply only when it has
+none.** `groups.Effective` is the only function in the process that works this
+out — one SQL statement covering both subject kinds and both sources, so there
+is nothing to keep in step. It is the same arrangement `Principal.Can` has for
 capabilities: one choke point, so a rule applied there is applied everywhere.
 Computing it in a second place would be the bug, which is why `User.Principal`
 takes the grants as an argument rather than reading them off the row — a method
 on an account cannot answer a question about other rows, and requiring the
 value is what stops a staler answer being assembled elsewhere.
+
+This used to be a **union** of the two, and that was a vulnerability rather than
+a design choice that aged badly. A key saved as `["bandwidth"]`, stored
+correctly and displayed correctly, that also belonged to a group granting
+`["*"]`, reached every plugin on the host — because `["bandwidth"] ∪ ["*"]` is
+`["*"]`. An audit against a live instance called Graylog and Textable tools with
+a key scoped to Bandwidth, and both reached their real upstreams through this
+host's stored credentials. It was fail-open and silent: nothing errored, nothing
+was logged, and every place an operator would look showed the key correctly
+bounded.
+
+The defect in union is not the arithmetic, it is the direction: it lets group
+membership *widen* a subject, so a narrowing written on the subject itself can
+never be relied on. This host already settles the same question the other way
+where a tunnel meets a ChatGPT account — the narrower wins, and assignment can
+only ever reduce reach.
+
+Own-grant-wins rather than intersection, because intersection has the same
+defect pointing the other way: a key showing `["bandwidth"]` whose groups do not
+mention bandwidth would reach nothing, and the displayed scope would be a lie
+again in the other direction. **What is displayed is what is reached**, and
+groups remain the ordinary way a subject gets reach — they simply cannot
+overrule a subject that has said what it reaches.
+
+`TestScopedAPIKey_IsNotWidenedByItsGroups` pins it at the HTTP boundary with a
+real key in a real wildcard group, because the auth package alone cannot show
+that the aggregate endpoint honours the answer.
 
 It is resolved per request, never frozen when a session or a key was issued.
 That is what makes taking somebody out of a group take effect on their next

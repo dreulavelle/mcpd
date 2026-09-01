@@ -62,12 +62,16 @@ func TestEffectiveGrants_IsTheUnion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("effective grants: %v", err)
 	}
-	want := []string{"cnmaestro", "netbox"}
+	// The user's own grant is the answer; the group cannot add to it.
+	want := []string{"netbox"}
 	if !slices.Equal(granted, want) {
 		t.Fatalf("granted = %v, want %v", granted, want)
 	}
 	p := u.Principal("ses", granted)
-	if !p.CanAccessPlugin("cnmaestro") || !p.CanAccessPlugin("netbox") {
+	if p.CanAccessPlugin("cnmaestro") {
+		t.Error("a group must not widen a user's own grant")
+	}
+	if !p.CanAccessPlugin("netbox") {
 		t.Error("the principal does not reach what the union says it does")
 	}
 	if p.CanAccessPlugin("echo") {

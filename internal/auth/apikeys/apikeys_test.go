@@ -117,8 +117,12 @@ func TestVerify_GrantsAreTheUnionAndFollowAGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if !slices.Equal(p.Plugins, []string{"cnmaestro", "echo"}) {
-		t.Errorf("reaches = %v, want the union of its own grant and its group's", p.Plugins)
+	// The key's own grant still decides. Joining a group cannot widen it, which
+	// is the whole point: a key saved and displayed as reaching one integration
+	// must reach one integration.
+	if !slices.Equal(p.Plugins, []string{"echo"}) {
+		t.Errorf("reaches = %v, want [echo]; a group must not widen a key's "+
+			"own grant", p.Plugins)
 	}
 }
 
