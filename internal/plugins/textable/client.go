@@ -213,16 +213,37 @@ func (h healthReport) ok() bool {
 // wrong key fails in ProbeAuth. Told apart at startup, those are two different
 // sentences on the dashboard; run together they are one confusing one.
 func (c *Client) Probe(ctx context.Context) (healthReport, error) {
-	raw, err := c.do(ctx, http.MethodGet, "/health", nil)
+	if err := c.limiter.Wait(ctx); err != nil {
+		return healthReport{}, fmt.Errorf("textable: waiting to probe: %w", err)
+	}
+	raw, status, err := c.send(ctx, http.MethodGet, c.root+"/health")
 	if err != nil {
 		return healthReport{}, err
 	}
+
+	// 503 is an answer, not a failure.
+	//
+	// This endpoint follows the health-check convention where the status code
+	// carries the verdict: 200 for a well instance, 503 for one that is not.
+	// A 503 still has the full report in its body, and its status is often
+	// "warn" -- degraded, still serving. Treating the code as an error meant a
+	// momentary wobble on the far end failed this plugin's startup entirely,
+	// and it then sat on the dashboard as broken while every one of its tools
+	// worked. Seen in production on the day it shipped.
+	//
+	// So the body decides, and the code is used only to know whether to expect
+	// one. Anything that is not 200 or 503 is a real failure -- a gateway, a
+	// 404, an auth page -- and goes through the ordinary explanation.
+	if status != http.StatusOK && status != http.StatusServiceUnavailable {
+		return healthReport{}, explainRequestFailure(status, "/health", raw)
+	}
+
 	var h healthReport
 	if err := json.Unmarshal(raw, &h); err != nil {
 		return healthReport{}, fmt.Errorf("textable: %s answered /health with "+
 			"something that is not the API's JSON -- the address may be "+
 			"reaching a proxy or a different application: %s",
-			redactURL(c.root), summarise(http.StatusOK, raw))
+			redactURL(c.root), summarise(status, raw))
 	}
 	// A body that decoded but names no status is a JSON API that is not this
 	// one. Reported here rather than left to fail later against an endpoint

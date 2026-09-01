@@ -306,6 +306,15 @@ named.
 `/health` first, unauthenticated: it proves the address resolves, TLS works and
 the thing answering is Textable rather than a gateway.
 
+It accepts **200 or 503**. This endpoint follows the convention where the status
+code carries the verdict, and a 503 still returns the whole report — with a
+status that is often `warn`, meaning degraded but serving. Treating the code as
+a failure took the plugin's startup down on the day it shipped: a momentary
+wobble on the far end left it reported as broken on the dashboard while every
+one of its tools answered normally. The body decides; the code only says whether
+to expect one. Anything that is neither 200 nor 503 is a gateway or a wrong
+address, and still fails.
+
 Then `GET /api/v2/tenants`, which is right on all three counts a probe is judged
 on: cheap (a few hundred bytes), proves both the credential and the
 `read-all-tenants` scope every other tool depends on, and is the first call the

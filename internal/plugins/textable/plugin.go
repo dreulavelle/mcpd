@@ -149,6 +149,9 @@ func (p *Plugin) Start(ctx context.Context) error {
 		"version", health.Version,
 		"release", health.ReleaseID)
 	if !health.ok() {
+		// Warned rather than failed. The instance said so itself and is still
+		// answering; refusing to mount here would take every tool offline over
+		// a condition the far end considers survivable.
 		p.deps.Log.Warn("textable reports that it is not well, so reads may be "+
 			"slow or incomplete", "status", health.Status)
 	}
