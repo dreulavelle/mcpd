@@ -81,6 +81,12 @@ func (a *App) scanClaimable(ctx context.Context) error {
 // Run starts every component and blocks until ctx is cancelled, then shuts
 // down in reverse order.
 func (a *App) Run(ctx context.Context) error {
+	// Before anything reads an assignment. Moves the plugin-keyed tunnel
+	// assignments onto the tunnel's own key, once, so that a plugin can be
+	// served to more than one ChatGPT account. Idempotent, and it leaves the
+	// old keys where they are.
+	a.migrateTunnelAssignments(ctx)
+
 	if err := a.manager.Start(ctx); err != nil {
 		return err
 	}
