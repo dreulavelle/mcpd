@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.1](https://github.com/dreulavelle/mcpd/compare/v0.9.0...v0.9.1) (2026-09-01)
+
+
+### Fixes
+
+* **tunnel:** let two ChatGPT accounts share one plugin ([6fafb87](https://github.com/dreulavelle/mcpd/commit/6fafb874a766da5bcb7822a81ddda36ffccc9a7b))
+* **tunnel:** offer only the selected account's workspaces, and stop refetching them ([ad85a92](https://github.com/dreulavelle/mcpd/commit/ad85a92d8c94068f8972d607633d56732a82cc55))
+* **tunnel:** show an OpenAI refusal as a page, and say what it actually means ([#108](https://github.com/dreulavelle/mcpd/issues/108)) ([6838948](https://github.com/dreulavelle/mcpd/commit/6838948d5f680b988061567141a5007d710d4c44))
+
 ## [0.9.0](https://github.com/dreulavelle/mcpd/compare/v0.8.0...v0.9.0) (2026-08-31)
 
 
