@@ -254,7 +254,17 @@ func (c *Client) do(ctx context.Context, h host, path string, query url.Values, 
 // path is written without the /api/v2 prefix, so a call site reads the way
 // Bandwidth's own documentation writes it.
 func (c *Client) getXML(ctx context.Context, path string, query url.Values) (Record, error) {
-	raw, err := c.do(ctx, hostAPI, dashboardPrefix+path, query, acceptXML)
+	return c.getXMLAt(ctx, dashboardPrefix+path, query)
+}
+
+// getXMLAt is getXML for a path that does not live under /api/v2.
+//
+// Campaign management is served under /api, not /api/v2, so it cannot go
+// through the prefixing helper above. Everything after the request is
+// identical, including the two failure shapes the Dashboard uses: an empty body
+// for an empty collection, and an error carried inside a 200.
+func (c *Client) getXMLAt(ctx context.Context, path string, query url.Values) (Record, error) {
+	raw, err := c.do(ctx, hostAPI, path, query, acceptXML)
 	if err != nil {
 		return nil, err
 	}
