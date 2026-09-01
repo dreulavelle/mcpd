@@ -248,3 +248,40 @@ func TestErrors_PointAtTheIdWhenAByIdReadReturns5xx(t *testing.T) {
 		t.Errorf("a collection read has no id to blame, got: %v", err)
 	}
 }
+
+// /health answers 503 when the instance is degraded, and the body still carries
+// the whole report -- its status is often "warn", which is unwell but serving.
+//
+// Treating the code as the verdict failed this plugin's startup on the day it
+// shipped: a momentary wobble on the far end left it sitting on the dashboard
+// as broken while every one of its tools answered normally. The body decides;
+// the code only says whether to expect one.
+func TestProbe_TreatsAServiceUnavailableReportAsAnAnswer(t *testing.T) {
+	c, _ := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"warn","version":"7.9.7","releaseId":"abc"}`))
+	})
+	h, err := c.Probe(context.Background())
+	if err != nil {
+		t.Fatalf("a 503 carrying a health report is an answer, not a failure: %v", err)
+	}
+	if h.Status != "warn" || h.Version != "7.9.7" {
+		t.Errorf("the report should decode from the 503 body, got %+v", h)
+	}
+	if h.ok() {
+		t.Error(`"warn" is not well; the caller needs to be able to tell`)
+	}
+}
+
+// A status this package does not recognise is still not a failure to start.
+// Anything that is not 200 or 503 is, because it is a gateway or the wrong
+// address rather than an instance reporting on itself.
+func TestProbe_StillFailsOnAStatusThatIsNotAHealthReport(t *testing.T) {
+	c, _ := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("<html><body>502</body></html>"))
+	})
+	if _, err := c.Probe(context.Background()); err == nil {
+		t.Fatal("a 502 is not an instance reporting on itself")
+	}
+}
