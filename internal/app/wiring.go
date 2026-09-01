@@ -22,6 +22,7 @@ import (
 	"github.com/spoked/mcpd/internal/plugins/extremecloudiq"
 	"github.com/spoked/mcpd/internal/plugins/graylog"
 	"github.com/spoked/mcpd/internal/plugins/observium"
+	"github.com/spoked/mcpd/internal/plugins/textable"
 )
 
 // decodeSettings converts a plugin's untyped YAML settings into its own config
@@ -96,6 +97,7 @@ func builtinTypes() (*plugins.Catalog, error) {
 		extremecloudiq.Type(),
 		graylog.Type(),
 		observium.Type(),
+		textable.Type(),
 	)
 }
 
