@@ -111,6 +111,38 @@ var allowed = []rule{
 	// paths these replaced are the Registration Center, a different product
 	// that these accounts are not enabled for -- so every 10DLC read failed
 	// with an entitlement error for a campaign that plainly exists.
+	// One telephone number, from every angle. These hang off /tns rather than
+	// off an account, because a number exists in the numbering plan before it
+	// exists on anybody's account -- which is what lets get_number answer about
+	// a number that has left.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/tns/[0-9]+$`), "reading one number"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/tns/[0-9]+/tndetails$`), "reading a number's details"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/tns/[0-9]+/e911$`), "reading a number's E911 record"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/tns/[0-9]+/ratecenter$`), "reading a number's rate centre"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/tns/[0-9]+/lata$`), "reading a number's LATA"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/tns/[0-9]+/lca$`), "reading a number's local calling area"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/tns/[0-9]+/sites$`), "reading where a number is routed"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/tns/[0-9]+/sippeers$`), "reading a number's SIP peers"},
+
+	// Caller-ID name, directory listings, and the customer service records a
+	// port is built from. All order-shaped: the question is what happened to
+	// the request, not what the value is.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/lidbs$`), "listing caller-ID name orders"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/lidbs/[^/]+$`), "reading one caller-ID name order"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/dldas$`), "listing directory listing orders"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/dldas/[^/]+$`), "reading one directory listing order"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/dldas/[^/]+/history$`), "reading a directory listing order's history"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/csrs$`), "listing customer service record requests"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/csrs/[^/]+$`), "reading one customer service record request"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/csrs/[^/]+/notes$`), "reading a customer service record's notes"},
+
+	// Where Bandwidth sends order notifications.
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/subscriptions$`), "listing notification subscriptions"},
+	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/subscriptions/[^/]+$`), "reading one notification subscription"},
+
+	// Individual calls as Insights recorded them, on the Insights host.
+	{http.MethodGet, regexp.MustCompile(`^/api/v1/voice/calls$`), "searching individual calls"},
+
 	// What the account is entitled to. Read when a refusal might be an
 	// entitlement rather than a credential; the two look alike from the error.
 	{http.MethodGet, regexp.MustCompile(`^/api/v2/accounts/[^/]+/products$`), "listing the account's enabled products"},

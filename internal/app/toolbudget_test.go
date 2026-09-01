@@ -56,7 +56,19 @@ var toolListBudget = map[string]int{
 	"observium":      29_000,
 	"cnmaestro":      23_000,
 	"extremecloudiq": 26_000,
-	"bandwidth":      42_000,
+	// Raised from 42,000 when the plugin grew from 31 tools to 39: port-outs,
+	// account entitlements, a composite per-number read, caller-ID name,
+	// directory listings, customer service records, notification subscriptions
+	// and Insights call events.
+	//
+	// It is now by a wide margin the most expensive tool list here, and that is
+	// a deliberate trade rather than drift. Bandwidth is not one API -- it is
+	// voice, messaging, number inventory, porting, 10DLC, E911 and line records,
+	// which a telephony operator treats as one system and asks questions
+	// across. The additions are not breadth for its own sake: every one of them
+	// corresponds to a product this deployment's own account reports as
+	// enabled, checked with list_products rather than assumed.
+	"bandwidth": 56_000,
 	// The cheapest of the seven per tool, at about 1,460 bytes against
 	// observium's 1,850, because every listing returns the same flat shape: a
 	// row array, a returned count and a truncation note. Output schemas are the
@@ -87,7 +99,12 @@ var toolListBudget = map[string]int{
 // questions across. Splitting them into six plugins would divide the cost by
 // six only for a host that mounted one of them, and nobody mounts one -- the
 // question "why is this number not receiving texts" crosses four.
-const budgetTotal = 155_000
+// Raised from 155,000 with the bandwidth expansion above and the arrival of
+// textable. Nobody in practice mounts every integration -- a host with two is
+// the ordinary case -- so this bounds the worst arrangement rather than the
+// likely one, and it is the aggregate endpoint's cost for one credential scoped
+// to everything.
+const budgetTotal = 175_000
 
 func TestToolList_StaysWithinItsContextBudget(t *testing.T) {
 	h := allPluginsApp(t).Handler()

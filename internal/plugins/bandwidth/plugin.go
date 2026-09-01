@@ -94,6 +94,8 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	p.registerVoiceTools(r)
 	p.registerMessagingTools(r)
 	p.registerNumberTools(r)
+	p.registerTNTools(r)
+	p.registerRecordTools(r)
 	p.registerPortingTools(r)
 	p.registerInventoryTools(r)
 	p.registerEstateTools(r)
