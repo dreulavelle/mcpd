@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.12.0](https://github.com/dreulavelle/mcpd/compare/v0.11.0...v0.12.0) (2026-09-02)
+
+
+### Features
+
+* **tunnel:** supervise a tunnel, and stop taking "connected" at its word ([ca20173](https://github.com/dreulavelle/mcpd/commit/ca20173570271e2fa690d1ececf26944c1d3cb1d))
+* **web:** a tunnel's detail as a sheet, metrics behind the bars, and the calls that explain them ([4a4027a](https://github.com/dreulavelle/mcpd/commit/4a4027a77b7366612f389f8d15bf0c729d1c0ffc))
+* **web:** the tunnels page as a list and an inspector ([9ad79ee](https://github.com/dreulavelle/mcpd/commit/9ad79eeca70c8ff6128da0b0428bd385f866f2c1))
+* **web:** tunnels by account, what each is doing, and the step ChatGPT needs ([b779caf](https://github.com/dreulavelle/mcpd/commit/b779cafe97ea74ecd9d4dbdc3cbaf80c3a37dcbe))
+
+
+### Fixes
+
+* **tunnel:** report a rejected key once ([9fb9d1f](https://github.com/dreulavelle/mcpd/commit/9fb9d1f601e0b423683c3f7d17cb185211a8cd4f))
+* **tunnel:** say what a refused key means, in one breath, and stop calling an idle connector unattached ([aa7f018](https://github.com/dreulavelle/mcpd/commit/aa7f0183c1cebfedadae377c8f010d6a218a5946))
+
 ## [0.11.0](https://github.com/dreulavelle/mcpd/compare/v0.10.0...v0.11.0) (2026-09-02)
 
 
