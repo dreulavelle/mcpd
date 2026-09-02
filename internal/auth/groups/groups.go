@@ -36,6 +36,13 @@ import (
 var (
 	// ErrNotFound reports an unknown group.
 	ErrNotFound = errors.New("groups: no such group")
+	// ErrLastAdmin reports a change that would leave nobody able to
+	// administer this host: a ceiling without admin on a group holding the
+	// only administrator, or the only administrator joining such a group.
+	// It is the same refusal the account store makes for a role change, and
+	// for the same reason -- there is no dashboard path back from it, since
+	// editing the group needs the capability the change just took away.
+	ErrLastAdmin = errors.New("groups: this would leave no administrator")
 	// ErrDuplicateName reports a name another group already uses.
 	ErrDuplicateName = errors.New("groups: a group with that name already exists")
 	// ErrNoSuchMember reports a membership that is not there.
@@ -429,6 +436,19 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			return err
 		}
 
+		// Whether the ceiling could strand the host is judged by comparing
+		// who holds admin before the write with who holds it after: a
+		// refusal only where somebody had it and nobody would, so a host
+		// with no administrators yet is not refused every restriction.
+		restricting := req.Capabilities != nil && *req.Capabilities != nil &&
+			!slices.Contains(*req.Capabilities, auth.CapAdmin)
+		adminsBefore := 0
+		if restricting {
+			if adminsBefore, err = adminsHoldingAdmin(tx); err != nil {
+				return err
+			}
+		}
+
 		sets := []string{"updated_at = ?"}
 		args := []any{now}
 		guard := ""
@@ -485,6 +505,14 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			// The row was read at the top of this transaction, so the only
 			// condition that can have failed is the name guard.
 			return ErrDuplicateName
+		}
+		// Checked after the write and inside the transaction, so the question
+		// is asked of the state this change would leave rather than of a
+		// guess about it, and a refusal rolls the write back.
+		if restricting {
+			if err := guardAdminRemains(tx, adminsBefore); err != nil {
+				return err
+			}
 		}
 		return tx.AppendAudit(sqlite.AdminAct{
 			Kind:    "group.updated",
@@ -710,6 +738,14 @@ func AddMemberTx(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject, 
 	if subject.Kind == KindKey {
 		other = "user_id"
 	}
+	// A key is not counted: it cannot sign in to put things right either way.
+	adminsBefore := 0
+	if subject.Kind == KindUser {
+		var err error
+		if adminsBefore, err = adminsHoldingAdmin(tx); err != nil {
+			return false, err
+		}
+	}
 	affected, err := tx.ExecAffected(`
 		INSERT INTO group_members (group_id, `+column+`, `+other+`, added_by, added_at)
 		SELECT ?,?,NULL,?,?
@@ -723,6 +759,14 @@ func AddMemberTx(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject, 
 		return false, err
 	}
 	if affected > 0 {
+		// An account has just gained whatever ceiling this group imposes.
+		// If that took admin away from the last person who held it, the
+		// membership is refused and rolled back.
+		if subject.Kind == KindUser {
+			if err := guardAdminRemains(tx, adminsBefore); err != nil {
+				return false, err
+			}
+		}
 		return true, nil
 	}
 	// Nothing was written, and three conditions could account for it. Which
@@ -1051,3 +1095,48 @@ const ceilingQuery = `
 	  JOIN group_members m ON m.group_id = g.id
 	 WHERE (?1 = 'user' AND m.user_id = ?2)
 	    OR (?1 = 'key'  AND m.key_id  = ?2)`
+
+// guardAdminRemains refuses the enclosing transaction if somebody held the
+// admin capability before the write and, as things now stand in it, nobody
+// does. Run after the write, so that the state judged is the one the change
+// would leave, and a refusal rolls it back.
+//
+// The comparison rather than a bare "at least one" is what lets a host that
+// has no administrator yet -- a fresh database, a test fixture -- restrict
+// its groups freely: nothing was taken away, because nobody had it.
+func guardAdminRemains(tx *sqlite.UnitOfWork, before int) error {
+	if before == 0 {
+		return nil
+	}
+	after, err := adminsHoldingAdmin(tx)
+	if err != nil {
+		return err
+	}
+	if after == 0 {
+		return ErrLastAdmin
+	}
+	return nil
+}
+
+// adminsHoldingAdmin counts the enabled, active administrators who hold the
+// admin capability once their groups have had their say.
+//
+// It evaluates the same rule CeilingFor does, in SQL: an account keeps its
+// role's capabilities when none of its groups declares a ceiling, and
+// otherwise holds what the union of the declared ceilings permits.
+func adminsHoldingAdmin(tx *sqlite.UnitOfWork) (int, error) {
+	var holding int
+	err := tx.QueryRow(`
+		SELECT COUNT(*) FROM users u
+		 WHERE u.role = 'admin' AND u.disabled = 0 AND u.status <> 'pending'
+		   AND (
+		     NOT EXISTS (
+		       SELECT 1 FROM group_members m JOIN groups g ON g.id = m.group_id
+		        WHERE m.user_id = u.id AND g.capabilities_json IS NOT NULL)
+		     OR EXISTS (
+		       SELECT 1 FROM group_members m JOIN groups g ON g.id = m.group_id,
+		            json_each(g.capabilities_json) c
+		        WHERE m.user_id = u.id AND c.value = 'admin')
+		   )`).Scan(&holding)
+	return holding, err
+}

@@ -2,10 +2,12 @@ package groups
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
 
 // A role grants capabilities; a group can only take them away.
@@ -197,5 +199,79 @@ func TestCeiling_TellsNoCeilingFromPermittingNothing(t *testing.T) {
 		t.Fatal(err)
 	} else if back.Capabilities != nil {
 		t.Errorf("a group with no ceiling came back with %v", back.Capabilities)
+	}
+}
+
+// seedAdmin writes an enabled, active administrator directly, for the same
+// reason seedUser does.
+func seedAdmin(t *testing.T, db *sqlite.DB, id, email string) {
+	t.Helper()
+	if _, err := db.Writer().ExecContext(context.Background(), `
+		INSERT INTO users (id, email, password_hash, display_name, role,
+		                   plugins_json, disabled, created_at, updated_at)
+		VALUES (?,?,'$2a$12$fake','','admin','["*"]',0,0,0)`, id, email); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+}
+
+// A ceiling that leaves nobody holding admin is refused, exactly as demoting
+// the last administrator is. There is no way back from the alternative: the
+// page that edits the group needs the capability the change just removed.
+func TestCeiling_CannotStrandTheHostWithoutAnAdministrator(t *testing.T) {
+	s, db := newStore(t)
+	ctx := context.Background()
+	const actor = "user:admin@example.com"
+	seedAdmin(t, db, "usr_a", "a@example.com")
+
+	everyone := mustGroup(t, s, "Everyone", "*")
+	if err := s.AddMember(ctx, actor, everyone.ID, User("usr_a")); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	// Restricting the only administrator's group to reading is refused, and
+	// the group is left as it was.
+	readOnly := []auth.Capability{auth.CapRead}
+	_, err := s.Update(ctx, actor, everyone.ID, UpdateRequest{Capabilities: &readOnly})
+	if !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("update = %v, want ErrLastAdmin", err)
+	}
+	if g, _ := s.ByID(ctx, everyone.ID); g.Capabilities != nil {
+		t.Fatalf("the refused ceiling was written: %v", g.Capabilities)
+	}
+
+	// A ceiling that keeps admin is fine, whoever is in the group.
+	keepsAdmin := []auth.Capability{auth.CapRead, auth.CapAdmin}
+	if _, err := s.Update(ctx, actor, everyone.ID, UpdateRequest{Capabilities: &keepsAdmin}); err != nil {
+		t.Fatalf("a ceiling permitting admin was refused: %v", err)
+	}
+
+	// Ceilings union, so while Everyone permits admin no other group can
+	// take it away. With that ceiling removed, the only administrator
+	// cannot be put into a group that would.
+	var none []auth.Capability
+	if _, err := s.Update(ctx, actor, everyone.ID, UpdateRequest{Capabilities: &none}); err != nil {
+		t.Fatalf("remove ceiling: %v", err)
+	}
+	suspended, err := s.Create(ctx, actor, CreateRequest{
+		Name: "Suspended", Plugins: []string{"*"}, Capabilities: []auth.Capability{},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := s.AddMember(ctx, actor, suspended.ID, User("usr_a")); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("add = %v, want ErrLastAdmin", err)
+	}
+	if members, _ := s.Members(ctx, suspended.ID); len(members) != 0 {
+		t.Fatalf("the refused membership was written: %v", members)
+	}
+
+	// With a second administrator outside every restricted group, both
+	// changes go through: somebody can still put things right.
+	seedAdmin(t, db, "usr_b", "b@example.com")
+	if err := s.AddMember(ctx, actor, suspended.ID, User("usr_a")); err != nil {
+		t.Fatalf("add with another admin remaining: %v", err)
+	}
+	if _, err := s.Update(ctx, actor, everyone.ID, UpdateRequest{Capabilities: &readOnly}); err != nil {
+		t.Fatalf("update with another admin remaining: %v", err)
 	}
 }

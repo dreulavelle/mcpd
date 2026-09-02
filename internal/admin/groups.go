@@ -273,6 +273,11 @@ func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, groups.ErrDuplicateName):
 		s.writeError(w, r, http.StatusConflict, "a group with that name already exists")
 		return
+	case errors.Is(err, groups.ErrLastAdmin):
+		s.writeError(w, r, http.StatusConflict,
+			"that would leave nobody able to administer this host; "+
+				"give another administrator a group that permits admin first")
+		return
 	case err != nil:
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
@@ -336,6 +341,10 @@ func (s *Server) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, groups.ErrNoSuchMember):
 		s.writeError(w, r, http.StatusNotFound, "no such account or key")
+		return
+	case errors.Is(err, groups.ErrLastAdmin):
+		s.writeError(w, r, http.StatusConflict,
+			"this group's restriction would take admin away from the last administrator")
 		return
 	case err != nil:
 		s.opts.Log.Error("could not add a group member", "error", err)
