@@ -22,6 +22,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useConfirm } from "@/components/confirm";
 
 const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
 const CHATGPT_CONNECTORS = "https://chatgpt.com/#settings/Connectors";
@@ -145,7 +146,7 @@ interface Row extends OpenAITunnel {
 // where, by whom -- and a toast flattens them into one line with the numbered
 // steps run together. Those get a dialog. Everything else is a toast, because
 // everything else is one sentence.
-function showFailure(
+export function showFailure(
   e: unknown,
   fallback: string,
   notify: Notify,
@@ -176,6 +177,7 @@ function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, no
   notify: Notify;
   onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
 }) {
+  const confirm = useConfirm();
   const state = row.status?.state;
   const admin = useCan("admin");
   // Assigned to a plugin that is not mounted, so the tunnel is not started.
@@ -199,7 +201,7 @@ function TunnelRow({ row, info, plugins, assigned, account, accounts, onDone, no
   }
 
   async function remove() {
-    if (!confirm(`Delete "${row.name}"? Any connector using it stops working.`)) return;
+    if (!(await confirm(`Delete "${row.name}"? Any connector using it stops working.`))) return;
     try {
       // Deleted from the organisation it actually lives in. Two accounts are
       // two organisations, and deleting from the wrong one cannot be undone.

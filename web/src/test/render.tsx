@@ -4,6 +4,7 @@ import type { Role, Session } from "@/lib/api";
 import { capabilitiesOf } from "@/lib/capabilities";
 import { RouterProvider } from "@/lib/router";
 import { SessionProvider } from "@/lib/session";
+import { ConfirmProvider } from "@/components/confirm";
 import { ToastProvider } from "@/components/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -63,7 +64,9 @@ export function renderWith(
       <SessionProvider session={session} onSession={onSession}>
         <TooltipProvider delayDuration={0}>
           <ToastProvider>
-            <RouterProvider>{children}</RouterProvider>
+            <ConfirmProvider>
+              <RouterProvider>{children}</RouterProvider>
+            </ConfirmProvider>
           </ToastProvider>
         </TooltipProvider>
       </SessionProvider>

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type Group, type GroupMember } from "@/lib/api";
 import { renderWith } from "@/test/render";
@@ -58,16 +58,15 @@ describe("the groups page", () => {
   it("says who loses what before deleting a group", async () => {
     stub({ groups: [group({ members: 3, plugins: ["echo"] })] });
     const remove = vi.spyOn(api, "deleteGroup").mockResolvedValue(undefined);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderWith(<Groups />);
 
     await screen.findByText("Field engineers");
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
-    expect(confirm).toHaveBeenCalledWith(
-      expect.stringContaining("3 members"),
-    );
-    expect(confirm.mock.calls[0]![0]).toMatch(/nothing else about them changes/i);
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("3 members");
+    expect(dialog.textContent).toMatch(/nothing else about them changes/i);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith("grp_1"));
   });
 

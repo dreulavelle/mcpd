@@ -23,6 +23,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useConfirm } from "@/components/confirm";
 import { reachLabel } from "./Groups";
 
 const ROLES: [Role, string][] = [
@@ -195,14 +196,15 @@ function KeyRow({ apiKey, activity, notify, onChanged, onEdit }: {
   onChanged: () => void;
   onEdit: () => void;
 }) {
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const dead = apiKey.status !== "active";
 
   async function revoke() {
-    if (!confirm(
+    if (!(await confirm(
       `Revoke ${apiKey.name}? Anything using it stops working on its next call.`,
-    )) return;
+    ))) return;
     setBusy(true);
     setError("");
     try {

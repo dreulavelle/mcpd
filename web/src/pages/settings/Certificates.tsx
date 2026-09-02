@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useConfirm } from "@/components/confirm";
 
 /**
  * Authorities this host trusts, on top of the ones it ships with.
@@ -95,16 +96,17 @@ function CertificateRow({ cert, notify, onChanged }: {
   notify: Notify;
   onChanged: () => void;
 }) {
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
   const dead = cert.status === "expired" || cert.status === "not_yet_valid";
 
   async function remove() {
-    if (!confirm(
+    if (!(await confirm(
       `Remove ${cert.name}? Anything reaching an address that relies on it ` +
       `stops verifying on its next connection.`,
-    )) return;
+    ))) return;
     setBusy(true);
     setError("");
     try {

@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { BypassBanner } from "./BypassBanner";
+import { SessionExpiry } from "./SessionExpiry";
 import { ThemeToggle } from "./ThemeToggle";
 
 function NavLink({ item, badge, onNavigate }: {
@@ -264,6 +265,7 @@ export function Shell({ badges, onSignOut, onSearch, version, children }: {
             {/* Above the page rather than inside one, because the failure this
                 guards against is somebody opening a window and forgetting. */}
             <BypassBanner />
+            <SessionExpiry />
             {children}
           </div>
         </main>

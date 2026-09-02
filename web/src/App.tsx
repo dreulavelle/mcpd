@@ -9,6 +9,7 @@ import { useShortcuts, type Shortcut } from "@/lib/shortcuts";
 import { takeSSOOutcome } from "@/lib/sso";
 import { ErrorBoundary } from "@/components/chrome";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ConfirmProvider } from "@/components/confirm";
 import { GettingStarted } from "@/components/getting-started";
 import { Shell } from "@/components/shell";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
@@ -82,9 +83,11 @@ export default function App() {
     <SessionProvider session={session} onSession={setSession}>
       <TooltipProvider delayDuration={200}>
         <ToastProvider>
-          <RouterProvider>
-            <Console onSignOut={signOut} version={meta.version} />
-          </RouterProvider>
+          <ConfirmProvider>
+            <RouterProvider>
+              <Console onSignOut={signOut} version={meta.version} />
+            </RouterProvider>
+          </ConfirmProvider>
         </ToastProvider>
       </TooltipProvider>
     </SessionProvider>

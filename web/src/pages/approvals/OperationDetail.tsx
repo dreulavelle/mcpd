@@ -3,7 +3,7 @@ import { CircleAlert, TriangleAlert } from "lucide-react";
 import { api, ApiError, type AuditRecord, type Operation } from "@/lib/api";
 import { pretty, relative, riskLabel, when, whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
-import { useRouter } from "@/lib/router";
+import { Link, useRouter } from "@/lib/router";
 import { useCan } from "@/lib/session";
 import { useNotify } from "@/components/toast";
 import {
@@ -60,7 +60,26 @@ function Body({ operation: op, audit, onChanged }: {
       <PageHeader
         title={op.action.replace(/[._]/g, " ")}
         back={{ to: "/approvals", label: "Approvals" }}
-        lede={op.impact || undefined}
+        lede={
+          <>
+            {op.impact && <span className="block">{op.impact}</span>}
+            <span className="block">
+              A change to{" "}
+              <Link to={`/plugins/${encodeURIComponent(op.plugin)}`} className="text-primary hover:underline">
+                {op.plugin}
+              </Link>
+              , proposed by{" "}
+              <Link
+                to={`/activity?principal=${encodeURIComponent(op.requested_by)}&hours=720`}
+                className="text-primary hover:underline"
+                title="Everything this caller has done, on Activity"
+              >
+                {op.requested_by}
+              </Link>
+              .
+            </span>
+          </>
+        }
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <AssuranceBadge
@@ -174,7 +193,11 @@ function Body({ operation: op, audit, onChanged }: {
                   <Detail label="Approved by">
                     Rule <code className="font-mono text-xs">{op.authorized_by_rule}</code>
                     <span className="block text-xs text-muted-foreground">
-                      No one was asked.
+                      No one was asked.{" "}
+                      <Link to="/settings/policy" className="text-primary hover:underline">
+                        The rules as they stand now
+                      </Link>
+                      .
                     </span>
                   </Detail>
                 ) : op.approved_by ? (

@@ -310,11 +310,13 @@ describe("rules that do not read", () => {
   it("lets an administrator start over with no rules", async () => {
     const save = vi.spyOn(api, "saveApprovalPolicy")
       .mockResolvedValue(policy({ rules: [] }));
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     mount(unreadable());
 
     await userEvent.click(
       await screen.findByRole("button", { name: "Start over with no rules" }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Start over" }),
     );
 
     await waitFor(() => expect(save).toHaveBeenCalledWith([]));
@@ -325,11 +327,13 @@ describe("rules that do not read", () => {
   it("does nothing if the confirmation is declined", async () => {
     const save = vi.spyOn(api, "saveApprovalPolicy")
       .mockResolvedValue(policy({ rules: [] }));
-    vi.spyOn(window, "confirm").mockReturnValue(false);
     mount(unreadable());
 
     await userEvent.click(
       await screen.findByRole("button", { name: "Start over with no rules" }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }),
     );
 
     expect(save).not.toHaveBeenCalled();

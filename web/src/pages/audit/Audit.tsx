@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScrollText, ShieldAlert, Unlink } from "lucide-react";
 import { api, ApiError, type AuditRecord } from "@/lib/api";
 import { describeEvent, pretty, when, who } from "@/lib/format";
@@ -13,7 +13,9 @@ import {
 import { RiskBadge } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { useConfirm } from "@/components/confirm";
 
 const LIMITS = [100, 250, 500];
 
@@ -29,9 +31,37 @@ export function Audit() {
   const [brokenAt, setBrokenAt] = useState<number | null>(null);
   const [checks, setChecks] = useState(0);
 
+  const [kind, setKind] = useState("");
+  const [actor, setActor] = useState("");
+  const [plugin, setPlugin] = useState("");
+  const [needle, setNeedle] = useState("");
+
   const load = useCallback(() => api.audit(limit), [limit]);
   const { data, error, reload } = useLoader(load, "Couldn't load the history.");
-  const records = data?.records ?? [];
+  const records = useMemo(() => data?.records ?? [], [data]);
+
+  // Over what is loaded, not a query the server answers: the endpoint takes
+  // a count and nothing else, and a filter that quietly narrowed the window
+  // it asked for would hide the entries somebody was looking for. The size
+  // control beside these says how far back the answer reaches.
+  const kinds = useMemo(() => [...new Set(records.map((r) => r.kind))].sort(), [records]);
+  const actors = useMemo(() => [...new Set(records.map((r) => r.actor))].sort(), [records]);
+  const plugins = useMemo(
+    () => [...new Set(records.map((r) => r.plugin).filter((p): p is string => !!p))].sort(),
+    [records],
+  );
+  const shown = useMemo(() => {
+    const q = needle.trim().toLowerCase();
+    return records.filter((r) =>
+      (!kind || r.kind === kind) &&
+      (!actor || r.actor === actor) &&
+      (!plugin || r.plugin === plugin) &&
+      (!q || [
+        describeEvent(r), r.actor, r.plugin ?? "", r.operation_id ?? "",
+        String(r.seq), pretty(r.detail),
+      ].join(" ").toLowerCase().includes(q)));
+  }, [records, kind, actor, plugin, needle]);
+  const filtering = kind !== "" || actor !== "" || plugin !== "" || needle.trim() !== "";
 
   /** Only an administrator may run the check, so only one asks for it. */
   useEffect(() => {
@@ -87,26 +117,68 @@ export function Audit() {
           somebody decides on it.
         </EmptyState>
       ) : (
-        <Card className="mt-4 p-4 sm:p-6">
-          <ol className="space-y-0">
-            {records.map((r, i) => (
-              <Entry
-                key={r.seq}
-                record={r}
-                first={i === 0}
-                last={i === records.length - 1}
-                // The page reads newest first, so the severed link is below
-                // the entry the check named.
-                severed={r.seq === brokenAt}
-                // Pruning takes from the oldest end, so a gap in the middle
-                // is missing entries rather than pruned ones.
-                missing={gapBelow(records, i)}
-                open={expanded === r.seq}
-                onToggle={() => setExpanded(expanded === r.seq ? null : r.seq)}
-              />
-            ))}
-          </ol>
-        </Card>
+        <>
+          <div className="mt-4 flex flex-wrap items-end gap-2">
+            <NativeSelect aria-label="Kind of entry" className="w-52" value={kind}
+                          onChange={(e) => setKind(e.target.value)}>
+              <option value="">Every kind</option>
+              {kinds.map((k) => <option key={k} value={k}>{k.replace(/[._]/g, " ")}</option>)}
+            </NativeSelect>
+            <NativeSelect aria-label="Who" className="w-48" value={actor}
+                          onChange={(e) => setActor(e.target.value)}>
+              <option value="">Anyone</option>
+              {actors.map((a) => <option key={a} value={a}>{who(a)}</option>)}
+            </NativeSelect>
+            {plugins.length > 0 && (
+              <NativeSelect aria-label="System" className="w-44" value={plugin}
+                            onChange={(e) => setPlugin(e.target.value)}>
+                <option value="">Every system</option>
+                {plugins.map((p) => <option key={p} value={p}>{p}</option>)}
+              </NativeSelect>
+            )}
+            <Input
+              aria-label="Find in these entries"
+              className="min-w-48 flex-1"
+              placeholder="Find an entry, a reference, a word in its detail…"
+              value={needle}
+              onChange={(e) => setNeedle(e.target.value)}
+            />
+          </div>
+          {filtering && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {shown.length} of the last {records.length} entries match.
+              {" "}Gaps in the chain below are entries the filter hides, not missing ones.
+            </p>
+          )}
+          {shown.length === 0 ? (
+            <EmptyState title="Nothing matches">
+              None of the last {records.length} entries match that. Ask for more
+              entries above, or widen the filter.
+            </EmptyState>
+          ) : (
+            <Card className="mt-4 p-4 sm:p-6">
+              <ol className="space-y-0">
+                {shown.map((r, i) => (
+                  <Entry
+                    key={r.seq}
+                    record={r}
+                    first={i === 0}
+                    last={i === shown.length - 1}
+                    // The page reads newest first, so the severed link is below
+                    // the entry the check named.
+                    severed={r.seq === brokenAt}
+                    // Pruning takes from the oldest end, so a gap in the middle
+                    // is missing entries rather than pruned ones -- unless a
+                    // filter is on, when a gap is only what it hides.
+                    missing={filtering ? 0 : gapBelow(shown, i)}
+                    open={expanded === r.seq}
+                    onToggle={() => setExpanded(expanded === r.seq ? null : r.seq)}
+                  />
+                ))}
+              </ol>
+            </Card>
+          )}
+        </>
       )}
     </>
   );
@@ -227,6 +299,7 @@ function ClearHistory({ disabled, onCleared }: {
   disabled: boolean;
   onCleared: () => void;
 }) {
+  const confirm = useConfirm();
   const mayClear = useCan("admin");
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
@@ -234,9 +307,11 @@ function ClearHistory({ disabled, onCleared }: {
   if (!mayClear) return null;
 
   async function clear() {
-    if (!confirm("Clear the history? The record of everything so far is removed, and clearing it is itself recorded.")) {
-      return;
-    }
+    if (!(await confirm({
+      title: "Clear the history?",
+      description: "The record of everything so far is removed, and clearing it is itself recorded.",
+      action: "Clear it",
+    }))) return;
     setBusy(true);
     try {
       const r = await api.clearAudit();
