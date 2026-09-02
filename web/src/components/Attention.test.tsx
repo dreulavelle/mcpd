@@ -62,4 +62,26 @@ describe("what needs attention", () => {
     expect(items[0]!.text).toContain("3 tools");
     expect(items[0]!.to).toBe("/plugins/remote");
   });
+
+  // Each tunnel state is a different thing to do: a tunnel OpenAI no longer
+  // has needs remaking, one the supervisor gave up on needs a person, one
+  // being retried needs nothing yet, and a degraded one is worth a look.
+  it("tells a gone tunnel from a stopped one from one being retried", () => {
+    const items = attention({
+      ...nothing,
+      tunnels: [
+        { state: "connected", plugin: "a", tunnel_id: "t1", upstream: "missing" },
+        { state: "failed", plugin: "b", tunnel_id: "t2", message: "bad key" },
+        { state: "failed", plugin: "c", tunnel_id: "t3", attempts: 2, next_retry_at: "2026-09-02T10:00:00Z" },
+        { state: "connected", plugin: "d", tunnel_id: "t4", degraded: true },
+        { state: "connected", plugin: "e", tunnel_id: "t5" },
+      ],
+    });
+    expect(items.map((i) => [i.key, i.tone])).toEqual([
+      ["tunnel-gone:t1", "problem"],
+      ["tunnel-failed:t2", "problem"],
+      ["tunnel-retrying:t3", "attention"],
+      ["tunnel-degraded:t4", "attention"],
+    ]);
+  });
 });

@@ -53,6 +53,13 @@ function callerLink(principal: string): string | null {
   return null;
 }
 
+/**
+ * How many calls a page holds. Twenty, not a hundred: the summary above is
+ * what somebody arrives to read, and a long list under it pushed the two
+ * sections into one another. "Show more" reaches the rest.
+ */
+const PAGE = 20;
+
 export function Activity() {
   // Every filter lives in the address, so a plugin's page can link to "what
   // has called this" and a reload keeps the view.
@@ -80,7 +87,7 @@ export function Activity() {
   const load = useCallback(() => {
     deeper.current = false;
     Promise.all([
-      api.calls({ hours, outcome, principal, plugin, limit: 100 }),
+      api.calls({ hours, outcome, principal, plugin, limit: PAGE }),
       api.callers(callerDays),
     ])
       .then(([c, k]) => {
@@ -111,7 +118,7 @@ export function Activity() {
     if (!next || loadingMore) return;
     setLoadingMore(true);
     try {
-      const page = await api.calls({ hours, outcome, principal, plugin, limit: 100, before: next });
+      const page = await api.calls({ hours, outcome, principal, plugin, limit: PAGE, before: next });
       deeper.current = true;
       setCalls((prev) => {
         const seen = new Set((prev ?? []).map((call) => call.id));
@@ -174,6 +181,7 @@ export function Activity() {
         )}
       </div>
 
+      <div className="space-y-10">
       <Section
         title="Callers"
         description={`What each credential actually reached over the last ${callerDays === 1 ? "day" : `${callerDays} days`}, which is not the same as what it is permitted to reach.`}
@@ -320,6 +328,7 @@ export function Activity() {
           </>
         )}
       </Section>
+      </div>
     </>
   );
 }

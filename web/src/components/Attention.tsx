@@ -71,13 +71,33 @@ export function attention(input: {
       to: "/plugins", linkLabel: "Plugins",
     });
   }
-  const failed = input.tunnels.filter((t) => t.state === "failed");
-  if (failed.length > 0) {
-    out.push({
-      key: "tunnels", tone: "problem",
-      text: `${plural(failed.length, "connector has", "connectors have")} failed${failed[0]?.message ? `: ${failed[0].message}` : "."}`,
-      to: "/tunnels", linkLabel: "Tunnels",
-    });
+  const name = (t: TunnelStatus) => t.plugin ? `The ${t.plugin} connector` : "The connector for everything";
+  for (const t of input.tunnels) {
+    if (t.upstream === "missing") {
+      out.push({
+        key: `tunnel-gone:${t.tunnel_id}`, tone: "problem",
+        text: `${name(t)} points at a tunnel OpenAI no longer has. Its client will poll for it for ever; make a new one.`,
+        to: "/tunnels", linkLabel: "Tunnels",
+      });
+    } else if (t.state === "failed" && !t.next_retry_at) {
+      out.push({
+        key: `tunnel-failed:${t.tunnel_id}`, tone: "problem",
+        text: `${name(t)} has stopped and will not restart on its own${t.message ? `: ${t.message}` : "."}`,
+        to: "/tunnels", linkLabel: "Tunnels",
+      });
+    } else if (t.state === "failed") {
+      out.push({
+        key: `tunnel-retrying:${t.tunnel_id}`, tone: "attention",
+        text: `${name(t)} is down; mcpd is retrying (attempt ${t.attempts ?? 1})${t.message ? `: ${t.message}` : "."}`,
+        to: "/tunnels", linkLabel: "Tunnels",
+      });
+    } else if (t.degraded) {
+      out.push({
+        key: `tunnel-degraded:${t.tunnel_id}`, tone: "attention",
+        text: `${name(t)} says connected but its client has been reporting errors with nothing served${t.trouble ? `: ${t.trouble}` : "."}`,
+        to: "/tunnels", linkLabel: "Tunnels",
+      });
+    }
   }
   for (const s of input.servers) {
     if (s.pending > 0) {
