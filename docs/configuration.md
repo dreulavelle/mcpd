@@ -103,6 +103,22 @@ auth:
       plugins: [echo]
 ```
 
+## Connecting a client
+
+ChatGPT is reached through a tunnel. Everything else -- Claude Code, Codex,
+VS Code and its forks, a script -- connects to the MCP listener directly and
+presents a key in an `Authorization: Bearer` header. The dashboard's
+**Clients** page writes the configuration for each of those with this host's
+address and the chosen plugin already filled in, and reads the key from an
+environment variable rather than putting it in a file.
+
+The address is `server.public_url` plus `/mcp` for everything the key reaches,
+or `/mcp/{plugin}` for one plugin alone. With no public URL set the API
+returns the bare path and the page says so, rather than guessing a host from
+whatever `Host` header the request carried. The endpoint is stateless
+streamable HTTP: no session to open, so a single `tools/list` POST is a
+complete check.
+
 ## Reaching an upstream behind your own certificate
 
 An integration inside a company often points at an HTTPS address whose
