@@ -9,6 +9,7 @@ import { signedInAs, useAdoptSession, useCan, useSession } from "@/lib/session";
 import { consumeSSOOutcome } from "@/lib/sso";
 import { Detail, Notice, PageHeader, Section } from "@/components/chrome";
 import { Chip } from "@/components/status";
+import { ThemePicker } from "@/components/ThemeToggle";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -80,6 +81,17 @@ export function Profile() {
         )}
 
         <DisplayName session={session} />
+
+        <Section
+          title="Appearance"
+          description="Kept in this browser rather than on your account, because a dark laptop and a light monitor are two different answers."
+        >
+          <Card>
+            <CardContent>
+              <ThemePicker />
+            </CardContent>
+          </Card>
+        </Section>
 
         <LinkedProviders />
 

@@ -12,13 +12,16 @@
  * it means something -- an accent used for "fine" leaves nothing to say
  * "not fine" with.
  *
- * Light and dark follow the system, with no toggle, which is what the console
- * has always done. Every colour is a token defined in both, so a component
- * never spells one out and cannot be right in one theme and wrong in the
- * other. */
+ * Light and dark follow the system unless somebody has chosen one; the choice
+ * is kept in the browser and applied by public/theme.js before the first
+ * paint, as `data-theme` on the root. Every colour is a token defined in both,
+ * so a component never spells one out and cannot be right in one theme and
+ * wrong in the other. The dark palette is keyed on the attribute alone rather
+ * than on the media query as well: two definitions of one palette is one more
+ * than can be kept in step. */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   /* Neutrals carry a slight green-blue bias, matching the accent rather than
      sitting flat beside it. */
@@ -84,55 +87,55 @@
   --radius: 0.5rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0d1211;
-    --foreground: #e8ecea;
+:root[data-theme="dark"] {
+  color-scheme: dark;
 
-    --card: #151b1a;
-    --card-foreground: #e8ecea;
-    --popover: #151b1a;
-    --popover-foreground: #e8ecea;
+  --background: #0d1211;
+  --foreground: #e8ecea;
 
-    --primary: #4dbca2;
-    --primary-hover: #62cab2;
-    --primary-foreground: #06120f;
+  --card: #151b1a;
+  --card-foreground: #e8ecea;
+  --popover: #151b1a;
+  --popover-foreground: #e8ecea;
 
-    --secondary: #1c2422;
-    --secondary-foreground: #e8ecea;
+  --primary: #4dbca2;
+  --primary-hover: #62cab2;
+  --primary-foreground: #06120f;
 
-    --muted: #1c2422;
-    --muted-foreground: #94a09c;
-    --faint: #6a7672;
+  --secondary: #1c2422;
+  --secondary-foreground: #e8ecea;
 
-    --accent: #242e2b;
-    --accent-foreground: #e8ecea;
+  --muted: #1c2422;
+  --muted-foreground: #94a09c;
+  --faint: #6a7672;
 
-    --border: #2a3532;
-    --border-soft: #222c2a;
-    --input: #2a3532;
-    --ring: #4dbca2;
+  --accent: #242e2b;
+  --accent-foreground: #e8ecea;
 
-    --good: #55bd8c;
-    --good-soft: #55bd8c1f;
-    --attention: #d5a052;
-    --attention-soft: #d5a0521f;
-    --problem: #e08472;
-    --problem-soft: #e084721f;
-    --info: #74a8d4;
-    --info-soft: #74a8d41f;
-    --destructive: #e08472;
-    --destructive-foreground: #180a08;
+  --border: #2a3532;
+  --border-soft: #222c2a;
+  --input: #2a3532;
+  --ring: #4dbca2;
 
-    /* Stepped for the dark surface rather than flipped: the same four hues,
-       re-chosen against #151b1a. The light steps are too light here -- the
-       dark brand teal misses the band by itself -- so this is a second
-       selection, validated as a set, not an inversion of the first. */
-    --chart-1: #199e70;
-    --chart-2: #3987e5;
-    --chart-3: #d95926;
-    --chart-4: #9085e9;
-  }
+  --good: #55bd8c;
+  --good-soft: #55bd8c1f;
+  --attention: #d5a052;
+  --attention-soft: #d5a0521f;
+  --problem: #e08472;
+  --problem-soft: #e084721f;
+  --info: #74a8d4;
+  --info-soft: #74a8d41f;
+  --destructive: #e08472;
+  --destructive-foreground: #180a08;
+
+  /* Stepped for the dark surface rather than flipped: the same four hues,
+     re-chosen against #151b1a. The light steps are too light here -- the
+     dark brand teal misses the band by itself -- so this is a second
+     selection, validated as a set, not an inversion of the first. */
+  --chart-1: #199e70;
+  --chart-2: #3987e5;
+  --chart-3: #d95926;
+  --chart-4: #9085e9;
 }
 
 /* Everything above becomes a Tailwind utility here -- bg-card, text-muted-
