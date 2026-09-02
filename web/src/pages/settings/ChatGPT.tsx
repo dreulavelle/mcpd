@@ -1,5 +1,5 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { api, ApiError, type ChatGPTAccount, type ChatGPTAccountBody } from "@/lib/api";
+import { api, ApiError, type AccountCheck, type ChatGPTAccount, type ChatGPTAccountBody } from "@/lib/api";
 import { useLoader, usePoll } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { SettingsForm } from "@/components/SettingsForm";
@@ -132,6 +132,26 @@ function AccountRow({ account, notify, onChanged }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
+  const [check, setCheck] = useState<AccountCheck | null>(null);
+
+  // Proves what the admin key can do by doing it: a listing, and a tunnel
+  // made and deleted at once. "Has an admin key" was being read as "can
+  // make tunnels", and the difference is exactly what somebody about to
+  // press Make needs to know first.
+  async function runCheck() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.checkChatGPTAccount(account.id);
+      setCheck(result);
+      if (result.can_make) notify("good", `${account.name} can list and make tunnels.`);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Couldn't check it.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function remove() {
     if (!(await confirm(
@@ -204,6 +224,12 @@ function AccountRow({ account, notify, onChanged }: {
               aria-label={`Let ${account.name} connect`}
               onCheckedChange={(v) => void toggle(v)}
             />
+            {account.has_admin_key && (
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => void runCheck()}
+                      title="Prove the admin key can list and make tunnels">
+                {busy ? "Checking…" : "Check"}
+              </Button>
+            )}
             <Button
               variant="ghost" size="sm" disabled={busy}
               onClick={() => setEditing(true)}
@@ -216,6 +242,25 @@ function AccountRow({ account, notify, onChanged }: {
           </div>
         </TableCell>
       </TableRow>
+
+      {check && (
+        <TableRow>
+          <TableCell colSpan={6} className="bg-muted/30 text-xs">
+            {check.problem ? (
+              <span className="text-problem">{check.problem}</span>
+            ) : (
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <Chip tone="good">can list</Chip>
+                <Chip tone={check.can_make ? "good" : "problem"}>{check.can_make ? "can make tunnels" : "cannot make tunnels"}</Chip>
+                <span className="text-muted-foreground">
+                  {check.tunnels} tunnel{check.tunnels === 1 ? "" : "s"} in its organisation
+                  {check.workspaces.length > 0 && <> · workspaces {check.workspaces.join(", ")}</>}
+                </span>
+              </span>
+            )}
+          </TableCell>
+        </TableRow>
+      )}
 
       {editing && (
         <AccountDialog
@@ -393,11 +438,10 @@ function AccountDialog({ account, onClose, onSaved }: {
               onChange={(e) => setWorkspaces(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              The ChatGPT workspaces this account's connectors sit in, by id,
-              separated by commas. A tunnel made under this account is listed
-              in one of them; a tunnel listed only to the organisation is
-              invisible in an Enterprise or Edu workspace. Ones already seen
-              on the account's tunnels are added on their own.
+              Learned from this account's tunnels on its own; nothing to type
+              unless ChatGPT Enterprise does not show a new tunnel, in which
+              case add the workspace's id here. A tunnel made under this
+              account is listed in every workspace it knows.
             </p>
           </div>
 

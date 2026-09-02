@@ -469,6 +469,9 @@ func (a *App) reconcileTunnelOwners(ctx context.Context) {
 		for _, t := range list {
 			owners[t.ID] = append(owners[t.ID], acct.ID)
 		}
+		// The same listing says which workspaces the account uses; written
+		// back so the account's list fills itself in.
+		a.learnWorkspaces(ctx, acct, dir)
 	}
 	if len(owners) == 0 {
 		return

@@ -37,7 +37,7 @@ func TestDeleteRejectsSomethingThatIsNotATunnelID(t *testing.T) {
 
 func TestCreateNeedsAName(t *testing.T) {
 	d := NewDirectory("sk-admin-test", "org_test", "")
-	if _, err := d.Create(context.Background(), "   ", "", ""); err == nil {
+	if _, err := d.Create(context.Background(), "   ", "", nil); err == nil {
 		t.Fatal("a nameless tunnel is not identifiable in anyone's account")
 	}
 }

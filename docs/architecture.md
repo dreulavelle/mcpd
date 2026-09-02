@@ -1630,6 +1630,22 @@ tunnel no listing can see. An admin key and organisation are proved against
 OpenAI when an account is saved, so a key from the wrong organisation fails
 at the form rather than at the first connector.
 
+**Making a tunnel is one call, and nothing is asked that the host knows.**
+`MakeTunnel` in `internal/app` is the pipeline: create the tunnel in the
+account's organisation, listed in every workspace the account knows, point it
+at the system, switch tunnels on, start it. The workspaces are the account's
+own list unioned with what its existing tunnels report, learned from each
+listing and written back to the account, so the field fills itself and nobody
+types a workspace id. That question used to be on the form, defaulting to a
+host-wide list, and an account with no workspaces of its own was offered
+another organisation's -- which OpenAI refuses with the same 403 as a key
+without the write scope, and an operator whose key had made tunnels an hour
+earlier was told it could not. A refused create is now explained by the same
+key's ability to list: a key that reads and cannot write lacks one scope,
+and the message names it. `CheckChatGPTAccount` proves both halves by doing
+them -- a listing, and a tunnel made organisation-only and deleted in the same
+call -- because "has an admin key" was being shown as "can make tunnels".
+
 **The handoff is the one step mcpd cannot do.** OpenAI exposes no API for
 attaching a tunnel as a connector in a ChatGPT workspace; that is done in
 ChatGPT's own settings, by picking the tunnel or pasting its id. So the

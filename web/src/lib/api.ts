@@ -548,6 +548,17 @@ export interface ChatGPTAccount {
  * matters most for the keys: an edit that changes only the rate limit sends no
  * key at all, and a blank string would read as an instruction to erase one.
  */
+/** What a check found an account's admin key can do. */
+export interface AccountCheck {
+  can_list: boolean;
+  can_make: boolean;
+  tunnels: number;
+  workspaces: string[];
+  problem?: string;
+  reason?: string;
+  checked_at: string;
+}
+
 export interface ChatGPTAccountBody {
   name?: string;
   api_key?: string;
@@ -1604,13 +1615,20 @@ export const api = {
 
   tunnelStop: () => request<TunnelStatus>("/api/tunnel/stop", { method: "POST" }),
 
-  createTunnel: (name: string, plugin: string, workspaceID?: string, account?: string) =>
-    request<OpenAITunnel>("/api/tunnels", {
+  /**
+   * The whole pipeline in one call: made in the account's organisation,
+   * listed wherever the account's other tunnels are, pointed at the system,
+   * switched on and started. No workspace to supply; the host knows them.
+   */
+  createTunnel: (plugin: string, account?: string, name?: string) =>
+    request<{ id: string; name: string; account_id: string; workspace_ids: string[] }>("/api/tunnels", {
       method: "POST",
-      body: JSON.stringify({
-        name, plugin, workspace_id: workspaceID ?? "", account: account ?? "",
-      }),
+      body: JSON.stringify({ name: name ?? "", plugin, account: account ?? "" }),
     }),
+
+  /** Proves what an account's admin key can do, by listing and by making and deleting a tunnel. */
+  checkChatGPTAccount: (id: string) =>
+    request<AccountCheck>(`/api/chatgpt/accounts/${encodeURIComponent(id)}/check`, { method: "POST" }),
 
   /** Stops one tunnel and starts it again, rebuilt against the plugins as they are now. */
   restartTunnel: (id: string) =>

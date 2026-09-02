@@ -715,7 +715,13 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 				// deployment began with rather than the one just saved.
 				return a.chatgptDirectory(context.Background(), accountID)
 			},
-			ChatGPTAccounts:      a.ListChatGPTAccounts,
+			ChatGPTAccounts: a.ListChatGPTAccounts,
+			MakeTunnel: func(ctx context.Context, actor string, req admin.MakeTunnelRequest) (any, error) {
+				return a.MakeTunnel(ctx, actor, MakeTunnelRequest{Plugin: req.Plugin, Account: req.Account, Name: req.Name})
+			},
+			CheckChatGPTAccount: func(ctx context.Context, id string) (any, error) {
+				return a.CheckChatGPTAccount(ctx, id)
+			},
 			AddChatGPTAccount:    a.AddChatGPTAccount,
 			UpdateChatGPTAccount: a.UpdateChatGPTAccount,
 			RemoveChatGPTAccount: a.RemoveChatGPTAccount,

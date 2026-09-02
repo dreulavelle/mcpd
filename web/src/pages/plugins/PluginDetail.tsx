@@ -526,11 +526,11 @@ function TunnelControl({ plugin, tunnels, tunnel, onChanged }: {
   async function create() {
     setBusy(true);
     try {
-      // Same default as the Tunnels page: a tunnel scoped only to the
-      // organisation is invisible in an Enterprise or Edu workspace.
+      // The host lists it wherever the account's other tunnels are.
       await api.createTunnel(
-        plugin.title, plugin.name, tunnels?.workspaces?.[0],
+        plugin.name,
         account || (accounts.length === 1 ? accounts[0]!.id : undefined),
+        plugin.title,
       );
       notify("good", "Made. Give it about 30 seconds to become active in ChatGPT.");
     } catch (e) {

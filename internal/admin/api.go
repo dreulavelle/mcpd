@@ -239,6 +239,13 @@ type Options struct {
 	// than the one an operator just saved.
 	Directory func(accountID string) *tunnel.Directory
 
+	// MakeTunnel is the whole pipeline -- create, list where the account's
+	// others are, assign, switch on, start -- so the handler does not
+	// assemble it from parts.
+	MakeTunnel func(ctx context.Context, actor string, req MakeTunnelRequest) (any, error)
+	// CheckChatGPTAccount proves what an account's admin key can do.
+	CheckChatGPTAccount func(ctx context.Context, id string) (any, error)
+
 	// The ChatGPT accounts tunnels connect with. Each carries a credential, an
 	// identity and a grant, so adding or editing one is an administrative act
 	// and every route below is gated accordingly.
@@ -306,6 +313,14 @@ type AuditPruner interface {
 // Status returns one entry per connector, because a tunnel forwards to exactly
 // one MCP endpoint: a deployment giving a system its own connector runs a
 // tunnel per system, and each has its own state worth showing.
+// MakeTunnelRequest is what the dashboard sends to make a connector. No
+// workspace: the host lists the tunnel wherever the account's others are.
+type MakeTunnelRequest struct {
+	Plugin  string `json:"plugin"`
+	Account string `json:"account"`
+	Name    string `json:"name"`
+}
+
 type TunnelController interface {
 	Status() []tunnel.Status
 	Start(ctx context.Context) error
@@ -511,6 +526,7 @@ func (s *Server) routes() {
 	api("POST /api/chatgpt/accounts", s.handleAddChatGPTAccount, auth.CapAdmin)
 	api("PATCH /api/chatgpt/accounts/{id}", s.handleUpdateChatGPTAccount, auth.CapAdmin)
 	api("DELETE /api/chatgpt/accounts/{id}", s.handleRemoveChatGPTAccount, auth.CapAdmin)
+	api("POST /api/chatgpt/accounts/{id}/check", s.handleCheckChatGPTAccount, auth.CapAdmin)
 
 	api("POST /api/tunnel/start", s.handleTunnelStart, auth.CapAdmin)
 	api("POST /api/tunnel/stop", s.handleTunnelStop, auth.CapAdmin)
@@ -1703,82 +1719,55 @@ func (s *Server) directory(accountID string) *tunnel.Directory {
 	return s.opts.Directory(accountID)
 }
 
-// handleCreateTunnel makes a tunnel at OpenAI and points it at a system.
+// handleCreateTunnel makes a connector: one request, the whole pipeline.
 func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name      string `json:"name"`
-		Plugin    string `json:"plugin"`
-		Workspace string `json:"workspace_id"`
-		// Account is whose organisation the tunnel is made in, and whose
-		// credential the connector will authenticate with. Empty means the
-		// only account when there is exactly one.
-		Account string `json:"account"`
-	}
+	var body MakeTunnelRequest
 	if !s.decode(w, r, &body) {
 		return
 	}
-
-	account, err := s.resolveAccount(r.Context(), body.Account)
+	if s.opts.MakeTunnel == nil {
+		s.writeError(w, r, http.StatusNotImplemented, "this host cannot make tunnels")
+		return
+	}
+	made, err := s.opts.MakeTunnel(r.Context(), auth.FromContext(r.Context()).ID, body)
 	if err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
-		return
-	}
-	dir := s.directory(account.ID)
-	if !dir.Available() {
-		s.writeError(w, r, http.StatusBadRequest,
-			"the ChatGPT account "+account.Name+" needs "+dir.Missing()+" first")
-		return
-	}
-	if err := s.checkPlugin(body.Plugin); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	created, err := dir.Create(r.Context(),
-		tunnelName(body.Name, body.Plugin), createdByMCPD, body.Workspace)
-	if err != nil {
-		// A 403 on create says only that the key may not do this. Two things
-		// produce it -- a key without the write scope, and a workspace the
-		// organisation may not list a tunnel in -- and the same key's
-		// ability to list tells them apart: a key that can read and cannot
-		// write lacks a scope; one that cannot even read lacks them all.
-		if tunnel.Reason(err) == tunnel.ReasonTunnelsManageRequired {
-			if _, lerr := dir.List(r.Context()); lerr == nil {
-				where := "the key lacks the tunnel write scope (api.organization.tunnel.write)"
-				if body.Workspace != "" {
-					where += ", or workspace " + body.Workspace + " is not one this " +
-						"organisation may list a tunnel in -- making it with " +
-						"\"None, organisation only\" tells the two apart"
-				}
-				err = tunnel.Refused(tunnel.ReasonTunnelsManageRequired,
-					"This account's admin key can list tunnels but OpenAI refused to "+
-						"make one: "+where+".")
-			} else {
-				err = tunnel.Refused(tunnel.ReasonTunnelsManageRequired,
-					"This account's admin key cannot list tunnels either, so it has "+
-						"no tunnel scopes at all: "+lerr.Error())
-			}
+		switch {
+		case tunnel.Reason(err) != "":
+			s.writeUpstreamError(w, r, http.StatusBadGateway, err)
+		case strings.Contains(err.Error(), "was made at OpenAI but"):
+			s.writeError(w, r, http.StatusInternalServerError, err.Error())
+		default:
+			s.writeError(w, r, http.StatusBadRequest, err.Error())
 		}
-		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
 		return
 	}
-	// The page reloads next, and a listing that predates this makes the tunnel
-	// somebody just created look as though it does not exist.
-	s.forgetTunnels(account.ID)
-	// Assigning is the point of creating: a tunnel nothing is bound to is an
-	// object in someone's account doing nothing.
-	if err := s.assign(r, created.ID, body.Plugin, account.ID); err != nil {
-		s.writeError(w, r, http.StatusInternalServerError, err.Error())
+	// The page reloads next, and a listing that predates this makes the
+	// tunnel somebody just made look as though it does not exist.
+	if body.Account != "" {
+		s.forgetTunnels(body.Account)
+	} else if accounts, err := s.chatgptAccounts(r.Context()); err == nil {
+		for _, a := range accounts {
+			s.forgetTunnels(a.ID)
+		}
+	}
+	s.writeJSON(w, r, http.StatusCreated, made)
+}
+
+// handleCheckChatGPTAccount proves what an account's admin key can do, by
+// doing it: a listing, and a tunnel made and deleted at once.
+func (s *Server) handleCheckChatGPTAccount(w http.ResponseWriter, r *http.Request) {
+	if s.opts.CheckChatGPTAccount == nil {
+		s.writeError(w, r, http.StatusNotImplemented, "this host cannot check accounts")
 		return
 	}
-	// And running it is the point of assigning. Leaving the subsystem switched
-	// off would mean making a connector, watching it sit at "switched off",
-	// and having to find a toggle on another page to finish the job nobody
-	// started for any other reason.
-	if err := s.enableTunnels(r); err != nil {
-		s.opts.Log.Warn("tunnel created but the subsystem could not be enabled", "error", err)
+	id := r.PathValue("id")
+	result, err := s.opts.CheckChatGPTAccount(r.Context(), id)
+	if err != nil {
+		s.writeError(w, r, http.StatusNotFound, err.Error())
+		return
 	}
-	s.writeJSON(w, r, http.StatusCreated, created)
+	s.forgetTunnels(id)
+	s.writeJSON(w, r, http.StatusOK, result)
 }
 
 // handleRestartTunnel stops one tunnel and starts it again.

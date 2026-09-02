@@ -321,7 +321,7 @@ export function Tunnels() {
 
       {making && info && (
         <MakeTunnel
-          plugins={plugins} fallbackWorkspaces={info.workspaces ?? []} accounts={accounts}
+          plugins={plugins} accounts={accounts} rows={rows}
           notify={notify} onRefused={setRefused}
           onClose={() => setMaking(false)}
           onMade={(id) => {
@@ -945,11 +945,11 @@ function Step({ n, done, current, children }: {
   );
 }
 
-function MakeTunnel({ plugins, fallbackWorkspaces, accounts, notify, onRefused, onClose, onMade }: {
+function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMade }: {
   plugins: string[];
-  /** Used only by an account that reports none of its own. */
-  fallbackWorkspaces: string[];
   accounts: ChatGPTAccount[];
+  /** Every tunnel here, so the default account is the one already in use. */
+  rows: Row[];
   notify: Notify;
   onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
   onClose: () => void;
@@ -958,36 +958,27 @@ function MakeTunnel({ plugins, fallbackWorkspaces, accounts, notify, onRefused, 
 }) {
   const [name, setName] = useState("");
   const [plugin, setPlugin] = useState("");
-  // Only accounts that can actually make a tunnel: one without an admin key
-  // and organisation cannot, and offering it would produce a refusal at the
-  // point somebody presses Make rather than at the point they chose.
+  // Only accounts that can make a tunnel: one without an admin key and
+  // organisation cannot, and offering it would refuse at Make rather than
+  // at the choice. The default is the account running the most tunnels,
+  // which is the one somebody almost always means; alphabetical put a
+  // different account first and a person did not notice.
   const canMake = accounts.filter((a) => a.can_manage);
-  const [account, setAccount] = useState(canMake[0]?.id ?? "");
-  // A tunnel scoped only to the Platform organisation silently does not appear
-  // in an Enterprise or Edu workspace, so the default is one that has worked.
-  const [workspace, setWorkspace] = useState("");
+  const busiest = [...canMake].sort((a, b) =>
+    rows.filter((r) => r.account === b.id).length - rows.filter((r) => r.account === a.id).length)[0];
+  const [account, setAccount] = useState(busiest?.id ?? "");
   const [busy, setBusy] = useState(false);
-
-  // The selected account's own workspaces. An account is an organisation, so
-  // offering the union across every account would let a tunnel be created in
-  // one the selected account cannot reach. The host-wide list is the fallback
-  // only for an account with no tunnels yet.
   const chosen = canMake.find((a) => a.id === account);
-  const workspaces = chosen?.workspaces?.length ? chosen.workspaces : fallbackWorkspaces;
-
-  useEffect(() => {
-    setWorkspace(workspaces[0] ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account]);
+  const workspaces = chosen?.workspaces ?? [];
 
   async function add() {
     setBusy(true);
     try {
-      const made = await api.createTunnel(name.trim(), plugin, workspace.trim(), account);
+      const made = await api.createTunnel(plugin, account, name.trim());
       // A tunnel is not active for the first half minute; OpenAI's own CLI
       // says the same after creating one.
-      notify("good", "Made. Give it about 30 seconds to become active in ChatGPT.");
-      onMade(made?.id ?? "");
+      notify("good", `Made ${made.name}. Give it about 30 seconds to become active in ChatGPT.`);
+      onMade(made.id);
     } catch (e) {
       showFailure(e, "Couldn't make it.", notify, onRefused);
     } finally {
@@ -1001,9 +992,10 @@ function MakeTunnel({ plugins, fallbackWorkspaces, accounts, notify, onRefused, 
         <DialogHeader>
           <DialogTitle>Make a tunnel</DialogTitle>
           <DialogDescription>
-            It is made in the account's organisation, pointed at a system here,
-            and connected straight away. Attaching it in ChatGPT is the one step
-            left afterwards, and the page walks you through it.
+            Made in the account's organisation, listed wherever its other
+            tunnels are, pointed at the system, and connected straight away.
+            Attaching it in ChatGPT is the one step left, and the page walks
+            you through it.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
@@ -1011,7 +1003,7 @@ function MakeTunnel({ plugins, fallbackWorkspaces, accounts, notify, onRefused, 
             <div className="space-y-1.5">
               <Label htmlFor="tacct">Account</Label>
               <NativeSelect id="tacct" value={account} onChange={(e) => setAccount(e.target.value)}>
-                {canMake.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                {canMake.map((a) => <option key={a.id} value={a.id}>{a.name}{a.organization_id ? ` · ${a.organization_id}` : ""}</option>)}
               </NativeSelect>
             </div>
           )}
@@ -1022,30 +1014,20 @@ function MakeTunnel({ plugins, fallbackWorkspaces, accounts, notify, onRefused, 
               {plugins.map((p) => <option key={p} value={p}>{p}</option>)}
             </NativeSelect>
           </div>
-          {workspaces.length > 0 ? (
-            <div className="space-y-1.5">
-              <Label htmlFor="tws">Workspace</Label>
-              <NativeSelect id="tws" value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
-                {workspaces.map((w) => <option key={w} value={w}>{w}</option>)}
-                <option value="">None — organisation only</option>
-              </NativeSelect>
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              <Label htmlFor="tws">Workspace (optional)</Label>
-              <Input id="tws" type="text" value={workspace} placeholder="ws_..."
-                     onChange={(e) => setWorkspace(e.target.value)} />
-            </div>
-          )}
           <div className="space-y-1.5">
             <Label htmlFor="tname">Name (optional)</Label>
             <Input id="tname" type="text" value={name}
                    placeholder={plugin ? `mcpd: ${plugin}` : "mcpd"}
                    onChange={(e) => setName(e.target.value)} />
           </div>
+          <p className="text-xs text-muted-foreground">
+            {workspaces.length > 0
+              ? <>It will be listed in {workspaces.length === 1 ? "the workspace" : `the ${workspaces.length} workspaces`} this account already uses, so it appears in ChatGPT beside the others.</>
+              : <>This account has no workspace on record yet, so the tunnel is listed to the organisation only. If ChatGPT Enterprise does not show it, add the workspace to the account under Settings › ChatGPT.</>}
+          </p>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button disabled={busy} onClick={add}>{busy ? "Making…" : "Make"}</Button>
+            <Button disabled={busy || !account} onClick={add}>{busy ? "Making…" : "Make"}</Button>
           </div>
         </div>
       </DialogContent>
