@@ -207,6 +207,14 @@ export function Shell({ badges, onSignOut, onSearch, version, children }: {
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[15rem_1fr]">
+      {/* Invisible until focused. A keyboard should not have to tab through
+          every entry in the sidebar to reach the page it came for. */}
+      <a
+        href="#content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:text-primary-foreground"
+      >
+        Skip to content
+      </a>
       {/* A drawer on a narrow window: 15rem of a phone's width is most of it. */}
       <aside className="sticky top-0 hidden h-screen border-r bg-card lg:flex lg:flex-col">
         <Brand />
@@ -260,7 +268,7 @@ export function Shell({ badges, onSignOut, onSearch, version, children }: {
           </Button>
         </header>
 
-        <main className="min-w-0 flex-1 px-4 py-6 lg:px-8 lg:py-8">
+        <main id="content" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 outline-none lg:px-8 lg:py-8">
           <div className="mx-auto max-w-6xl">
             {/* Above the page rather than inside one, because the failure this
                 guards against is somebody opening a window and forgetting. */}
