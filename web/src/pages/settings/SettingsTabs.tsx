@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
  * bookmark, a deep link and the back button work as they did when several of
  * these were sidebar entries.
  */
-interface Tab {
+export interface Tab {
   path: string;
   label: string;
   /** The schema section this tab renders, where it renders one. */
@@ -24,7 +24,7 @@ interface Tab {
   admin: boolean;
 }
 
-const TABS: Tab[] = [
+export const TABS: Tab[] = [
   { path: "/settings", label: "General", section: "settings", admin: false },
   { path: "/settings/chatgpt", label: "ChatGPT", section: "chatgpt", admin: true },
   { path: "/settings/authentication", label: "Authentication", section: "authentication", admin: true },
