@@ -125,4 +125,38 @@ describe("the keys page", () => {
     expect(await screen.findByText(/configuration file keep working/i))
       .toBeInTheDocument();
   });
+
+  // Only what changed is sent, so renaming a key does not also rewrite its
+  // grant with whatever the form happened to hold.
+  it("re-scopes a key without reissuing it, sending only what changed", async () => {
+    stub({ keys: [keyView({ plugins: ["echo"] })] });
+    const update = vi.spyOn(api, "updateKey").mockResolvedValue(keyView({ name: "Weekly" }));
+    renderWith(<Keys />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const name = await screen.findByLabelText("Name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Weekly report");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith("key_1", { name: "Weekly report" }));
+  });
+
+  it("offers nothing to save until something changes", async () => {
+    stub({ keys: [keyView()] });
+    renderWith(<Keys />);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(await screen.findByRole("button", { name: "Nothing to save" })).toBeDisabled();
+  });
+
+  it("narrows a long list by name, id or group", async () => {
+    const keys = Array.from({ length: 10 }, (_, i) =>
+      keyView({ id: `key_${i}`, name: i === 3 ? "Backup runner" : `Script ${i}` }));
+    stub({ keys });
+    renderWith(<Keys />);
+    await screen.findByText("Backup runner");
+    await userEvent.type(screen.getByLabelText("Find a key"), "backup");
+    await waitFor(() => expect(screen.queryByText("Script 1")).not.toBeInTheDocument());
+    expect(screen.getByText("Backup runner")).toBeInTheDocument();
+  });
 });

@@ -1,7 +1,9 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { UsersRound } from "lucide-react";
 import { api, ApiError, type Group, type Role, type User } from "@/lib/api";
+import { effectiveCapabilities, heldLabel } from "@/lib/effective";
 import { usePoll } from "@/lib/hooks";
-import { Loading, Notice, PageHeader, Section } from "@/components/chrome";
+import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
 import { SettingsTabs } from "./SettingsTabs";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
@@ -13,6 +15,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ReachPicker } from "@/components/ReachPicker";
 import { reachLabel } from "./Groups";
 
@@ -33,6 +36,7 @@ export function Users({ embedded = false }: { embedded?: boolean } = {}) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
+  const [query, setQuery] = useState("");
   const notify = useNotify();
 
   const load = useCallback(() => {
@@ -42,6 +46,17 @@ export function Users({ embedded = false }: { embedded?: boolean } = {}) {
     api.groups().then((r) => setGroups(r.groups ?? [])).catch(() => undefined);
   }, []);
   usePoll(load, 30_000);
+
+  // By address, name or group, so a list that has grown past a screen can
+  // still be read one person at a time.
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !users) return users ?? [];
+    return users.filter((u) =>
+      u.email.toLowerCase().includes(q) ||
+      u.name.toLowerCase().includes(q) ||
+      u.groups.some((g) => g.name.toLowerCase().includes(q)));
+  }, [users, query]);
 
   return (
     <>
@@ -72,31 +87,56 @@ export function Users({ embedded = false }: { embedded?: boolean } = {}) {
         />
       )}
 
-      {!users ? <Loading rows={4} /> : (
-        <Card className="mt-4 overflow-hidden p-0">
-          <div className="scroll-x">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Can reach</TableHead>
-                  <TableHead>Groups</TableHead>
-                  <TableHead>Last signed in</TableHead>
-                  <TableHead className="w-px" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.map((u) => (
-                  <UserRow
-                    key={u.id} user={u} groups={groups}
-                    onChanged={load} notify={notify}
-                  />
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </Card>
+      {!users ? <Loading rows={4} /> : users.length === 0 ? (
+        <EmptyState mark={<UsersRound />} title="Nobody here yet">
+          Add an account, or switch on registration under Authentication so
+          people can ask for one.
+        </EmptyState>
+      ) : (
+        <>
+          {users.length > 8 && (
+            <div className="mt-4">
+              <Input
+                aria-label="Find an account"
+                placeholder="Find by address, name or group…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="max-w-sm"
+              />
+            </div>
+          )}
+          <Card className="mt-4 overflow-hidden p-0">
+            <div className="scroll-x">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Can do</TableHead>
+                    <TableHead>Can reach</TableHead>
+                    <TableHead>Groups</TableHead>
+                    <TableHead>Last signed in</TableHead>
+                    <TableHead className="w-px" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {shown.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="py-6 text-center text-muted-foreground">
+                        Nobody matches that.
+                      </TableCell>
+                    </TableRow>
+                  ) : shown.map((u) => (
+                    <UserRow
+                      key={u.id} user={u} groups={groups}
+                      onChanged={load} notify={notify}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </Card>
+        </>
       )}
     </>
   );
@@ -161,6 +201,13 @@ function UserRow({ user, groups, onChanged, notify }: {
           </NativeSelect>
         </div>
       </TableCell>
+      {/* The role less whatever a group takes away, worked out the way the
+          server does. The role column alone would say "admin" of somebody a
+          group has narrowed to reading, and "why can't they approve" is the
+          question this page exists to answer. */}
+      <TableCell className="text-muted-foreground">
+        <CanDo user={user} groups={groups} />
+      </TableCell>
       {/* What the account actually reaches, which is its own list unioned
           with every group's. Showing only its own would disagree with what
           the server lets it do. */}
@@ -189,6 +236,31 @@ function UserRow({ user, groups, onChanged, notify }: {
         </Button>
       </TableCell>
     </TableRow>
+  );
+}
+
+function CanDo({ user, groups }: { user: User; groups: Group[] }) {
+  if (user.status === "pending") {
+    return <span className="text-xs">Nothing until approved</span>;
+  }
+  const { held, ceiling, restrictedBy } = effectiveCapabilities(user.role, user.groups, groups);
+  const label = heldLabel(user.role, held);
+  if (ceiling === null) return <span>{label}</span>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="inline-flex items-center gap-1.5 rounded-sm">
+          <span>{label}</span>
+          <Chip tone={held.length === 0 ? "attention" : "info"}>narrowed</Chip>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">
+        {restrictedBy.length === 1
+          ? `${restrictedBy[0]} restricts what its members may do.`
+          : `${restrictedBy.join(" and ")} restrict what their members may do; the union of what they permit applies.`}
+        {held.length === 0 && " Nothing is permitted, so this account is suspended without being removed."}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

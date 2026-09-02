@@ -1,10 +1,12 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { KeyRound } from "lucide-react";
 import {
   api, ApiError, type ApiKey, type Group, type Role,
   type Caller,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { Copyable, Loading, Notice, PageHeader } from "@/components/chrome";
+import { Link } from "@/lib/router";
+import { Copyable, EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
 import { SettingsTabs } from "./SettingsTabs";
 import { ReachPicker } from "@/components/ReachPicker";
 import { Chip } from "@/components/status";
@@ -35,6 +37,8 @@ export function Keys() {
   const [activity, setActivity] = useState<Record<string, Caller>>({});
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<ApiKey | null>(null);
+  const [query, setQuery] = useState("");
   // The secret lives here and nowhere else: never in storage, and gone from
   // the page the moment the dialog closes.
   const [secret, setSecret] = useState<{ name: string; value: string } | null>(null);
@@ -54,6 +58,15 @@ export function Keys() {
       .catch(() => setActivity({}));
   }, []);
   usePoll(load, 30_000);
+
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !keys) return keys ?? [];
+    return keys.filter((k) =>
+      k.name.toLowerCase().includes(q) ||
+      k.id.toLowerCase().includes(q) ||
+      k.groups.some((g) => g.name.toLowerCase().includes(q)));
+  }, [keys, query]);
 
   return (
     <>
@@ -81,39 +94,67 @@ export function Keys() {
       {secret && <SecretOnce name={secret.name} value={secret.value}
                              onClose={() => setSecret(null)} />}
 
+      {editing && (
+        <EditKey
+          apiKey={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); load(); notify("good", "Key saved."); }}
+        />
+      )}
+
       {!keys ? <Loading rows={3} /> : keys.length === 0 ? (
-        <Notice tone="neutral">
-          No keys yet. Tokens set in the configuration file keep working; a key
-          made here can be revoked and re-scoped without a restart.
-        </Notice>
+        <EmptyState mark={<KeyRound />} title="No keys yet">
+          Tokens set in the configuration file keep working; a key made here
+          can be revoked and re-scoped without a restart.
+        </EmptyState>
       ) : (
-        <Card className="mt-4 overflow-hidden p-0">
-          <div className="scroll-x">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Can reach</TableHead>
-                  <TableHead>Has reached</TableHead>
-                  <TableHead>Last used</TableHead>
-                  <TableHead className="w-px" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {keys.map((k) => (
-                  <KeyRow
-                    key={k.id}
-                    apiKey={k}
-                    activity={activity[`key:${k.id}`]}
-                    notify={notify}
-                    onChanged={load}
-                  />
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </Card>
+        <>
+          {keys.length > 8 && (
+            <div className="mt-4">
+              <Input
+                aria-label="Find a key"
+                placeholder="Find by name, id or group…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="max-w-sm"
+              />
+            </div>
+          )}
+          <Card className="mt-4 overflow-hidden p-0">
+            <div className="scroll-x">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Can reach</TableHead>
+                    <TableHead>Has reached</TableHead>
+                    <TableHead>Last used</TableHead>
+                    <TableHead className="w-px" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {shown.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
+                        No key matches that.
+                      </TableCell>
+                    </TableRow>
+                  ) : shown.map((k) => (
+                    <KeyRow
+                      key={k.id}
+                      apiKey={k}
+                      activity={activity[`key:${k.id}`]}
+                      notify={notify}
+                      onChanged={load}
+                      onEdit={() => setEditing(k)}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </Card>
+        </>
       )}
     </>
   );
@@ -126,7 +167,7 @@ export function Keys() {
  * is the clearest candidate for revoking, so it says so rather than showing a
  * blank cell.
  */
-function Reached({ activity }: { activity?: Caller }) {
+function Reached({ activity, principal }: { activity?: Caller; principal: string }) {
   if (!activity) {
     return <span className="text-xs">Nothing yet</span>;
   }
@@ -134,18 +175,25 @@ function Reached({ activity }: { activity?: Caller }) {
     <span className="text-xs">
       {(activity.plugins ?? []).join(", ") || "Nothing yet"}
       <span className="block text-muted-foreground">
-        {activity.calls} call{activity.calls === 1 ? "" : "s"}
+        <Link
+          to={`/activity?principal=${encodeURIComponent(principal)}&hours=720`}
+          className="hover:underline"
+          title="Every call this key made, on Activity"
+        >
+          {activity.calls} call{activity.calls === 1 ? "" : "s"}
+        </Link>
         {activity.denied > 0 && `, ${activity.denied} refused`}
       </span>
     </span>
   );
 }
 
-function KeyRow({ apiKey, activity, notify, onChanged }: {
+function KeyRow({ apiKey, activity, notify, onChanged, onEdit }: {
   apiKey: ApiKey;
   activity?: Caller;
   notify: Notify;
   onChanged: () => void;
+  onEdit: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -196,7 +244,7 @@ function KeyRow({ apiKey, activity, notify, onChanged }: {
           review. A key permitted three integrations that has only ever touched
           one is the case worth seeing. */}
       <TableCell className="text-muted-foreground">
-        <Reached activity={activity} />
+        <Reached activity={activity} principal={`key:${apiKey.id}`} />
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">
         {apiKey.last_used_at
@@ -204,6 +252,9 @@ function KeyRow({ apiKey, activity, notify, onChanged }: {
           : "Never"}
       </TableCell>
       <TableCell className="whitespace-nowrap">
+        <Button variant="ghost" size="sm" disabled={busy || dead} onClick={onEdit}>
+          Edit
+        </Button>
         <Button variant="ghost" size="sm" disabled={busy || dead} onClick={revoke}>
           Revoke
         </Button>
@@ -242,6 +293,128 @@ function SecretOnce({ name, value, onClose }: {
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Re-scoping a key without reissuing it.
+ *
+ * Only what changed is sent, so an edit to the name does not also rewrite the
+ * grant with whatever the page happened to hold. The secret is not here and
+ * cannot be: nothing on the server can show it again.
+ */
+function EditKey({ apiKey, onClose, onSaved }: {
+  apiKey: ApiKey;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(apiKey.name);
+  const [role, setRole] = useState<Role>(apiKey.role);
+  const [reach, setReach] = useState<string[]>(apiKey.plugins);
+  // The date input wants a day; the stored value is an instant.
+  const [expires, setExpires] = useState(
+    apiKey.expires_at ? toDay(apiKey.expires_at) : "",
+  );
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const wasExpiry = apiKey.expires_at ? toDay(apiKey.expires_at) : "";
+  const changed =
+    name.trim() !== apiKey.name || role !== apiKey.role ||
+    !sameSet(reach, apiKey.plugins) || expires !== wasExpiry;
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateKey(apiKey.id, {
+        ...(name.trim() !== apiKey.name ? { name: name.trim() } : {}),
+        ...(role !== apiKey.role ? { role } : {}),
+        ...(!sameSet(reach, apiKey.plugins) ? { plugins: reach } : {}),
+        ...(expires !== wasExpiry
+          ? { expires_at: expires ? new Date(`${expires}T00:00:00`).toISOString() : "" }
+          : {}),
+      });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : "Couldn't save that key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit {apiKey.name}</DialogTitle>
+          <DialogDescription>
+            Takes effect on the key's next call. The secret itself does not
+            change and is not shown; a key whose secret has leaked is revoked,
+            not edited.
+          </DialogDescription>
+        </DialogHeader>
+        {error && <Notice tone="problem">{error}</Notice>}
+        <form onSubmit={submit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-key-name">Name</Label>
+            <Input
+              id="edit-key-name" value={name} autoComplete="off"
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-key-role">Role</Label>
+            <NativeSelect
+              id="edit-key-role" value={role}
+              onChange={(e) => setRole(e.target.value as Role)}
+            >
+              {ROLES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </NativeSelect>
+          </div>
+          <ReachPicker
+            id="edit-key-reach" value={reach} onChange={setReach}
+            subject="this key"
+          />
+          {apiKey.groups.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              It also reaches whatever {apiKey.groups.map((g) => g.name).join(", ")}{" "}
+              {apiKey.groups.length === 1 ? "reaches" : "reach"}. Membership is
+              changed on the Users &amp; Groups tab.
+            </p>
+          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-key-expires">Stops working on</Label>
+            <Input
+              id="edit-key-expires" type="date" value={expires}
+              onChange={(e) => setExpires(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Clear it for a key that does not expire.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={busy || !changed || !name.trim()}>
+              {busy ? "Saving…" : changed ? "Save" : "Nothing to save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** The local day an instant falls on, in the form a date input takes. */
+function toDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function sameSet(a: string[], b: string[]): boolean {
+  return a.length === b.length && [...a].sort().every((v, i) => v === [...b].sort()[i]);
 }
 
 function AddKey({ groups, onClose, onAdded }: {
