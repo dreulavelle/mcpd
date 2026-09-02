@@ -8,6 +8,7 @@ import { describeEvent, relative, when, who } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
 import { hasOwnName, signedInAs, useSession } from "@/lib/session";
+import { Attention } from "@/components/Attention";
 import {
   CodeBlock, Copyable, EmptyState, Loading, Notice, PageHeader, Section,
 } from "@/components/chrome";
@@ -130,21 +131,13 @@ export function Overview() {
       </div>
 
       <div className="mt-8 space-y-8">
-        {unhealthy.length > 0 && (
-          <Notice tone="attention">
-            <div className="space-y-0.5">
-              {unhealthy.map((p) => (
-                <p key={p.name}>
-                  <Link to={`/plugins/${encodeURIComponent(p.name)}`} className="font-medium underline underline-offset-4">
-                    {p.name}
-                  </Link>{" "}
-                  is {p.health}
-                  {p.health_message ? ` — ${p.health_message}` : "."}
-                </p>
-              ))}
-            </div>
-          </Notice>
-        )}
+        {/* Waiting changes have their own table below; this is everything
+            else, including the unhealthy plugins that were a notice here. */}
+        <Attention
+          plugins={snap.plugins}
+          instances={snap.instances}
+          tunnels={snap.tunnels?.tunnels ?? []}
+        />
 
         <Section
           title="Waiting on a decision"
@@ -256,12 +249,14 @@ function ConnectingDirectly({ endpoints }: { endpoints: Endpoints | null | undef
           ) : (
             <Copyable value={endpoints.aggregate} label="address" />
           )}
-          {/* TODO: link "YOUR_KEY" to the API keys page once there is one.
-              Today a machine credential is a static token in the
-              configuration file, so there is nowhere in the dashboard to send
-              somebody -- and a link that goes nowhere is worse than the
-              placeholder. */}
           <CodeBlock>{"Authorization: Bearer YOUR_KEY"}</CodeBlock>
+          <p className="text-xs text-muted-foreground">
+            A key is issued under{" "}
+            <Link to="/settings/keys" className="text-primary hover:underline">
+              Settings › API Keys
+            </Link>
+            , and shown once.
+          </p>
         </CardContent>
       </Card>
     </Section>
