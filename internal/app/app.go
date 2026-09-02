@@ -964,6 +964,10 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 	// else notices: no watchdog restarts it and the healthcheck does not look
 	// at it.
 	a.tunnels.OnFailure = a.notifyTunnelFailed
+	a.tunnels.OnRecovered = a.notifyTunnelRecovered
+	// Set below, once the factory exists; the group needs it for a restart
+	// asked for by tunnel id from the dashboard.
+	defer func() { a.tunnels.Factory = a.tunnelFactory }()
 	a.tunnelFactory = func(principal *auth.Principal) (*sdkmcp.Server, error) {
 		granted := authorizer.VisiblePlugins(principal, a.manager.Names())
 		if len(granted) == 0 {

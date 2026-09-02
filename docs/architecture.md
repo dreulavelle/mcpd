@@ -1570,6 +1570,41 @@ catalogue.
 
 ## Tunnels
 
+**A tunnel is supervised, and "connected" is not taken at its word.** The
+embedded client reports ready once, after its first completed poll, and never
+again: it backs off on its own for as long as the control plane refuses it and
+tells nobody. So `Manager` keeps three things beside the state. What ChatGPT
+has actually sent through the tunnel, observed on the in-memory transport,
+which is the only positive sign of life a connector gives. The client's own
+error lines, including its `poll failed; backing off` warnings, which are the
+only sign it is *not* being served. And what OpenAI says when asked with the
+account's admin key, every few minutes, because a tunnel deleted in OpenAI's
+dashboard is never told and polls for it for ever. A connected tunnel whose
+client has been reporting errors with nothing served is *degraded* on the
+status; after ten minutes of that the watchdog restarts it, since a fresh
+client is the one thing that reliably clears a stuck one.
+
+A failure is either retried or it is not, and the caller that saw it decides
+which: a control plane that could not be reached is retried with doubling
+backoff up to five minutes, a rejected credential or a configuration that
+does not validate is not, because nothing about it will be different in two
+seconds. The person told about a failure is told whether mcpd is retrying,
+told again if it has not worked after eight attempts, and told when it is
+back. `tunnel_use_forbidden` joins the two credential rejections the log
+watcher stops the client on: the control plane retries it every ten seconds
+otherwise, and it means the key and the tunnel belong to different
+organisations, which no retry will change. `POST /api/tunnels/{id}/restart`
+is the same restart the watchdog does, for a person.
+
+**The handoff is the one step mcpd cannot do.** OpenAI exposes no API for
+attaching a tunnel as a connector in a ChatGPT workspace; that is done in
+ChatGPT's own settings, by picking the tunnel or pasting its id. So the
+Tunnels page walks through it for a tunnel it just made -- the id ready to
+copy, the page to open -- and clears the notice when the first request comes
+through, which is the moment the connector is real. The list of tunnels
+awaiting that step lives in the browser, because it is a fact about what one
+person has done and not finished.
+
 One tunnel carries one address, so it is one connector in ChatGPT. A per-plugin
 tunnel scopes by the principal it carries, not by URL — every tunnel binds the
 in-process MCP server, so there is no URL to scope.

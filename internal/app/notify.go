@@ -90,22 +90,49 @@ func (a *App) notifyBypassOpened(ctx context.Context, b *operations.Bypass) {
 // mcpd sat reporting healthy for nine hours with nothing reaching it, and the
 // first anybody knew was somebody trying to use it the next morning.
 //
-// A tunnel that has stopped is not going to fix itself, which is precisely
-// what makes it worth interrupting somebody for. It says so plainly, because
-// "reconnecting" would invite waiting for something that is not going to
-// happen.
+// Since then a supervisor restarts a tunnel that failed for a reason worth
+// retrying, with backoff, and a watchdog restarts one whose client has been
+// failing quietly. So the message says which case this is: one mcpd is
+// working on, or one that will not fix itself -- a rejected credential, a
+// configuration that cannot start -- which is precisely what makes it worth
+// interrupting somebody for. "Reconnecting" is only said when it is true.
 //
 // Background context rather than a request's: there is no caller here. This
 // is reached from the tunnel's own goroutine, and the alternative is a
 // cancelled context that would drop the event at the moment it matters.
-func (a *App) notifyTunnelFailed(plugin, tunnelID, reason string) {
+func (a *App) notifyTunnelFailed(plugin, tunnelID, reason string, retrying bool) {
+	text := fmt.Sprintf("It is not serving and will not restart on its own; "+
+		"a person has to put it right from the Tunnels page. %s", reason)
+	if retrying {
+		text = fmt.Sprintf("It is not serving. mcpd is retrying with backoff and "+
+			"will say when it is back, or when it has stopped trying. %s", reason)
+	}
 	a.notifier.Notify(context.Background(), notify.Event{
 		Kind:     "tunnels.disconnected",
 		Severity: notify.SeverityWarning,
-		Title:    fmt.Sprintf("The %s connector has stopped", plugin),
-		Text: fmt.Sprintf("It is not serving and will not restart on its own; "+
-			"a person has to start it again from the Tunnels page. %s", reason),
+		Title:    fmt.Sprintf("The %s connector has stopped", describeConnector(plugin)),
+		Text:     text,
 	})
+}
+
+// notifyTunnelRecovered closes the loop the failure opened: whoever was told a
+// connector had stopped is told it is serving again, so nobody drives in to
+// fix something that fixed itself.
+func (a *App) notifyTunnelRecovered(plugin, tunnelID string) {
+	a.notifier.Notify(context.Background(), notify.Event{
+		Kind:     "tunnels.reconnected",
+		Severity: notify.SeverityInfo,
+		Title:    fmt.Sprintf("The %s connector is back", describeConnector(plugin)),
+		Text:     "It reconnected and is serving again. Nothing needs doing.",
+	})
+}
+
+// describeConnector names a tunnel the way the Tunnels page does.
+func describeConnector(plugin string) string {
+	if plugin == "" {
+		return "everything"
+	}
+	return plugin
 }
 
 // sendTestNotification answers "did I type the address correctly".
