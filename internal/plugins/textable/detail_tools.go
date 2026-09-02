@@ -115,7 +115,7 @@ type orgResult struct {
 	DeletedAt   string `json:"deleted_at,omitempty"`
 	ManagedBy   string `json:"managed_by,omitempty"`
 	// Admins is the list rather than a count, unlike the equivalent on a user.
-	// These ids are directly usable with get_user and the question "who
+	// These are the ids list_users reports, and the question "who
 	// administers this customer" is one somebody follows up on.
 	Admins                []string `json:"organization_admins,omitempty"`
 	RequireContactConsent bool     `json:"requires_contact_consent"`
