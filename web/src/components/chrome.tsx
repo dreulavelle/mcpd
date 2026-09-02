@@ -164,6 +164,42 @@ export function Notice({ tone = "info", icon, children }: {
   );
 }
 
+/* -- long text --------------------------------------------------------------- */
+
+/**
+ * Text that may run to a paragraph, in a place that has room for a line or
+ * two. A plugin's health message is a diagnosis, not a status word, and the
+ * one that explains a timeout properly is a hundred and fifty words -- which
+ * is right on the plugin's page and wrong in a table cell. The first lines
+ * stay, the rest is a click away, and nothing is lost.
+ */
+export function Clamp({ children, lines = 2, className }: {
+  children: string;
+  lines?: 2 | 3;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  // Roughly what two lines of a 40ch column hold. Short text gets no toggle.
+  const long = children.length > (lines === 2 ? 120 : 200);
+  return (
+    <span className={cn("block", className)}>
+      <span className={cn("block", !open && long && (lines === 2 ? "line-clamp-2" : "line-clamp-3"))}>
+        {children}
+      </span>
+      {long && (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="mt-0.5 text-xs text-primary hover:underline"
+          aria-expanded={open}
+        >
+          {open ? "Less" : "More"}
+        </button>
+      )}
+    </span>
+  );
+}
+
 /* -- copying --------------------------------------------------------------- */
 
 function useCopy(value: string) {
