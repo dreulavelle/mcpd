@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { api, ApiError, type BypassStatus } from "@/lib/api";
+import { api, type BypassStatus } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { Button } from "@/components/ui/button";
@@ -38,8 +38,13 @@ export function BypassBanner() {
     try {
       await api.revokeBypasses();
       load();
-    } catch (e) {
-      if (e instanceof ApiError) setBusy(false);
+    } catch {
+      // The banner is the error display: a window that is still open is
+      // still shown, and the button below is usable again.
+    } finally {
+      // The banner outlives the window it closed, so the button has to come
+      // back for the next one. Left busy, it was greyed out until a reload.
+      setBusy(false);
     }
   }
 

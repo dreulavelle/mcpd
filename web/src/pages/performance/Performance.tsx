@@ -268,6 +268,8 @@ function Histogram({ title, empty, d, format, budget, caption }: {
     );
   }
 
+  const overLabel = rows.find((r) => r.over)?.label;
+
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-2">
@@ -295,9 +297,12 @@ function Histogram({ title, empty, d, format, budget, caption }: {
             className="text-[10px]"
           />
           <ChartTooltip content={<ChartTooltipContent hideLabel={false} />} />
-          {budget !== undefined && (
+          {/* By label, not index: the axis is categorical, and a number
+              that is not one of its labels falls outside the scale and draws
+              nothing -- which is what happened, silently, on every chart. */}
+          {budget !== undefined && overLabel !== undefined && (
             <ReferenceLine
-              x={rows.findIndex((r) => r.over)}
+              x={overLabel}
               stroke="var(--problem)"
               strokeDasharray="4 4"
             />

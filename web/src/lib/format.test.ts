@@ -24,6 +24,10 @@ describe("relative time", () => {
     ["days", 172_800, "in 2 days"],
     ["weeks", 1_814_400, "in 3 weeks"],
     ["weeks past", -1_814_400, "3 weeks ago"],
+    // Larger units exist, so an old proposal is not "52 weeks ago".
+    ["months", 7_776_000, "in 3 months"],
+    ["a year past", -31_536_000, "last year"],
+    ["years past", -94_608_000, "3 years ago"],
   ];
 
   for (const [name, offset, expected] of cases) {

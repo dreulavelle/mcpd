@@ -412,14 +412,24 @@ function AddPlugin({ types, open, onOpenChange, onAdded }: {
   const chosen = type || types[0]?.name || "";
   const effective = name.trim() || chosen;
 
+  // Closing forgets the attempt. A failure left its notice and a half-typed
+  // name for the next opening, which read as a new problem with a new plugin.
+  function close(open: boolean) {
+    if (!open) {
+      setProblem("");
+      setName("");
+      setType("");
+    }
+    onOpenChange(open);
+  }
+
   async function add() {
     setBusy(true);
     setProblem("");
     try {
       const result = await api.addInstance(effective, chosen);
       notify("good", result.note ?? `Added ${effective}.`);
-      setName("");
-      onOpenChange(false);
+      close(false);
       onAdded();
     } catch (e) {
       setProblem(e instanceof ApiError ? e.detail : "Couldn't add it.");
@@ -429,7 +439,7 @@ function AddPlugin({ types, open, onOpenChange, onAdded }: {
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={close}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add a plugin</DialogTitle>
