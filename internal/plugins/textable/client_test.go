@@ -162,8 +162,9 @@ func TestProbe_RefusesJSONThatIsNotTextable(t *testing.T) {
 	}
 }
 
-// A 403 means the plugin is working and the key is the limit. The fix is never
-// in mcpd, so the message says where it is.
+// A 403 means the plugin is working and the token's scopes are the limit. The
+// fix is never in mcpd, so the message says where it is -- and it describes a
+// service account's scopes, not the user key this integration no longer takes.
 func TestErrors_ExplainThatAKeyIsScopedRatherThanBroken(t *testing.T) {
 	c, _ := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -174,7 +175,7 @@ func TestErrors_ExplainThatAKeyIsScopedRatherThanBroken(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 403 should be an error")
 	}
-	for _, want := range []string{"admin", "ref-2", "key"} {
+	for _, want := range []string{"admin", "ref-2", "scope"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the 403 should mention %q, got: %v", want, err)
 		}

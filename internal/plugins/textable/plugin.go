@@ -81,23 +81,22 @@ func (p *Plugin) Descriptor() plugins.Descriptor {
 		Name:    "textable",
 		Version: "0.1.0",
 		Title:   "Textable",
-		Description: "Reads a Textable business-SMS instance: the users who " +
-			"send from it, the organizations they belong to, a user's contacts, " +
-			"and the drip campaigns and canned responses that send " +
-			"automatically. Read-only. It will not create, edit or delete " +
-			"anything, and every request is checked against a list of read " +
-			"endpoints rather than merely being a method nothing writes with.\n\n" +
-			"What it can see is decided by the key, not by mcpd. Contacts, " +
-			"drip campaigns and canned responses are always the key owner's " +
-			"own; listings of users and organizations need a key belonging to " +
-			"an admin and then cover the whole instance. Every tool says which " +
-			"of the two it is.",
+		Description: "Reads a Textable business-SMS instance as a service " +
+			"account: its tenants, the users and organizations in each, and " +
+			"one contact at a time by id. Read-only. It will not create, edit " +
+			"or delete anything, and every request is checked against a list " +
+			"of read endpoints rather than merely being a method nothing " +
+			"writes with.\n\n" +
+			"What it can see is decided by the token's scopes, not by mcpd. " +
+			"Contacts are readable one at a time and never listed, and there " +
+			"is no per-user read: what can be known about a user is what " +
+			"list_users reports.",
 	}
 }
 
 // Register implements plugins.Plugin.
 //
-// Seven tools in two groups, split by where an answer comes from rather than by
+// Six tools in two groups, split by where an answer comes from rather than by
 // what it is about. The directory tools are served by one cached call to the
 // tenant report and are how a caller finds an id at all; the detail tools each
 // read one thing by the id they were given.
@@ -112,9 +111,9 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 // Two calls, in this order, because they fail differently and the difference is
 // the whole value of probing at all. /health is unauthenticated: it proves the
 // address resolves, TLS works and the thing answering is Textable rather than a
-// gateway. /api/canned-responses then proves the key is accepted. Run together
-// they would produce one message covering four causes; run apart they produce
-// the one that is true.
+// gateway. /api/v2/tenants then proves the token is accepted and carries the
+// scope every other tool depends on. Run together they would produce one
+// message covering four causes; run apart they produce the one that is true.
 func (p *Plugin) Start(ctx context.Context) error {
 	if !p.configured {
 		// Not an error the host should die on. The plugin is mounted, its

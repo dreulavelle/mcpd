@@ -172,26 +172,25 @@ func explainRequestFailure(status int, path string, body []byte) error {
 		// header, a malformed one and a revoked key all say. The envelope's
 		// `reason` is quoted by summarise where it exists, and the sentence
 		// below covers the case where it does not.
-		return fmt.Errorf("textable: the API rejected our key: %s. The key is "+
-			"the pair accountUid:apiKey, so half of it pasted on its own fails "+
-			"exactly like a revoked one -- check the shape before assuming it "+
-			"was revoked. Reaching %s",
+		return fmt.Errorf("textable: the API rejected our token: %s. A service "+
+			"account token is one opaque string, and one pasted short or with "+
+			"a stray character fails exactly like one that was revoked -- check "+
+			"it was copied whole before assuming it was revoked. Reaching %s",
 			summarise(status, body), redactURL(path))
 
 	case http.StatusForbidden:
 		// The failure that means the plugin is working and the *key* is the
 		// limit. Worth spelling out, because the fix is never in mcpd.
-		return fmt.Errorf("textable: not permitted to read %s: %s. Textable "+
-			"scopes a key to the user it was created under, and widens it only "+
-			"for an admin -- listings of users and organizations are admin-only, "+
-			"and contacts are always the key owner's own. This is that limit "+
-			"rather than anything about mcpd, so it is fixed by using a key "+
-			"belonging to an account that can see what was asked for",
+		return fmt.Errorf("textable: not permitted to read %s: %s. A service "+
+			"account token carries explicit scopes, and this is one it lacks "+
+			"rather than anything about mcpd: grant the read scope for what was "+
+			"asked (read-all-tenants, read-all-users, read-all-organizations or "+
+			"read-contacts) on the service account in Textable",
 			path, summarise(status, body))
 
 	case http.StatusNotFound:
 		return fmt.Errorf("textable: %s returned nothing. Either it does not "+
-			"exist, or this key cannot see it -- an id outside a key's scope "+
+			"exist, or this token cannot see it -- an id outside a token's scope "+
 			"can be reported as absent rather than forbidden, so the two are "+
 			"indistinguishable from here: %s", path, summarise(status, body))
 

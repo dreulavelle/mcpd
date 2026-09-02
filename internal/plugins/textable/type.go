@@ -78,7 +78,7 @@ func Type() plugins.Type {
 				Min:     intPtr(0), Max: intPtr(3600),
 				Help: "Seconds a read may be answered from memory. This mostly " +
 					"decides how often the tenant report is refetched — it is " +
-					"the directory behind three of the seven tools and the most " +
+					"the directory behind most of the tools and the most " +
 					"expensive read here, so holding it is most of what makes " +
 					"this integration quick. Zero fetches every time. A contact " +
 					"is never held whatever this says: whether somebody has " +
