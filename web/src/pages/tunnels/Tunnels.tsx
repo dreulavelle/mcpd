@@ -30,6 +30,36 @@ import { useConfirm } from "@/components/confirm";
 const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
 const CHATGPT_CONNECTORS = "https://chatgpt.com/#settings/Connectors";
 
+/**
+ * Tunnels made from this page and not yet attached in ChatGPT, by id.
+ *
+ * Kept in this browser, because it is a fact about what this person has
+ * done and not finished. Nothing on the host can tell an attached connector
+ * that has been idle from one nobody attached -- both are "connected, nothing
+ * sent" -- so the page only says "waiting for ChatGPT" of a tunnel it made
+ * itself, and stops saying it on the first request through.
+ */
+const AWAITING = "mcpd.tunnels.awaiting";
+
+function readAwaiting(): string[] {
+  try {
+    const raw = localStorage.getItem(AWAITING);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((v) => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeAwaiting(ids: string[]) {
+  try {
+    if (ids.length === 0) localStorage.removeItem(AWAITING);
+    else localStorage.setItem(AWAITING, JSON.stringify(ids));
+  } catch {
+    // Private mode: remembered for this page and no longer.
+  }
+}
+
 interface Row extends OpenAITunnel {
   status?: TunnelStatus;
   /** Which ChatGPT account it connects with, undefined when it has none. */
@@ -57,7 +87,7 @@ export interface Reading {
   detail: string;
 }
 
-export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[]): Reading {
+export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[], awaiting: Set<string> = new Set()): Reading {
   const s = row.status;
   const waitingOn = row.assigned && !s && !plugins.includes(row.assigned) ? row.assigned : "";
   if (!row.account && accounts.length > 1) {
@@ -91,9 +121,15 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[])
         return { kind: "degraded", label: "Degraded", tone: "attention", rank: 2, bucket: "needs",
           detail: "Connected, but the client has been reporting errors with nothing served since. mcpd restarts it if this goes on." };
       }
-      if ((s.requests ?? 0) === 0 && !s.last_request_at) {
+      if ((s.requests ?? 0) === 0 && !s.last_request_at && awaiting.has(row.id)) {
         return { kind: "attach", label: "Waiting for ChatGPT", tone: "info", rank: 4, bucket: "waiting",
-          detail: "mcpd is connected and nothing has come through yet. Attach the tunnel in ChatGPT, or wait: this clears itself on the first request." };
+          detail: "mcpd is connected and nothing has come through yet. Attach the tunnel in ChatGPT; this clears itself on the first request." };
+      }
+      if ((s.requests ?? 0) === 0 && !s.last_request_at) {
+        // A restart of mcpd starts the count again; an attached connector
+        // that nobody has used since is not one that was never attached.
+        return { kind: "ready", label: "Ready", tone: "good", rank: 6, bucket: "ready",
+          detail: `Connected${s.connected_at ? ` ${relative(s.connected_at)}` : ""}; nothing has come through since mcpd started. A connector ChatGPT already has reconnects on its own.` };
       }
       return { kind: "ready", label: "Ready", tone: "good", rank: 6, bucket: "ready",
         detail: `${s.requests ?? 0} request${s.requests === 1 ? "" : "s"} since it connected${s.connected_at ? ` ${relative(s.connected_at)}` : ""}.` };
@@ -123,6 +159,7 @@ export function Tunnels() {
   const [bucket, setBucket] = useQueryParam("show");
   const [query, setQuery] = useState("");
   const [making, setMaking] = useState(false);
+  const [awaiting, setAwaiting] = useState<string[]>(readAwaiting);
 
   const notify = useNotify();
   const admin = useCan("admin");
@@ -152,7 +189,24 @@ export function Tunnels() {
     }));
   }, [info]);
 
-  const read = useCallback((r: Row) => reading(r, plugins, accounts), [plugins, accounts]);
+  const awaitingSet = useMemo(() => new Set(awaiting), [awaiting]);
+  const read = useCallback((r: Row) => reading(r, plugins, accounts, awaitingSet), [plugins, accounts, awaitingSet]);
+
+  // The first request through a tunnel is ChatGPT saying it is attached.
+  useEffect(() => {
+    if (awaiting.length === 0) return;
+    const attached = awaiting.filter((id) => {
+      const s = rows.find((r) => r.id === id)?.status;
+      return Boolean(s?.last_request_at) || (s?.requests ?? 0) > 0;
+    });
+    if (attached.length === 0) return;
+    const rest = awaiting.filter((id) => !attached.includes(id));
+    setAwaiting(rest);
+    writeAwaiting(rest);
+    for (const id of attached) {
+      notify("good", `ChatGPT is connected to ${rows.find((r) => r.id === id)?.name ?? id}.`);
+    }
+  }, [awaiting, rows, notify]);
 
   // Worst first, then by name: a page opened because something is wrong
   // should put the wrong thing at the top.
@@ -227,7 +281,17 @@ export function Tunnels() {
           plugins={plugins} fallbackWorkspaces={info.workspaces ?? []} accounts={accounts}
           notify={notify} onRefused={setRefused}
           onClose={() => setMaking(false)}
-          onMade={(id) => { setMaking(false); setBucket(""); setSelected(id); load(); }}
+          onMade={(id) => {
+            setMaking(false);
+            setBucket("");
+            setSelected(id);
+            if (id) {
+              const next = [...awaiting.filter((v) => v !== id), id];
+              setAwaiting(next);
+              writeAwaiting(next);
+            }
+            load();
+          }}
         />
       )}
 
@@ -535,7 +599,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, onDone, notify, o
           <Step n={2} done>
             Tunnel made{row.status?.connected_at ? "" : ""}
           </Step>
-          <Step n={3} done={attached} current={!attached && r.kind === "attach"}>
+          <Step n={3} done={attached || (r.kind !== "attach" && s?.state === "connected")} current={r.kind === "attach"}>
             Attached in ChatGPT
             {!attached && r.kind === "attach" && (
               <span className="mt-1 block text-xs font-normal text-muted-foreground">
@@ -549,8 +613,14 @@ function Inspector({ row, reading: r, info, plugins, accounts, onDone, notify, o
                 Last request {when(s.last_request_at)}
               </span>
             )}
+            {!attached && r.kind !== "attach" && s?.state === "connected" && (
+              <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+                Nothing has come through since mcpd started, so this cannot be
+                confirmed from here. A connector ChatGPT already has needs nothing.
+              </span>
+            )}
           </Step>
-          <Step n={4} done={r.kind === "ready"} current={attached && r.kind !== "ready"}>
+          <Step n={4} done={r.kind === "ready"} current={r.kind !== "ready" && s?.state === "connected"}>
             Serving
           </Step>
         </ol>

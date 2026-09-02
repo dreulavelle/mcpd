@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spoked/mcpd/internal/mcpservers"
 	"github.com/spoked/mcpd/internal/notify"
@@ -101,11 +102,15 @@ func (a *App) notifyBypassOpened(ctx context.Context, b *operations.Bypass) {
 // is reached from the tunnel's own goroutine, and the alternative is a
 // cancelled context that would drop the event at the moment it matters.
 func (a *App) notifyTunnelFailed(plugin, tunnelID, reason string, retrying bool) {
-	text := fmt.Sprintf("It is not serving and will not restart on its own; "+
-		"a person has to put it right from the Tunnels page. %s", reason)
+	// The reason already says what to do; the package prefix and a preamble
+	// about the Tunnels page were ad copy on a phone screen.
+	reason = strings.TrimPrefix(reason, "tunnel: ")
+	text := fmt.Sprintf("%s. mcpd will not retry this.", strings.TrimSuffix(reason, "."))
 	if retrying {
-		text = fmt.Sprintf("It is not serving. mcpd is retrying with backoff and "+
-			"will say when it is back, or when it has stopped trying. %s", reason)
+		text = fmt.Sprintf("%s. mcpd is retrying and will say when it is back.", strings.TrimSuffix(reason, "."))
+	}
+	if tunnelID != "" {
+		text += " Tunnel " + tunnelID + "."
 	}
 	a.notifier.Notify(context.Background(), notify.Event{
 		Kind:     "tunnels.disconnected",
