@@ -69,6 +69,8 @@ func newAccountView(a tunnel.Account) accountView {
 		OrgID:       a.OrgID,
 		HasAdminKey: strings.TrimSpace(a.AdminKey) != "",
 		CreatedAt:   a.CreatedAt,
+		// The account's own; the tunnel listing adds what it reports.
+		Workspaces: append([]string{}, a.Workspaces...),
 	}
 }
 
@@ -151,6 +153,7 @@ type accountBody struct {
 	APIKey     *string   `json:"api_key"`
 	AdminKey   *string   `json:"admin_key"`
 	OrgID      *string   `json:"organization_id"`
+	Workspaces *[]string `json:"workspaces"`
 	Role       *string   `json:"role"`
 	Plugins    *[]string `json:"plugins"`
 	RatePerSec *float64  `json:"rate_per_sec"`
@@ -181,6 +184,9 @@ func (s *Server) handleAddChatGPTAccount(w http.ResponseWriter, r *http.Request)
 	}
 	if body.OrgID != nil {
 		acct.OrgID = *body.OrgID
+	}
+	if body.Workspaces != nil {
+		acct.Workspaces = *body.Workspaces
 	}
 	if body.Role != nil {
 		acct.Role = auth.Role(*body.Role)
@@ -221,7 +227,7 @@ func (s *Server) handleUpdateChatGPTAccount(w http.ResponseWriter, r *http.Reque
 
 	up := tunnel.AccountUpdate{
 		Name: body.Name, APIKey: body.APIKey, AdminKey: body.AdminKey,
-		OrgID: body.OrgID, Plugins: body.Plugins,
+		OrgID: body.OrgID, Workspaces: body.Workspaces, Plugins: body.Plugins,
 		RatePerSec: body.RatePerSec, Enabled: body.Enabled,
 	}
 	if body.Role != nil {

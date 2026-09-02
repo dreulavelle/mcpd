@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"encoding/base64"
@@ -260,5 +261,34 @@ func TestRemovingAnUnknownAccountIsRefused(t *testing.T) {
 	s := newAccountStore(t)
 	if err := s.Delete(context.Background(), "user:test", "acct_missing"); !errors.Is(err, ErrNoSuchAccount) {
 		t.Fatalf("Delete = %v, want ErrNoSuchAccount", err)
+	}
+}
+
+// The workspaces are the account's own and survive a round trip through the
+// store, normalised: trimmed, deduplicated, sorted, and never null.
+func TestChatGPTAccount_WorkspacesRoundTrip(t *testing.T) {
+	s := newAccountStore(t)
+	ctx := context.Background()
+	created, err := s.Create(ctx, "user:test", tunnel.Account{
+		Name: "Work", APIKey: "sk-runtime", Role: auth.RoleUser, Plugins: []string{"*"},
+		Enabled: true, Workspaces: []string{" ws_b", "ws_a", "ws_a", ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.Get(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get: %v %v", ok, err)
+	}
+	if want := []string{"ws_a", "ws_b"}; !slices.Equal(got.Workspaces, want) {
+		t.Fatalf("workspaces = %v, want %v", got.Workspaces, want)
+	}
+	none := []string{}
+	if _, err := s.Update(ctx, "user:test", created.ID, tunnel.AccountUpdate{Workspaces: &none}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = s.Get(ctx, created.ID)
+	if got.Workspaces == nil || len(got.Workspaces) != 0 {
+		t.Fatalf("cleared workspaces = %#v, want an empty list", got.Workspaces)
 	}
 }

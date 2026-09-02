@@ -250,6 +250,7 @@ function AccountDialog({ account, onClose, onSaved }: {
   // changing a rate limit quietly took the Tunnels page's Add form away.
   const [dropAdminKey, setDropAdminKey] = useState(false);
   const [orgID, setOrgID] = useState(account?.organization_id ?? "");
+  const [workspaces, setWorkspaces] = useState((account?.workspaces ?? []).join(", "));
   const [role, setRole] = useState<"user" | "admin">(account?.role ?? "user");
   // Held in the shape the API takes, so nothing has to be parsed back out of
   // a sentence on the way to the request.
@@ -269,6 +270,7 @@ function AccountDialog({ account, onClose, onSaved }: {
     const body: ChatGPTAccountBody = {
       name: name.trim(),
       organization_id: orgID.trim(),
+      workspaces: workspaces.split(/[\s,]+/).map((w) => w.trim()).filter(Boolean),
       role,
       plugins: reach,
       rate_per_sec: Number(rate) || 0,
@@ -382,6 +384,21 @@ function AccountDialog({ account, onClose, onSaved }: {
                 <span className="font-medium">org_</span>.
               </p>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="acct-ws">Workspaces</Label>
+            <Input
+              id="acct-ws" value={workspaces} placeholder="ws_…, ws_…"
+              onChange={(e) => setWorkspaces(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              The ChatGPT workspaces this account's connectors sit in, by id,
+              separated by commas. A tunnel made under this account is listed
+              in one of them; a tunnel listed only to the organisation is
+              invisible in an Enterprise or Edu workspace. Ones already seen
+              on the account's tunnels are added on their own.
+            </p>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">

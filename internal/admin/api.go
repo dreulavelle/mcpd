@@ -886,9 +886,10 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 						AccountName: acct.Name,
 					})
 				}
-				// This account's own workspaces, not the host's. The page
-				// offers these when a tunnel is made under this account.
-				view.Workspaces = workspacesIn(list)
+				// This account's own workspaces and the ones its tunnels
+				// report, not the host's. The page offers these when a
+				// tunnel is made under this account.
+				view.Workspaces = tunnel.NormalizeWorkspaces(append(view.Workspaces, workspacesIn(list)...))
 				seen = append(seen, list...)
 			}
 		}
@@ -1815,8 +1816,12 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 	if err := s.assign(r, r.PathValue("id"), body.Plugin, account.ID); err != nil {
 		var wrong *errWrongOwner
 		if errors.As(err, &wrong) {
+			ids := make([]string, 0, len(wrong.owners))
+			for _, o := range wrong.owners {
+				ids = append(ids, o.ID)
+			}
 			s.writeJSON(w, r, http.StatusConflict, map[string]any{
-				"error": "wrong_account", "detail": err.Error(), "owner": wrong.owner.ID,
+				"error": "wrong_account", "detail": err.Error(), "owners": ids,
 			})
 			return
 		}
@@ -1881,25 +1886,34 @@ func (s *Server) checkPlugin(plugin string) error {
 // on that workspace's credential -- and applying them separately would leave a
 // window in which a tunnel is pointed at a system with no account, which is
 // exactly the state that refuses to start.
-// errWrongOwner is an assignment to an account whose organisation does not
-// own the tunnel. A tunnel can only ever be run by the key of the
-// organisation it was made in, so this is refused rather than stored.
+// errWrongOwner is an assignment to an account whose organisation is not
+// among those the tunnel belongs to. A tunnel is run only by the key of an
+// organisation it is associated with, so this is refused rather than stored.
 type errWrongOwner struct {
-	owner tunnel.Account
+	owners []tunnel.Account
 }
 
 func (e *errWrongOwner) Error() string {
-	return fmt.Sprintf("that tunnel is in %s's organisation and can only run there", e.owner.Name)
+	names := make([]string, 0, len(e.owners))
+	for _, o := range e.owners {
+		names = append(names, o.Name)
+	}
+	if len(names) == 1 {
+		return fmt.Sprintf("that tunnel is in %s's organisation and can only run there", names[0])
+	}
+	return fmt.Sprintf("that tunnel belongs to %s and can only run under one of them", strings.Join(names, ", "))
 }
 
-// ownerOf reports which account's organisation lists a tunnel, from the
-// listings the page already keeps. Unknown when no account with an admin
-// key can see it.
-func (s *Server) ownerOf(ctx context.Context, id string) (tunnel.Account, bool) {
+// ownersOf reports every account whose organisation lists a tunnel, from the
+// listings the page already keeps. A tunnel's record names organisations as
+// a list, so there may be several; empty when no account with an admin key
+// can see it.
+func (s *Server) ownersOf(ctx context.Context, id string) []tunnel.Account {
 	accounts, err := s.chatgptAccounts(ctx)
 	if err != nil {
-		return tunnel.Account{}, false
+		return nil
 	}
+	var out []tunnel.Account
 	for _, acct := range accounts {
 		dir := s.directory(acct.ID)
 		if !dir.Available() {
@@ -1911,11 +1925,12 @@ func (s *Server) ownerOf(ctx context.Context, id string) (tunnel.Account, bool) 
 		}
 		for _, t := range list {
 			if t.ID == id {
-				return acct, true
+				out = append(out, acct)
+				break
 			}
 		}
 	}
-	return tunnel.Account{}, false
+	return out
 }
 
 // assign points a tunnel at a system under an account. The dashboard spells
@@ -1925,8 +1940,9 @@ func (s *Server) assign(r *http.Request, id, plugin, accountID string) error {
 	if s.opts.Settings == nil {
 		return fmt.Errorf("settings are unavailable")
 	}
-	if owner, known := s.ownerOf(r.Context(), id); known && owner.ID != accountID {
-		return &errWrongOwner{owner: owner}
+	if owners := s.ownersOf(r.Context(), id); len(owners) > 0 &&
+		!slices.ContainsFunc(owners, func(a tunnel.Account) bool { return a.ID == accountID }) {
+		return &errWrongOwner{owners: owners}
 	}
 	stored := plugin
 	if stored == "" {

@@ -557,6 +557,8 @@ export interface ChatGPTAccountBody {
   plugins?: string[];
   rate_per_sec?: number;
   enabled?: boolean;
+  /** The workspaces this account's connectors sit in, by id. */
+  workspaces?: string[];
 }
 
 export type SettingKind =

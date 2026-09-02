@@ -170,7 +170,7 @@ describe("the tunnels page", () => {
 // chips cannot disagree.
 describe("what a tunnel is doing", () => {
   const row = (s: Partial<TunnelStatus> | null = {}, extra: Record<string, unknown> = {}) =>
-    ({ id: "t", name: "t", account: "acct_1", assigned: "graylog", status: s === null ? undefined : status(s), ...extra }) as never;
+    ({ id: "t", name: "t", account: "acct_1", owners: [], assigned: "graylog", status: s === null ? undefined : status(s), ...extra }) as never;
   const one = [account()];
   it.each([
     ["not in this organisation", row({ upstream: "missing" }), "gone", 0],
@@ -203,9 +203,18 @@ describe("what a tunnel is doing", () => {
   // when they differ the key is refused, and the remedy is a move.
   it("names the account that owns a tunnel assigned to the wrong one", () => {
     const two = [account(), account({ id: "acct_2", name: "Nick" })];
-    const r = reading(row({ state: "failed", message: "refused" }, { account: "acct_1", account_id: "acct_2" }), ["graylog"], two);
+    const r = reading(row({ state: "failed", message: "refused" }, { account: "acct_1", owners: ["acct_2"] }), ["graylog"], two);
     expect(r.kind).toBe("elsewhere");
-    expect(r.detail).toContain("Nick's organisation");
+    expect(r.detail).toContain("belongs to Nick");
     expect(r.detail).toContain("Move it to Nick");
+  });
+
+  // A tunnel several organisations share may be run by any of their keys,
+  // so an assignment to one of them is right, and a shared tunnel is one
+  // row rather than one per account that lists it.
+  it("accepts any of the accounts a shared tunnel belongs to", () => {
+    const two = [account(), account({ id: "acct_2", name: "Nick" })];
+    const shared = row({ state: "connected" }, { account: "acct_2", owners: ["acct_1", "acct_2"] });
+    expect(reading(shared, ["graylog"], two).kind).not.toBe("elsewhere");
   });
 });

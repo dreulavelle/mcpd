@@ -3,6 +3,7 @@ package tunnel
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -32,6 +33,11 @@ type Account struct {
 	// because the API scopes every tunnel request to one organisation.
 	AdminKey string
 	OrgID    string
+	// Workspaces are the ChatGPT workspaces this account's connectors sit
+	// in, by id. The account's own, so an account with no tunnels yet can
+	// say where its first one belongs; what the listings report is merged
+	// in when they are shown.
+	Workspaces []string
 
 	// Principal is the identity calls through this account's tunnels act as.
 	// It is what the audit trail records, which is why two accounts may not
@@ -66,9 +72,33 @@ type Account struct {
 // slug that needs no escaping anywhere it is later written.
 var accountNamePattern = regexp.MustCompile(`^[\p{L}\p{N} _-]+$`)
 
+// NormalizeWorkspaces trims, drops blanks and duplicates, and sorts, so two
+// spellings of one list compare equal and a stray space is not a workspace.
+func NormalizeWorkspaces(in []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, w := range in {
+		w = strings.TrimSpace(w)
+		if w == "" || seen[w] {
+			continue
+		}
+		seen[w] = true
+		out = append(out, w)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Validate checks an account before it is stored or connected.
 func (a *Account) Validate() error {
 	var problems []string
+	a.Workspaces = NormalizeWorkspaces(a.Workspaces)
+	for _, w := range a.Workspaces {
+		if len(w) > 128 || strings.ContainsAny(w, " \t\n\"'") {
+			problems = append(problems, "a workspace id may not contain spaces or quotes")
+			break
+		}
+	}
 
 	name := strings.TrimSpace(a.Name)
 	switch {
@@ -195,6 +225,7 @@ type AccountUpdate struct {
 	APIKey     *string
 	AdminKey   *string
 	OrgID      *string
+	Workspaces *[]string
 	Role       *auth.Role
 	Plugins    *[]string
 	RatePerSec *float64
