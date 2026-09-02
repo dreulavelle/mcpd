@@ -425,6 +425,26 @@ export interface TunnelStatus {
   plugin?: string;
   message?: string;
   connected_at?: string;
+  /**
+   * What ChatGPT has actually sent through this tunnel since it connected.
+   * "Connected" is decided once, on the first poll, and says nothing about
+   * the hours after it; these do.
+   */
+  requests?: number;
+  last_request_at?: string;
+  /** The client's last error line, and when. Its poll backing off looks
+   *  like this; a connected tunnel with errors and nothing served is degraded. */
+  trouble?: string;
+  trouble_at?: string;
+  degraded?: boolean;
+  /** Restarts since it last worked, and when the next is due. A failed
+   *  tunnel with no next attempt is one the supervisor will not retry. */
+  attempts?: number;
+  next_retry_at?: string;
+  /** Whether OpenAI still has this tunnel: "present", "missing", or absent
+   *  when nothing has checked. */
+  upstream?: "present" | "missing";
+  upstream_checked_at?: string;
 }
 
 export interface TunnelVersion {
@@ -1584,6 +1604,11 @@ export const api = {
         name, plugin, workspace_id: workspaceID ?? "", account: account ?? "",
       }),
     }),
+
+  /** Stops one tunnel and starts it again, rebuilt against the plugins as they are now. */
+  restartTunnel: (id: string) =>
+    request<{ status: string; tunnels: TunnelStatus[] }>(
+      `/api/tunnels/${encodeURIComponent(id)}/restart`, { method: "POST" }),
 
   assignTunnel: (id: string, plugin: string, account?: string) =>
     request<{ status: string }>(`/api/tunnels/${encodeURIComponent(id)}/assign`, {
