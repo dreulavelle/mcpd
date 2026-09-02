@@ -21,7 +21,7 @@ const css = readFileSync(join(SRC, "index.css"), "utf8");
 function token(name: string, theme: "light" | "dark"): string {
   // The dark block is the only place a property is redefined, so splitting on
   // it gives two haystacks with one definition each.
-  const [light, dark] = css.split("@media (prefers-color-scheme: dark)");
+  const [light, dark] = css.split(':root[data-theme="dark"]');
   const haystack = theme === "light" ? light! : dark!;
   const match = haystack.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
   if (!match) throw new Error(`no --${name} in the ${theme} palette`);
@@ -179,9 +179,13 @@ describe("the native select's dropdown", () => {
   /**
    * Not the fix, but the half that was already right and must stay right: it is
    * what makes the popup's scrollbar, borders and highlight follow the theme
-   * once the colours are named.
+   * once the colours are named. One scheme per palette, not "light dark" on
+   * both: a page that offers the browser either while its tokens are light
+   * gets dark form controls on a light card the moment the system is dark.
    */
-  it("tells the browser which schemes the page supports", () => {
-    expect(css).toMatch(/color-scheme:\s*light dark/);
+  it("tells the browser which scheme each palette is", () => {
+    const [light, dark] = css.split(':root[data-theme="dark"]');
+    expect(light).toMatch(/color-scheme:\s*light;/);
+    expect(dark).toMatch(/color-scheme:\s*dark;/);
   });
 });

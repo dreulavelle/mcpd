@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { BypassBanner } from "./BypassBanner";
+import { ThemeToggle } from "./ThemeToggle";
 
 function NavLink({ item, badge, onNavigate }: {
   item: NavItem;
@@ -133,6 +134,7 @@ function SidebarFooter({ onSignOut, onNavigate }: {
         >
           <span title={session?.email}>{signedInAs(session)}</span>
         </Link>
+        <ThemeToggle />
         <Button
           variant="ghost" size="icon-sm"
           aria-label="Sign out" onClick={onSignOut}
