@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { AlertTriangle, RefreshCw, RotateCw } from "lucide-react";
 import { api, ApiError, type Resources, type UpdateStatus } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
@@ -176,12 +176,7 @@ function VersionBody({ status }: { status: UpdateStatus }) {
  */
 function Usage() {
   const load = useCallback(() => api.resources(), []);
-  const { data, error, reload } = useLoader(load, "Couldn't read resource usage.");
-
-  useEffect(() => {
-    const id = setInterval(reload, 10_000);
-    return () => clearInterval(id);
-  }, [reload]);
+  const { data, error } = useLoader(load, "Couldn't read resource usage.", 10_000);
 
   return (
     <Card>

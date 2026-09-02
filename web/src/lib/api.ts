@@ -300,6 +300,8 @@ export interface Tool {
   name: string;
   /** "read" looks things up; "propose" suggests a change for approval. */
   kind: "read" | "propose";
+  /** What the tool does, as the model is told it. Absent on an older host. */
+  description?: string;
 }
 
 export interface Setting {

@@ -5,7 +5,7 @@ import {
 } from "@/lib/api";
 import { unprefixed, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
-import { useRouter } from "@/lib/router";
+import { Link, useRouter } from "@/lib/router";
 import { useCan } from "@/lib/session";
 import {
   Copyable, Detail, Loading, Notice, PageHeader, Section,
@@ -16,6 +16,7 @@ import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { RestoreButton } from "./PluginsList";
+import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useConfirm } from "@/components/confirm";
 import { OpenAIPermissionDialog, type OpenAIReason } from "@/components/openai-permission";
@@ -86,10 +87,18 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
   onChanged: () => void;
 }) {
   const mayAdminister = useCan("admin");
+  // Activity is an administrator's page, so the link to it is too.
+  const mayRead = useCan("admin");
   const running = plugin !== null && plugin.endpoint !== "";
   const runtime = instance?.runtime ?? "builtin";
-  const reads = (plugin?.tools ?? []).filter((t) => t.kind === "read");
-  const writes = (plugin?.tools ?? []).filter((t) => t.kind !== "read");
+  const [toolQuery, setToolQuery] = useState("");
+  const toolMatches = (t: { name: string; description?: string }) => {
+    const q = toolQuery.trim().toLowerCase();
+    return !q || t.name.toLowerCase().includes(q) || (t.description ?? "").toLowerCase().includes(q);
+  };
+  const reads = (plugin?.tools ?? []).filter((t) => t.kind === "read" && toolMatches(t));
+  const writes = (plugin?.tools ?? []).filter((t) => t.kind !== "read" && toolMatches(t));
+  const toolCount = plugin?.tools?.length ?? 0;
   const tunnel = tunnels?.tunnels.find((t) => t.plugin === name);
   const group = settings?.groups.find(
     (g) => g.name === (plugin?.settings_group ?? `plugin:${name}`),
@@ -160,14 +169,38 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
 
         {/* The remote panel lists tools in more detail, and in three states. */}
         {running && runtime !== "mcp" && (
-          <Section title="Tools">
+          <Section
+            title="Tools"
+            description={`${toolCount} ${toolCount === 1 ? "tool" : "tools"}. Hover one for what it does.`}
+            actions={
+              <div className="flex flex-wrap items-center gap-2">
+                {toolCount > 12 && (
+                  <Input
+                    aria-label="Find a tool"
+                    className="w-48"
+                    placeholder="Find a tool…"
+                    value={toolQuery}
+                    onChange={(e) => setToolQuery(e.target.value)}
+                  />
+                )}
+                {mayRead && (
+                  <Link
+                    to={`/activity?plugin=${encodeURIComponent(name)}`}
+                    className="text-sm text-primary hover:underline"
+                  >
+                    What has called it
+                  </Link>
+                )}
+              </div>
+            }
+          >
             <div className="grid gap-4 lg:grid-cols-2">
               <Card>
                 <CardContent className="space-y-2">
                   <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                     Read
                   </p>
-                  <ToolList tools={reads.map((t) => unprefixed(t.name, name))} />
+                  <ToolList tools={reads.map((t) => ({ name: unprefixed(t.name, name), description: t.description }))} />
                 </CardContent>
               </Card>
               <Card>
@@ -177,7 +210,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
                   </p>
                   <ToolList
                     tone="attention"
-                    tools={writes.map((t) => unprefixed(t.name, name))}
+                    tools={writes.map((t) => ({ name: unprefixed(t.name, name), description: t.description }))}
                   />
                 </CardContent>
               </Card>
@@ -218,15 +251,18 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
   );
 }
 
-function ToolList({ tools, tone }: { tools: string[]; tone?: "attention" }) {
+function ToolList({ tools, tone }: {
+  tools: { name: string; description?: string }[];
+  tone?: "attention";
+}) {
   if (tools.length === 0) {
     return <p className="text-sm text-muted-foreground">Nothing.</p>;
   }
   return (
     <div className="flex flex-wrap gap-1.5">
       {tools.map((t) => (
-        <Chip key={t} tone={tone ?? "neutral"}>
-          <span className="font-mono">{t}</span>
+        <Chip key={t.name} tone={tone ?? "neutral"} className={t.description ? "cursor-help" : undefined}>
+          <span className="font-mono" title={t.description}>{t.name}</span>
         </Chip>
       ))}
     </div>

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ClipboardCheck } from "lucide-react";
 import { api, type Operation, type OperationState } from "@/lib/api";
 import { relative, when } from "@/lib/format";
@@ -10,6 +10,7 @@ import {
 } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -43,6 +44,9 @@ export function ApprovalsList() {
   const filter: Filter = param === "all" ? "" : param === "" ? "pending_approval" : (param as Filter);
   const setFilter = (next: Filter) => setParam(next === "" ? "all" : next === "pending_approval" ? "" : next);
 
+  const [plugin, setPlugin] = useQueryParam("plugin");
+  const [needle, setNeedle] = useState("");
+
   const load = useCallback(
     () => api.operations(filter || undefined, 200),
     [filter],
@@ -51,12 +55,25 @@ export function ApprovalsList() {
 
   // Newest first: the endpoint walks plugin by plugin, so what comes back is
   // grouped by integration rather than ordered in time.
-  const operations = useMemo(() => {
+  const loaded = useMemo(() => {
     const list = data?.operations ?? [];
     return [...list].sort(
       (a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at),
     );
   }, [data]);
+  const plugins = useMemo(() => {
+    const seen = new Set(loaded.map((op) => op.plugin));
+    if (plugin) seen.add(plugin);
+    return [...seen].sort();
+  }, [loaded, plugin]);
+  const operations = useMemo(() => {
+    const q = needle.trim().toLowerCase();
+    return loaded.filter((op) =>
+      (!plugin || op.plugin === plugin) &&
+      (!q || [op.action, op.plugin, op.requested_by, op.impact, op.id, op.authorized_by_rule ?? ""]
+        .join(" ").toLowerCase().includes(q)));
+  }, [loaded, plugin, needle]);
+  const narrowed = plugin !== "" || needle.trim() !== "";
 
   return (
     <>
@@ -64,16 +81,38 @@ export function ApprovalsList() {
         title="Approvals"
         lede="A change an assistant proposed is frozen when it is proposed. What you decide on is exactly what will run."
         actions={
-          <NativeSelect
-            aria-label="Show"
-            className="w-56"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value as Filter)}
-          >
-            {FILTERS.map(([value, label]) => (
-              <option key={value || "all"} value={value}>{label}</option>
-            ))}
-          </NativeSelect>
+          <div className="flex flex-wrap items-center gap-2">
+            <NativeSelect
+              aria-label="Show"
+              className="w-56"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value as Filter)}
+            >
+              {FILTERS.map(([value, label]) => (
+                <option key={value || "all"} value={value}>{label}</option>
+              ))}
+            </NativeSelect>
+            {plugins.length > 1 && (
+              <NativeSelect
+                aria-label="System"
+                className="w-44"
+                value={plugin}
+                onChange={(e) => setPlugin(e.target.value)}
+              >
+                <option value="">Every system</option>
+                {plugins.map((p) => <option key={p} value={p}>{p}</option>)}
+              </NativeSelect>
+            )}
+            {loaded.length > 8 && (
+              <Input
+                aria-label="Find a change"
+                className="w-56"
+                placeholder="Find a change…"
+                value={needle}
+                onChange={(e) => setNeedle(e.target.value)}
+              />
+            )}
+          </div>
         }
       />
 
@@ -83,7 +122,18 @@ export function ApprovalsList() {
         <Loading rows={5} />
       ) : operations.length === 0 ? (
         <EmptyState mark={<ClipboardCheck />} title="Nothing here">
-          {filter === "pending_approval" ? (
+          {narrowed ? (
+            <>
+              No change matches that.{" "}
+              <Button
+                variant="link" className="h-auto p-0"
+                onClick={() => { setPlugin(""); setNeedle(""); }}
+              >
+                Widen it
+              </Button>
+              .
+            </>
+          ) : filter === "pending_approval" ? (
             <>
               No change is waiting on a decision.{" "}
               <Button

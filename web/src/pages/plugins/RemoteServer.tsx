@@ -118,6 +118,7 @@ function Body({ server, tools, toolsError, onChanged }: {
   // administrator's, which is how the endpoints are gated.
   const mayAdminister = useCan("admin");
   const [filter, setFilter] = useState<ToolFilter>("all");
+  const [needle, setNeedle] = useState("");
   const [classifying, setClassifying] = useState<MCPTool | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [diff, setDiff] = useState<MCPDiff | null>(null);
@@ -125,13 +126,16 @@ function Body({ server, tools, toolsError, onChanged }: {
 
   const shown = useMemo(() => {
     const list = tools ?? [];
-    const filtered = filter === "all" ? list : list.filter((t) => t.state === filter);
+    const q = needle.trim().toLowerCase();
+    const filtered = list.filter((t) =>
+      (filter === "all" || t.state === filter) &&
+      (!q || t.name.toLowerCase().includes(q) || (t.descriptor.description ?? "").toLowerCase().includes(q)));
     // Pending first: it is the only state that is asking for something.
     const rank: Record<MCPToolState, number> = { pending: 0, enabled: 1, disabled: 2 };
     return [...filtered].sort(
       (a, b) => rank[a.state] - rank[b.state] || a.name.localeCompare(b.name),
     );
-  }, [tools, filter]);
+  }, [tools, filter, needle]);
 
   const pending = (tools ?? []).filter((t) => t.state === "pending").length;
 
@@ -227,6 +231,15 @@ function Body({ server, tools, toolsError, onChanged }: {
               <option value="enabled">Served</option>
               <option value="disabled">Not served</option>
             </NativeSelect>
+            {(tools?.length ?? 0) > 8 && (
+              <Input
+                aria-label="Find a tool"
+                className="w-44"
+                placeholder="Find a tool…"
+                value={needle}
+                onChange={(e) => setNeedle(e.target.value)}
+              />
+            )}
             {mayAdminister && (
               <Button variant="outline" size="sm" disabled={discovering} onClick={discover}>
                 <RefreshCw
@@ -248,7 +261,7 @@ function Body({ server, tools, toolsError, onChanged }: {
         ) : shown.length === 0 ? (
           <EmptyState title={tools?.length ? "Nothing in that state" : "No tools yet"}>
             {tools?.length
-              ? "Try another filter."
+              ? "Try another filter, or a different word."
               : "Run discovery and mcpd will ask the server what it offers."}
           </EmptyState>
         ) : (

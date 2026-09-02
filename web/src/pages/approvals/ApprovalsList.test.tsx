@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { api, type Operation } from "@/lib/api";
 import { renderWith } from "@/test/render";
 import { ApprovalsList } from "./ApprovalsList";
@@ -87,5 +88,20 @@ describe("a change a rule authorised", () => {
     expect(await screen.findByText(/No one was asked/i))
       .toBeInTheDocument();
     expect(screen.queryByText("Gated call")).not.toBeInTheDocument();
+  });
+
+  // A host with several systems proposing changes needs the list cut by one
+  // of them, and the cut lives in the address so a plugin's page can link
+  // straight to its own changes.
+  it("narrows to one system when asked, and says so when nothing matches", async () => {
+    mount([
+      operation({ id: "op-1", plugin: "cnmaestro" }),
+      operation({ id: "op-2", plugin: "graylog", action: "stream.pause" }),
+    ]);
+    await screen.findByText(/radio channel set/);
+    await userEvent.selectOptions(screen.getByLabelText("System"), "graylog");
+    expect(await screen.findByText(/stream pause/)).toBeInTheDocument();
+    expect(screen.queryByText(/radio channel set/)).not.toBeInTheDocument();
+    expect(window.location.search).toBe("?plugin=graylog");
   });
 });
