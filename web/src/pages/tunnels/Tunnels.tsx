@@ -108,7 +108,7 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
   }
   if (s.upstream === "missing") {
     return { kind: "gone", label: "Gone from OpenAI", tone: "problem", rank: 0, bucket: "needs",
-      detail: "OpenAI no longer has this tunnel, so no connector can reach it and the client here is polling for something that does not exist. Remove it and make a new one." };
+      detail: "OpenAI no longer has this tunnel, so no connector can reach it. Forget it here, and make a new one if its system still needs a connector of its own." };
   }
   switch (s.state) {
     case "failed":
@@ -710,13 +710,16 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
   }
 
   async function remove() {
-    if (!(await confirm(`Delete "${row.name}"? Any connector using it stops working.`))) return;
+    const question = r.kind === "gone"
+      ? { title: `Forget "${row.name}"?`, description: "OpenAI no longer has it, so there is nothing there to delete. This clears its assignment here, which is what keeps mcpd reporting it.", action: "Forget" }
+      : `Delete "${row.name}"? Any connector using it stops working.`;
+    if (!(await confirm(question))) return;
     setBusy("remove");
     try {
       // Deleted from the organisation it actually lives in. Two accounts are
       // two organisations, and deleting from the wrong one cannot be undone.
       await api.deleteTunnel(row.id, row.account ?? row.account_id);
-      notify("good", "Deleted.");
+      notify("good", r.kind === "gone" ? "Forgotten." : "Deleted.");
     } catch (e) {
       showFailure(e, "Couldn't delete it.", notify, onRefused);
     } finally {
@@ -767,7 +770,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
           {manages && (
             <Button variant="ghost" size="sm" onClick={remove} disabled={busy !== null}
                     className="text-destructive hover:text-destructive">
-              Remove
+              {r.kind === "gone" ? "Forget" : "Remove"}
             </Button>
           )}
           <CopyDiagnostics row={row} reading={r} />

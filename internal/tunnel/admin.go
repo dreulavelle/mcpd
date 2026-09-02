@@ -141,6 +141,14 @@ func (d *Directory) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("tunnel: %q is not a tunnel id", id)
 	}
 	if _, err := client.DeleteTunnel(ctx, id); err != nil {
+		// Already gone is the outcome asked for. A tunnel deleted in
+		// OpenAI's own dashboard answers 404 here, and refusing on it left
+		// the assignment in place -- the one thing that keeps mcpd
+		// reporting the tunnel on every restart.
+		var req *tcadmin.RequestError
+		if errors.As(err, &req) && req.StatusCode == http.StatusNotFound {
+			return nil
+		}
 		return d.explain(err)
 	}
 	return nil
