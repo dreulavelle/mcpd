@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.0](https://github.com/dreulavelle/mcpd/compare/v0.10.0...v0.11.0) (2026-09-02)
+
+
+### Features
+
+* **web:** a command palette and keyboard shortcuts ([0ee7f51](https://github.com/dreulavelle/mcpd/commit/0ee7f51834954d06a9f99678b63dc8c269afc707))
+* **web:** choose an appearance, or keep following the system ([504d9cb](https://github.com/dreulavelle/mcpd/commit/504d9cb04d9e66793bf75fe04b1b8fe2ba481e1f))
+* **web:** find a tool, follow a plugin to its calls, and keep a log line ([4773d46](https://github.com/dreulavelle/mcpd/commit/4773d46d0c91af38dc3feebf42e65faaf48a7cca))
+* **web:** the console's own confirmation, a warning before the session ends, and audit filters ([0147ac9](https://github.com/dreulavelle/mcpd/commit/0147ac9c91e355327b0efef6eddfcb81367b01f2))
+* **web:** titles that say where you are, a way past the sidebar, and a plugin finder ([515aaf8](https://github.com/dreulavelle/mcpd/commit/515aaf896f7f26d3594f06e4b39a31835f442b8d))
+* **web:** what each account may actually do, and keys that can be re-scoped ([17a2c00](https://github.com/dreulavelle/mcpd/commit/17a2c00451e0efdd2ab414ddfda757be3e402fe3))
+* **web:** what needs attention, first, and filters that live in the address ([3436e92](https://github.com/dreulavelle/mcpd/commit/3436e92a2bfb8f262bb7fe65e1baff083b5d3c8b))
+
 ## [0.10.0](https://github.com/dreulavelle/mcpd/compare/v0.9.1...v0.10.0) (2026-09-02)
 
 
