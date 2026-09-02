@@ -656,6 +656,15 @@ role map, but only to describe what a role means; the moment the page derived
 what a person may do from their role, a group ceiling was invisible to it, and
 a restricted administrator saw every button and had every click refused.
 
+**A ceiling may not strand the host.** The last-administrator guard applies to
+groups as it does to roles: a ceiling without `admin` on a group holding the
+only administrator, or the only administrator joining such a group, is refused
+(`groups.ErrLastAdmin`, a 409). The check counts who holds `admin` before the
+write and after it, inside the transaction, so a host with no administrator
+yet is not refused every restriction — nothing was taken away, because nobody
+had it. There is no dashboard path back from the alternative: editing the
+group needs the capability the change just removed.
+
 Note the two rules point in opposite directions and that is deliberate. For
 *reach*, a subject's own grant wins and groups fill in when it has none. For
 *capabilities*, the role grants and groups narrow. Both follow the same
