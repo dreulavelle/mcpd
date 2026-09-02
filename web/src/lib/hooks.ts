@@ -29,6 +29,10 @@ export function useLoader<T>(
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const live = useRef(true);
+  // Which request is the latest. Changing a filter starts a new one while
+  // the old may still be in flight, and answers do not arrive in order; the
+  // old one landing second would show the wrong list until the next poll.
+  const latest = useRef(0);
 
   useEffect(() => {
     live.current = true;
@@ -36,14 +40,15 @@ export function useLoader<T>(
   }, []);
 
   const reload = useCallback(() => {
+    const seq = ++latest.current;
     load().then(
       (value) => {
-        if (!live.current) return;
+        if (!live.current || seq !== latest.current) return;
         setData(value);
         setError(null);
       },
       (err) => {
-        if (!live.current) return;
+        if (!live.current || seq !== latest.current) return;
         setError(err instanceof ApiError ? err.detail : fallbackMessage);
       },
     );

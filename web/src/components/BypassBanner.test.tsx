@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { api, type Bypass } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
 import { BypassBanner } from "./BypassBanner";
@@ -47,6 +48,26 @@ describe("the standing warning about an open window", () => {
 
     expect(await screen.findByText(/without asking anyone/)).toBeInTheDocument();
     expect(screen.getByText(/3 so far/)).toBeInTheDocument();
+  });
+
+  // The banner outlives the window it closed. Its button was left disabled
+  // after the first close, so the next window could only be closed after a
+  // reload.
+  it("offers the button again after closing a window", async () => {
+    const status = vi.spyOn(api, "bypassStatus").mockResolvedValue({
+      active: true, open: 1, current: bypass(), max_minutes: 480,
+    });
+    vi.spyOn(api, "revokeBypasses").mockResolvedValue({ closed: 1 });
+    renderWith(<BypassBanner />);
+
+    const button = await screen.findByRole("button", { name: "Close it now" });
+    await userEvent.click(button);
+    // A second window opens later; the reload after closing finds it.
+    status.mockResolvedValue({
+      active: true, open: 1, current: bypass({ id: "byp_2" }), max_minutes: 480,
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Close it now" })).toBeEnabled());
   });
 
   // Two windows scoped to different plugins are not comparable, so the banner

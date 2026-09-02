@@ -273,8 +273,11 @@ function AddKey({ groups, onClose, onAdded }: {
         role,
         plugins: reach,
         groups: joined,
-        // A date input gives a day; the key dies at the start of it, in UTC.
-        ...(expires ? { expires_at: new Date(`${expires}T00:00:00Z`).toISOString() } : {}),
+        // A date input gives a day; the key dies at the start of it, in the
+        // operator's own time zone, so that the row renders the day they
+        // picked. As UTC midnight it read as the evening before anywhere
+        // west of Greenwich.
+        ...(expires ? { expires_at: new Date(`${expires}T00:00:00`).toISOString() } : {}),
       });
       onAdded(name.trim(), secret);
     } catch (err) {

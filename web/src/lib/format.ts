@@ -28,6 +28,8 @@ export function relative(iso: string, now: number = Date.now()): string {
 
   // Coarse to fine, so the first match is the largest unit that fits.
   const scales: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["year", 31_536_000],
+    ["month", 2_592_000],
     ["week", 604_800],
     ["day", 86_400],
     ["hour", 3_600],
