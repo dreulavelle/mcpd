@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, setCSRFToken, type AuthOptions, type Meta, type Session } from "@/lib/api";
+import {
+  api, setCSRFToken, setUnauthorizedHandler, type AuthOptions, type Meta, type Session,
+} from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { RouterProvider, useRouter } from "@/lib/router";
 import { SessionProvider, useCan } from "@/lib/session";
@@ -47,6 +49,17 @@ export default function App() {
       setCSRFToken(null);
       setSession(null);
     });
+  }, []);
+
+  // A session that expires under the console -- the cookie's lifetime ran
+  // out, or an administrator disabled the account -- is met with the sign-in
+  // form, not a page of refusals.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setCSRFToken(null);
+      setSession(null);
+    });
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   if (!checked || !meta) return null;

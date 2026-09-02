@@ -888,6 +888,16 @@ export class ApiError extends Error {
 // this code deliberately cannot read.
 let csrfToken: string | null = null;
 
+// Told when the server no longer recognises the session, so the console can
+// return to the sign-in form rather than sit there with every fetch refused.
+// It is a callback rather than a redirect because the session lives in
+// React state, and only App knows where.
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+
 export function setCSRFToken(token: string | null): void {
   csrfToken = token;
 }
@@ -914,6 +924,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
+    // Only for a request that carried the session: signing in with a wrong
+    // password is a 401 too, and it must not sign anybody out.
+    if (response.status === 401 && csrfToken) onUnauthorized?.();
     const problems = Array.isArray(body.problems)
       ? body.problems.map(String)
       : undefined;
