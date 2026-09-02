@@ -328,10 +328,10 @@ type Manager struct {
 	// its own: a rejected credential will not fix itself, a control plane
 	// that is briefly unreachable will. Set by the group from the
 	// composition root, and nil wherever nobody is listening.
-	onFailure func(plugin, tunnelID, reason string, retrying bool)
+	onFailure func(plugin, tunnelID, account, reason string, retrying bool)
 	// onRecovered is told when a tunnel that had failed is serving again, so
 	// the person told about the failure is told it is over.
-	onRecovered func(plugin, tunnelID string)
+	onRecovered func(plugin, tunnelID, account string)
 	// now is the clock, replaceable by a test.
 	now func() time.Time
 
@@ -571,7 +571,7 @@ func (m *Manager) start(ctx context.Context) error {
 				"principal", cfg.Principal.ID,
 				"plugins", cfg.Principal.Plugins)
 			if recovered && m.onRecovered != nil {
-				m.onRecovered(cfg.Plugin, cfg.TunnelID)
+				m.onRecovered(cfg.Plugin, cfg.TunnelID, cfg.AccountName)
 			}
 		case <-runCtx.Done():
 		}
@@ -769,7 +769,7 @@ func (m *Manager) fail(err error, retryable bool) {
 	m.state = StateFailed
 	m.message = err.Error()
 	m.connectedAt = nil
-	plugin, tunnelID := m.cfg.Plugin, m.cfg.TunnelID
+	plugin, tunnelID, account := m.cfg.Plugin, m.cfg.TunnelID, m.cfg.AccountName
 	first := !m.failedBefore
 	m.failedBefore = true
 	var attempt int
@@ -795,15 +795,15 @@ func (m *Manager) fail(err error, retryable bool) {
 	// the same thing twice.
 	switch {
 	case was != StateFailed && first:
-		m.onFailure(plugin, tunnelID, err.Error(), retryable)
+		m.onFailure(plugin, tunnelID, account, err.Error(), retryable)
 	case retryable && attempt == stillDownAfter:
-		m.onFailure(plugin, tunnelID,
+		m.onFailure(plugin, tunnelID, account,
 			fmt.Sprintf("still not connecting after %d attempts: %s", attempt, err.Error()), true)
 	case !retryable && was != StateFailed:
 		// A failure that was being retried and has now become final: the
 		// person who was told mcpd would keep trying needs to know it will
 		// not.
-		m.onFailure(plugin, tunnelID, err.Error(), false)
+		m.onFailure(plugin, tunnelID, account, err.Error(), false)
 	}
 }
 

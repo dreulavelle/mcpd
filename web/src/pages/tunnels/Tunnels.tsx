@@ -437,7 +437,14 @@ function TunnelRow({ row, reading: r, accounts, selected, onSelect, onDone, noti
         <span className={cn("block text-xs", toneText(r.tone))}>{r.label}</span>
       </TableCell>
       {accounts.length > 1 && (
-        <TableCell className="text-muted-foreground">{accountName(accounts, row.account) || "—"}</TableCell>
+        <TableCell>
+          <span className="block text-sm text-muted-foreground">{accountName(accounts, row.account) || "—"}</span>
+          {accounts.find((a) => a.id === row.account)?.organization_id && (
+            <span className="block font-mono text-[11px] text-muted-foreground">
+              {accounts.find((a) => a.id === row.account)!.organization_id}
+            </span>
+          )}
+        </TableCell>
       )}
       <TableCell className="font-mono text-xs">{reaches}</TableCell>
       <TableCell>
@@ -672,6 +679,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
   const s = row.status;
   const account = accounts.find((a) => a.id === row.account);
   const reachesValue = s ? (s.plugin || "*") : row.assigned === undefined ? "" : (row.assigned || "*");
+  const owner = row.account_id && accounts.some((a) => a.id === row.account_id) ? row.account_id : "";
   const activity = s?.activity ?? [];
   const errors = s?.errors && s.errors.length === activity.length ? s.errors : activity.map(() => 0);
   const metrics = s && activity.length > 0 && (
@@ -696,7 +704,10 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
   async function assign(to: string, withAccount = row.account) {
     setBusy("assign");
     try {
-      await api.assignTunnel(row.id, to === "*" ? "" : to, withAccount);
+      // "" from the select is "not used", which is an unassignment; "*" is
+      // everything, which the API spells as an empty plugin.
+      if (to === "") await api.assignTunnel(row.id, "", withAccount, true);
+      else await api.assignTunnel(row.id, to === "*" ? "" : to, withAccount);
     } catch (e) {
       showFailure(e, "Couldn't change that.", notify, onRefused);
     } finally {
@@ -750,8 +761,9 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
             with the middle missing cannot be typed anywhere. */}
         <Copyable value={row.id} label="tunnel ID" />
         <SheetDescription className="text-xs">
-          {account ? <>{account.name} · connects as <code className="font-mono">{account.principal}</code></> : "No account"}
-          {account?.organization_id && <> · <code className="font-mono">{account.organization_id}</code></>}
+          {account
+            ? <>{account.name}{account.organization_id && <> · organisation <code className="font-mono">{account.organization_id}</code></>} · connects as <code className="font-mono">{account.principal}</code></>
+            : "No account"}
         </SheetDescription>
       </div>
 
@@ -804,7 +816,11 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
               ))}
             </NativeSelect>
           </div>
-          {accounts.length > 1 && (
+          {/* Which account a tunnel belongs to is a fact where an account's
+              listing knows it: a tunnel runs only under the key of the
+              organisation it was made in. The choice is offered only for a
+              tunnel no listing can see. */}
+          {accounts.length > 1 && !owner && (
             <div className="space-y-1.5">
               <Label htmlFor="insp-account">Account</Label>
               <NativeSelect id="insp-account" value={row.account ?? ""} disabled={busy !== null}
@@ -812,6 +828,9 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
                 <option value="">No account</option>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </NativeSelect>
+              <p className="text-xs text-muted-foreground">
+                No account here can see this tunnel, so which one runs it has to be said.
+              </p>
             </div>
           )}
         </div>

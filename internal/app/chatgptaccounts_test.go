@@ -69,7 +69,7 @@ func TestSeedingPinsTheTunnelsItFound(t *testing.T) {
 	const id = "tunnel_6a87964313a88191b1cf9d9bf28dde48"
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelAPIKey, Value: "sk-runtime", Secret: true},
-		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
+		{Key: settings.TunnelPluginKey(id), Value: `"*"`},
 		{Key: settings.TunnelPluginKey("tunnel_1123456789abcdef0123456789abcdef"),
 			Value: `"echo"`},
 	}); err != nil {
@@ -88,7 +88,7 @@ func TestSeedingPinsTheTunnelsItFound(t *testing.T) {
 	}
 	seeded := accounts[0].ID
 
-	if got := a.settings.String(ctx, settings.KeyTunnelAccount, ""); got != seeded {
+	if got := a.settings.String(ctx, settings.TunnelAccountKey(id), ""); got != seeded {
 		t.Errorf("the main tunnel names %q, want the seeded account", got)
 	}
 	if got := a.settings.String(ctx,
@@ -166,9 +166,10 @@ func TestRemovingAnAccountUnassignsItsTunnels(t *testing.T) {
 	ctx := context.Background()
 
 	acct := addAccount(t, a, "Work", nil)
+	const id = "tunnel_6a87964313a88191b1cf9d9bf28dde48"
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
-		{Key: settings.KeyTunnelID, Value: `"tunnel_6a87964313a88191b1cf9d9bf28dde48"`},
-		{Key: settings.KeyTunnelAccount, Value: `"` + acct.ID + `"`},
+		{Key: settings.TunnelPluginKey(id), Value: `"*"`},
+		{Key: settings.TunnelAccountKey(id), Value: `"` + acct.ID + `"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +177,7 @@ func TestRemovingAnAccountUnassignsItsTunnels(t *testing.T) {
 	if err := a.RemoveChatGPTAccount(ctx, "user:test", acct.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.settings.String(ctx, settings.KeyTunnelAccount, ""); got != "" {
+	if got := a.settings.String(ctx, settings.TunnelAccountKey(id), ""); got != "" {
 		t.Fatalf("the tunnel still names the removed account (%q)", got)
 	}
 }

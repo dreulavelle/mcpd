@@ -87,10 +87,44 @@ func TestMigrationMovesAssignmentsOntoTheTunnelsOwnKey(t *testing.T) {
 	if got[0].TunnelID != id || got[0].Plugin != "echo" || got[0].Account != "acct_one" {
 		t.Fatalf("migrated to %+v", got[0])
 	}
-	// The old rows stay, so rolling back to the previous build still finds
-	// them rather than coming up with nothing assigned.
-	if a.settings.String(ctx, settings.PluginTunnelKey("echo"), "") != id {
-		t.Error("the old key was removed; a rollback would lose the assignment")
+	// The old rows go. They were kept once for the sake of a rollback, and
+	// a host holding two answers for one plugin -- the old key and the new
+	// -- is how a connector came to run under a key that could not use it.
+	// Migrations here are forward-only, as the database's are.
+	if _, ok, _ := a.settings.Get(ctx, settings.PluginTunnelKey("echo")); ok {
+		t.Error("the old key was left behind as a second authority for the same tunnel")
+	}
+	if _, ok, _ := a.settings.Get(ctx, settings.PluginTunnelAccountKey("echo")); ok {
+		t.Error("the old account key was left behind")
+	}
+}
+
+// The aggregate tunnel had a pair of keys of its own. It is a tunnel like the
+// others now, under its own id, serving everything.
+func TestMigrationMovesTheAggregateTunnelOntoItsOwnKey(t *testing.T) {
+	ctx := context.Background()
+	a := newTestApp(t)
+
+	const id = "tunnel_2123456789abcdef0123456789abcdef"
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
+		{Key: settings.KeyTunnelAccount, Value: `"acct_one"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	a.migrateTunnelAssignments(ctx)
+
+	got := a.assignedTunnels(ctx)
+	if len(got) != 1 || got[0].TunnelID != id || got[0].Plugin != settings.TunnelEverything || got[0].Account != "acct_one" {
+		t.Fatalf("migrated to %+v, want the aggregate under its own id", got)
+	}
+	if _, ok, _ := a.settings.Get(ctx, settings.KeyTunnelID); ok {
+		t.Error("the aggregate's old key was left behind")
+	}
+	// And the dashboard still sees everything spelled the way it always has.
+	if plugin, ok := a.tunnelAssignments(ctx)[id]; !ok || plugin != "" {
+		t.Errorf("assignments = %v, want %q as \"\"", a.tunnelAssignments(ctx), id)
 	}
 }
 

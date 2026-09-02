@@ -193,7 +193,9 @@ const (
 // history reads clearly.
 const (
 	KeyTunnelEnabled = "tunnel.enabled"
-	// KeyTunnelID holds the tunnel serving every plugin at once.
+	// KeyTunnelID held the tunnel serving every plugin at once, before every
+	// tunnel was keyed by its own id. Read once at startup to move it onto
+	// that key, and never written again.
 	//
 	// Deliberately not a settings field, for the same reason as
 	// PluginTunnelKey below: tunnels are made and assigned on the Tunnels
@@ -443,8 +445,15 @@ func PluginTunnelAccountKey(plugin string) string {
 // integration without duplicating its configuration.
 const tunnelKeyPrefix = "tunnel."
 
-// TunnelPluginKey names the plugin a tunnel serves. An empty value is the
-// aggregate: everything the account's grant allows.
+// TunnelEverything is the plugin value for a tunnel serving every system its
+// account's grant allows. Spelled out rather than left as the empty string,
+// because empty is what an unassigned tunnel holds, and one value meaning
+// both "everything" and "nothing" was how the aggregate tunnel came to need
+// a second pair of keys of its own.
+const TunnelEverything = "*"
+
+// TunnelPluginKey names the plugin a tunnel serves: a plugin name,
+// TunnelEverything, or empty for a tunnel nothing is using.
 func TunnelPluginKey(tunnelID string) string {
 	return tunnelKeyPrefix + tunnelID + ".plugin"
 }

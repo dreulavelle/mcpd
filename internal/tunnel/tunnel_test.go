@@ -439,7 +439,7 @@ func TestReconfigure_DoesNotInterleaveWithAnother(t *testing.T) {
 func TestFailReportsOncePerFailure(t *testing.T) {
 	var got []string
 	m := NewManager(Config{Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
-	m.onFailure = func(plugin, tunnelID, reason string, _ bool) {
+	m.onFailure = func(plugin, tunnelID, _, reason string, _ bool) {
 		got = append(got, plugin+"|"+tunnelID+"|"+reason)
 	}
 
@@ -462,7 +462,7 @@ func TestFailReportsOncePerFailure(t *testing.T) {
 func TestGroupPassesTheFailureHookToItsManagers(t *testing.T) {
 	var called int
 	g := NewGroup(discardLogger())
-	g.OnFailure = func(string, string, string, bool) { called++ }
+	g.OnFailure = func(string, string, string, string, bool) { called++ }
 
 	if err := g.Apply(t.Context(), []Config{
 		{Plugin: "graylog", TunnelID: "tunnel_abc", APIKey: "k",
@@ -540,7 +540,7 @@ func TestSupervisor_SaysWhenRetryingHasNotWorked(t *testing.T) {
 	t.Cleanup(func() { retryBase = restore })
 	var reports []string
 	m := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
-	m.onFailure = func(_, _, reason string, retrying bool) {
+	m.onFailure = func(_, _, _, reason string, retrying bool) {
 		reports = append(reports, fmt.Sprintf("%v:%s", retrying, reason))
 	}
 	for i := 0; i < stillDownAfter; i++ {
@@ -721,7 +721,7 @@ func TestActivity_HourlyRingAndInheritance(t *testing.T) {
 func TestRejectedKey_IsReportedOnce(t *testing.T) {
 	var reports []string
 	m := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
-	m.onFailure = func(_, _, reason string, _ bool) { reports = append(reports, reason) }
+	m.onFailure = func(_, _, _, reason string, _ bool) { reports = append(reports, reason) }
 
 	m.fail(errors.New("tunnel: OpenAI rejected the key"), false)
 	if err := m.halt(t.Context()); err != nil {

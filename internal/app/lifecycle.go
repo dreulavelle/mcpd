@@ -170,6 +170,7 @@ func (a *App) Run(ctx context.Context) error {
 				case <-time.After(30 * time.Second):
 					// Once soon after start, then on the ticker.
 				}
+				a.reconcileTunnelOwners(ctx)
 				a.tunnels.CheckUpstream(ctx, check)
 				select {
 				case <-ctx.Done():
