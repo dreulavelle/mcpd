@@ -446,3 +446,33 @@ func TestCallTypeAcceptsEitherDialect(t *testing.T) {
 		}
 	}
 }
+
+// A disconnect that failed says why in its notes, and the notes are the whole
+// reason one order can be read by id. They were requested at a path without
+// the Dashboard prefix, which the allow-list refused before the network, so
+// every read came back with the order and an apology instead of the notes.
+func TestDisconnectOrderReadsItsNotes(t *testing.T) {
+	const base = "/api/v2/accounts/9000001/disconnects/d-1"
+	srv := dashboardServer(t, map[string]string{
+		base: `<DisconnectTelephoneNumberOrderResponse><OrderId>d-1</OrderId>
+			<OrderStatus>FAILED</OrderStatus></DisconnectTelephoneNumberOrderResponse>`,
+		base + "/notes": `<NotesResponse>
+			<Note><Id>7</Id><Description>Number is not on this account</Description></Note>
+		</NotesResponse>`,
+	})
+	p := portingPlugin(t, srv)
+
+	got, err := p.listOrders(context.Background(), OrdersInput{Kind: "disconnects", OrderID: "d-1"})
+	if err != nil {
+		t.Fatalf("listOrders: %v", err)
+	}
+	if got.Note != "" {
+		t.Fatalf("note = %q; the notes should have been read", got.Note)
+	}
+	if got.Returned != 2 || len(got.Items) != 2 {
+		t.Fatalf("returned %d items, want the order and its one note: %v", got.Returned, got.Items)
+	}
+	if got.Items[1]["Description"] != "Number is not on this account" {
+		t.Errorf("note = %v", got.Items[1])
+	}
+}
