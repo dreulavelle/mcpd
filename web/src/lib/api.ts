@@ -432,6 +432,9 @@ export interface TunnelStatus {
    */
   requests?: number;
   last_request_at?: string;
+  /** Requests per hour over the last twelve, oldest first. Per process, and
+   *  carried across a restart of the tunnel. */
+  activity?: number[];
   /** The client's last error line, and when. Its poll backing off looks
    *  like this; a connected tunnel with errors and nothing served is degraded. */
   trouble?: string;

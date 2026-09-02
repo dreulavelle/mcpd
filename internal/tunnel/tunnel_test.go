@@ -677,3 +677,39 @@ func TestGroupRestart_NeedsATunnelItKnows(t *testing.T) {
 		t.Fatal("restarting a tunnel that is not configured should refuse")
 	}
 }
+
+// The request history is by the hour, oldest first, with idle hours zeroed
+// rather than left holding a stale count -- and it outlives a rebuild, so a
+// restarted connector does not read as one that was never used.
+func TestActivity_HourlyRingAndInheritance(t *testing.T) {
+	m := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
+	clock := time.Date(2026, 9, 2, 10, 30, 0, 0, time.UTC)
+	m.now = func() time.Time { return clock }
+
+	m.noteRequest()
+	m.noteRequest()
+	clock = clock.Add(time.Hour)
+	m.noteRequest()
+	// Two idle hours, then one more.
+	clock = clock.Add(3 * time.Hour)
+	m.noteRequest()
+
+	got := m.Status().Activity
+	if len(got) != activityHours {
+		t.Fatalf("len = %d, want %d", len(got), activityHours)
+	}
+	tail := got[activityHours-5:]
+	want := []int64{2, 1, 0, 0, 1}
+	for i := range want {
+		if tail[i] != want[i] {
+			t.Fatalf("last five hours = %v, want %v", tail, want)
+		}
+	}
+
+	next := NewManager(m.Config(), nil, discardLogger())
+	next.now = m.now
+	next.Inherit(m)
+	if s := next.Status(); s.Activity[activityHours-1] != 1 || s.LastRequestAt == nil {
+		t.Fatalf("the replacement should carry the history: %+v", s)
+	}
+}
