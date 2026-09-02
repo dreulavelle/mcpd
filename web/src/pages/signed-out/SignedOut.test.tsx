@@ -18,6 +18,7 @@ const SESSION: Session = {
   expires_at: "2026-08-24T00:00:00Z",
   status: "active",
   has_password: true,
+  capabilities: ["read", "propose", "approve"],
 };
 
 /**

@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { Session } from "./api";
-import { capabilitiesOf, type Capability } from "./capabilities";
+import type { Capability } from "./capabilities";
 
 interface SessionValue {
   session: Session | null;
@@ -25,7 +25,9 @@ export function SessionProvider({ session, onSession, children }: {
   children: ReactNode;
 }) {
   const value = useMemo<SessionValue>(() => {
-    const held = new Set(session ? capabilitiesOf(session.role) : []);
+    // The server's answer, never the role's: a group can narrow a role, and
+    // only the server knows by how much.
+    const held = new Set<Capability>(session?.capabilities ?? []);
     return {
       session,
       can: (c) => held.has(c),

@@ -62,6 +62,10 @@ func (c Capability) Valid() bool {
 	return false
 }
 
+// allCapabilities lists every capability in the order they are displayed:
+// the broadest reach first, the one that administers the host last.
+var allCapabilities = []Capability{CapRead, CapPropose, CapApprove, CapAdmin}
+
 // roleCapabilities is the authoritative role-to-capability mapping.
 var roleCapabilities = map[Role][]Capability{
 	RoleUser:  {CapRead, CapPropose, CapApprove},
@@ -149,6 +153,25 @@ func (p *Principal) Can(c Capability) bool {
 	return slices.Contains(p.Ceiling, c)
 }
 
+// Capabilities lists everything the principal holds, in display order.
+//
+// It is derived from Can rather than kept alongside it, so that a page
+// rendering "what you may do" cannot disagree with the check that decides it.
+// The dashboard draws its controls from this list; the moment it computed the
+// set from the role instead, a group ceiling would leave a person looking at
+// buttons the server refuses. Never nil: an empty list is an answer, and a
+// principal that holds nothing should render as holding nothing rather than
+// as a question nobody asked.
+func (p *Principal) Capabilities() []Capability {
+	held := make([]Capability, 0, len(allCapabilities))
+	for _, c := range allCapabilities {
+		if p.Can(c) {
+			held = append(held, c)
+		}
+	}
+	return held
+}
+
 // CanAccessPlugin reports whether the principal may reach a plugin endpoint.
 //
 // A principal with no plugins listed is denied everything. Empty means "no
@@ -223,5 +246,18 @@ func (p Principal) Equal(other Principal) bool {
 	theirs := slices.Clone(other.Plugins)
 	slices.Sort(mine)
 	slices.Sort(theirs)
-	return slices.Equal(mine, theirs)
+	if !slices.Equal(mine, theirs) {
+		return false
+	}
+	// A ceiling is part of what a principal grants. Nil and empty are
+	// different answers -- no ceiling against one that permits nothing -- so
+	// they are told apart before the contents are compared.
+	if (p.Ceiling == nil) != (other.Ceiling == nil) {
+		return false
+	}
+	myCeiling := slices.Clone(p.Ceiling)
+	theirCeiling := slices.Clone(other.Ceiling)
+	slices.Sort(myCeiling)
+	slices.Sort(theirCeiling)
+	return slices.Equal(myCeiling, theirCeiling)
 }

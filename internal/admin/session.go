@@ -170,6 +170,15 @@ type sessionResponse struct {
 	// profile page can offer to set one before unlinking the provider that is
 	// currently the only way in.
 	HasPassword bool `json:"has_password"`
+	// Capabilities is what this account may actually do: its role, less
+	// whatever its groups take away, and nothing at all while it is pending.
+	//
+	// The page draws its controls from this rather than from the role. It
+	// used to derive the set from the role alone, which was right until a
+	// group could impose a ceiling and wrong from then on: a restricted
+	// administrator saw every button and had every click refused. Advisory,
+	// like everything the page knows -- the server checks again on each call.
+	Capabilities []string `json:"capabilities"`
 }
 
 // handleSignIn exchanges an email and password for a session cookie.
@@ -205,7 +214,7 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 
 	s.opts.Log.Info("dashboard sign-in", "user", user.Email, "session", sess.ID)
 	s.setSessionCookie(w, r, token, sess.ExpiresAt)
-	s.writeJSON(w, r, http.StatusOK, sessionView(user, sess, s.grantsFor(r, user)))
+	s.writeJSON(w, r, http.StatusOK, s.sessionView(r, user, sess))
 }
 
 // handleRegisterFirst claims an unclaimed instance.
@@ -254,7 +263,7 @@ func (s *Server) handleRegisterFirst(w http.ResponseWriter, r *http.Request) {
 	s.opts.Log.Info("first account registered; this instance is now claimed",
 		"email", user.Email, "id", user.ID)
 	s.setSessionCookie(w, r, token, sess.ExpiresAt)
-	s.writeJSON(w, r, http.StatusCreated, sessionView(user, sess, s.grantsFor(r, user)))
+	s.writeJSON(w, r, http.StatusCreated, s.sessionView(r, user, sess))
 }
 
 // handleSignOut ends the current session.
@@ -284,24 +293,51 @@ func (s *Server) handleCurrentSession(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusUnauthorized, "not signed in")
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, sessionView(user, sess, s.grantsFor(r, user)))
+	s.writeJSON(w, r, http.StatusOK, s.sessionView(r, user, sess))
 }
 
-func sessionView(u *users.User, sess *users.Session, granted []string) sessionResponse {
-	if granted == nil {
-		granted = []string{}
-	}
+// sessionView describes a signed-in account to the page.
+//
+// What it may reach and what it may do are both resolved here, through the
+// same Principal the request path builds, so the page and the server answer
+// "can this person approve" from one place.
+func (s *Server) sessionView(r *http.Request, u *users.User, sess *users.Session) sessionResponse {
+	granted := s.grantsFor(r, u)
+	p := u.Principal(sess.ID, granted, s.ceilingFor(r, u))
 	return sessionResponse{
-		Email:       u.Email,
-		Name:        u.Name(),
-		DisplayName: u.DisplayName,
-		Role:        string(u.Role),
-		Plugins:     granted,
-		CSRFToken:   sess.CSRFToken,
-		ExpiresAt:   sess.ExpiresAt.Format(time.RFC3339),
-		Status:      statusOf(u),
-		HasPassword: u.HasPassword(),
+		Email:        u.Email,
+		Name:         u.Name(),
+		DisplayName:  u.DisplayName,
+		Role:         string(u.Role),
+		Plugins:      granted,
+		CSRFToken:    sess.CSRFToken,
+		ExpiresAt:    sess.ExpiresAt.Format(time.RFC3339),
+		Status:       statusOf(u),
+		HasPassword:  u.HasPassword(),
+		Capabilities: capabilityNames(p.Capabilities()),
 	}
+}
+
+// ceilingFor resolves what an account's groups permit it to do, for a page
+// that is about to render it.
+//
+// A failure yields a ceiling that permits nothing rather than none at all,
+// for the same reason grantsFor yields an empty list: the console showing a
+// person fewer controls than they hold is a page they can reload, while
+// showing the full rights of a role a group has narrowed is the console
+// disagreeing with the server. The request path refuses outright on the same
+// error; a description of a session is not worth refusing the session over.
+func (s *Server) ceilingFor(r *http.Request, u *users.User) []auth.Capability {
+	if s.opts.Accounts == nil {
+		return []auth.Capability{}
+	}
+	ceiling, err := s.opts.Accounts.EffectiveCeiling(r.Context(), u.ID)
+	if err != nil {
+		s.opts.Log.ErrorContext(r.Context(), "could not resolve capability ceiling",
+			"account", u.ID, "error", err)
+		return []auth.Capability{}
+	}
+	return ceiling
 }
 
 // grantsFor resolves what an account may reach, for a page that is about to

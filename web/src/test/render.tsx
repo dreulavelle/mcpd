@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 import { render, type RenderResult } from "@testing-library/react";
 import type { Role, Session } from "@/lib/api";
+import { capabilitiesOf } from "@/lib/capabilities";
 import { RouterProvider } from "@/lib/router";
 import { SessionProvider } from "@/lib/session";
 import { ToastProvider } from "@/components/toast";
@@ -27,6 +28,9 @@ export function sessionFor(role: Role, overrides: Partial<Session> = {}): Sessio
     expires_at: new Date(Date.now() + 3_600_000).toISOString(),
     status: "active",
     has_password: true,
+    // What the server would send for an account no group restricts. A test
+    // about a ceiling overrides this, and only this.
+    capabilities: [...capabilitiesOf(role)],
   };
   const merged = { ...base, ...overrides };
   if (overrides.display_name !== undefined && overrides.name === undefined) {

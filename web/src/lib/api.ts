@@ -106,6 +106,14 @@ export interface Session {
   status: AccountStatus;
   /** False for an account that only signs in through a provider. */
   has_password: boolean;
+  /**
+   * What this account may actually do: its role, less whatever its groups
+   * take away, and nothing while it is pending. The console draws its
+   * controls from this and never from the role, because a group ceiling is
+   * invisible in the role and a control the server refuses is worse than one
+   * that is missing. Advisory: the server checks again on every call.
+   */
+  capabilities: Capability[];
 }
 
 /** What has been decided about an account. Not the same axis as `disabled`. */
