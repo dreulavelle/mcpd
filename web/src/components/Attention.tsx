@@ -11,6 +11,14 @@ import { Section } from "./chrome";
 import { StatusDot, type Tone } from "./status";
 import { Card, CardContent } from "@/components/ui/card";
 
+/** The first sentence of a paragraph, for a line that has room for one. */
+export function firstSentence(text: string): string {
+  const m = /^(.+?[.!?])(\s|$)/.exec(text.trim());
+  if (!m) return text.length > 140 ? text.slice(0, 140).trimEnd() + "…" : text;
+  const first = m[1]!;
+  return first.length < text.trim().length ? first + " …" : first;
+}
+
 /** One thing somebody should look at, and where to look. */
 export interface Item {
   key: string;
@@ -59,7 +67,9 @@ export function attention(input: {
     if (p.health === "healthy") continue;
     out.push({
       key: `plugin:${p.name}`, tone: p.health === "degraded" ? "attention" : "problem",
-      text: `${p.name} is ${p.health}${p.health_message ? ` — ${p.health_message}` : "."}`,
+      // The first sentence only: the whole diagnosis is on the plugin's
+      // page, and a digest line is one line.
+      text: `${p.name} is ${p.health}${p.health_message ? ` — ${firstSentence(p.health_message)}` : "."}`,
       to: `/plugins/${encodeURIComponent(p.name)}`, linkLabel: p.name,
     });
   }

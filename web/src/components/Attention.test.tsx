@@ -84,4 +84,15 @@ describe("what needs attention", () => {
       ["tunnel-degraded:t4", "attention"],
     ]);
   });
+
+  // A diagnosis can run to a paragraph. The digest keeps its first sentence;
+  // the rest is on the plugin's page.
+  it("keeps a long health message to its first sentence", () => {
+    const items = attention({
+      ...nothing,
+      plugins: [plugin({ name: "textable", health: "degraded",
+        health_message: "/health timed out inside Textable (HTTP 408). This is not transient: the whole list has to be built in one response. Do not retry." })],
+    });
+    expect(items[0]!.text).toBe("textable is degraded — /health timed out inside Textable (HTTP 408). …");
+  });
 });

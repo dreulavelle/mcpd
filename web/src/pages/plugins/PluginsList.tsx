@@ -11,7 +11,7 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import {
   EmptyState, Loading, Notice, PageHeader, Section,
-} from "@/components/chrome";
+ Clamp } from "@/components/chrome";
 import { Chip, healthTone, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -319,9 +319,9 @@ function PluginTable({ rows, mayManage, onChanged }: {
                     <Chip tone="attention">Not running</Chip>
                   )}
                   {(row.removed || row.health !== "healthy") && row.healthMessage && (
-                    <div className="max-w-[40ch] text-xs text-muted-foreground">
+                    <Clamp className="max-w-[40ch] text-xs text-muted-foreground">
                       {row.healthMessage}
-                    </div>
+                    </Clamp>
                   )}
                   {row.removed && mayManage && (
                     <RestoreButton
