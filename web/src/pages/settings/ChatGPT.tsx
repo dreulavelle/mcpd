@@ -243,6 +243,10 @@ function AccountDialog({ account, onClose, onSaved }: {
   const [name, setName] = useState(account?.name ?? "");
   const [apiKey, setApiKey] = useState("");
   const [adminKey, setAdminKey] = useState("");
+  // Clearing the stored admin key is a real thing to want, but it has to be
+  // asked for. It used to follow from leaving the box blank on any edit, so
+  // changing a rate limit quietly took the Tunnels page's Add form away.
+  const [dropAdminKey, setDropAdminKey] = useState(false);
   const [orgID, setOrgID] = useState(account?.organization_id ?? "");
   const [role, setRole] = useState<"user" | "admin">(account?.role ?? "user");
   // Held in the shape the API takes, so nothing has to be parsed back out of
@@ -270,10 +274,11 @@ function AccountDialog({ account, onClose, onSaved }: {
     // Omitted rather than sent empty: on an edit, an absent key means "keep
     // the one you have", and sending "" would erase it.
     if (apiKey.trim() !== "") body.api_key = apiKey.trim();
-    // The admin key is the exception, because clearing it is a real thing to
-    // want. On a new account there is nothing to clear, so it is only sent
-    // when typed.
-    if (editing || adminKey.trim() !== "") body.admin_key = adminKey.trim();
+    // The admin key follows the same rule, with one addition: an explicit
+    // request to remove it sends an empty key, which is what the server reads
+    // as "forget the stored one".
+    if (adminKey.trim() !== "") body.admin_key = adminKey.trim();
+    else if (editing && dropAdminKey) body.admin_key = "";
 
     try {
       const saved = editing
@@ -337,12 +342,25 @@ function AccountDialog({ account, onClose, onSaved }: {
               <Input
                 id="acct-admin" type="password" value={adminKey}
                 placeholder={
-                  editing
-                    ? account.has_admin_key ? "stored — blank clears it" : "optional"
+                  editing && account.has_admin_key
+                    ? "leave blank to keep the stored key"
                     : "optional"
                 }
+                disabled={dropAdminKey}
                 onChange={(e) => setAdminKey(e.target.value)}
               />
+              {editing && account.has_admin_key && (
+                <div className="flex items-center gap-2 pt-1">
+                  <Switch
+                    id="acct-admin-drop"
+                    checked={dropAdminKey}
+                    onCheckedChange={setDropAdminKey}
+                  />
+                  <Label htmlFor="acct-admin-drop" className="font-normal">
+                    Remove the stored admin key
+                  </Label>
+                </div>
+              )}
               <p className="text-xs text-muted-foreground">
                 Optional. Lets tunnels be created from the Tunnels page instead
                 of pasted in by hand. Made under Settings → Organization →
