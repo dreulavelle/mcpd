@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.10.0](https://github.com/dreulavelle/mcpd/compare/v0.9.1...v0.10.0) (2026-09-02)
+
+
+### Features
+
+* **auth:** a group may take capabilities away ([bb18bc1](https://github.com/dreulavelle/mcpd/commit/bb18bc1324f90ff211b01c4512eed4853a593d0d))
+* **bandwidth:** disconnect detail, and port-out passcodes behind a capability ([7a24cad](https://github.com/dreulavelle/mcpd/commit/7a24cade78e9c45bd5ebee0bdb21dc7095a4ab46))
+* **bandwidth:** per-number reads, line records, and Insights call events ([422ddc9](https://github.com/dreulavelle/mcpd/commit/422ddc9433e23f3a261d497dcd524a2765275408))
+* **bandwidth:** read port-outs and account entitlements ([83782e4](https://github.com/dreulavelle/mcpd/commit/83782e4617b2195f9fc91d2e3edfae5255d34775))
+* **textable:** read a Textable instance as a service account ([2a8b704](https://github.com/dreulavelle/mcpd/commit/2a8b704e10bbf26a694522cbd8a42d7eaa542df6))
+
+
+### Fixes
+
+* **auth:** a group ceiling may not strand the host without an administrator ([2f6fb81](https://github.com/dreulavelle/mcpd/commit/2f6fb812758e93e43ad469e53de597cc15ec8183))
+* **auth:** a group must not widen a subject's own grant ([904ed45](https://github.com/dreulavelle/mcpd/commit/904ed45a0a48d5a0f17e099445cbc1ac14eeb61d))
+* **auth:** the console draws its controls from what a session may actually do ([f5dc3fd](https://github.com/dreulavelle/mcpd/commit/f5dc3fdd59f6334791b0c409a46fcce34c455cdc))
+* **bandwidth:** read 10DLC from the API that serves it ([b5a24f6](https://github.com/dreulavelle/mcpd/commit/b5a24f6583733735d12f7fad8fabe9d2abbf05b2))
+* **bandwidth:** read a disconnect order's notes from the path the allow-list knows ([58d5efe](https://github.com/dreulavelle/mcpd/commit/58d5efe6b0e9ae1dcac72da54f423f314b68205b))
+* **textable:** a degraded instance is an answer, not a failed start ([cb12583](https://github.com/dreulavelle/mcpd/commit/cb12583ddb92bf1445970247869a0e359f668d1a))
+* **textable:** describe the token this integration actually takes ([7f64250](https://github.com/dreulavelle/mcpd/commit/7f64250ce5f0a13fa2c29b81d036877fd8cbd3d0))
+* **web:** an expired session returns to the sign-in form ([3fde267](https://github.com/dreulavelle/mcpd/commit/3fde2678425d5e4a4b2620482d32db1d9dce6491))
+* **web:** editing a ChatGPT account keeps its stored admin key ([c894651](https://github.com/dreulavelle/mcpd/commit/c89465189839ff5c0534e87b544da329a1f35b54))
+* **web:** smaller dashboard corrections ([440fde6](https://github.com/dreulavelle/mcpd/commit/440fde631da813d6464cbc43cadcc6ecfa3589f5))
+* **web:** the activity list keeps the pages it was asked for ([2d0722f](https://github.com/dreulavelle/mcpd/commit/2d0722fd4d4defcae743b5537e5d46cc891051e2))
+
 ## [0.9.1](https://github.com/dreulavelle/mcpd/compare/v0.9.0...v0.9.1) (2026-09-01)
 
 
