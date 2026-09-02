@@ -82,23 +82,6 @@ export function attention(input: {
     });
   }
   const name = (t: TunnelStatus) => t.plugin ? `The ${t.plugin} connector` : "The connector for everything";
-  // Two tunnels on one system is allowed -- two workspaces may each want a
-  // connector -- but the common case is one that was superseded and never
-  // removed, and the idle one is usually it.
-  const byPlugin = new Map<string, TunnelStatus[]>();
-  for (const t of input.tunnels) {
-    if (!t.plugin || !t.tunnel_id) continue;
-    byPlugin.set(t.plugin, [...(byPlugin.get(t.plugin) ?? []), t]);
-  }
-  for (const [plugin, list] of byPlugin) {
-    if (list.length < 2) continue;
-    const idle = list.filter((t) => !t.last_request_at && (t.requests ?? 0) === 0);
-    out.push({
-      key: `duplicate:${plugin}`, tone: "info",
-      text: `${list.length} tunnels reach ${plugin}. If that is one workspace each, fine; if one replaced another, forget the old one${idle.length === 1 ? ` (${idle[0]!.tunnel_id} has served nothing)` : ""}.`,
-      to: `/tunnels?show=`, linkLabel: "Tunnels",
-    });
-  }
   for (const t of input.tunnels) {
     if (t.upstream === "missing") {
       out.push({
