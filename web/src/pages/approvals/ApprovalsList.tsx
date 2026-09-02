@@ -1,9 +1,9 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { ClipboardCheck } from "lucide-react";
 import { api, type Operation, type OperationState } from "@/lib/api";
 import { relative, when } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
-import { Link } from "@/lib/router";
+import { Link, useQueryParam } from "@/lib/router";
 import { EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
 import {
   AssuranceBadge, AuthorisedByRule, RiskBadge, StateBadge, VerifiedBadge,
@@ -36,7 +36,12 @@ const FILTERS: [Filter, string][] = [
  * row would be approving a one-line summary rather than the change.
  */
 export function ApprovalsList() {
-  const [filter, setFilter] = useState<Filter>("pending_approval");
+  // In the address, so the overview can link to "the ones with an unknown
+  // outcome" and a reload keeps the view. Absent means waiting, which is
+  // what the page is for; "all" is spelled out because "" is the absent one.
+  const [param, setParam] = useQueryParam("state");
+  const filter: Filter = param === "all" ? "" : param === "" ? "pending_approval" : (param as Filter);
+  const setFilter = (next: Filter) => setParam(next === "" ? "all" : next === "pending_approval" ? "" : next);
 
   const load = useCallback(
     () => api.operations(filter || undefined, 200),

@@ -103,7 +103,7 @@ describe("the activity page", () => {
     const summary = await screen.findByRole("table", { name: "Callers" });
     await user.click(within(summary).getByRole("button", { name: "key:abc" }));
 
-    expect(await screen.findByRole("button", { name: /Clear filter/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Clear caller/ })).toBeInTheDocument();
     expect(api.calls).toHaveBeenCalledWith(
       expect.objectContaining({ principal: "key:abc" }),
     );

@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { api, ApiError, type Caller, type ToolCall } from "@/lib/api";
 import { when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
+import { Link, useQueryParam } from "@/lib/router";
 import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
 import { Chip } from "@/components/status";
 import { Button } from "@/components/ui/button";
@@ -44,10 +45,26 @@ function took(us?: number): string {
   return `${Math.round(us / 1000)} ms`;
 }
 
+/** Where a caller's identity leads, when it leads anywhere. */
+function callerLink(principal: string): string | null {
+  if (principal.startsWith("key:")) return "/settings/keys";
+  if (principal.startsWith("user:")) return "/settings/users";
+  if (principal.startsWith("svc:chatgpt")) return "/settings/chatgpt";
+  return null;
+}
+
 export function Activity() {
-  const [hours, setHours] = useState(24);
-  const [outcome, setOutcome] = useState("");
-  const [principal, setPrincipal] = useState("");
+  // Every filter lives in the address, so a plugin's page can link to "what
+  // has called this" and a reload keeps the view.
+  const [hoursParam, setHoursParam] = useQueryParam("hours");
+  const [outcome, setOutcome] = useQueryParam("outcome");
+  const [principal, setPrincipal] = useQueryParam("principal");
+  const [plugin, setPlugin] = useQueryParam("plugin");
+  const hours = Number(hoursParam) > 0 ? Number(hoursParam) : 24;
+  const setHours = (h: number) => setHoursParam(h === 24 ? "" : String(h));
+  // The callers summary is by whole days, which is what its endpoint takes.
+  // Said in its heading rather than left to disagree with the calls below.
+  const callerDays = Math.max(1, Math.round(hours / 24));
 
   const [calls, setCalls] = useState<ToolCall[] | null>(null);
   const [callers, setCallers] = useState<Caller[] | null>(null);
@@ -63,8 +80,8 @@ export function Activity() {
   const load = useCallback(() => {
     deeper.current = false;
     Promise.all([
-      api.calls({ hours, outcome, principal, limit: 100 }),
-      api.callers(Math.max(1, Math.round(hours / 24))),
+      api.calls({ hours, outcome, principal, plugin, limit: 100 }),
+      api.callers(callerDays),
     ])
       .then(([c, k]) => {
         setCalls((prev) => {
@@ -79,14 +96,22 @@ export function Activity() {
       })
       .catch((e) => setError(
         e instanceof ApiError ? e.detail : "Couldn't read the call record."));
-  }, [hours, outcome, principal]);
+  }, [hours, outcome, principal, plugin, callerDays]);
   usePoll(load, 30_000);
+
+  // Every system anybody has reached in the period, for the plugin filter.
+  const plugins = useMemo(() => {
+    const seen = new Set<string>();
+    for (const c of callers ?? []) for (const p of c.plugins ?? []) seen.add(p);
+    if (plugin) seen.add(plugin);
+    return [...seen].sort();
+  }, [callers, plugin]);
 
   async function more() {
     if (!next || loadingMore) return;
     setLoadingMore(true);
     try {
-      const page = await api.calls({ hours, outcome, principal, limit: 100, before: next });
+      const page = await api.calls({ hours, outcome, principal, plugin, limit: 100, before: next });
       deeper.current = true;
       setCalls((prev) => {
         const seen = new Set((prev ?? []).map((call) => call.id));
@@ -133,16 +158,25 @@ export function Activity() {
           <option value="denied">Refused</option>
           <option value="rate_limited">Rate limited</option>
         </NativeSelect>
+        <NativeSelect
+          aria-label="System"
+          className="w-44"
+          value={plugin}
+          onChange={(e) => setPlugin(e.target.value)}
+        >
+          <option value="">Every system</option>
+          {plugins.map((p) => <option key={p} value={p}>{p}</option>)}
+        </NativeSelect>
         {principal && (
           <Button variant="outline" size="sm" onClick={() => setPrincipal("")}>
-            Clear filter: {principal}
+            Clear caller: {principal}
           </Button>
         )}
       </div>
 
       <Section
         title="Callers"
-        description="What each credential actually reached, which is not the same as what it is permitted to reach."
+        description={`What each credential actually reached over the last ${callerDays === 1 ? "day" : `${callerDays} days`}, which is not the same as what it is permitted to reach.`}
       >
         {!callers ? <Loading rows={2} /> : callers.length === 0 ? (
           <Notice tone="neutral">
@@ -175,9 +209,17 @@ export function Activity() {
                         >
                           {c.principal}
                         </button>
-                        {c.role && (
-                          <div className="text-xs text-muted-foreground">{c.role}</div>
-                        )}
+                        <div className="text-xs text-muted-foreground">
+                          {c.role}
+                          {callerLink(c.principal) && (
+                            <>
+                              {c.role ? " · " : ""}
+                              <Link to={callerLink(c.principal)!} className="text-primary hover:underline">
+                                open
+                              </Link>
+                            </>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{c.calls}</TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -193,7 +235,9 @@ export function Activity() {
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
                           {(c.plugins ?? []).map((p) => (
-                            <Chip key={p} tone="neutral">{p}</Chip>
+                            <Link key={p} to={`/plugins/${encodeURIComponent(p)}`}>
+                              <Chip tone="neutral" className="hover:border-ring/50">{p}</Chip>
+                            </Link>
                           ))}
                         </div>
                       </TableCell>
@@ -234,9 +278,23 @@ export function Activity() {
                         <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
                           {when(c.at)}
                         </TableCell>
-                        <TableCell className="font-mono text-xs">{c.principal}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          <button
+                            type="button"
+                            className="underline-offset-2 hover:underline"
+                            onClick={() => setPrincipal(c.principal)}
+                          >
+                            {c.principal}
+                          </button>
+                        </TableCell>
                         <TableCell>
-                          <span className="font-mono text-sm">{c.plugin}_{c.tool}</span>
+                          <Link
+                            to={`/plugins/${encodeURIComponent(c.plugin)}`}
+                            className="font-mono text-sm hover:underline"
+                            title={`Open ${c.plugin}`}
+                          >
+                            {c.plugin}_{c.tool}
+                          </Link>
                         </TableCell>
                         <TableCell>
                           <Chip tone={OUTCOMES[c.outcome]?.tone ?? "neutral"}>
