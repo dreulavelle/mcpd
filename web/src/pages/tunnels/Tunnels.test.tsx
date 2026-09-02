@@ -42,45 +42,55 @@ describe("the tunnels page", () => {
   });
 
   // A page opened because something is wrong puts the wrong thing at the
-  // top, and opens on it.
-  it("lists worst first and opens on the worst", async () => {
+  // top.
+  it("lists worst first", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info());
     renderWith(<Tunnels />);
-    const list = await screen.findByRole("list", { name: "Tunnels" });
-    const rows = within(list.parentElement!).getAllByRole("listitem");
+    const table = await screen.findByRole("table", { name: "Tunnels" });
+    const rows = within(table).getAllByRole("row").slice(1);
     expect(rows[0]).toHaveTextContent("mcpd: echo");
     expect(rows[0]).toHaveTextContent("Stopped");
-    expect(rows[0]).toHaveAttribute("aria-current", "true");
-    // The inspector tells the story of the selected one.
-    expect(screen.getByText(/It will not restart on its own/)).toBeInTheDocument();
-    expect(screen.getByText(/connects as/)).toHaveTextContent("Lab");
+    expect(rows[1]).toHaveTextContent("mcpd: graylog");
   });
 
-  it("selects a tunnel from its row and keeps the choice in the address", async () => {
+  // The detail is a sheet over the list, opened from the row, and the choice
+  // lives in the address so a link can open the page on one tunnel.
+  it("opens a tunnel's detail from its row and keeps the choice in the address", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info());
     renderWith(<Tunnels />);
-    await userEvent.click((await screen.findAllByText("mcpd: graylog"))[0]!.closest("[role=listitem]")!);
-    expect(window.location.search).toBe("?tunnel=tunnel_a");
-    expect(screen.getByRole("heading", { name: "mcpd: graylog" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Details for mcpd: echo" }));
+    const sheet = await screen.findByRole("dialog");
+    expect(within(sheet).getByText("mcpd: echo")).toBeInTheDocument();
+    expect(within(sheet).getByText(/It will not restart on its own/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/connects as/)).toHaveTextContent("Lab");
+    expect(window.location.search).toBe("?tunnel=tunnel_b");
+  });
+
+  it("opens on the tunnel the address names", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info());
+    renderWith(<Tunnels />, { path: "/tunnels?tunnel=tunnel_a" });
+    const sheet = await screen.findByRole("dialog");
+    expect(within(sheet).getByText("mcpd: graylog")).toBeInTheDocument();
   });
 
   it("narrows to what needs somebody from the chips", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info());
     renderWith(<Tunnels />);
-    await screen.findByRole("list", { name: "Tunnels" });
+    await screen.findByRole("table", { name: "Tunnels" });
     await userEvent.click(screen.getByRole("button", { name: /Ready 1/ }));
-    const list = screen.getByRole("list", { name: "Tunnels" }).parentElement!;
-    const rows = within(list).getAllByRole("listitem");
+    const rows = within(screen.getByRole("table", { name: "Tunnels" })).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("mcpd: graylog");
   });
 
-  it("restarts the selected tunnel from the inspector", async () => {
+  it("restarts a tunnel from its row without opening it", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info());
     const restart = vi.spyOn(api, "restartTunnel").mockResolvedValue({ status: "restarted", tunnels: [] });
     renderWith(<Tunnels />);
-    await userEvent.click(await screen.findByRole("button", { name: /Restart/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Restart mcpd: echo" }));
     await waitFor(() => expect(restart).toHaveBeenCalledWith("tunnel_b"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   // mcpd's half is done when the tunnel is made; the setup steps carry the
@@ -93,7 +103,8 @@ describe("the tunnels page", () => {
     }));
     renderWith(<Tunnels />);
     expect((await screen.findAllByText(/Waiting for ChatGPT/)).length).toBeGreaterThan(0);
-    expect(screen.getByText(/choose Create, pick/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Details for mcpd: graylog" }));
+    expect(await screen.findByText(/choose Create, pick/)).toBeInTheDocument();
   });
 
   // A restart of mcpd starts every count again. A connector ChatGPT already
@@ -106,13 +117,34 @@ describe("the tunnels page", () => {
     renderWith(<Tunnels />);
     expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Waiting for ChatGPT/)).not.toBeInTheDocument();
-    expect(screen.getByText(/nothing has come through since mcpd started/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Details for mcpd: graylog" }));
+    expect(await screen.findByText(/nothing has come through since mcpd started/)).toBeInTheDocument();
+  });
+
+  // The bars are a way in: a chart worth looking at is worth looking at
+  // larger, with the errors beside it and the calls that made it.
+  it("opens the metrics view from the bars, with the recent calls", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      tunnels: [status({ activity: [0, 0, 0, 0, 0, 0, 0, 0, 2, 5, 3, 1], errors: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] })],
+      available: [{ id: "tunnel_a", name: "mcpd: graylog", account_id: "acct_1" }] as never,
+    }));
+    const calls = vi.spyOn(api, "calls").mockResolvedValue({
+      calls: [{ id: 1, at: new Date().toISOString(), principal: "svc:chatgpt:work", plugin: "graylog", tool: "search_messages", outcome: "ok", duration_us: 1200 }],
+      count: 1, next: "",
+    });
+    renderWith(<Tunnels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Metrics for mcpd: graylog" }));
+    const sheet = await screen.findByRole("dialog");
+    expect(within(sheet).getByText("Last twelve hours")).toBeInTheDocument();
+    expect(await within(sheet).findByText("search_messages")).toBeInTheDocument();
+    expect(calls).toHaveBeenCalledWith(expect.objectContaining({ principal: "svc:chatgpt:work", plugin: "graylog" }));
+    expect(window.location.search).toContain("view=metrics");
   });
 
   it("offers an operator the state and nothing to press", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info({ can_manage: false, available: undefined }));
     renderWith(<Tunnels />, { session: sessionFor("user") });
-    await screen.findByRole("list", { name: "Tunnels" });
+    await screen.findByRole("table", { name: "Tunnels" });
     expect(screen.queryByRole("button", { name: /Restart/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Make a tunnel/ })).not.toBeInTheDocument();

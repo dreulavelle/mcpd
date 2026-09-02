@@ -214,6 +214,10 @@ type Status struct {
 	// restart of the tunnel because the history is carried to the manager
 	// that replaces one.
 	Activity []int64 `json:"activity"`
+	// Errors is the client's error lines per hour over the same window, so
+	// a chart can show a connector that stopped serving at the hour its
+	// errors began.
+	Errors []int64 `json:"errors"`
 
 	// Upstream reports whether OpenAI still has this tunnel: "present",
 	// "missing", or "" when nothing has checked -- there is no admin key, or
@@ -364,6 +368,7 @@ type Manager struct {
 	requests     int64
 	lastRequest  *time.Time
 	history      activity
+	troubles     activity
 	trouble      string
 	troubleAt    *time.Time
 	troubleSince *time.Time
@@ -404,6 +409,7 @@ func (m *Manager) Status() Status {
 		Requests:          m.requests,
 		LastRequestAt:     m.lastRequest,
 		Activity:          m.history.series(m.now()),
+		Errors:            m.troubles.series(m.now()),
 		Trouble:           m.trouble,
 		TroubleAt:         m.troubleAt,
 		Degraded:          m.degradedLocked(m.now()) >= degradedAfter,
@@ -846,6 +852,7 @@ func (m *Manager) noteTrouble(line string) {
 	}
 	m.trouble = line
 	m.troubleAt = &now
+	m.troubles.note(now)
 	m.mu.Unlock()
 }
 
@@ -873,11 +880,12 @@ func (m *Manager) Inherit(from *Manager) {
 		return
 	}
 	from.mu.RLock()
-	history, last := from.history, from.lastRequest
+	history, troubles, last := from.history, from.troubles, from.lastRequest
 	upstream, upstreamAt := from.upstream, from.upstreamAt
 	from.mu.RUnlock()
 	m.mu.Lock()
 	m.history = history
+	m.troubles = troubles
 	m.lastRequest = last
 	m.upstream, m.upstreamAt = upstream, upstreamAt
 	m.mu.Unlock()

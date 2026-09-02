@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRight, Plus, RotateCw, Search, Waypoints } from "lucide-react";
+import { ArrowRight, Check, ChevronRight, Copy, Plus, RotateCw, Search, Waypoints } from "lucide-react";
 import {
   isOpenAIReason, OpenAIPermissionDialog, type OpenAIReason,
 } from "@/components/openai-permission";
 import {
   api, ApiError,
-  type ChatGPTAccount, type OpenAITunnel, type TunnelInfo, type TunnelStatus,
+  type ChatGPTAccount, type OpenAITunnel, type ToolCall, type TunnelInfo, type TunnelStatus,
 } from "@/lib/api";
 import { relative, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
@@ -25,6 +25,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import { useConfirm } from "@/components/confirm";
 
 const OPENAI_TUNNELS = "https://platform.openai.com/settings/organization/tunnels";
@@ -156,6 +160,8 @@ export function Tunnels() {
   // gets a dialog; everything else stays a toast.
   const [refused, setRefused] = useState<{ reason: OpenAIReason; detail: string } | null>(null);
   const [selectedParam, setSelected] = useQueryParam("tunnel");
+  // "metrics" opens the detail on its chart; clicking the bars sets it.
+  const [view, setView] = useQueryParam("view");
   const [bucket, setBucket] = useQueryParam("show");
   const [query, setQuery] = useState("");
   const [making, setMaking] = useState(false);
@@ -228,8 +234,9 @@ export function Tunnels() {
   }, [ordered, bucket, query, read, accounts]);
 
   // The selection is in the address, so a link can open the page on one
-  // tunnel. Absent, the worst one is selected: it is what somebody came for.
-  const selected = shown.find((r) => r.id === selectedParam) ?? shown[0] ?? null;
+  // tunnel with its detail already open. Nothing is selected by default:
+  // the list is the page, and the detail is a sheet over it.
+  const selected = rows.find((r) => r.id === selectedParam) ?? null;
 
   return (
     <>
@@ -302,51 +309,71 @@ export function Tunnels() {
             : "A tunnel is made in the OpenAI dashboard and pasted in here, or made from here once an admin key is set under Settings › ChatGPT."}
         </EmptyState>
       ) : (
-        <div className="mt-4 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_22.5rem]">
-          <Card className="overflow-hidden p-0">
-            <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-              <button type="button" onClick={() => setBucket("")} aria-pressed={bucket === ""}>
-                <Chip tone={bucket === "" ? "info" : "neutral"}>All {rows.length}</Chip>
-              </button>
-              {BUCKETS.filter((b) => counts[b.id] > 0).map((b) => (
-                <button key={b.id} type="button" onClick={() => setBucket(bucket === b.id ? "" : b.id)} aria-pressed={bucket === b.id}>
-                  <Chip tone={bucket === b.id ? b.tone : "neutral"} className={bucket === b.id ? "" : "hover:border-ring/50"}>
-                    {b.label} {counts[b.id]}
-                  </Chip>
+        <>
+          <Card className="mt-4 overflow-hidden p-0">
+            {/* Only when there is something to filter between. Eight tunnels
+                all ready is one state, and a row of chips saying so twice
+                was a header with nothing to say. */}
+            {BUCKETS.filter((b) => counts[b.id] > 0).length > 1 && (
+              <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+                <button type="button" onClick={() => setBucket("")} aria-pressed={bucket === ""}>
+                  <Chip tone={bucket === "" ? "info" : "neutral"}>All {rows.length}</Chip>
                 </button>
-              ))}
-              <span className="flex-1" />
-              <span className="text-xs text-muted-foreground">worst first · last 12 hours</span>
+                {BUCKETS.filter((b) => counts[b.id] > 0).map((b) => (
+                  <button key={b.id} type="button" onClick={() => setBucket(bucket === b.id ? "" : b.id)} aria-pressed={bucket === b.id}>
+                    <Chip tone={bucket === b.id ? b.tone : "neutral"} className={bucket === b.id ? "" : "hover:border-ring/50"}>
+                      {b.label} {counts[b.id]}
+                    </Chip>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="scroll-x">
+              <Table aria-label="Tunnels">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8" />
+                    <TableHead>Tunnel</TableHead>
+                    {accounts.length > 1 && <TableHead>Account</TableHead>}
+                    <TableHead>Reaches</TableHead>
+                    <TableHead>Requests, last 12 h</TableHead>
+                    <TableHead>Activity</TableHead>
+                    <TableHead className="w-px" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {shown.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={accounts.length > 1 ? 7 : 6} className="py-8 text-center text-muted-foreground">
+                        No tunnel matches that.
+                      </TableCell>
+                    </TableRow>
+                  ) : shown.map((row) => (
+                    <TunnelRow
+                      key={row.id} row={row} reading={read(row)} accounts={accounts}
+                      selected={selected?.id === row.id}
+                      onSelect={(v) => { setView(v ?? ""); setSelected(row.id); }}
+                      onDone={load} notify={notify} onRefused={setRefused}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
             </div>
-            <div
-              role="list"
-              aria-label="Tunnels"
-              className="grid grid-cols-[1.25rem_minmax(0,1.5fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.1fr)_auto] items-center gap-x-3 border-t px-4 py-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase"
-            >
-              <span /><span>Tunnel</span><span>Account</span><span>Reaches</span><span>Requests</span><span className="text-right">Activity</span>
-            </div>
-            {shown.length === 0 ? (
-              <p className="border-t px-4 py-8 text-center text-sm text-muted-foreground">
-                No tunnel matches that.
-              </p>
-            ) : shown.map((row) => (
-              <TunnelRow
-                key={row.id} row={row} reading={read(row)} accounts={accounts}
-                selected={selected?.id === row.id}
-                onSelect={() => setSelected(row.id)}
-              />
-            ))}
           </Card>
 
-          {selected && (
-            <Inspector
-              key={selected.id}
-              row={selected} reading={read(selected)} info={info}
-              plugins={plugins} accounts={accounts}
-              onDone={load} notify={notify} onRefused={setRefused}
-            />
-          )}
-        </div>
+          <Sheet open={selected !== null} onOpenChange={(open) => { if (!open) { setView(""); setSelected(""); } }}>
+            {selected && (
+              <SheetContent aria-describedby={undefined}>
+                <Inspector
+                  key={selected.id}
+                  row={selected} reading={read(selected)} info={info}
+                  plugins={plugins} accounts={accounts} metricsFirst={view === "metrics"}
+                  onDone={load} notify={notify} onRefused={setRefused}
+                />
+              </SheetContent>
+            )}
+          </Sheet>
+        </>
       )}
     </>
   );
@@ -356,40 +383,86 @@ function accountName(accounts: ChatGPTAccount[], id?: string): string {
   return accounts.find((a) => a.id === id)?.name ?? "";
 }
 
-function TunnelRow({ row, reading: r, accounts, selected, onSelect }: {
+/**
+ * One row: what the tunnel is, and enough to know whether to open it. The
+ * whole row opens the detail; the two buttons at its end are the actions
+ * somebody reaches for without wanting to read anything first.
+ */
+function TunnelRow({ row, reading: r, accounts, selected, onSelect, onDone, notify, onRefused }: {
   row: Row;
   reading: Reading;
   accounts: ChatGPTAccount[];
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (view?: "metrics") => void;
+  onDone: () => void;
+  notify: Notify;
+  onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
 }) {
+  const admin = useCan("admin");
+  const [busy, setBusy] = useState(false);
   const s = row.status;
   const reaches = s ? (s.plugin || "Everything") : row.assigned === undefined ? "—" : (row.assigned || "Everything");
+
+  async function restart(e: React.MouseEvent) {
+    e.stopPropagation();
+    setBusy(true);
+    try {
+      await api.restartTunnel(row.id);
+      notify("good", `Restarting ${row.name}. Give it a moment to reconnect.`);
+    } catch (err) {
+      showFailure(err, "Couldn't restart it.", notify, onRefused);
+    } finally {
+      setBusy(false);
+      onDone();
+    }
+  }
+
   return (
-    <button
-      type="button"
-      role="listitem"
-      aria-current={selected ? "true" : undefined}
-      onClick={onSelect}
-      className={cn(
-        "grid w-full grid-cols-[1.25rem_minmax(0,1.5fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.1fr)_auto] items-center gap-x-3 border-t px-4 py-3 text-left transition-colors",
-        selected ? "bg-accent" : "hover:bg-accent/50",
-      )}
+    <TableRow
+      onClick={() => onSelect()}
+      aria-selected={selected}
+      className={cn("cursor-pointer", selected && "bg-accent")}
     >
-      <StatusDot tone={r.tone} />
-      <span className="min-w-0">
+      <TableCell><StatusDot tone={r.tone} /></TableCell>
+      <TableCell className="min-w-[14rem]">
         <span className="block truncate font-medium">{row.name}</span>
         <span className={cn("block text-xs", toneText(r.tone))}>{r.label}</span>
-      </span>
-      <span className="truncate text-sm text-muted-foreground">
-        {accountName(accounts, row.account) || (accounts.length > 1 ? "—" : "")}
-      </span>
-      <span className="truncate font-mono text-xs">{reaches}</span>
-      <Bars values={s?.activity} tone={r.tone} />
-      <span className="text-right text-xs whitespace-nowrap text-muted-foreground">
+      </TableCell>
+      {accounts.length > 1 && (
+        <TableCell className="text-muted-foreground">{accountName(accounts, row.account) || "—"}</TableCell>
+      )}
+      <TableCell className="font-mono text-xs">{reaches}</TableCell>
+      <TableCell>
+        {/* The bars open the metrics view: a chart worth looking at is
+            worth looking at larger, with the errors beside it. */}
+        <button
+          type="button"
+          className="rounded-sm hover:bg-accent/60"
+          title="Requests and errors over the last twelve hours"
+          aria-label={`Metrics for ${row.name}`}
+          onClick={(e) => { e.stopPropagation(); onSelect("metrics"); }}
+        >
+          <Bars values={s?.activity} errors={s?.errors} tone={r.tone} />
+        </button>
+      </TableCell>
+      <TableCell className="text-xs whitespace-nowrap text-muted-foreground">
         {s?.last_request_at ? relative(s.last_request_at) : s?.trouble_at ? `error ${relative(s.trouble_at)}` : "—"}
-      </span>
-    </button>
+      </TableCell>
+      <TableCell className="whitespace-nowrap">
+        <span className="flex items-center justify-end gap-1">
+          {admin && s && s.state !== "disabled" && (
+            <Button variant="ghost" size="sm" onClick={restart} disabled={busy} title="Restart">
+              <RotateCw className={busy ? "size-3.5 animate-spin" : "size-3.5"} aria-hidden="true" />
+              <span className="sr-only">Restart {row.name}</span>
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onSelect(); }} aria-label={`Details for ${row.name}`}>
+            Details
+            <ChevronRight className="size-3.5" aria-hidden="true" />
+          </Button>
+        </span>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -409,26 +482,142 @@ function toneText(tone: Tone): string {
  * nothing is a faint stub rather than a gap, so twelve of them read as
  * "nothing for twelve hours" and not as a chart that failed to draw.
  */
-function Bars({ values, tone }: { values?: number[]; tone: Tone }) {
+function Bars({ values, errors, tone }: { values?: number[]; errors?: number[]; tone: Tone }) {
   const series = values && values.length > 0 ? values : Array.from({ length: 12 }, () => 0);
+  const bad = errors && errors.length === series.length ? errors : series.map(() => 0);
   const max = Math.max(1, ...series);
   const fill = tone === "good" ? "bg-good" : tone === "attention" ? "bg-attention" : tone === "problem" ? "bg-problem" : tone === "info" ? "bg-info" : "bg-faint";
   const total = series.reduce((a, b) => a + b, 0);
+  const totalErrors = bad.reduce((a, b) => a + b, 0);
   return (
     <span
       className="flex h-6 items-end gap-0.5"
       role="img"
-      aria-label={`${total} requests in the last ${series.length} hours`}
-      title={`${total} in the last ${series.length} hours`}
+      aria-label={`${total} requests and ${totalErrors} errors in the last ${series.length} hours`}
     >
       {series.map((v, i) => (
-        <span
-          key={i}
-          className={cn("w-1.5 rounded-sm", fill, v === 0 && "opacity-30")}
-          style={{ height: v === 0 ? 2 : Math.max(3, Math.round((v / max) * 24)) }}
-        />
+        <span key={i} className="relative flex w-1.5 items-end" style={{ height: 24 }}>
+          <span
+            className={cn("w-full rounded-sm", fill, v === 0 && "opacity-30")}
+            style={{ height: v === 0 ? 2 : Math.max(3, Math.round((v / max) * 24)) }}
+          />
+          {/* An hour with errors gets a mark under its bar, so a connector
+              that went quiet at the hour its errors began reads as one. */}
+          {bad[i]! > 0 && (
+            <span className="absolute -bottom-1 left-0 h-0.5 w-full rounded-sm bg-problem" />
+          )}
+        </span>
       ))}
     </span>
+  );
+}
+
+/** The last twelve hours, large enough to read: an hour per column. */
+function Chart({ values, errors }: { values: number[]; errors: number[] }) {
+  const max = Math.max(1, ...values, ...errors);
+  const now = new Date();
+  const hourOf = (i: number) => {
+    const d = new Date(now.getTime() - (values.length - 1 - i) * 3_600_000);
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  };
+  return (
+    <div>
+      <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${values.length}, minmax(0, 1fr))` }}>
+        {values.map((v, i) => (
+          <div key={i} className="flex h-28 flex-col justify-end gap-0.5" title={`${hourOf(i)}: ${v} request${v === 1 ? "" : "s"}, ${errors[i] ?? 0} error${errors[i] === 1 ? "" : "s"}`}>
+            {(errors[i] ?? 0) > 0 && (
+              <div className="rounded-sm bg-problem" style={{ height: Math.max(3, Math.round(((errors[i] ?? 0) / max) * 100)) }} />
+            )}
+            <div className={cn("rounded-sm bg-good", v === 0 && "opacity-30")} style={{ height: v === 0 ? 2 : Math.max(3, Math.round((v / max) * 100)) }} />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground tabular-nums">
+        <span>{hourOf(0)}</span><span>{hourOf(values.length - 1)}</span>
+      </div>
+      <div className="mt-1 flex gap-3 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1"><span className="inline-block size-2 rounded-sm bg-good" />requests</span>
+        <span className="inline-flex items-center gap-1"><span className="inline-block size-2 rounded-sm bg-problem" />client errors</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What ChatGPT actually did through this tunnel, from the call ledger. The
+ * ledger records the account's identity rather than the tunnel, so for a
+ * tunnel serving one system the calls are filtered to that system and are
+ * exactly its own; for one serving everything they are the account's.
+ */
+function RecentCalls({ principal, plugin }: { principal?: string; plugin: string }) {
+  const [calls, setCalls] = useState<ToolCall[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const mayRead = useCan("admin");
+  useEffect(() => {
+    if (!mayRead || !principal) return;
+    let live = true;
+    api.calls({ principal, plugin: plugin || undefined, hours: 12, limit: 8 })
+      .then((r) => { if (live) setCalls(r.calls ?? []); })
+      .catch(() => { if (live) setFailed(true); });
+    return () => { live = false; };
+  }, [mayRead, principal, plugin]);
+  if (!mayRead || !principal) return null;
+  const href = `/activity?principal=${encodeURIComponent(principal)}${plugin ? `&plugin=${encodeURIComponent(plugin)}` : ""}&hours=12`;
+  return (
+    <div className="space-y-2 border-t pt-4">
+      <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Recent calls</h3>
+      {failed ? (
+        <p className="text-xs text-muted-foreground">The call record could not be read.</p>
+      ) : calls === null ? (
+        <p className="text-xs text-muted-foreground">Reading…</p>
+      ) : calls.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nothing in the last twelve hours.</p>
+      ) : (
+        <ul className="space-y-1">
+          {calls.map((c) => (
+            <li key={c.id} className="flex items-center gap-2 text-xs">
+              <StatusDot tone={c.outcome === "ok" ? "good" : c.outcome === "denied" ? "attention" : c.outcome === "error" ? "problem" : "neutral"} />
+              <span className="min-w-0 flex-1 truncate font-mono">{plugin ? c.tool : `${c.plugin}_${c.tool}`}</span>
+              <span className="text-muted-foreground">{c.outcome === "ok" ? "" : c.outcome.replace("_", " ")}</span>
+              <span className="whitespace-nowrap text-muted-foreground">{relative(c.at)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Link to={href} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+        All its calls, on Activity <ArrowRight className="size-3" aria-hidden="true" />
+      </Link>
+    </div>
+  );
+}
+
+/** Everything the page knows about a tunnel, as text, for a ticket. */
+function CopyDiagnostics({ row, reading: r }: { row: Row; reading: Reading }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    const s = row.status;
+    const lines = [
+      `tunnel: ${row.id}`, `name: ${row.name}`, `state: ${r.label}`, `detail: ${r.detail}`,
+      s?.message ? `message: ${s.message}` : "", s?.connected_at ? `connected_at: ${s.connected_at}` : "",
+      `requests_since_connected: ${s?.requests ?? 0}`, s?.last_request_at ? `last_request_at: ${s.last_request_at}` : "",
+      s?.activity ? `requests_by_hour: ${s.activity.join(",")}` : "", s?.errors ? `errors_by_hour: ${s.errors.join(",")}` : "",
+      s?.attempts ? `restart_attempts: ${s.attempts}` : "", s?.next_retry_at ? `next_retry_at: ${s.next_retry_at}` : "",
+      s?.upstream ? `upstream: ${s.upstream} (checked ${s.upstream_checked_at ?? "?"})` : "",
+      s?.trouble ? `last_client_error: ${s.trouble_at ?? ""} ${s.trouble}` : "",
+    ].filter(Boolean);
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Refused outside a secure context, which a plain-http LAN address is.
+    }
+  }
+  return (
+    <Button variant="ghost" size="sm" onClick={copy}>
+      {copied ? <Check className="size-3.5 text-good" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+      {copied ? "Copied" : "Copy diagnostics"}
+    </Button>
   );
 }
 
@@ -456,12 +645,14 @@ export function showFailure(
  * what to do about it, and where it is in being set up. The actions live
  * here and only here, so a row stays a row.
  */
-function Inspector({ row, reading: r, info, plugins, accounts, onDone, notify, onRefused }: {
+function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onDone, notify, onRefused }: {
   row: Row;
   reading: Reading;
   info: TunnelInfo;
   plugins: string[];
   accounts: ChatGPTAccount[];
+  /** Opened from the bars: the chart is what was asked for, so it leads. */
+  metricsFirst?: boolean;
   onDone: () => void;
   notify: Notify;
   onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
@@ -472,6 +663,22 @@ function Inspector({ row, reading: r, info, plugins, accounts, onDone, notify, o
   const [busy, setBusy] = useState<"restart" | "remove" | "assign" | null>(null);
   const s = row.status;
   const account = accounts.find((a) => a.id === row.account);
+  const activity = s?.activity ?? [];
+  const errors = s?.errors && s.errors.length === activity.length ? s.errors : activity.map(() => 0);
+  const metrics = s && activity.length > 0 && (
+    <div className="space-y-3 border-t pt-4">
+      <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Last twelve hours</h3>
+      <Chart values={activity} errors={errors} />
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+        <div><dt className="text-muted-foreground">Requests</dt><dd className="font-mono">{activity.reduce((a, b) => a + b, 0)}</dd></div>
+        <div><dt className="text-muted-foreground">Client errors</dt><dd className="font-mono">{errors.reduce((a, b) => a + b, 0)}</dd></div>
+        <div><dt className="text-muted-foreground">Last request</dt><dd>{s.last_request_at ? relative(s.last_request_at) : "none since mcpd started"}</dd></div>
+        <div><dt className="text-muted-foreground">Connected</dt><dd>{s.connected_at ? relative(s.connected_at) : "—"}</dd></div>
+        <div><dt className="text-muted-foreground">Restarts since it worked</dt><dd className="font-mono">{s.attempts ?? 0}</dd></div>
+        <div><dt className="text-muted-foreground">At OpenAI</dt><dd>{s.upstream === "missing" ? "gone" : s.upstream === "present" ? `present, checked ${s.upstream_checked_at ? relative(s.upstream_checked_at) : ""}` : "not checked"}</dd></div>
+      </dl>
+    </div>
+  );
 
   // The account travels with every assignment: pointing a tunnel at a system
   // and saying whose credential it uses are one decision, and applying them
@@ -522,20 +729,22 @@ function Inspector({ row, reading: r, info, plugins, accounts, onDone, notify, o
   const attached = Boolean(s?.last_request_at) || (s?.requests ?? 0) > 0;
 
   return (
-    <Card className="gap-5 px-5 py-5 lg:sticky lg:top-6">
-      <div className="space-y-2">
+    <div className="flex flex-col gap-5">
+      <div className="space-y-2 pr-8">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-base font-semibold">{row.name}</h2>
+          <SheetTitle>{row.name}</SheetTitle>
           <Chip tone={r.tone}><StatusDot tone={r.tone} />{r.label}</Chip>
         </div>
         {/* Copyable: ChatGPT accepts a tunnel ID typed in, and an ID shown
             with the middle missing cannot be typed anywhere. */}
         <Copyable value={row.id} label="tunnel ID" />
-        <p className="text-xs text-muted-foreground">
+        <SheetDescription className="text-xs">
           {account ? <>{account.name} · connects as <code className="font-mono">{account.principal}</code></> : "No account"}
           {account?.organization_id && <> · <code className="font-mono">{account.organization_id}</code></>}
-        </p>
+        </SheetDescription>
       </div>
+
+      {metricsFirst && metrics}
 
       {r.detail && (
         <Notice tone={r.tone === "good" ? "neutral" : r.tone}>
@@ -561,6 +770,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, onDone, notify, o
               Remove
             </Button>
           )}
+          <CopyDiagnostics row={row} reading={r} />
         </div>
       )}
 
@@ -626,6 +836,10 @@ function Inspector({ row, reading: r, info, plugins, accounts, onDone, notify, o
         </ol>
       </div>
 
+      {!metricsFirst && metrics}
+
+      <RecentCalls principal={account?.principal} plugin={s?.plugin ?? row.assigned ?? ""} />
+
       {s?.trouble && (
         <div className="space-y-1.5 border-t pt-4">
           <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Last from the client</h3>
@@ -639,7 +853,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, onDone, notify, o
           )}
         </div>
       )}
-    </Card>
+    </div>
   );
 }
 
