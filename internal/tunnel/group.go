@@ -223,6 +223,7 @@ func (g *Group) rebuildOne(ctx context.Context, key string, factory ServerFactor
 	m := NewManager(cfg, factory, g.log.With("tunnel", key))
 	m.onFailure = g.OnFailure
 	m.onRecovered = g.OnRecovered
+	m.Inherit(existing)
 	g.mu.Lock()
 	g.managers[key] = m
 	g.mu.Unlock()

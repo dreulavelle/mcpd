@@ -207,6 +207,14 @@ type Status struct {
 	Attempts    int        `json:"attempts,omitempty"`
 	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
 
+	// Activity is how many requests arrived in each of the last
+	// activityHours hours, oldest first, the current hour last. In memory
+	// only and per process, which is enough for the question it answers --
+	// "is this connector in use, and did it stop" -- and it survives a
+	// restart of the tunnel because the history is carried to the manager
+	// that replaces one.
+	Activity []int64 `json:"activity"`
+
 	// Upstream reports whether OpenAI still has this tunnel: "present",
 	// "missing", or "" when nothing has checked -- there is no admin key, or
 	// the check has not run yet. A tunnel deleted in OpenAI's dashboard polls
@@ -237,6 +245,49 @@ var (
 	// watchdogEvery is how often the watchdog looks.
 	watchdogEvery = 30 * time.Second
 )
+
+// activityHours is how far back the per-tunnel request history reaches.
+const activityHours = 12
+
+// activity is a ring of hourly request counts.
+type activity struct {
+	// counts[i] is the hour i; head is the index of the current hour, and
+	// hour is which hour of the epoch it holds, so a gap of idle hours is
+	// zeroed rather than left holding a stale count.
+	counts [activityHours]int64
+	head   int
+	hour   int64
+}
+
+// note records one request at the given time.
+func (a *activity) note(now time.Time) {
+	a.advance(now)
+	a.counts[a.head]++
+}
+
+// advance moves the ring to now, zeroing every hour skipped.
+func (a *activity) advance(now time.Time) {
+	h := now.Unix() / 3600
+	if a.hour == 0 {
+		a.hour = h
+		return
+	}
+	for a.hour < h {
+		a.hour++
+		a.head = (a.head + 1) % activityHours
+		a.counts[a.head] = 0
+	}
+}
+
+// series returns the counts oldest first, ending with the current hour.
+func (a *activity) series(now time.Time) []int64 {
+	a.advance(now)
+	out := make([]int64, activityHours)
+	for i := 0; i < activityHours; i++ {
+		out[i] = a.counts[(a.head+1+i)%activityHours]
+	}
+	return out
+}
 
 // backoff is the delay before the nth retry, starting at 1.
 func backoff(attempt int) time.Duration {
@@ -312,6 +363,7 @@ type Manager struct {
 	// Liveness, all guarded by mu.
 	requests     int64
 	lastRequest  *time.Time
+	history      activity
 	trouble      string
 	troubleAt    *time.Time
 	troubleSince *time.Time
@@ -351,6 +403,7 @@ func (m *Manager) Status() Status {
 		ConnectedAt:       m.connectedAt,
 		Requests:          m.requests,
 		LastRequestAt:     m.lastRequest,
+		Activity:          m.history.series(m.now()),
 		Trouble:           m.trouble,
 		TroubleAt:         m.troubleAt,
 		Degraded:          m.degradedLocked(m.now()) >= degradedAfter,
@@ -745,6 +798,7 @@ func (m *Manager) noteRequest() {
 	m.mu.Lock()
 	m.requests++
 	m.lastRequest = &now
+	m.history.note(now)
 	// Something got through, so whatever the client was complaining about
 	// was not stopping it.
 	m.troubleSince = nil
@@ -780,6 +834,24 @@ func (m *Manager) degradedLocked(now time.Time) time.Duration {
 		return 0
 	}
 	return now.Sub(*m.troubleSince)
+}
+
+// Inherit carries the history that outlives a restart from the manager this
+// one replaces: the hourly request counts and when the last request came,
+// so a rebuild does not read as a connector that has never been used.
+func (m *Manager) Inherit(from *Manager) {
+	if from == nil || from == m {
+		return
+	}
+	from.mu.RLock()
+	history, last := from.history, from.lastRequest
+	upstream, upstreamAt := from.upstream, from.upstreamAt
+	from.mu.RUnlock()
+	m.mu.Lock()
+	m.history = history
+	m.lastRequest = last
+	m.upstream, m.upstreamAt = upstream, upstreamAt
+	m.mu.Unlock()
 }
 
 // SetUpstream records what OpenAI said about this tunnel: whether it still

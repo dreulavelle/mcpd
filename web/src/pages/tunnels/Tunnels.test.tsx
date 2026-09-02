@@ -3,7 +3,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type ChatGPTAccount, type TunnelInfo, type TunnelStatus } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
-import { Liveness, Tunnels } from "./Tunnels";
+import { reading, Tunnels } from "./Tunnels";
 
 function account(overrides: Partial<ChatGPTAccount> = {}): ChatGPTAccount {
   return {
@@ -14,12 +14,12 @@ function account(overrides: Partial<ChatGPTAccount> = {}): ChatGPTAccount {
 }
 
 function status(overrides: Partial<TunnelStatus> = {}): TunnelStatus {
-  return { state: "connected", tunnel_id: "tunnel_a", plugin: "graylog", requests: 0, degraded: false, ...overrides };
+  return { state: "connected", tunnel_id: "tunnel_a", plugin: "graylog", requests: 5, last_request_at: new Date().toISOString(), degraded: false, ...overrides };
 }
 
 function info(overrides: Partial<TunnelInfo> = {}): TunnelInfo {
   return {
-    tunnels: [status()],
+    tunnels: [status(), status({ tunnel_id: "tunnel_b", plugin: "echo", state: "failed", message: "bad key", requests: 0, last_request_at: undefined })],
     can_manage: true,
     available: [
       { id: "tunnel_a", name: "mcpd: graylog", account_id: "acct_1" },
@@ -37,69 +37,97 @@ function info(overrides: Partial<TunnelInfo> = {}): TunnelInfo {
 describe("the tunnels page", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    window.localStorage.clear();
+    window.history.replaceState(null, "", "/tunnels");
   });
 
-  // An account is an organisation and a tunnel lives in exactly one, so the
-  // heading says which rather than a column in one long table.
-  it("lists each account's tunnels under its own heading", async () => {
+  // A page opened because something is wrong puts the wrong thing at the
+  // top, and opens on it.
+  it("lists worst first and opens on the worst", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info());
     renderWith(<Tunnels />);
-    const work = (await screen.findByRole("heading", { name: "Work" })).closest("section")!;
-    const lab = screen.getByRole("heading", { name: "Lab" }).closest("section")!;
-    expect(within(work).getByText("mcpd: graylog")).toBeInTheDocument();
-    expect(within(work).queryByText("mcpd: echo")).not.toBeInTheDocument();
-    expect(within(lab).getByText("mcpd: echo")).toBeInTheDocument();
-    expect(within(work).getByText(/svc:chatgpt:work/)).toBeInTheDocument();
+    const list = await screen.findByRole("list", { name: "Tunnels" });
+    const rows = within(list.parentElement!).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("mcpd: echo");
+    expect(rows[0]).toHaveTextContent("Stopped");
+    expect(rows[0]).toHaveAttribute("aria-current", "true");
+    // The inspector tells the story of the selected one.
+    expect(screen.getByText(/It will not restart on its own/)).toBeInTheDocument();
+    expect(screen.getByText(/connects as/)).toHaveTextContent("Lab");
   });
 
-  it("restarts a tunnel from its row", async () => {
+  it("selects a tunnel from its row and keeps the choice in the address", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info());
+    renderWith(<Tunnels />);
+    await userEvent.click((await screen.findAllByText("mcpd: graylog"))[0]!.closest("[role=listitem]")!);
+    expect(window.location.search).toBe("?tunnel=tunnel_a");
+    expect(screen.getByRole("heading", { name: "mcpd: graylog" })).toBeInTheDocument();
+  });
+
+  it("narrows to what needs somebody from the chips", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info());
+    renderWith(<Tunnels />);
+    await screen.findByRole("list", { name: "Tunnels" });
+    await userEvent.click(screen.getByRole("button", { name: /Ready 1/ }));
+    const list = screen.getByRole("list", { name: "Tunnels" }).parentElement!;
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("mcpd: graylog");
+  });
+
+  it("restarts the selected tunnel from the inspector", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info());
     const restart = vi.spyOn(api, "restartTunnel").mockResolvedValue({ status: "restarted", tunnels: [] });
     renderWith(<Tunnels />);
     await userEvent.click(await screen.findByRole("button", { name: /Restart/ }));
-    await waitFor(() => expect(restart).toHaveBeenCalledWith("tunnel_a"));
+    await waitFor(() => expect(restart).toHaveBeenCalledWith("tunnel_b"));
   });
 
-  // mcpd's half is done when the tunnel is made; the notice is the other
-  // half, and the first request through the tunnel is what ends it.
-  it("walks through the ChatGPT step for a tunnel it made, until ChatGPT connects", async () => {
-    const t = vi.spyOn(api, "tunnel").mockResolvedValue(info());
-    vi.spyOn(api, "createTunnel").mockResolvedValue({ id: "tunnel_a", name: "mcpd: graylog" } as never);
+  // mcpd's half is done when the tunnel is made; the setup steps carry the
+  // other half, and the first request through is what ticks it.
+  it("walks through the ChatGPT step for a connected tunnel nothing has used", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      tunnels: [status({ requests: 0, last_request_at: undefined })],
+      available: [{ id: "tunnel_a", name: "mcpd: graylog", account_id: "acct_1" }] as never,
+    }));
     renderWith(<Tunnels />);
-    await screen.findByRole("heading", { name: "Work" });
-    await userEvent.click(screen.getByRole("button", { name: "Make" }));
-    expect(await screen.findByText(/Finish in ChatGPT/)).toBeInTheDocument();
-    expect(window.localStorage.getItem("mcpd.tunnels.awaiting")).toContain("tunnel_a");
-
-    // The next poll shows a request came through.
-    t.mockResolvedValue(info({ tunnels: [status({ requests: 3, last_request_at: "2026-09-02T10:00:00Z" })] }));
-    await waitFor(() => expect(screen.queryByText(/Finish in ChatGPT/)).not.toBeInTheDocument(), { timeout: 12_000 });
-    expect(window.localStorage.getItem("mcpd.tunnels.awaiting")).toBeNull();
-  }, 15_000);
+    expect((await screen.findAllByText(/Waiting for ChatGPT/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/choose Create, pick/)).toBeInTheDocument();
+  });
 
   it("offers an operator the state and nothing to press", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info({ can_manage: false, available: undefined }));
     renderWith(<Tunnels />, { session: sessionFor("user") });
-    await screen.findByText("Ready");
+    await screen.findByRole("list", { name: "Tunnels" });
     expect(screen.queryByRole("button", { name: /Restart/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Make a tunnel/ })).not.toBeInTheDocument();
   });
 });
 
-// "Connected" is decided once, on the first poll. What is said beside it is
-// the part that changes, and each case is a different thing to do.
+// One table decides what a tunnel is, so the row, the inspector and the
+// chips cannot disagree.
 describe("what a tunnel is doing", () => {
-  const cases: [string, TunnelStatus, RegExp][] = [
-    ["nothing sent yet", status({ connected_at: new Date().toISOString() }), /has not sent anything/],
-    ["requests served", status({ requests: 12, last_request_at: new Date().toISOString() }), /12 requests/],
-    ["degraded", status({ degraded: true, trouble: "poll failed; backing off" }), /reporting errors with nothing served/],
-    ["retrying", status({ state: "failed", attempts: 3, next_retry_at: new Date(Date.now() + 60_000).toISOString(), message: "unreachable" }), /Retrying \(attempt 3\)/],
-    ["stopped for good", status({ state: "failed", message: "OpenAI did not recognise that key" }), /will not restart on its own/],
-    ["gone from OpenAI", status({ upstream: "missing" }), /Gone from OpenAI/],
-  ];
-  it.each(cases)("says so when %s", (_, s, want) => {
-    renderWith(<Liveness status={s} unassigned={false} waitingOn="" />);
-    expect(screen.getByText(want)).toBeInTheDocument();
+  const row = (s: Partial<TunnelStatus> | null = {}, extra: Record<string, unknown> = {}) =>
+    ({ id: "t", name: "t", account: "acct_1", assigned: "graylog", status: s === null ? undefined : status(s), ...extra }) as never;
+  const one = [account()];
+  it.each([
+    ["gone from OpenAI", row({ upstream: "missing" }), "gone", 0],
+    ["stopped for good", row({ state: "failed", message: "bad key" }), "stopped", 0],
+    ["retrying", row({ state: "failed", attempts: 2, next_retry_at: new Date(Date.now() + 60_000).toISOString() }), "retrying", 1],
+    ["degraded", row({ degraded: true }), "degraded", 2],
+    ["waiting for ChatGPT", row({ requests: 0, last_request_at: undefined }), "attach", 4],
+    ["ready", row(), "ready", 6],
+    ["not used", row(null, { assigned: undefined }), "unused", 8],
+  ] as [string, never, string, number][])("reads %s", (_, r, kind, rank) => {
+    const got = reading(r, ["graylog"], one);
+    expect(got.kind).toBe(kind);
+    expect(got.rank).toBe(rank);
+  });
+
+  it("puts a waiting plugin before a working tunnel and after a broken one", () => {
+    const waiting = reading(row(null, { assigned: "observium" }), ["graylog"], one);
+    expect(waiting.kind).toBe("waiting");
+    expect(waiting.rank).toBeGreaterThan(reading(row({ degraded: true }), ["graylog"], one).rank);
+    expect(waiting.rank).toBeLessThan(reading(row(), ["graylog"], one).rank);
   });
 });
