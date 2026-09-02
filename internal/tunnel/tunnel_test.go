@@ -713,3 +713,26 @@ func TestActivity_HourlyRingAndInheritance(t *testing.T) {
 		t.Fatalf("the replacement should carry the history: %+v", s)
 	}
 }
+
+// A rejected key is reported once. It used to be recorded, stopped, and
+// recorded again -- stopping had erased the state and the second record was
+// what put the explanation back -- and every rejected key reached Discord
+// twice.
+func TestRejectedKey_IsReportedOnce(t *testing.T) {
+	var reports []string
+	m := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
+	m.onFailure = func(_, _, reason string, _ bool) { reports = append(reports, reason) }
+
+	m.fail(errors.New("tunnel: OpenAI rejected the key"), false)
+	if err := m.halt(t.Context()); err != nil {
+		t.Fatalf("halt: %v", err)
+	}
+	s := m.Status()
+	if s.State != StateFailed || !strings.Contains(s.Message, "rejected") {
+		t.Fatalf("halting must keep the failure and its reason: %+v", s)
+	}
+	// Nothing else to say: the failure is already recorded and reported.
+	if len(reports) != 1 {
+		t.Fatalf("want one report, got %d: %v", len(reports), reports)
+	}
+}

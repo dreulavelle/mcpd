@@ -483,19 +483,19 @@ func (m *Manager) start(ctx context.Context) error {
 			rejectOnce.Do(func() {
 				// Not retried: the key will still be wrong in ten minutes.
 				m.fail(fmt.Errorf("tunnel: %s", diagnose(cfg.APIKey, code)), false)
-				// Stopping is the point. The client would otherwise keep
+				// Halting is the point. The client would otherwise keep
 				// retrying a credential the control plane has already
 				// rejected, filling the log with a failure nobody is going
-				// to see.
+				// to see. Halted rather than stopped: a stop would reset the
+				// state and erase the explanation, and recording the
+				// failure a second time to put it back is how every rejected
+				// key was reported twice.
 				go func() {
-					stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-					defer stopCancel()
-					if err := m.Stop(stopCtx); err != nil {
+					haltCtx, haltCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer haltCancel()
+					if err := m.halt(haltCtx); err != nil {
 						m.log.WarnContext(ctx, "tunnel did not stop cleanly after a rejected key", "error", err)
 					}
-					// Stop resets the state to stopped, which would erase
-					// the explanation the operator needs.
-					m.fail(fmt.Errorf("tunnel: %s", diagnose(cfg.APIKey, code)), false)
 				}()
 			})
 		},
@@ -654,6 +654,35 @@ func (m *Manager) stop(ctx context.Context) error {
 		close(done)
 	}()
 
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// halt tears the client down after a failure the state already records,
+// leaving the state and its explanation as they are. What stop does, minus
+// the reset: a halted tunnel still reads as failed, with the reason, and
+// the supervisor's bookkeeping is untouched.
+func (m *Manager) halt(ctx context.Context) error {
+	m.ops.Lock()
+	defer m.ops.Unlock()
+
+	m.mu.Lock()
+	cancel := m.cancel
+	m.cancel = nil
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		m.running.Wait()
+		close(done)
+	}()
 	select {
 	case <-done:
 		return nil
