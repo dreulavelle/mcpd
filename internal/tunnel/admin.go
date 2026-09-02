@@ -102,7 +102,7 @@ func (d *Directory) List(ctx context.Context) ([]TunnelInfo, error) {
 // Platform organisation does not appear in an Enterprise or Edu workspace, so
 // a connector created without one is invisible in exactly the accounts that
 // have workspaces at all.
-func (d *Directory) Create(ctx context.Context, name, description, workspaceID string) (*TunnelInfo, error) {
+func (d *Directory) Create(ctx context.Context, name, description string, workspaceIDs []string) (*TunnelInfo, error) {
 	client, err := d.client()
 	if err != nil {
 		return nil, err
@@ -115,8 +115,8 @@ func (d *Directory) Create(ctx context.Context, name, description, workspaceID s
 		Description:     description,
 		OrganizationIDs: []string{d.orgID},
 	}
-	if w := strings.TrimSpace(workspaceID); w != "" {
-		req.WorkspaceIDs = []string{w}
+	if ws := NormalizeWorkspaces(workspaceIDs); len(ws) > 0 {
+		req.WorkspaceIDs = ws
 	}
 	t, err := client.CreateTunnel(ctx, req)
 	if err != nil {
