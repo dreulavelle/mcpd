@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -106,10 +107,10 @@ func (s *ChatGPTAccountStore) Create(ctx context.Context, actor string, a tunnel
 	err = s.db.WriteTx(ctx, now.UnixMilli(), func(u *UnitOfWork) error {
 		_, err := u.exec(`
 			INSERT INTO chatgpt_accounts
-			  (id, name, api_key, admin_key, org_id, principal, role, plugins,
+			  (id, name, api_key, admin_key, org_id, workspaces, principal, role, plugins,
 			   rate_per_sec, enabled, created_by, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			a.ID, a.Name, apiKey, adminKey, nullIfEmpty(a.OrgID), a.Principal,
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			a.ID, a.Name, apiKey, adminKey, nullIfEmpty(a.OrgID), encodeWorkspaces(a.Workspaces), a.Principal,
 			string(a.Role), string(plugins), a.RatePerSec, boolToInt(a.Enabled),
 			actor, now.UnixMilli(), now.UnixMilli())
 		if err != nil {
@@ -166,6 +167,12 @@ func (s *ChatGPTAccountStore) Update(ctx context.Context, actor, id string, up t
 		next.OrgID = strings.TrimSpace(*up.OrgID)
 		changed["org_id"] = next.OrgID
 	}
+	if up.Workspaces != nil {
+		next.Workspaces = tunnel.NormalizeWorkspaces(*up.Workspaces)
+		if !slices.Equal(next.Workspaces, tunnel.NormalizeWorkspaces(current.Workspaces)) {
+			changed["workspaces"] = next.Workspaces
+		}
+	}
 	if up.Role != nil && *up.Role != current.Role {
 		next.Role = *up.Role
 		changed["role"] = string(next.Role)
@@ -219,10 +226,10 @@ func (s *ChatGPTAccountStore) Update(ctx context.Context, actor, id string, up t
 		// the first made and nobody saw.
 		res, err := u.exec(`
 			UPDATE chatgpt_accounts
-			   SET name = ?, api_key = ?, admin_key = ?, org_id = ?, role = ?,
+			   SET name = ?, api_key = ?, admin_key = ?, org_id = ?, workspaces = ?, role = ?,
 			       plugins = ?, rate_per_sec = ?, enabled = ?, updated_at = ?
 			 WHERE id = ? AND updated_at = ?`,
-			next.Name, apiKey, adminKey, nullIfEmpty(next.OrgID), string(next.Role),
+			next.Name, apiKey, adminKey, nullIfEmpty(next.OrgID), encodeWorkspaces(next.Workspaces), string(next.Role),
 			string(plugins), next.RatePerSec, boolToInt(next.Enabled),
 			now.UnixMilli(), id, current.UpdatedAt.UnixMilli())
 		if err != nil {
@@ -277,7 +284,7 @@ func (s *ChatGPTAccountStore) Delete(ctx context.Context, actor, id string) erro
 // List returns every account, by name.
 func (s *ChatGPTAccountStore) List(ctx context.Context) ([]tunnel.Account, error) {
 	rows, err := s.db.Reader().QueryContext(ctx, `
-		SELECT id, name, api_key, admin_key, org_id, principal, role, plugins,
+		SELECT id, name, api_key, admin_key, org_id, workspaces, principal, role, plugins,
 		       rate_per_sec, enabled, created_by, created_at, updated_at
 		  FROM chatgpt_accounts ORDER BY lower(name)`)
 	if err != nil {
@@ -299,7 +306,7 @@ func (s *ChatGPTAccountStore) List(ctx context.Context) ([]tunnel.Account, error
 // Get returns one account.
 func (s *ChatGPTAccountStore) Get(ctx context.Context, id string) (tunnel.Account, bool, error) {
 	row := s.db.Reader().QueryRowContext(ctx, `
-		SELECT id, name, api_key, admin_key, org_id, principal, role, plugins,
+		SELECT id, name, api_key, admin_key, org_id, workspaces, principal, role, plugins,
 		       rate_per_sec, enabled, created_by, created_at, updated_at
 		  FROM chatgpt_accounts WHERE id = ?`, id)
 	a, err := s.scan(row)
@@ -329,15 +336,17 @@ func (s *ChatGPTAccountStore) scan(sc scanner) (tunnel.Account, error) {
 		a                  tunnel.Account
 		apiKey             string
 		adminKey, orgID    sql.NullString
+		workspaces         string
 		role, plugins      string
 		enabled            int
 		createdAt, updated int64
 	)
-	if err := sc.Scan(&a.ID, &a.Name, &apiKey, &adminKey, &orgID, &a.Principal,
+	if err := sc.Scan(&a.ID, &a.Name, &apiKey, &adminKey, &orgID, &workspaces, &a.Principal,
 		&role, &plugins, &a.RatePerSec, &enabled, &a.CreatedBy,
 		&createdAt, &updated); err != nil {
 		return tunnel.Account{}, err
 	}
+	a.Workspaces = decodeWorkspaces(workspaces)
 
 	if s.cipher == nil {
 		return tunnel.Account{}, ErrNoCipher
@@ -422,4 +431,22 @@ func isAccountConflict(err error) bool {
 	return isUniqueViolation(err, "ux_chatgpt_accounts_name") ||
 		isUniqueViolation(err, "ux_chatgpt_accounts_principal") ||
 		isUniqueViolation(err, "chatgpt_accounts.principal")
+}
+
+// encodeWorkspaces stores the list as JSON; never null, so a row written by
+// this build and one migrated with the column's default read the same way.
+func encodeWorkspaces(ws []string) string {
+	b, err := json.Marshal(tunnel.NormalizeWorkspaces(ws))
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func decodeWorkspaces(raw string) []string {
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return []string{}
+	}
+	return tunnel.NormalizeWorkspaces(out)
 }

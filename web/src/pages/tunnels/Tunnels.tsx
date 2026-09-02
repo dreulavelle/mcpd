@@ -68,6 +68,12 @@ interface Row extends OpenAITunnel {
   status?: TunnelStatus;
   /** Which ChatGPT account it connects with, undefined when it has none. */
   account?: string;
+  /**
+   * Every account whose organisation lists this tunnel. A tunnel's record
+   * names organisations as a list, so there may be several, and any of
+   * their keys may run it; empty when no account here can see it.
+   */
+  owners: string[];
   /** What it is pointed at in the configuration: a plugin name, "" for
    *  everything, or undefined when it is not assigned at all. */
   assigned?: string;
@@ -106,13 +112,14 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
     return { kind: "unused", label: "Not used", tone: "neutral", rank: 8, bucket: "off",
       detail: "Point it at a system to start it." };
   }
-  // The listing knows who owns it; the assignment says who runs it. When
-  // the two differ, the runtime key is refused and the upstream check says
-  // missing -- and the remedy is to move it, not to remake it.
-  const owner = row.account_id && accounts.some((a) => a.id === row.account_id) ? row.account_id : "";
-  if (owner && row.account && owner !== row.account) {
+  // The listings know which accounts may run it; the assignment says which
+  // does. When the assigned one is not among them, the runtime key is
+  // refused and the upstream check says missing -- and the remedy is to
+  // move it, not to remake it.
+  if (row.owners.length > 0 && row.account && !row.owners.includes(row.account)) {
+    const names = row.owners.map((id) => accountName(accounts, id)).filter(Boolean);
     return { kind: "elsewhere", label: "Wrong account", tone: "problem", rank: 0, bucket: "needs",
-      detail: `This tunnel is in ${accountName(accounts, owner)}'s organisation but assigned to ${accountName(accounts, row.account)}, whose key OpenAI refuses for it. Move it to ${accountName(accounts, owner)}.` };
+      detail: `This tunnel belongs to ${names.join(" and ")} but is assigned to ${accountName(accounts, row.account)}, whose key OpenAI refuses for it. Move it to ${names.length === 1 ? names[0] : "one of them"}.` };
   }
   if (s.upstream === "missing") {
     return { kind: "gone", label: "Not in this organisation", tone: "problem", rank: 0, bucket: "needs",
@@ -193,12 +200,33 @@ export function Tunnels() {
     const running = new Map((info.tunnels ?? []).map((t) => [t.tunnel_id ?? "", t]));
     const accountOf = info.account_assignments ?? {};
     const assignments = info.assignments ?? {};
-    const base: Row[] = info.can_manage
-      ? (info.available ?? []).map((t) => ({ ...t, status: running.get(t.id) }))
-      : (info.tunnels ?? []).map((t) => ({ id: t.tunnel_id ?? "", name: t.plugin || "Everything", status: t }));
+    // The listings are per account, so a tunnel several organisations
+    // share appears once per account. One row per tunnel, remembering every
+    // account that listed it.
+    const owners = new Map<string, string[]>();
+    for (const t of info.available ?? []) {
+      if (t.account_id) owners.set(t.id, [...(owners.get(t.id) ?? []), t.account_id]);
+    }
+    const seen = new Set<string>();
+    const base: Row[] = [];
+    if (info.can_manage) {
+      for (const t of info.available ?? []) {
+        if (seen.has(t.id)) continue;
+        seen.add(t.id);
+        base.push({ ...t, status: running.get(t.id), owners: owners.get(t.id) ?? [] });
+      }
+    }
+    // A running tunnel no listing knows -- an account without an admin key,
+    // or one the operator pasted in -- is still a row.
+    for (const t of info.tunnels ?? []) {
+      const id = t.tunnel_id ?? "";
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      base.push({ id, name: t.plugin || "Everything", status: t, owners: [] });
+    }
     return base.map((r) => ({
       ...r,
-      account: accountOf[r.id] ?? r.account_id,
+      account: accountOf[r.id] ?? (r.owners.length === 1 ? r.owners[0] : r.account_id),
       assigned: assignments[r.id],
     }));
   }, [info]);
@@ -679,7 +707,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
   const s = row.status;
   const account = accounts.find((a) => a.id === row.account);
   const reachesValue = s ? (s.plugin || "*") : row.assigned === undefined ? "" : (row.assigned || "*");
-  const owner = row.account_id && accounts.some((a) => a.id === row.account_id) ? row.account_id : "";
+  const owner = row.owners.length > 0;
   const activity = s?.activity ?? [];
   const errors = s?.errors && s.errors.length === activity.length ? s.errors : activity.map(() => 0);
   const metrics = s && activity.length > 0 && (
@@ -780,12 +808,12 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
 
       {(admin || manages) && (
         <div className="flex flex-wrap gap-2">
-          {manages && r.kind === "elsewhere" && row.account_id && (
-            <Button size="sm" disabled={busy !== null}
-                    onClick={() => assign(reachesValue, row.account_id)}>
-              Move to {accountName(accounts, row.account_id)}
+          {manages && r.kind === "elsewhere" && row.owners.map((id) => (
+            <Button key={id} size="sm" disabled={busy !== null}
+                    onClick={() => assign(reachesValue, id)}>
+              Move to {accountName(accounts, id)}
             </Button>
-          )}
+          ))}
           {admin && s && s.state !== "disabled" && (
             <Button variant="outline" size="sm" onClick={restart} disabled={busy !== null}
                     title="Stop it and start it again, against the plugins as they are now">

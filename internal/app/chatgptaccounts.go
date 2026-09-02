@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -447,7 +449,13 @@ func (a *App) reconcileTunnelOwners(ctx context.Context) {
 	if a.settings == nil {
 		return
 	}
-	owners := map[string]string{}
+	// A tunnel's record carries organisations as a list, so one tunnel may
+	// be listed by several accounts and any of their keys may run it. Which
+	// accounts may is a set; the assignment is wrong only when it names an
+	// account outside it, and it is moved to the first inside it, in a
+	// stable order, so two valid accounts never trade the tunnel back and
+	// forth between runs.
+	owners := map[string][]string{}
 	for _, acct := range a.chatgptAccounts(ctx) {
 		dir := a.chatgptDirectory(ctx, acct.ID)
 		if !dir.Available() {
@@ -459,7 +467,7 @@ func (a *App) reconcileTunnelOwners(ctx context.Context) {
 			continue
 		}
 		for _, t := range list {
-			owners[t.ID] = acct.ID
+			owners[t.ID] = append(owners[t.ID], acct.ID)
 		}
 	}
 	if len(owners) == 0 {
@@ -469,11 +477,12 @@ func (a *App) reconcileTunnelOwners(ctx context.Context) {
 	var changes []settings.Change
 	var moved []string
 	for _, at := range a.assignedTunnels(ctx) {
-		owner, known := owners[at.TunnelID]
-		if !known || owner == at.Account {
+		able := owners[at.TunnelID]
+		if len(able) == 0 || slices.Contains(able, at.Account) {
 			continue
 		}
-		encoded, err := json.Marshal(owner)
+		sort.Strings(able)
+		encoded, err := json.Marshal(able[0])
 		if err != nil {
 			continue
 		}

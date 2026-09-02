@@ -1600,6 +1600,17 @@ otherwise, and it means the key and the tunnel belong to different
 organisations, which no retry will change. `POST /api/tunnels/{id}/restart`
 is the same restart the watchdog does, for a person.
 
+**An account owns its credentials, its organisation and its workspaces; a
+tunnel is its child and carries one capability.** A ChatGPT account is one
+OpenAI organisation: the runtime key its connectors authenticate with, the
+admin key and organisation id that make tunnels in it, the workspaces those
+tunnels are listed in, and the identity its calls act as. A tunnel belongs to
+an account and reaches one system or every one the account is granted --
+that is the whole of what a tunnel is here. A tunnel's record at OpenAI names
+organisations as a list, so one may be listed by several accounts and any of
+their keys may run it; the same *purpose* in two organisations is two tunnels
+with two ids.
+
 **A tunnel has one authority for what it serves, and its account is a
 fact.** Every tunnel is keyed by its own id in `settings`: `tunnel.<id>.plugin`
 is a plugin name, `*` for everything the account is granted, or absent for a
