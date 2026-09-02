@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { api, ApiError, type Caller, type ToolCall } from "@/lib/api";
 import { when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
@@ -53,15 +53,27 @@ export function Activity() {
   const [callers, setCallers] = useState<Caller[] | null>(null);
   const [error, setError] = useState("");
   const [next, setNext] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Whether pages beyond the first have been asked for. The poll refreshes
+  // the head of the list; it must not throw those pages away, nor reset the
+  // cursor to the first page's, or "Show more" undoes itself within thirty
+  // seconds. Cleared when the filters change, because then the list is new.
+  const deeper = useRef(false);
 
   const load = useCallback(() => {
+    deeper.current = false;
     Promise.all([
       api.calls({ hours, outcome, principal, limit: 100 }),
       api.callers(Math.max(1, Math.round(hours / 24))),
     ])
       .then(([c, k]) => {
-        setCalls(c.calls);
-        setNext(c.next);
+        setCalls((prev) => {
+          if (!prev || !deeper.current) return c.calls;
+          // New calls go on the front; what was already loaded stays.
+          const seen = new Set(c.calls.map((call) => call.id));
+          return [...c.calls, ...prev.filter((call) => !seen.has(call.id))];
+        });
+        setNext((cursor) => (deeper.current ? cursor : c.next));
         setCallers(k.callers);
         setError("");
       })
@@ -71,13 +83,20 @@ export function Activity() {
   usePoll(load, 30_000);
 
   async function more() {
-    if (!next) return;
+    if (!next || loadingMore) return;
+    setLoadingMore(true);
     try {
       const page = await api.calls({ hours, outcome, principal, limit: 100, before: next });
-      setCalls((prev) => [...(prev ?? []), ...page.calls]);
+      deeper.current = true;
+      setCalls((prev) => {
+        const seen = new Set((prev ?? []).map((call) => call.id));
+        return [...(prev ?? []), ...page.calls.filter((call) => !seen.has(call.id))];
+      });
       setNext(page.next);
     } catch (e) {
       setError(e instanceof ApiError ? e.detail : "Couldn't read more.");
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -235,7 +254,9 @@ export function Activity() {
             </Card>
             {next && (
               <div className="mt-3">
-                <Button variant="outline" size="sm" onClick={more}>Show more</Button>
+                <Button variant="outline" size="sm" onClick={more} disabled={loadingMore}>
+                  Show more
+                </Button>
               </div>
             )}
           </>
