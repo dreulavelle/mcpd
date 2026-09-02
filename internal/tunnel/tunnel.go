@@ -1001,25 +1001,26 @@ func shorten(s string, n int) string {
 // admin key is recognisable by its prefix, which turns a guess into a
 // statement.
 func diagnose(apiKey, code string) string {
+	// One sentence of cause and one of remedy. These reach a phone as a
+	// notification, where a paragraph is not read.
 	if code == "tunnel_use_forbidden" {
-		return "OpenAI says this API key's principal is not allowed to use this " +
-			"tunnel. The tunnel was made in a different organisation or workspace " +
-			"from the key, or the key's principal lacks Tunnels Use there. Use a " +
-			"runtime key from the account the tunnel was made in, or make the " +
-			"tunnel again under this account"
+		// The same code for a tunnel that is gone and one in another
+		// organisation; only the upstream check can tell them apart, and
+		// the Tunnels page shows its answer.
+		return "OpenAI refused this account's key for this tunnel (tunnel_use_forbidden). " +
+			"Either the tunnel no longer exists in OpenAI, or it belongs to another " +
+			"organisation or workspace. The Tunnels page says which; remove it if it is gone"
 	}
 	if code == "token_invalidated" {
-		return "OpenAI has invalidated that API key. Create a new runtime key " +
-			"under Settings, Organization, API keys and paste it in -- rotating a " +
-			"key does not update the copy stored here"
+		return "OpenAI has invalidated this account's key (token_invalidated). " +
+			"Paste a new runtime key into the account under Settings › ChatGPT"
 	}
 	if strings.HasPrefix(apiKey, "sk-admin-") {
-		return "That looks like an admin key (it starts with sk-admin-). Admin keys " +
-			"can only create and delete tunnels, not run one. Use a runtime API key " +
-			"from Settings, Organization, API keys instead"
+		return "The account's key is an admin key (sk-admin-…), which cannot run a " +
+			"tunnel. Paste a runtime key into the account under Settings › ChatGPT"
 	}
-	return "Check the tunnel ID exists, and that the key is a runtime API key whose " +
-		"principal has Tunnels Read and Use -- an admin key will not work"
+	return "OpenAI rejected the key (invalid_api_key). Check the account's runtime " +
+		"key under Settings › ChatGPT has Tunnels Read and Use"
 }
 
 // Config returns the configuration this tunnel is running with, so a caller

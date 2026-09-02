@@ -38,6 +38,7 @@ describe("the tunnels page", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     window.history.replaceState(null, "", "/tunnels");
+    window.localStorage.clear();
   });
 
   // A page opened because something is wrong puts the wrong thing at the
@@ -84,7 +85,8 @@ describe("the tunnels page", () => {
 
   // mcpd's half is done when the tunnel is made; the setup steps carry the
   // other half, and the first request through is what ticks it.
-  it("walks through the ChatGPT step for a connected tunnel nothing has used", async () => {
+  it("walks through the ChatGPT step for a tunnel it made, and only that one", async () => {
+    window.localStorage.setItem("mcpd.tunnels.awaiting", JSON.stringify(["tunnel_a"]));
     vi.spyOn(api, "tunnel").mockResolvedValue(info({
       tunnels: [status({ requests: 0, last_request_at: undefined })],
       available: [{ id: "tunnel_a", name: "mcpd: graylog", account_id: "acct_1" }] as never,
@@ -92,6 +94,19 @@ describe("the tunnels page", () => {
     renderWith(<Tunnels />);
     expect((await screen.findAllByText(/Waiting for ChatGPT/)).length).toBeGreaterThan(0);
     expect(screen.getByText(/choose Create, pick/)).toBeInTheDocument();
+  });
+
+  // A restart of mcpd starts every count again. A connector ChatGPT already
+  // has, idle since, is ready -- not waiting to be attached.
+  it("does not mistake an idle connector after a restart for one never attached", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      tunnels: [status({ requests: 0, last_request_at: undefined, connected_at: new Date().toISOString() })],
+      available: [{ id: "tunnel_a", name: "mcpd: graylog", account_id: "acct_1" }] as never,
+    }));
+    renderWith(<Tunnels />);
+    expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Waiting for ChatGPT/)).not.toBeInTheDocument();
+    expect(screen.getByText(/nothing has come through since mcpd started/)).toBeInTheDocument();
   });
 
   it("offers an operator the state and nothing to press", async () => {
@@ -115,7 +130,7 @@ describe("what a tunnel is doing", () => {
     ["stopped for good", row({ state: "failed", message: "bad key" }), "stopped", 0],
     ["retrying", row({ state: "failed", attempts: 2, next_retry_at: new Date(Date.now() + 60_000).toISOString() }), "retrying", 1],
     ["degraded", row({ degraded: true }), "degraded", 2],
-    ["waiting for ChatGPT", row({ requests: 0, last_request_at: undefined }), "attach", 4],
+    ["idle since a restart", row({ requests: 0, last_request_at: undefined }), "ready", 6],
     ["ready", row(), "ready", 6],
     ["not used", row(null, { assigned: undefined }), "unused", 8],
   ] as [string, never, string, number][])("reads %s", (_, r, kind, rank) => {
@@ -129,5 +144,11 @@ describe("what a tunnel is doing", () => {
     expect(waiting.kind).toBe("waiting");
     expect(waiting.rank).toBeGreaterThan(reading(row({ degraded: true }), ["graylog"], one).rank);
     expect(waiting.rank).toBeLessThan(reading(row(), ["graylog"], one).rank);
+  });
+
+  it("says waiting for ChatGPT only of a tunnel this page made", () => {
+    const idle = row({ requests: 0, last_request_at: undefined });
+    expect(reading(idle, ["graylog"], one, new Set(["t"])).kind).toBe("attach");
+    expect(reading(idle, ["graylog"], one, new Set()).kind).toBe("ready");
   });
 });
