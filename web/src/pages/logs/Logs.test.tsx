@@ -242,8 +242,29 @@ describe("the logs page", () => {
 
     await userEvent.type(screen.getByLabelText("Containing"), "cnmaestro");
 
-    expect(screen.getByText("cnmaestro")).toBeInTheDocument();
-    expect(screen.queryByText("echo")).toBeNull();
+    // The source chips above the log name both plugins whatever the filter
+    // says, so the lines themselves are what is counted.
+    const rows = screen.getAllByRole("button", { name: /started/ });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("cnmaestro");
+  });
+
+  // "Which part of the host is talking" is the question being asked while
+  // scanning, so each source seen so far is one click to isolate.
+  it("narrows to one source from its chip, and back again", async () => {
+    const source = mount();
+    source.send({ time: AT, level: "INFO", msg: "started", plugin: "cnmaestro" });
+    source.send({ time: AT, level: "INFO", msg: "started", plugin: "echo" });
+
+    const chips = screen.getByRole("group", { name: "Source" });
+    await userEvent.click(within(chips).getByRole("button", { name: "echo" }));
+    let rows = screen.getAllByRole("button", { name: /started/ });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("echo");
+
+    await userEvent.click(within(chips).getByRole("button", { name: "every source" }));
+    rows = screen.getAllByRole("button", { name: /started/ });
+    expect(rows).toHaveLength(2);
   });
 
   // Pausing is for reading something before it scrolls away, so what arrives

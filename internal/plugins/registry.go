@@ -707,6 +707,21 @@ func (r *Registry) ToolNames() []string {
 	return out
 }
 
+// ToolDescriptions returns what each registered tool says it does, by
+// qualified name. The dashboard shows it on hover: a tool's name is a verb and
+// a resource, and the one line the model is told is the shortest honest
+// answer to "what does this one reach".
+func (r *Registry) ToolDescriptions() map[string]string {
+	out := make(map[string]string, len(r.tools)+len(r.mutations))
+	for _, t := range r.tools {
+		out[t.qualified] = t.spec.Description
+	}
+	for _, m := range r.mutations {
+		out[m.qualified] = m.spec.Description
+	}
+	return out
+}
+
 // MutationActions returns every registered mutation action.
 func (r *Registry) MutationActions() []string {
 	out := make([]string, 0, len(r.mutations))

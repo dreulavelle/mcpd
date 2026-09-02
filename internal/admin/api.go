@@ -1260,6 +1260,9 @@ type toolDTO struct {
 	// Kind separates what a tool can do, which is the distinction that
 	// matters to whoever is deciding whether to hand out access.
 	Kind string `json:"kind"` // "read" or "propose"
+	// Description is the one line the model is told, so the dashboard can
+	// answer "what does this one do" without a trip to the plugin's docs.
+	Description string `json:"description,omitempty"`
 }
 
 // settingDTO is one plugin configuration value.
@@ -1295,16 +1298,17 @@ func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
 			proposeTools[d.Name+"_"+strings.ReplaceAll(action, ".", "_")] = true
 		}
 
+		descriptions := m.Registry.ToolDescriptions()
 		tools := make([]toolDTO, 0, len(m.Registry.ToolNames()))
 		for _, name := range m.Registry.ToolNames() {
 			kind := "read"
 			if proposeTools[name] {
 				kind = "propose"
 			}
-			tools = append(tools, toolDTO{Name: name, Kind: kind})
+			tools = append(tools, toolDTO{Name: name, Kind: kind, Description: descriptions[name]})
 		}
 		for name := range proposeTools {
-			tools = append(tools, toolDTO{Name: name, Kind: "propose"})
+			tools = append(tools, toolDTO{Name: name, Kind: "propose", Description: descriptions[name]})
 		}
 		sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 

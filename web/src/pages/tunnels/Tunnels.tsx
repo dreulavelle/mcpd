@@ -97,7 +97,11 @@ export function Tunnels() {
       )}
 
       {!info ? <Loading rows={4} /> : rows.length === 0 ? (
-        <EmptyState mark={<Waypoints />} title="No tunnels yet" />
+        <EmptyState mark={<Waypoints />} title="No tunnels yet">
+          {info?.can_manage
+            ? "Add one above. One tunnel is one connector in ChatGPT, and a connector can cover everything on this host or a single system."
+            : "A tunnel is made in the OpenAI dashboard and pasted in here, or made from here once an admin key is set under Settings › ChatGPT."}
+        </EmptyState>
       ) : (
         <Card className="mt-4 overflow-hidden p-0">
           <div className="scroll-x">

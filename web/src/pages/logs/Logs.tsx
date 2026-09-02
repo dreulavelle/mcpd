@@ -1,5 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Notice, PageHeader } from "@/components/chrome";
+import { Check, Copy, Download } from "lucide-react";
+import { PageHeader } from "@/components/chrome";
+import { Chip } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -92,6 +94,7 @@ function unwrap(level: string, msg: string, rest: Record<string, unknown>): {
 // a running host. A parser written against an imagined format is a parser
 // tested against the imagination.
 export const parseLogfmtForTest = parseLogfmt;
+export const asTextForTest = (line: Omit<Line, "key">) => asText({ ...line, key: 0 });
 
 const LEVELS = ["ALL", "DEBUG", "INFO", "WARN", "ERROR"] as const;
 type Level = (typeof LEVELS)[number];
@@ -147,10 +150,12 @@ function sourceOf(rest: Record<string, unknown>): { key: string; label: string }
 export function Logs() {
   const [lines, setLines] = useState<Line[]>([]);
   const [connected, setConnected] = useState(false);
-  const [error, setError] = useState("");
   const [paused, setPaused] = useState(false);
   const [level, setLevel] = useState<Level>("ALL");
   const [needle, setNeedle] = useState("");
+  // "" is every source. A chip per source seen so far, because "which part
+  // of the host is talking" is the question being asked while scanning.
+  const [source, setSource] = useState("");
 
   // Read by the event handler, which is created once and would otherwise close
   // over the first value of `paused` for ever.
@@ -167,11 +172,11 @@ export function Logs() {
   }, []);
 
   useEffect(() => {
-    const source = new EventSource("/api/logs/stream", { withCredentials: true });
+    const stream = new EventSource("/api/logs/stream", { withCredentials: true });
 
-    source.onopen = () => { setConnected(true); setError(""); };
+    stream.onopen = () => setConnected(true);
 
-    source.onmessage = (e) => {
+    stream.onmessage = (e) => {
       try {
         const { time, level: lvl, msg, ...rest } = JSON.parse(e.data);
         const record = unwrap(
@@ -188,20 +193,26 @@ export function Logs() {
     };
 
     // The host says so when a browser has fallen too far behind to keep up.
-    source.addEventListener("dropped", (e) => {
+    stream.addEventListener("dropped", (e) => {
       append({ time: "", level: "WARN", msg: "", rest: {}, gap: Number(e.data) || 0 });
     });
 
-    source.onerror = () => {
-      setConnected(false);
-      // Not an error to report: EventSource reconnects on its own, and a host
-      // restarting is the ordinary reason this fires. The badge says what is
-      // true; a red notice would cry wolf on every deploy.
-      setError("");
-    };
+    // Not an error to report: EventSource reconnects on its own, and a host
+    // restarting is the ordinary reason this fires. The badge says what is
+    // true; a red notice would cry wolf on every deploy.
+    stream.onerror = () => setConnected(false);
 
-    return () => source.close();
+    return () => stream.close();
   }, [append]);
+
+  const sources = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const l of lines) {
+      const label = sourceOf(l.rest)?.label;
+      if (label) seen.set(label, (seen.get(label) ?? 0) + 1);
+    }
+    return [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([label]) => label);
+  }, [lines]);
 
   const shown = useMemo(() => {
     const floor = level === "ALL" ? -1 : (RANK[level] ?? -1);
@@ -209,10 +220,26 @@ export function Logs() {
     return lines.filter((l) => {
       if (l.gap !== undefined) return true;
       if (floor >= 0 && (RANK[l.level] ?? 1) < floor) return false;
+      if (source && sourceOf(l.rest)?.label !== source) return false;
       if (!q) return true;
       return (l.msg + " " + JSON.stringify(l.rest)).toLowerCase().includes(q);
     });
-  }, [lines, level, needle]);
+  }, [lines, level, needle, source]);
+
+  // What is on screen, as the host would have written it, for a ticket.
+  function download() {
+    const text = shown
+      .filter((l) => l.gap === undefined)
+      .map((l) => asText(l))
+      .join("\n");
+    const blob = new Blob([text + "\n"], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mcpd-log-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <>
@@ -225,11 +252,16 @@ export function Logs() {
               {paused ? "Resume" : "Pause"}
             </Button>
             <Button variant="outline" onClick={() => setLines([])}>Clear</Button>
+            <Button
+              variant="outline" onClick={download} disabled={shown.length === 0}
+              title="Save the lines on screen as a text file"
+            >
+              <Download className="size-4" aria-hidden="true" />
+              Save
+            </Button>
           </div>
         }
       />
-
-      {error && <Notice tone="problem">{error}</Notice>}
 
       <Card className="mt-4">
         <CardContent className="space-y-3">
@@ -263,6 +295,28 @@ export function Logs() {
               {paused && " · paused"}
             </div>
           </div>
+
+          {sources.length > 1 && (
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Source">
+              <button
+                type="button"
+                onClick={() => setSource("")}
+                aria-pressed={source === ""}
+              >
+                <Chip tone={source === "" ? "info" : "neutral"}>every source</Chip>
+              </button>
+              {sources.map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => setSource(source === label ? "" : label)}
+                  aria-pressed={source === label}
+                >
+                  <Chip tone={source === label ? "info" : "neutral"}>{label}</Chip>
+                </button>
+              ))}
+            </div>
+          )}
 
           <LogView lines={shown} paused={paused} />
 
@@ -356,7 +410,7 @@ const LogLine = memo(function LogLine({ line }: { line: Line }) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full gap-2 px-1 py-px text-left"
+        className="group flex w-full gap-2 px-1 py-px text-left"
       >
         <span className="shrink-0 text-muted-foreground tabular-nums">
           {clock(line.time)}
@@ -379,19 +433,60 @@ const LogLine = memo(function LogLine({ line }: { line: Line }) {
         </span>
       </button>
 
-      {open && attrs.length > 0 && (
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-px border-l-2 border-border py-1 pl-3 ml-3">
-          {attrs.map(([k, v]) => (
-            <Fragment key={k}>
-              <dt className="text-muted-foreground">{k}</dt>
-              <dd className="break-all text-foreground">{render(v)}</dd>
-            </Fragment>
-          ))}
-        </dl>
+      {open && (
+        <div className="ml-3 border-l-2 border-border py-1 pl-3">
+          {attrs.length > 0 && (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-px">
+              {attrs.map(([k, v]) => (
+                <Fragment key={k}>
+                  <dt className="text-muted-foreground">{k}</dt>
+                  <dd className="break-all text-foreground">{render(v)}</dd>
+                </Fragment>
+              ))}
+            </dl>
+          )}
+          <CopyLine line={line} />
+        </div>
       )}
     </div>
   );
 });
+
+/**
+ * One record, as text, for a ticket. The support caller wants the line as
+ * the host wrote it, correlation id and all, not a screenshot of it.
+ */
+function asText(line: Line): string {
+  const attrs = Object.entries(line.rest)
+    .map(([k, v]) => `${k}=${typeof v === "string" && /\s/.test(v) ? JSON.stringify(v) : render(v)}`)
+    .join(" ");
+  return `${line.time || "-"} ${line.level} ${line.msg}${attrs ? " " + attrs : ""}`;
+}
+
+function CopyLine({ line }: { line: Line }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(asText(line));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Refused outside a secure context, which a plain-http LAN address is.
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="mt-1 inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+    >
+      {copied
+        ? <Check className="size-3 text-good" aria-hidden="true" />
+        : <Copy className="size-3" aria-hidden="true" />}
+      {copied ? "Copied" : "Copy this line"}
+    </button>
+  );
+}
 
 /** Just the time. The date is the same for every line anybody is watching. */
 function clock(stamp: string): string {
