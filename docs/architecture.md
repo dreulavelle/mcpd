@@ -1577,9 +1577,13 @@ tells nobody. So `Manager` keeps three things beside the state. What ChatGPT
 has actually sent through the tunnel, observed on the in-memory transport,
 which is the only positive sign of life a connector gives. The client's own
 error lines, including its `poll failed; backing off` warnings, which are the
-only sign it is *not* being served. And what OpenAI says when asked with the
-account's admin key, every few minutes, because a tunnel deleted in OpenAI's
-dashboard is never told and polls for it for ever. A connected tunnel whose
+only sign it is *not* being served. And whether the account's organisation still has the
+tunnel, asked with its admin key every few minutes, because a tunnel deleted
+there -- or assigned to an account whose organisation never owned it -- is
+never told and polls for ever. OpenAI's admin API is scoped to one
+organisation, so that answer alone cannot tell deleted from elsewhere; the
+Tunnels page can, from the listings it already holds for every account, and
+names the owner. A connected tunnel whose
 client has been reporting errors with nothing served is *degraded* on the
 status; after ten minutes of that the watchdog restarts it, since a fresh
 client is the one thing that reliably clears a stuck one.

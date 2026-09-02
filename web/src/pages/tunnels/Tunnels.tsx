@@ -82,7 +82,7 @@ interface Row extends OpenAITunnel {
  * inspector and the filter chips cannot disagree about what a tunnel is.
  */
 export interface Reading {
-  kind: "gone" | "stopped" | "retrying" | "degraded" | "unassigned" | "waiting" | "attach" | "connecting" | "ready" | "off" | "unused";
+  kind: "elsewhere" | "gone" | "stopped" | "retrying" | "degraded" | "unassigned" | "waiting" | "attach" | "connecting" | "ready" | "off" | "unused";
   label: string;
   tone: Tone;
   rank: number;
@@ -106,9 +106,17 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
     return { kind: "unused", label: "Not used", tone: "neutral", rank: 8, bucket: "off",
       detail: "Point it at a system to start it." };
   }
+  // The listing knows who owns it; the assignment says who runs it. When
+  // the two differ, the runtime key is refused and the upstream check says
+  // missing -- and the remedy is to move it, not to remake it.
+  const owner = row.account_id && accounts.some((a) => a.id === row.account_id) ? row.account_id : "";
+  if (owner && row.account && owner !== row.account) {
+    return { kind: "elsewhere", label: "Wrong account", tone: "problem", rank: 0, bucket: "needs",
+      detail: `This tunnel is in ${accountName(accounts, owner)}'s organisation but assigned to ${accountName(accounts, row.account)}, whose key OpenAI refuses for it. Move it to ${accountName(accounts, owner)}.` };
+  }
   if (s.upstream === "missing") {
-    return { kind: "gone", label: "Gone from OpenAI", tone: "problem", rank: 0, bucket: "needs",
-      detail: "OpenAI no longer has this tunnel, so no connector can reach it. Forget it here, and make a new one if its system still needs a connector of its own." };
+    return { kind: "gone", label: "Not in this organisation", tone: "problem", rank: 0, bucket: "needs",
+      detail: "This account's organisation does not have this tunnel: it was deleted, or made in an organisation no account here can see. Forget it, and make a new one if its system still needs a connector of its own." };
   }
   switch (s.state) {
     case "failed":
@@ -663,6 +671,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
   const [busy, setBusy] = useState<"restart" | "remove" | "assign" | null>(null);
   const s = row.status;
   const account = accounts.find((a) => a.id === row.account);
+  const reachesValue = s ? (s.plugin || "*") : row.assigned === undefined ? "" : (row.assigned || "*");
   const activity = s?.activity ?? [];
   const errors = s?.errors && s.errors.length === activity.length ? s.errors : activity.map(() => 0);
   const metrics = s && activity.length > 0 && (
@@ -675,7 +684,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
         <div><dt className="text-muted-foreground">Last request</dt><dd>{s.last_request_at ? relative(s.last_request_at) : "none since mcpd started"}</dd></div>
         <div><dt className="text-muted-foreground">Connected</dt><dd>{s.connected_at ? relative(s.connected_at) : "—"}</dd></div>
         <div><dt className="text-muted-foreground">Restarts since it worked</dt><dd className="font-mono">{s.attempts ?? 0}</dd></div>
-        <div><dt className="text-muted-foreground">At OpenAI</dt><dd>{s.upstream === "missing" ? "gone" : s.upstream === "present" ? `present, checked ${s.upstream_checked_at ? relative(s.upstream_checked_at) : ""}` : "not checked"}</dd></div>
+        <div><dt className="text-muted-foreground">In this organisation</dt><dd>{s.upstream === "missing" ? "no" : s.upstream === "present" ? `yes, checked ${s.upstream_checked_at ? relative(s.upstream_checked_at) : ""}` : "not checked"}</dd></div>
       </dl>
     </div>
   );
@@ -728,7 +737,6 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
     }
   }
 
-  const reachesValue = s ? (s.plugin || "*") : row.assigned === undefined ? "" : (row.assigned || "*");
   const attached = Boolean(s?.last_request_at) || (s?.requests ?? 0) > 0;
 
   return (
@@ -760,6 +768,12 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
 
       {(admin || manages) && (
         <div className="flex flex-wrap gap-2">
+          {manages && r.kind === "elsewhere" && row.account_id && (
+            <Button size="sm" disabled={busy !== null}
+                    onClick={() => assign(reachesValue, row.account_id)}>
+              Move to {accountName(accounts, row.account_id)}
+            </Button>
+          )}
           {admin && s && s.state !== "disabled" && (
             <Button variant="outline" size="sm" onClick={restart} disabled={busy !== null}
                     title="Stop it and start it again, against the plugins as they are now">
