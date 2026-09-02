@@ -20,6 +20,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useConfirm } from "@/components/confirm";
 import { ClassifyDialog } from "./ClassifyDialog";
 
 const TOOL_STATES: Record<MCPToolState, { label: string; tone: "good" | "attention" | "neutral" }> = {
@@ -110,6 +111,7 @@ function Body({ server, tools, toolsError, onChanged }: {
   toolsError: string | null;
   onChanged: () => void;
 }) {
+  const confirm = useConfirm();
   const notify = useNotify();
   const { navigate } = useRouter();
   // Reading is an operator's; classifying, discovering and removing are an
@@ -164,9 +166,7 @@ function Body({ server, tools, toolsError, onChanged }: {
   }
 
   async function remove() {
-    if (!confirm(`Remove ${server.name}? Its document, its tool snapshot and its settings go with it.`)) {
-      return;
-    }
+    if (!(await confirm(`Remove ${server.name}? Its document, its tool snapshot and its settings go with it.`))) return;
     setBusy(true);
     try {
       await api.removeMCPServer(server.name);

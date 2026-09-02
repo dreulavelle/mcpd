@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useConfirm } from "@/components/confirm";
 
 /** Renders a grant the way every other list of systems here is rendered. */
 export function reachLabel(plugins: string[]): string {
@@ -112,6 +113,7 @@ function GroupRow({ group, notify, onChanged, open, onToggle }: {
   open: boolean;
   onToggle: () => void;
 }) {
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -165,12 +167,12 @@ function GroupRow({ group, notify, onChanged, open, onToggle }: {
           </Button>
           <Button
             variant="ghost" size="sm" disabled={busy}
-            onClick={() => {
+            onClick={async () => {
               const who = group.members === 1 ? "1 member" : `${group.members} members`;
-              if (!confirm(
-                `Delete ${group.name}? ${who} will stop reaching what it lists. ` +
-                `Nothing else about them changes.`,
-              )) return;
+              if (!(await confirm({
+                title: `Delete ${group.name}?`,
+                description: `${who} will stop reaching what it lists. Nothing else about them changes.`,
+              }))) return;
               run("Group deleted.", () => api.deleteGroup(group.id));
             }}
           >

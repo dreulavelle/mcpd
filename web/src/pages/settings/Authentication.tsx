@@ -14,6 +14,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useConfirm } from "@/components/confirm";
 
 /**
  * Where to register a redirect address, per provider.
@@ -220,6 +221,7 @@ function PendingRow({ user, groups, onChanged, notify }: {
   onChanged: () => void;
   notify: Notify;
 }) {
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [group, setGroup] = useState("");
@@ -288,8 +290,12 @@ function PendingRow({ user, groups, onChanged, notify }: {
         </Button>
         <Button
           variant="ghost" size="sm" disabled={busy}
-          onClick={() => {
-            if (!confirm(`Turn down ${user.email}? The account is removed.`)) return;
+          onClick={async () => {
+            if (!(await confirm({
+              title: `Turn down ${user.email}?`,
+              description: "The account is removed. They can register again.",
+              action: "Turn down",
+            }))) return;
             run("Turned down.", () => api.rejectRegistration(user.id));
           }}
         >

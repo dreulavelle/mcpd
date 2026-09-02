@@ -16,6 +16,10 @@ import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { RestoreButton } from "./PluginsList";
+import { NativeSelect } from "@/components/ui/native-select";
+import { useConfirm } from "@/components/confirm";
+import { OpenAIPermissionDialog, type OpenAIReason } from "@/components/openai-permission";
+import { showFailure } from "@/pages/tunnels/Tunnels";
 import { RemoteServer } from "./RemoteServer";
 
 /** One plugin, whatever kind it is. A remote MCP server is managed here too. */
@@ -368,6 +372,7 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
   runtime: "builtin" | "mcp";
   onChanged: () => void;
 }) {
+  const confirm = useConfirm();
   const mayRemove = useCan("admin");
   const notify = useNotify();
   const { navigate } = useRouter();
@@ -388,15 +393,15 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
     // their credentials are about to be forgotten when they are not is as
     // wrong as not telling them when they are.
     const question = fromFile
-      ? `Remove ${name}? mcpd stops serving it, now and after every restart. `
+      ? "mcpd stops serving it, now and after every restart. "
         + "Your configuration file is not changed — it still declares it, and "
         + "you can restore it here."
         + (required
           ? "\n\nThe file also marks it required: true, meaning this host is "
             + "meant not to run without it. Removing it overrides that."
           : "")
-      : `Remove ${name}? Its settings, including credentials, go with it.`;
-    if (!confirm(question)) return;
+      : "Its settings, including credentials, go with it.";
+    if (!(await confirm({ title: `Remove ${name}?`, description: question, action: "Remove" }))) return;
     setBusy(true);
     try {
       await api.removeInstance(name, required);
@@ -466,19 +471,34 @@ function TunnelControl({ plugin, tunnels, tunnel, onChanged }: {
   tunnel?: TunnelStatus;
   onChanged: () => void;
 }) {
+  const confirm = useConfirm();
   const mayManage = useCan("admin");
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
+  const [refused, setRefused] = useState<{ reason: OpenAIReason; detail: string } | null>(null);
+  const accounts = tunnels?.accounts ?? [];
+  // With one account there is nothing to choose; with several, a tunnel made
+  // without one lands as "No account" on the Tunnels page and never starts.
+  const [account, setAccount] = useState("");
+  // The account a running tunnel connects with, so a removal goes to the
+  // organisation it actually lives in. Two accounts are two organisations,
+  // and deleting from the wrong one cannot be undone.
+  const ownAccount = tunnel?.tunnel_id
+    ? tunnels?.account_assignments?.[tunnel.tunnel_id]
+    : undefined;
 
   async function create() {
     setBusy(true);
     try {
       // Same default as the Tunnels page: a tunnel scoped only to the
       // organisation is invisible in an Enterprise or Edu workspace.
-      await api.createTunnel(plugin.title, plugin.name, tunnels?.workspaces?.[0]);
+      await api.createTunnel(
+        plugin.title, plugin.name, tunnels?.workspaces?.[0],
+        account || (accounts.length === 1 ? accounts[0]!.id : undefined),
+      );
       notify("good", "Made. Give it about 30 seconds to become active in ChatGPT.");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't make it.");
+      showFailure(e, "Couldn't make it.", notify, setRefused);
     } finally {
       setBusy(false);
       onChanged();
@@ -486,24 +506,33 @@ function TunnelControl({ plugin, tunnels, tunnel, onChanged }: {
   }
 
   async function remove() {
-    if (!confirm("Remove this connector? Anything using it stops working.")) return;
+    if (!(await confirm("Remove this connector? Anything using it stops working."))) return;
     setBusy(true);
     try {
-      await api.deleteTunnel(tunnel!.tunnel_id!);
+      await api.deleteTunnel(tunnel!.tunnel_id!, ownAccount);
       notify("good", "Removed.");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't remove it.");
+      showFailure(e, "Couldn't remove it.", notify, setRefused);
     } finally {
       setBusy(false);
       onChanged();
     }
   }
 
+  const permission = refused && (
+    <OpenAIPermissionDialog
+      reason={refused.reason}
+      detail={refused.detail}
+      onClose={() => setRefused(null)}
+    />
+  );
+
   if (tunnel) {
     const tone = tunnel.state === "connected" ? "good"
       : tunnel.state === "failed" ? "problem" : "info";
     return (
       <div className="flex flex-wrap items-center gap-3">
+        {permission}
         <StatusDot tone={tone} />
         <span className="flex-1 text-sm text-muted-foreground">
           Its own connector, {describe(tunnel.state)}.
@@ -541,12 +570,25 @@ function TunnelControl({ plugin, tunnels, tunnel, onChanged }: {
     );
   }
 
+  const needsAccount = accounts.length > 1 && !account;
   return (
     <div className="flex flex-wrap items-center gap-3">
+      {permission}
       <span className="flex-1 text-sm text-muted-foreground">
         Reachable through any connector that covers everything.
       </span>
-      <Button size="sm" disabled={busy} onClick={create}>
+      {accounts.length > 1 && (
+        <NativeSelect
+          aria-label="ChatGPT account"
+          className="w-44"
+          value={account}
+          onChange={(e) => setAccount(e.target.value)}
+        >
+          <option value="">Which account…</option>
+          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </NativeSelect>
+      )}
+      <Button size="sm" disabled={busy || needsAccount} onClick={create}>
         {busy ? "Making…" : "Give it its own connector"}
       </Button>
     </div>

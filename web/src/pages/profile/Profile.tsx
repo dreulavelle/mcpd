@@ -14,6 +14,7 @@ import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useConfirm } from "@/components/confirm";
 import { Label } from "@/components/ui/label";
 
 const CAPABILITY_MEANING: Record<Capability, string> = {
@@ -138,6 +139,7 @@ export function Profile() {
  * says exactly the thing that needs saying.
  */
 function LinkedProviders() {
+  const confirm = useConfirm();
   const notify = useNotify();
   const load = useCallback(() => api.identities(), []);
   const { data, error, reload } = useLoader(load, "Couldn't read your linked providers.");
@@ -168,7 +170,11 @@ function LinkedProviders() {
   }
 
   async function unlink(provider: ProviderName, label: string) {
-    if (!confirm(`Stop signing in with ${label}?`)) return;
+    if (!(await confirm({
+      title: `Stop signing in with ${label}?`,
+      description: "The provider is unlinked from this account. Linking it again is a click away.",
+      action: "Unlink",
+    }))) return;
     setBusy(provider);
     setProblem("");
     try {

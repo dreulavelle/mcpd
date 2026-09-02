@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
+import { useConfirm } from "@/components/confirm";
 
 /** A rule being edited. `key` is React identity and is never sent. */
 interface Draft {
@@ -97,6 +98,7 @@ export function warningsByRule(
 }
 
 export function ApprovalPolicy() {
+  const confirm = useConfirm();
   const mayWrite = useCan("admin");
   const notify = useNotify();
 
@@ -189,10 +191,11 @@ export function ApprovalPolicy() {
   // The only way out of a stored value this build cannot parse: the editor
   // cannot be drawn over it, and PUT /api/settings refuses this key.
   async function clearUnreadable() {
-    if (!confirm(
-      "Delete the saved rules and start with none? They can't be read and "
-      + "aren't in effect. This cannot be undone.",
-    )) return;
+    if (!(await confirm({
+      title: "Delete the saved rules and start with none?",
+      description: "They can't be read and aren't in effect. This cannot be undone.",
+      action: "Start over",
+    }))) return;
     setBusy(true);
     try {
       adopt(await api.saveApprovalPolicy([]));

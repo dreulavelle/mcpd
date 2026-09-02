@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type MCPServer, type MCPTool, type PluginInstance } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
@@ -116,11 +116,11 @@ describe("a remote MCP server's plugin page", () => {
     const removeServer = vi.spyOn(api, "removeMCPServer")
       .mockResolvedValue({ status: "removed" });
     const removeInstance = vi.spyOn(api, "removeInstance");
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     renderWith(<PluginDetail name="weather" />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(removeServer).toHaveBeenCalledWith("weather"));
     expect(removeInstance).not.toHaveBeenCalled();
@@ -228,26 +228,28 @@ describe("a plugin the configuration file declares", () => {
       type: "weather", enabled: true, required: true,
     } });
     const remove = vi.spyOn(api, "removeInstance").mockResolvedValue({ status: "removed" });
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
 
     renderWith(<PluginDetail name="weather" />);
     await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toMatch(/required: true/);
+    expect(dialog.textContent).toMatch(/configuration file is not changed/);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", true));
-    expect(confirm.mock.calls[0]?.[0]).toMatch(/required: true/);
-    expect(confirm.mock.calls[0]?.[0]).toMatch(/configuration file is not changed/);
   });
 
   it("does not claim the credentials go with a file-declared removal", async () => {
     declared();
     const remove = vi.spyOn(api, "removeInstance").mockResolvedValue({ status: "removed" });
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
 
     renderWith(<PluginDetail name="weather" />);
     await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).not.toMatch(/credentials/);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", false));
-    expect(confirm.mock.calls[0]?.[0]).not.toMatch(/credentials/);
   });
 
   /**

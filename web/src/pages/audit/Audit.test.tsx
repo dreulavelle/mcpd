@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { api, type AuditRecord } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
 import { Audit } from "./Audit";
@@ -81,5 +82,27 @@ describe("the audit trail", () => {
     mount([record(9), record(4)], INTACT);
     expect(await screen.findByText(/4 entries are not in this table/))
       .toBeInTheDocument();
+  });
+
+  // A filter narrows what is on screen and never what was asked for: the
+  // endpoint takes a count and nothing else, and a filter that quietly
+  // shrank the window would hide the entries somebody was looking for.
+  it("narrows the loaded entries by kind, actor and words, and says how many match", async () => {
+    mount([
+      record(3, { kind: "operation.approved", actor: "user:sam@example.com" }),
+      record(2),
+      record(1, { plugin: "graylog", action: "stream.pause" }),
+    ], INTACT);
+    await screen.findAllByText(/Suggested/);
+
+    await userEvent.selectOptions(screen.getByLabelText("Kind of entry"), "operation.approved");
+    expect(await screen.findByText(/1 of the last 3 entries match/)).toBeInTheDocument();
+    expect(screen.getByText(/Approved: device reboot/)).toBeInTheDocument();
+    expect(screen.queryByText(/Suggested: device reboot/)).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Kind of entry"), "");
+    await userEvent.type(screen.getByLabelText("Find in these entries"), "stream pause");
+    expect(await screen.findByText(/Suggested: stream pause/)).toBeInTheDocument();
+    expect(screen.queryByText(/device reboot/)).not.toBeInTheDocument();
   });
 });

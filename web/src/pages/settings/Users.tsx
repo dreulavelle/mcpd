@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ReachPicker } from "@/components/ReachPicker";
+import { useConfirm } from "@/components/confirm";
 import { reachLabel } from "./Groups";
 
 const ROLES: [Role, string][] = [
@@ -148,6 +149,7 @@ function UserRow({ user, groups, onChanged, notify }: {
   onChanged: () => void;
   notify: Notify;
 }) {
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -228,8 +230,8 @@ function UserRow({ user, groups, onChanged, notify }: {
         </Button>
         <Button variant="ghost" size="sm" disabled={busy || user.self}
                 title={user.self ? "You cannot delete the account you are signed in as" : undefined}
-                onClick={() => {
-                  if (!confirm(`Delete ${user.email}? This cannot be undone.`)) return;
+                onClick={async () => {
+                  if (!(await confirm(`Delete ${user.email}? This cannot be undone.`))) return;
                   run("Account deleted.", () => api.deleteUser(user.id));
                 }}>
           Delete

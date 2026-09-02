@@ -22,6 +22,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useConfirm } from "@/components/confirm";
 
 /**
  * The ChatGPT accounts this host connects to.
@@ -127,15 +128,16 @@ function AccountRow({ account, notify, onChanged }: {
   notify: Notify;
   onChanged: () => void;
 }) {
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
 
   async function remove() {
-    if (!confirm(
+    if (!(await confirm(
       `Remove ${account.name}? Any tunnel using it stops connecting, and its ` +
       `assignment is cleared. The tunnels themselves stay in OpenAI.`,
-    )) return;
+    ))) return;
     setBusy(true);
     setError("");
     try {
