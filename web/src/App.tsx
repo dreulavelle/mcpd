@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api, setCSRFToken, setUnauthorizedHandler, type AuthOptions, type Meta, type Session,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { RouterProvider, useRouter } from "@/lib/router";
 import { SessionProvider, useCan } from "@/lib/session";
+import { useShortcuts, type Shortcut } from "@/lib/shortcuts";
 import { takeSSOOutcome } from "@/lib/sso";
 import { ErrorBoundary } from "@/components/chrome";
+import { CommandPalette } from "@/components/CommandPalette";
 import { GettingStarted } from "@/components/getting-started";
 import { Shell } from "@/components/shell";
+import { ShortcutsHelp } from "@/components/ShortcutsHelp";
 import { ToastProvider } from "@/components/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AwaitingApproval, FirstRun, SignIn } from "@/pages/signed-out/SignedOut";
@@ -89,12 +92,42 @@ export default function App() {
 }
 
 function Console({ onSignOut, version }: { onSignOut: () => void; version: string }) {
-  const { path } = useRouter();
+  const { path, navigate } = useRouter();
   const badges = usePendingCount();
+  const [palette, setPalette] = useState(false);
+  const [help, setHelp] = useState(false);
+  const admin = useCan("admin");
+
+  // "g" then a letter, for the sections; the rest are one chord each. Only
+  // the sections this account may open are listed, so the help sheet does
+  // not advertise a page that would answer with a refusal.
+  const shortcuts = useMemo<Shortcut[]>(() => {
+    const go = (to: string) => () => navigate(to);
+    const list: Shortcut[] = [
+      { keys: "mod+k", label: "Search the console", run: () => setPalette((o) => !o) },
+      { keys: "?", label: "This list", run: () => setHelp((o) => !o) },
+      { keys: "g o", label: "Go to Overview", run: go("/") },
+      { keys: "g a", label: "Go to Approvals", run: go("/approvals") },
+      { keys: "g p", label: "Go to Plugins", run: go("/plugins") },
+      { keys: "g t", label: "Go to Tunnels", run: go("/tunnels") },
+      { keys: "g u", label: "Go to Audit", run: go("/audit") },
+      { keys: "g s", label: "Go to Settings", run: go("/settings") },
+    ];
+    if (admin) {
+      list.push(
+        { keys: "g l", label: "Go to Logs", run: go("/logs") },
+        { keys: "g c", label: "Go to Activity", run: go("/activity") },
+      );
+    }
+    return list;
+  }, [navigate, admin]);
+  useShortcuts(shortcuts);
 
   return (
     <>
-      <Shell badges={badges} onSignOut={onSignOut} version={version}>
+      <CommandPalette open={palette} onOpenChange={setPalette} onSignOut={onSignOut} />
+      <ShortcutsHelp open={help} onOpenChange={setHelp} shortcuts={shortcuts} />
+      <Shell badges={badges} onSignOut={onSignOut} version={version} onSearch={() => setPalette(true)}>
         {/* Keyed on the path, so a page that failed is rebuilt from scratch when
             it is opened again rather than staying broken for the session. The
             boundary is inside the chrome: whatever happens to a page, the

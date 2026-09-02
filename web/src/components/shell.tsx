@@ -1,9 +1,10 @@
 import { useCallback, useState, type ReactNode } from "react";
-import { LogOut, Menu, X } from "lucide-react";
+import { LogOut, Menu, Search, X } from "lucide-react";
 import type { Capability } from "@/lib/capabilities";
 import { entryFor, visibleNav, type NavItem } from "@/lib/nav";
 import { Link, useRouter } from "@/lib/router";
 import { signedInAs, useCan, useSession } from "@/lib/session";
+import { isMac } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -160,10 +161,42 @@ export function Brand({ compact }: { compact?: boolean }) {
   );
 }
 
+/**
+ * The way into the search, drawn where the eye lands before the menu. The
+ * shortcut is printed on it so it is learned by being seen rather than
+ * looked up.
+ */
+function SearchButton({ onSearch, compact }: { onSearch: () => void; compact?: boolean }) {
+  if (compact) {
+    return (
+      <Button variant="ghost" size="icon-sm" aria-label="Search the console" onClick={onSearch}>
+        <Search className="size-4" aria-hidden="true" />
+      </Button>
+    );
+  }
+  return (
+    <div className="px-3 pt-3">
+      <button
+        type="button"
+        onClick={onSearch}
+        className="flex w-full items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:border-ring/50 hover:text-foreground"
+      >
+        <Search className="size-4 shrink-0" aria-hidden="true" />
+        <span className="flex-1 text-left">Search…</span>
+        <kbd className="rounded border px-1.5 py-px font-mono text-[10px]">
+          {isMac() ? "⌘" : "Ctrl"} K
+        </kbd>
+      </button>
+    </div>
+  );
+}
+
 /** The console's frame. */
-export function Shell({ badges, onSignOut, version, children }: {
+export function Shell({ badges, onSignOut, onSearch, version, children }: {
   badges: Record<string, number>;
   onSignOut: () => void;
+  /** Opens the command palette. Absent in a test that only draws the frame. */
+  onSearch?: () => void;
   /** What this host is running, shown under the account. */
   version: string;
   children: ReactNode;
@@ -177,6 +210,7 @@ export function Shell({ badges, onSignOut, version, children }: {
       <aside className="sticky top-0 hidden h-screen border-r bg-card lg:flex lg:flex-col">
         <Brand />
         <Separator />
+        {onSearch && <SearchButton onSearch={onSearch} />}
         <Sidebar badges={badges} />
         <Version version={version} />
         <SidebarFooter onSignOut={onSignOut} />
@@ -216,6 +250,7 @@ export function Shell({ badges, onSignOut, version, children }: {
 
           <span className="flex-1" />
 
+          {onSearch && <SearchButton onSearch={onSearch} compact />}
           <Button
             variant="ghost" size="icon-sm"
             aria-label="Sign out" onClick={onSignOut}

@@ -1,6 +1,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* The `dark:` variant follows the attribute the palette is keyed on, not the
+   media query it defaults to; otherwise a chosen theme would switch the
+   tokens and leave every `dark:` utility on the system's answer. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 /* mcpd console.
  *
  * This is a page people scan and operate, not one they read, so the design
