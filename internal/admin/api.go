@@ -1788,8 +1788,19 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Plugin  string `json:"plugin"`
 		Account string `json:"account"`
+		// Unassign says the tunnel is not to be used here at all. Without
+		// it an empty plugin means everything, as it always has.
+		Unassign bool `json:"unassign"`
 	}
 	if !s.decode(w, r, &body) {
+		return
+	}
+	if body.Unassign {
+		if err := s.unassign(r, r.PathValue("id")); err != nil {
+			s.writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.writeJSON(w, r, http.StatusOK, map[string]string{"status": "unassigned"})
 		return
 	}
 	if err := s.checkPlugin(body.Plugin); err != nil {
@@ -1802,6 +1813,13 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.assign(r, r.PathValue("id"), body.Plugin, account.ID); err != nil {
+		var wrong *errWrongOwner
+		if errors.As(err, &wrong) {
+			s.writeJSON(w, r, http.StatusConflict, map[string]any{
+				"error": "wrong_account", "detail": err.Error(), "owner": wrong.owner.ID,
+			})
+			return
+		}
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1863,16 +1881,58 @@ func (s *Server) checkPlugin(plugin string) error {
 // on that workspace's credential -- and applying them separately would leave a
 // window in which a tunnel is pointed at a system with no account, which is
 // exactly the state that refuses to start.
+// errWrongOwner is an assignment to an account whose organisation does not
+// own the tunnel. A tunnel can only ever be run by the key of the
+// organisation it was made in, so this is refused rather than stored.
+type errWrongOwner struct {
+	owner tunnel.Account
+}
+
+func (e *errWrongOwner) Error() string {
+	return fmt.Sprintf("that tunnel is in %s's organisation and can only run there", e.owner.Name)
+}
+
+// ownerOf reports which account's organisation lists a tunnel, from the
+// listings the page already keeps. Unknown when no account with an admin
+// key can see it.
+func (s *Server) ownerOf(ctx context.Context, id string) (tunnel.Account, bool) {
+	accounts, err := s.chatgptAccounts(ctx)
+	if err != nil {
+		return tunnel.Account{}, false
+	}
+	for _, acct := range accounts {
+		dir := s.directory(acct.ID)
+		if !dir.Available() {
+			continue
+		}
+		list, err := s.listTunnels(ctx, acct.ID, dir)
+		if err != nil {
+			continue
+		}
+		for _, t := range list {
+			if t.ID == id {
+				return acct, true
+			}
+		}
+	}
+	return tunnel.Account{}, false
+}
+
+// assign points a tunnel at a system under an account. The dashboard spells
+// "everything" as an empty plugin, which the store spells out; an empty
+// plugin that means "not used" is the unassign path, not this one.
 func (s *Server) assign(r *http.Request, id, plugin, accountID string) error {
 	if s.opts.Settings == nil {
 		return fmt.Errorf("settings are unavailable")
 	}
-	// Written against the tunnel rather than against the plugin. Keying by
-	// plugin meant a second tunnel pointed at the same system overwrote the
-	// first tunnel's binding: the first account kept its access and lost its
-	// connector, silently. Several tunnels may now serve one plugin, which is
-	// how two ChatGPT workspaces share one integration.
-	encodedPlugin, err := json.Marshal(plugin)
+	if owner, known := s.ownerOf(r.Context(), id); known && owner.ID != accountID {
+		return &errWrongOwner{owner: owner}
+	}
+	stored := plugin
+	if stored == "" {
+		stored = settings.TunnelEverything
+	}
+	encodedPlugin, err := json.Marshal(stored)
 	if err != nil {
 		return err
 	}
@@ -1883,18 +1943,6 @@ func (s *Server) assign(r *http.Request, id, plugin, accountID string) error {
 	changes := []settings.Change{
 		{Key: settings.TunnelPluginKey(id), Value: string(encodedPlugin)},
 		{Key: settings.TunnelAccountKey(id), Value: string(encodedAccount)},
-	}
-	// The aggregate keeps its own keys as well, because they are what the
-	// startup path reads for the tunnel that serves everything.
-	if plugin == "" {
-		encodedID, err := json.Marshal(id)
-		if err != nil {
-			return err
-		}
-		changes = append(changes,
-			settings.Change{Key: settings.KeyTunnelID, Value: string(encodedID)},
-			settings.Change{Key: settings.KeyTunnelAccount, Value: string(encodedAccount)},
-		)
 	}
 	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, changes)
 }
@@ -1984,32 +2032,11 @@ func (s *Server) unassign(r *http.Request, id string) error {
 	if s.opts.Settings == nil {
 		return fmt.Errorf("settings are unavailable")
 	}
-	ctx := r.Context()
-
-	var changes []settings.Change
-	// Paired with the account key that goes with each, so a tunnel's removal
-	// does not leave an account assignment behind pointing at nothing.
-	keys := map[string]string{settings.KeyTunnelID: settings.KeyTunnelAccount}
-	if s.opts.Plugins != nil {
-		for _, name := range s.opts.Plugins() {
-			keys[settings.PluginTunnelKey(name)] = settings.PluginTunnelAccountKey(name)
-		}
-	}
-	for key, accountKey := range keys {
-		var current string
-		if found, err := s.opts.Settings.GetJSON(ctx, key, &current); err != nil || !found {
-			continue
-		}
-		if current == id {
-			changes = append(changes,
-				settings.Change{Key: key, Delete: true},
-				settings.Change{Key: accountKey, Delete: true})
-		}
-	}
-	if len(changes) == 0 {
-		return nil
-	}
-	return s.opts.Settings.Apply(ctx, auth.FromContext(ctx).ID, changes)
+	// One pair of keys per tunnel, and nothing else to look for.
+	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, []settings.Change{
+		{Key: settings.TunnelPluginKey(id), Delete: true},
+		{Key: settings.TunnelAccountKey(id), Delete: true},
+	})
 }
 
 // decode reads a small JSON body, reporting a failure to the client.

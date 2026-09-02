@@ -64,7 +64,7 @@ export function ChatGPT() {
       <SettingsTabs />
       <PageHeader
         title="ChatGPT"
-        lede="An account is one OpenAI credential and one identity in the history. Add one per workspace that connects here."
+        lede="An account is one OpenAI organisation: its runtime key, the admin key that makes tunnels in it, and the identity its connectors act as in the history. A tunnel belongs to the organisation it was made in and runs under that account only. Add one per organisation that connects here."
         actions={rows && <Button onClick={() => setAdding(true)}>Add account</Button>}
       />
 

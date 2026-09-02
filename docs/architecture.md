@@ -1600,6 +1600,25 @@ otherwise, and it means the key and the tunnel belong to different
 organisations, which no retry will change. `POST /api/tunnels/{id}/restart`
 is the same restart the watchdog does, for a person.
 
+**A tunnel has one authority for what it serves, and its account is a
+fact.** Every tunnel is keyed by its own id in `settings`: `tunnel.<id>.plugin`
+is a plugin name, `*` for everything the account is granted, or absent for a
+tunnel nothing here uses, and `tunnel.<id>.account` names whose key runs it.
+The two earlier shapes -- one tunnel per plugin under `tunnel.plugin.<name>`,
+and the aggregate tunnel under `tunnel.tunnel_id` -- are read once at startup,
+moved onto the tunnel's own key, and deleted; a value left under an old key
+was a second authority for the same tunnel, and a host holding two answers for
+one plugin is how a connector came to run under a key that could not use it.
+
+Which account a tunnel belongs to is not chosen. A tunnel is created inside
+one organisation and only that organisation's runtime key can use it, so
+where an account's admin key can list it, that account is its owner: the
+reconciler writes the owner over any assignment that disagrees, the assign
+endpoint refuses one that would, and the page offers the choice only for a
+tunnel no listing can see. An admin key and organisation are proved against
+OpenAI when an account is saved, so a key from the wrong organisation fails
+at the form rather than at the first connector.
+
 **The handoff is the one step mcpd cannot do.** OpenAI exposes no API for
 attaching a tunnel as a connector in a ChatGPT workspace; that is done in
 ChatGPT's own settings, by picking the tunnel or pasting its id. So the

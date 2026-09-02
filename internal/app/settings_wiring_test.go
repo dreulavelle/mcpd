@@ -84,7 +84,7 @@ func TestTunnelConfigComesFromSettingsAndTheAccount(t *testing.T) {
 	const id = "tunnel_6a87964313a88191b1cf9d9bf28dde48"
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
+		{Key: settings.TunnelPluginKey(id), Value: `"*"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestTunnelConfig_EmptyGrantsMeanEverything(t *testing.T) {
 	addAccount(t, a, "Work", nil)
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.KeyTunnelID, Value: `"tunnel_6a87964313a88191b1cf9d9bf28dde48"`},
+		{Key: settings.TunnelPluginKey("tunnel_6a87964313a88191b1cf9d9bf28dde48"), Value: `"*"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestATunnelWithoutAnAccountDoesNotStart(t *testing.T) {
 
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.KeyTunnelID, Value: `"tunnel_6a87964313a88191b1cf9d9bf28dde48"`},
+		{Key: settings.TunnelPluginKey("tunnel_6a87964313a88191b1cf9d9bf28dde48"), Value: `"*"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestAnUnassignedTunnelIsAmbiguousWithTwoAccounts(t *testing.T) {
 	const id = "tunnel_6a87964313a88191b1cf9d9bf28dde48"
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
+		{Key: settings.TunnelPluginKey(id), Value: `"*"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestAnUnassignedTunnelIsAmbiguousWithTwoAccounts(t *testing.T) {
 
 	// Naming one settles it, and the named one is the one used.
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
-		{Key: settings.KeyTunnelAccount, Value: `"` + second.ID + `"`},
+		{Key: settings.TunnelAccountKey(id), Value: `"` + second.ID + `"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
 	)
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.KeyTunnelID, Value: `"` + main + `"`},
+		{Key: settings.TunnelPluginKey(main), Value: `"*"`},
 		{Key: settings.TunnelPluginKey(echo), Value: `"echo"`},
 	}); err != nil {
 		t.Fatal(err)
@@ -307,15 +307,21 @@ func TestAPerPluginTunnelCannotReuseTheMainTunnelID(t *testing.T) {
 	const id = "tunnel_0123456789abcdef0123456789abcdef"
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.KeyTunnelID, Value: `"` + id + `"`},
+		{Key: settings.TunnelPluginKey(id), Value: `"*"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// One key per tunnel, so a second assignment of the same id is a
+	// replacement, not a second client competing for the same commands.
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.TunnelPluginKey(id), Value: `"echo"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	configs := a.tunnelConfigs(ctx)
-	if len(configs) != 1 {
-		t.Fatalf("got %d tunnels, want only the main one", len(configs))
+	if len(configs) != 1 || configs[0].Plugin != "echo" {
+		t.Fatalf("got %+v, want one tunnel, now serving echo", configs)
 	}
 }
 

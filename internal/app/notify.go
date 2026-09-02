@@ -101,7 +101,7 @@ func (a *App) notifyBypassOpened(ctx context.Context, b *operations.Bypass) {
 // Background context rather than a request's: there is no caller here. This
 // is reached from the tunnel's own goroutine, and the alternative is a
 // cancelled context that would drop the event at the moment it matters.
-func (a *App) notifyTunnelFailed(plugin, tunnelID, reason string, retrying bool) {
+func (a *App) notifyTunnelFailed(plugin, tunnelID, account, reason string, retrying bool) {
 	// The reason already says what to do; the package prefix and a preamble
 	// about the Tunnels page were ad copy on a phone screen.
 	reason = strings.TrimPrefix(reason, "tunnel: ")
@@ -115,7 +115,7 @@ func (a *App) notifyTunnelFailed(plugin, tunnelID, reason string, retrying bool)
 	a.notifier.Notify(context.Background(), notify.Event{
 		Kind:     "tunnels.disconnected",
 		Severity: notify.SeverityWarning,
-		Title:    fmt.Sprintf("The %s connector has stopped", describeConnector(plugin)),
+		Title:    fmt.Sprintf("The %s connector%s has stopped", describeConnector(plugin), onAccount(account)),
 		Text:     text,
 	})
 }
@@ -123,13 +123,22 @@ func (a *App) notifyTunnelFailed(plugin, tunnelID, reason string, retrying bool)
 // notifyTunnelRecovered closes the loop the failure opened: whoever was told a
 // connector had stopped is told it is serving again, so nobody drives in to
 // fix something that fixed itself.
-func (a *App) notifyTunnelRecovered(plugin, tunnelID string) {
+func (a *App) notifyTunnelRecovered(plugin, tunnelID, account string) {
 	a.notifier.Notify(context.Background(), notify.Event{
 		Kind:     "tunnels.reconnected",
 		Severity: notify.SeverityInfo,
-		Title:    fmt.Sprintf("The %s connector is back", describeConnector(plugin)),
+		Title:    fmt.Sprintf("The %s connector%s is back", describeConnector(plugin), onAccount(account)),
 		Text:     "It reconnected and is serving again. Nothing needs doing.",
 	})
+}
+
+// onAccount names the account in a title where a host has several: "the
+// cnmaestro connector" cannot say which workspace's.
+func onAccount(account string) string {
+	if account == "" {
+		return ""
+	}
+	return " on " + account
 }
 
 // describeConnector names a tunnel the way the Tunnels page does.

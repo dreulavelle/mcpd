@@ -70,6 +70,14 @@ func (a *App) migrateTunnelAssignments(ctx context.Context) {
 		if plugin == "" {
 			continue
 		}
+		// The old key goes whether or not it is carried over: a value under
+		// it is a second authority for the same tunnel, and one that nothing
+		// reads any more. Leaving it was how a host came to hold two answers
+		// for one plugin.
+		changes = append(changes,
+			settings.Change{Key: key, Delete: true},
+			settings.Change{Key: settings.PluginTunnelAccountKey(plugin), Delete: true},
+		)
 		id := a.settings.String(ctx, key, "")
 		if id == "" {
 			continue
@@ -95,6 +103,26 @@ func (a *App) migrateTunnelAssignments(ctx context.Context) {
 		)
 		migrated = append(migrated, plugin)
 	}
+
+	// The aggregate tunnel had a pair of keys of its own, because "" as a
+	// tunnel's plugin already meant "not used". It is a tunnel like the
+	// others now, serving TunnelEverything under its own id.
+	if id := a.settings.String(ctx, settings.KeyTunnelID, ""); id != "" {
+		if a.settings.String(ctx, settings.TunnelPluginKey(id), "\x00") == "\x00" {
+			account := a.settings.String(ctx, settings.KeyTunnelAccount, "")
+			encodedPlugin, _ := json.Marshal(settings.TunnelEverything)
+			encodedAccount, _ := json.Marshal(account)
+			changes = append(changes,
+				settings.Change{Key: settings.TunnelPluginKey(id), Value: string(encodedPlugin)},
+				settings.Change{Key: settings.TunnelAccountKey(id), Value: string(encodedAccount)},
+			)
+			migrated = append(migrated, "everything")
+		}
+		changes = append(changes,
+			settings.Change{Key: settings.KeyTunnelID, Delete: true},
+			settings.Change{Key: settings.KeyTunnelAccount, Delete: true},
+		)
+	}
 	if len(changes) == 0 {
 		return
 	}
@@ -109,7 +137,7 @@ func (a *App) migrateTunnelAssignments(ctx context.Context) {
 			"error", err)
 		return
 	}
-	a.log.InfoContext(ctx, "moved tunnel assignments onto the tunnel's own key, so a "+
-		"plugin can now be served to more than one ChatGPT account",
-		"tunnels", len(migrated), "plugins", strings.Join(migrated, ","))
+	a.log.InfoContext(ctx, "moved tunnel assignments onto each tunnel's own key and "+
+		"removed the old ones, so a tunnel has one authority for what it serves",
+		"carried", len(migrated), "which", strings.Join(migrated, ","))
 }

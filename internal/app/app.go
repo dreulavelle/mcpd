@@ -1053,30 +1053,25 @@ func (a *App) tunnelConfigs(ctx context.Context) []tunnel.Config {
 	accounts := a.chatgptAccounts(ctx)
 
 	var out []tunnel.Config
-	if id := a.settings.String(ctx, settings.KeyTunnelID, ""); id != "" {
-		if cfg, ok := a.bindAccount(ctx, base, accounts,
-			a.settings.String(ctx, settings.KeyTunnelAccount, ""), ""); ok {
-			cfg.TunnelID = id
-			out = append(out, cfg)
-		}
-	}
-
-	// Every tunnel that has been assigned, keyed by the tunnel rather than by
-	// the plugin. Several may name the same plugin: that is what lets two
-	// ChatGPT workspaces use one integration without a second copy of its
-	// configuration, and keying by plugin is what used to make the second
-	// assignment silently discard the first.
 	mounted := a.manager.Names()
-	seen := make(map[string]bool, len(out))
-	for _, cfg := range out {
-		seen[cfg.TunnelID] = true
-	}
+	seen := make(map[string]bool)
 
 	for _, at := range a.assignedTunnels(ctx) {
+		// Empty is a tunnel nothing is using; TunnelEverything serves every
+		// system the account is granted, which the config spells as an
+		// empty plugin.
 		if at.Plugin == "" {
-			// The aggregate is configured under its own key and was handled
-			// above; a tunnel-keyed row naming no plugin is one whose plugin
-			// was cleared, and it has nothing to serve.
+			continue
+		}
+		if at.Plugin == settings.TunnelEverything {
+			if seen[at.TunnelID] {
+				continue
+			}
+			if cfg, ok := a.bindAccount(ctx, base, accounts, at.Account, ""); ok {
+				cfg.TunnelID = at.TunnelID
+				seen[at.TunnelID] = true
+				out = append(out, cfg)
+			}
 			continue
 		}
 		if !slices.Contains(mounted, at.Plugin) {
@@ -1214,11 +1209,16 @@ func (a *App) tunnelConfig(ctx context.Context) tunnel.Config {
 // which cannot distinguish "not assigned" from "assigned and unable to start".
 func (a *App) tunnelAssignments(ctx context.Context) map[string]string {
 	out := map[string]string{}
-	if id := a.settings.String(ctx, settings.KeyTunnelID, ""); id != "" {
-		out[id] = ""
-	}
 	for _, at := range a.assignedTunnels(ctx) {
-		out[at.TunnelID] = at.Plugin
+		switch at.Plugin {
+		case "":
+			// Nothing is using it; it is not assigned.
+		case settings.TunnelEverything:
+			// The dashboard has always spelled everything as "".
+			out[at.TunnelID] = ""
+		default:
+			out[at.TunnelID] = at.Plugin
+		}
 	}
 	return out
 }

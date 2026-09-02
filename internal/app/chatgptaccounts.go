@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 
@@ -230,7 +231,7 @@ func (a *App) pinTunnelsToTheOnlyAccount(ctx context.Context) error {
 	// The aggregate keeps its own pair; every other tunnel is keyed by its own
 	// id, so a plugin served by two of them pins each separately rather than
 	// the pair colliding on the plugin name.
-	pairs := [][2]string{{settings.KeyTunnelID, settings.KeyTunnelAccount}}
+	var pairs [][2]string
 	for _, at := range a.assignedTunnels(ctx) {
 		pairs = append(pairs, [2]string{
 			settings.TunnelPluginKey(at.TunnelID),
@@ -276,6 +277,9 @@ func (a *App) AddChatGPTAccount(ctx context.Context, actor string, acct tunnel.A
 	if a.chatgpt == nil {
 		return tunnel.Account{}, fmt.Errorf("ChatGPT accounts are unavailable")
 	}
+	if err := a.proveAdminKey(ctx, acct.AdminKey, acct.OrgID); err != nil {
+		return tunnel.Account{}, err
+	}
 	created, err := a.chatgpt.Create(ctx, actor, acct)
 	if err != nil {
 		return tunnel.Account{}, err
@@ -288,6 +292,22 @@ func (a *App) AddChatGPTAccount(ctx context.Context, actor string, acct tunnel.A
 func (a *App) UpdateChatGPTAccount(ctx context.Context, actor, id string, up tunnel.AccountUpdate) (tunnel.Account, error) {
 	if a.chatgpt == nil {
 		return tunnel.Account{}, fmt.Errorf("ChatGPT accounts are unavailable")
+	}
+	// Proved against what the account will hold after the edit, since an
+	// edit may change either half of the pair.
+	if up.AdminKey != nil || up.OrgID != nil {
+		if current, ok := accountFor(a.chatgptAccounts(ctx), id); ok {
+			adminKey, orgID := current.AdminKey, current.OrgID
+			if up.AdminKey != nil {
+				adminKey = *up.AdminKey
+			}
+			if up.OrgID != nil {
+				orgID = *up.OrgID
+			}
+			if err := a.proveAdminKey(ctx, adminKey, orgID); err != nil {
+				return tunnel.Account{}, err
+			}
+		}
 	}
 	updated, err := a.chatgpt.Update(ctx, actor, id, up)
 	if err != nil {
@@ -320,7 +340,7 @@ func (a *App) RemoveChatGPTAccount(ctx context.Context, actor, id string) error 
 
 // unassignAccount clears every tunnel assignment naming an account.
 func (a *App) unassignAccount(ctx context.Context, actor, id string) error {
-	keys := []string{settings.KeyTunnelAccount}
+	var keys []string
 	for _, at := range a.assignedTunnels(ctx) {
 		keys = append(keys, settings.TunnelAccountKey(at.TunnelID))
 	}
@@ -380,15 +400,94 @@ func (a *App) chatgptDirectory(ctx context.Context, accountID string) *tunnel.Di
 // from a tunnel nobody assigned.
 func (a *App) tunnelAccountAssignments(ctx context.Context) map[string]string {
 	out := map[string]string{}
-	if id := a.settings.String(ctx, settings.KeyTunnelID, ""); id != "" {
-		if acct := a.settings.String(ctx, settings.KeyTunnelAccount, ""); acct != "" {
-			out[id] = acct
-		}
-	}
 	for _, at := range a.assignedTunnels(ctx) {
 		if at.Account != "" {
 			out[at.TunnelID] = at.Account
 		}
 	}
 	return out
+}
+
+// proveAdminKey asks OpenAI whether an admin key and organisation go
+// together before they are saved, so a key pasted from the wrong
+// organisation fails at the form rather than at the first connector.
+//
+// Only a definitive refusal fails the save: a control plane that cannot be
+// reached is not a reason to refuse to store what the operator typed, and is
+// logged instead.
+func (a *App) proveAdminKey(ctx context.Context, adminKey, orgID string) error {
+	dir := tunnel.NewDirectory(adminKey, orgID,
+		a.settings.String(ctx, settings.KeyTunnelControlPlane, ""))
+	if !dir.Available() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, err := dir.List(ctx)
+	if err == nil {
+		return nil
+	}
+	if tunnel.Reason(err) != "" {
+		return fmt.Errorf("chatgpt account: OpenAI refused that admin key for that "+
+			"organisation: %w", err)
+	}
+	a.log.WarnContext(ctx, "could not prove a ChatGPT account's admin key against OpenAI; "+
+		"saving it anyway", "error", err)
+	return nil
+}
+
+// reconcileTunnelOwners writes the account that actually owns each tunnel.
+//
+// A tunnel is created inside one organisation and can only be run by that
+// organisation's key, so which account a tunnel belongs to is a fact rather
+// than a choice. The listings say whose it is; an assignment that names a
+// different account is corrected here, recorded, and the tunnel reconnected
+// under the key that can use it.
+func (a *App) reconcileTunnelOwners(ctx context.Context) {
+	if a.settings == nil {
+		return
+	}
+	owners := map[string]string{}
+	for _, acct := range a.chatgptAccounts(ctx) {
+		dir := a.chatgptDirectory(ctx, acct.ID)
+		if !dir.Available() {
+			continue
+		}
+		list, err := dir.List(ctx)
+		if err != nil {
+			a.log.DebugContext(ctx, "could not list an account's tunnels", "account", acct.Name, "error", err)
+			continue
+		}
+		for _, t := range list {
+			owners[t.ID] = acct.ID
+		}
+	}
+	if len(owners) == 0 {
+		return
+	}
+
+	var changes []settings.Change
+	var moved []string
+	for _, at := range a.assignedTunnels(ctx) {
+		owner, known := owners[at.TunnelID]
+		if !known || owner == at.Account {
+			continue
+		}
+		encoded, err := json.Marshal(owner)
+		if err != nil {
+			continue
+		}
+		changes = append(changes, settings.Change{Key: settings.TunnelAccountKey(at.TunnelID), Value: string(encoded)})
+		moved = append(moved, at.TunnelID)
+	}
+	if len(changes) == 0 {
+		return
+	}
+	if err := a.settings.Apply(ctx, "system:tunnel-reconcile", changes); err != nil {
+		a.log.ErrorContext(ctx, "could not move tunnels to the accounts that own them", "error", err)
+		return
+	}
+	a.log.InfoContext(ctx, "moved tunnels to the accounts whose organisations own them",
+		"tunnels", strings.Join(moved, ","))
+	a.reconnectTunnels(ctx, "tunnels were moved to the accounts that own them")
 }

@@ -1615,10 +1615,11 @@ export const api = {
     request<{ status: string; tunnels: TunnelStatus[] }>(
       `/api/tunnels/${encodeURIComponent(id)}/restart`, { method: "POST" }),
 
-  assignTunnel: (id: string, plugin: string, account?: string) =>
+  /** `plugin` "" is everything; `unassign` says the tunnel is not to be used here. */
+  assignTunnel: (id: string, plugin: string, account?: string, unassign = false) =>
     request<{ status: string }>(`/api/tunnels/${encodeURIComponent(id)}/assign`, {
       method: "POST",
-      body: JSON.stringify({ plugin, account: account ?? "" }),
+      body: JSON.stringify({ plugin, account: account ?? "", unassign }),
     }),
 
   // The account is carried so the tunnel is deleted from the organisation it

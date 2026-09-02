@@ -68,7 +68,7 @@ func TestChangingTheRoleReachesTheTunnel(t *testing.T) {
 	acct := addAccount(t, a, "Work", nil)
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
-		{Key: settings.KeyTunnelID, Value: `"tunnel_6a87964313a88191b1cf9d9bf28dde48"`},
+		{Key: settings.TunnelPluginKey("tunnel_6a87964313a88191b1cf9d9bf28dde48"), Value: `"*"`},
 	}); err != nil {
 		t.Fatal(err)
 	}

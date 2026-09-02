@@ -30,9 +30,9 @@ type Group struct {
 	// It lives here rather than on Config because it is a property of the
 	// host rather than of any one tunnel, and every manager the group builds
 	// should reach the same place.
-	OnFailure func(plugin, tunnelID, reason string, retrying bool)
+	OnFailure func(plugin, tunnelID, account, reason string, retrying bool)
 	// OnRecovered is told when a tunnel that had failed is serving again.
-	OnRecovered func(plugin, tunnelID string)
+	OnRecovered func(plugin, tunnelID, account string)
 	// Factory builds a tunnel's MCP server, for a restart asked for by name:
 	// the dashboard knows a tunnel id and nothing about servers. Set once by
 	// the composition root, beside the hooks.
