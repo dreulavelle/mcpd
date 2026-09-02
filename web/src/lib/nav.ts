@@ -1,6 +1,6 @@
 import {
   Activity, Boxes, ChartColumn, ClipboardCheck, Cog, Gauge, ScrollText,
-  ListChecks, ShieldCheck, Store, Terminal, UserRound, Waypoints,
+  ListChecks, Plug, ShieldCheck, Store, Terminal, UserRound, Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import type { Capability } from "./capabilities";
@@ -111,6 +111,18 @@ export const NAV: NavGroup[] = [
         label: "Tunnels",
         lede: "One tunnel is one connector in ChatGPT.",
         icon: Waypoints,
+        capability: "read",
+      },
+      {
+        // The other way in. Tunnels and ChatGPT each had a page and every
+        // other client had nothing, so the address on the Overview was the
+        // whole of the help for Claude Code, Codex and an IDE. Read, not
+        // admin: the person setting up a client is usually the one who will
+        // use it, and issuing the key is the only part that needs more.
+        path: "/clients",
+        label: "Clients",
+        lede: "Reach this host from Claude Code, Codex, VS Code, or anything else that speaks MCP over HTTP.",
+        icon: Plug,
         capability: "read",
       },
     ],

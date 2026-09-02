@@ -255,7 +255,9 @@ function ConnectingDirectly({ endpoints }: { endpoints: Endpoints | null | undef
             <Link to="/settings/keys" className="text-primary hover:underline">
               Settings › API Keys
             </Link>
-            , and shown once.
+            , and shown once. What to paste into Claude Code, Codex or an IDE
+            is on{" "}
+            <Link to="/clients" className="text-primary hover:underline">Clients</Link>.
           </p>
         </CardContent>
       </Card>
