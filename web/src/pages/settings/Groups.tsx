@@ -1,7 +1,8 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { api, ApiError, type Capability, type Group, type GroupMember } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
-import { Loading, Notice, PageHeader, Section } from "@/components/chrome";
+import { UsersRound } from "lucide-react";
+import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
 import { SettingsTabs } from "./SettingsTabs";
 import { ReachPicker } from "@/components/ReachPicker";
 import { PermissionMatrix } from "@/components/PermissionMatrix";
@@ -71,10 +72,10 @@ export function Groups({ embedded = false }: { embedded?: boolean } = {}) {
       )}
 
       {!groups ? <Loading rows={3} /> : groups.length === 0 ? (
-        <Notice tone="neutral">
-          No groups yet. Add one, list the systems it should reach, then put
-          people and keys in it.
-        </Notice>
+        <EmptyState mark={<UsersRound />} title="No groups yet">
+          Add one, list the systems it should reach, then put people and keys
+          in it.
+        </EmptyState>
       ) : (
         <Card className="mt-4 overflow-hidden p-0">
           <div className="scroll-x">
@@ -142,6 +143,18 @@ function GroupRow({ group, notify, onChanged, open, onToggle }: {
           {group.plugins.length === 0
             ? <Chip>Nothing</Chip>
             : reachLabel(group.plugins)}
+          {/* A ceiling is the one thing about a group that takes away rather
+              than gives, so it is said on the row and not only inside the
+              editor. */}
+          {group.capabilities !== null && (
+            <div className="mt-1">
+              <Chip tone={group.capabilities.length === 0 ? "attention" : "info"}>
+                {group.capabilities.length === 0
+                  ? "members may do nothing"
+                  : `members may only ${group.capabilities.join(", ")}`}
+              </Chip>
+            </div>
+          )}
         </TableCell>
         <TableCell className="whitespace-nowrap text-muted-foreground">
           {group.members === 1 ? "1 member" : `${group.members} members`}

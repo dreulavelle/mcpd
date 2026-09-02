@@ -116,13 +116,14 @@ export function useSegments(): string[] {
  * An internal link. A real anchor, intercepting only the plain left click, so
  * middle-click and the status bar still work.
  */
-export function Link({ to, className, children, onClick, current }: {
+export function Link({ to, className, children, onClick, current, title }: {
   to: string;
   className?: string;
   children: ReactNode;
   onClick?: () => void;
   /** Marks this as the page being looked at, for assistive technology. */
   current?: boolean;
+  title?: string;
 }) {
   const { navigate } = useRouter();
 
@@ -136,7 +137,7 @@ export function Link({ to, className, children, onClick, current }: {
 
   return (
     <a
-      href={to} className={className} onClick={handle}
+      href={to} className={className} onClick={handle} title={title}
       aria-current={current ? "page" : undefined}
     >
       {children}
