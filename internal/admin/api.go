@@ -311,6 +311,9 @@ type TunnelController interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	Enabled() bool
+	// Restart stops one tunnel and starts it again, rebuilt against the
+	// plugins as they are now.
+	Restart(ctx context.Context, tunnelID string) error
 }
 
 // AuditReader is the slice of the audit store the dashboard needs.
@@ -516,6 +519,7 @@ func (s *Server) routes() {
 	// it, wherever those connectors are.
 	api("POST /api/tunnels", s.handleCreateTunnel, auth.CapAdmin)
 	api("POST /api/tunnels/{id}/assign", s.handleAssignTunnel, auth.CapAdmin)
+	api("POST /api/tunnels/{id}/restart", s.handleRestartTunnel, auth.CapAdmin)
 	api("DELETE /api/tunnels/{id}", s.handleDeleteTunnel, auth.CapAdmin)
 	// Admin, not read: the log carries every request this host served, which
 	// systems were called and by whom. That is a wider view than any one
@@ -1752,6 +1756,31 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		s.opts.Log.Warn("tunnel created but the subsystem could not be enabled", "error", err)
 	}
 	s.writeJSON(w, r, http.StatusCreated, created)
+}
+
+// handleRestartTunnel stops one tunnel and starts it again.
+//
+// The one recovery a person can do without changing anything: a tunnel that
+// the supervisor has given up on, or one somebody wants fresh after a change
+// they cannot name. It answers with the tunnel's status afterwards, which is
+// what the person pressing the button is waiting to read.
+func (s *Server) handleRestartTunnel(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Tunnel == nil {
+		s.writeError(w, r, http.StatusBadRequest, "no tunnel is configured")
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.opts.Tunnel.Restart(r.Context(), id); err != nil {
+		s.writeJSON(w, r, http.StatusConflict, map[string]any{
+			"error":  "tunnel_failed",
+			"detail": err.Error(),
+			"status": s.opts.Tunnel.Status(),
+		})
+		return
+	}
+	s.opts.Log.InfoContext(r.Context(), "tunnel restarted from the dashboard",
+		"tunnel", id, "by", auth.FromContext(r.Context()).ID)
+	s.writeJSON(w, r, http.StatusOK, map[string]any{"status": "restarted", "tunnels": s.opts.Tunnel.Status()})
 }
 
 // handleAssignTunnel points an existing tunnel at a system.

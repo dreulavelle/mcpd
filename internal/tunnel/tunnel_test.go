@@ -3,6 +3,7 @@ package tunnel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -438,12 +439,12 @@ func TestReconfigure_DoesNotInterleaveWithAnother(t *testing.T) {
 func TestFailReportsOncePerFailure(t *testing.T) {
 	var got []string
 	m := NewManager(Config{Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
-	m.onFailure = func(plugin, tunnelID, reason string) {
+	m.onFailure = func(plugin, tunnelID, reason string, _ bool) {
 		got = append(got, plugin+"|"+tunnelID+"|"+reason)
 	}
 
-	m.fail(errors.New("the control plane rejected the key"))
-	m.fail(errors.New("the control plane rejected the key"))
+	m.fail(errors.New("the control plane rejected the key"), false)
+	m.fail(errors.New("the control plane rejected the key"), false)
 
 	if len(got) != 1 {
 		t.Fatalf("want one report, got %d: %v", len(got), got)
@@ -461,7 +462,7 @@ func TestFailReportsOncePerFailure(t *testing.T) {
 func TestGroupPassesTheFailureHookToItsManagers(t *testing.T) {
 	var called int
 	g := NewGroup(discardLogger())
-	g.OnFailure = func(string, string, string) { called++ }
+	g.OnFailure = func(string, string, string, bool) { called++ }
 
 	if err := g.Apply(t.Context(), []Config{
 		{Plugin: "graylog", TunnelID: "tunnel_abc", APIKey: "k",
@@ -473,8 +474,206 @@ func TestGroupPassesTheFailureHookToItsManagers(t *testing.T) {
 	if m == nil {
 		t.Fatal("the tunnel was not built")
 	}
-	m.fail(errors.New("boom"))
+	m.fail(errors.New("boom"), false)
 	if called != 1 {
 		t.Fatalf("the group's hook was not given to the manager: called %d times", called)
+	}
+}
+
+// A failure worth retrying schedules the next attempt with a growing delay,
+// and a failure that is not -- a rejected credential, a configuration that
+// cannot start -- schedules nothing, because nothing about it will be
+// different in two seconds. The dashboard tells the two apart by whether a
+// next attempt is due.
+func TestSupervisor_RetriesOnlyWhatCouldWork(t *testing.T) {
+	m := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
+	// Long enough that the timer cannot fire during the test.
+	restore := retryBase
+	retryBase = time.Hour
+	t.Cleanup(func() { retryBase = restore })
+
+	m.fail(errors.New("the control plane could not be reached"), true)
+	s := m.Status()
+	if s.Attempts != 1 || s.NextRetryAt == nil {
+		t.Fatalf("a retryable failure should schedule attempt 1: %+v", s)
+	}
+
+	// A second failure while one is already scheduled does not stack a
+	// second timer.
+	m.fail(errors.New("still unreachable"), true)
+	if s := m.Status(); s.Attempts != 1 {
+		t.Fatalf("attempts = %d, want the pending one only", s.Attempts)
+	}
+
+	// Stopping is a decision, and cancels what was due.
+	if err := m.Stop(t.Context()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if s := m.Status(); s.NextRetryAt != nil || s.Attempts != 0 {
+		t.Fatalf("stop should cancel the retry: %+v", s)
+	}
+
+	final := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
+	final.fail(errors.New("OpenAI did not recognise that key"), false)
+	if s := final.Status(); s.NextRetryAt != nil || s.State != StateFailed {
+		t.Fatalf("a final failure must not be retried: %+v", s)
+	}
+}
+
+func TestBackoff_DoublesToACap(t *testing.T) {
+	restoreBase, restoreCap := retryBase, retryCap
+	retryBase, retryCap = time.Second, 10*time.Second
+	t.Cleanup(func() { retryBase, retryCap = restoreBase, restoreCap })
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 10 * time.Second, 10 * time.Second}
+	for i, w := range want {
+		if got := backoff(i + 1); got != w {
+			t.Errorf("backoff(%d) = %s, want %s", i+1, got, w)
+		}
+	}
+}
+
+// The person told a connector had stopped is told again when retrying has
+// stopped being reassuring, and told it is over when it comes back.
+func TestSupervisor_SaysWhenRetryingHasNotWorked(t *testing.T) {
+	restore := retryBase
+	retryBase = time.Hour
+	t.Cleanup(func() { retryBase = restore })
+	var reports []string
+	m := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
+	m.onFailure = func(_, _, reason string, retrying bool) {
+		reports = append(reports, fmt.Sprintf("%v:%s", retrying, reason))
+	}
+	for i := 0; i < stillDownAfter; i++ {
+		m.fail(errors.New("unreachable"), true)
+		// Each attempt is scheduled and, in the real thing, fires; here the
+		// timer is cleared by hand so the next failure counts as an attempt.
+		m.mu.Lock()
+		if m.retry != nil {
+			m.retry.Stop()
+			m.retry = nil
+		}
+		m.mu.Unlock()
+	}
+	if len(reports) != 2 {
+		t.Fatalf("want the first failure and the still-down report, got %v", reports)
+	}
+	if !strings.HasPrefix(reports[0], "true:") || !strings.Contains(reports[1], "still not connecting after") {
+		t.Errorf("reports = %v", reports)
+	}
+}
+
+// A tunnel is degraded when its client keeps reporting errors and nothing
+// gets through; a served request clears it, and so do the errors stopping.
+func TestLiveness_DegradedIsErrorsWithNothingServed(t *testing.T) {
+	m := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
+	clock := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return clock }
+	m.mu.Lock()
+	m.state = StateConnected
+	m.mu.Unlock()
+
+	m.noteTrouble("poll failed; backing off")
+	if m.Status().Degraded {
+		t.Fatal("one error is not degraded")
+	}
+	clock = clock.Add(degradedAfter)
+	m.noteTrouble("poll failed; backing off")
+	s := m.Status()
+	if !s.Degraded || s.Trouble == "" || s.TroubleAt == nil {
+		t.Fatalf("errors for %s with nothing served should be degraded: %+v", degradedAfter, s)
+	}
+
+	// Something got through, so the client's complaints were not stopping it.
+	m.noteRequest()
+	if s := m.Status(); s.Degraded || s.Requests != 1 || s.LastRequestAt == nil {
+		t.Fatalf("a served request clears degraded: %+v", s)
+	}
+
+	// Errors that stopped on their own clear it too.
+	m.noteTrouble("poll failed; backing off")
+	clock = clock.Add(degradedAfter)
+	m.noteTrouble("poll failed; backing off")
+	if !m.Status().Degraded {
+		t.Fatal("degraded again")
+	}
+	clock = clock.Add(troubleWindow + time.Minute)
+	if m.Status().Degraded {
+		t.Fatal("errors that stopped are not a degradation")
+	}
+}
+
+// The control plane's refusal to let this key use this tunnel is as final as
+// a bad key, and left alone it is one warning every ten seconds for ever.
+func TestCredentialRejection_KnowsAForbiddenTunnel(t *testing.T) {
+	line := `level=WARN msg="poll failed; backing off" error_code=tunnel_use_forbidden retry_in_ms=10000`
+	if got := credentialRejection(line); got != "tunnel_use_forbidden" {
+		t.Fatalf("credentialRejection = %q", got)
+	}
+	if !strings.Contains(diagnose("sk-proj-x", "tunnel_use_forbidden"), "organisation or workspace") {
+		t.Error("the diagnosis should say where the tunnel and the key disagree")
+	}
+	if !pollFailure(line) {
+		t.Error("a poll backing off is trouble, whatever level the client filed it under")
+	}
+	if pollFailure(`level=INFO msg="tunnel connected"`) {
+		t.Error("an ordinary line is not")
+	}
+}
+
+type fakeUpstream struct {
+	present map[string]bool
+	err     error
+}
+
+func (f fakeUpstream) Exists(_ context.Context, id string) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.present[id], nil
+}
+
+// A tunnel deleted in OpenAI's dashboard is never told; the check is what
+// says so. A check that could not run leaves the last answer standing rather
+// than calling the tunnel missing.
+func TestGroupCheckUpstream_RecordsWhatOpenAISaid(t *testing.T) {
+	g := NewGroup(discardLogger())
+	cfgs := []Config{
+		{Plugin: "graylog", TunnelID: "tunnel_abc", APIKey: "k", AccountID: "a", Principal: testConfig().Principal},
+		{Plugin: "echo", TunnelID: "tunnel_def", APIKey: "k", AccountID: "a", Principal: testConfig().Principal},
+	}
+	if err := g.Apply(t.Context(), cfgs, testFactory()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	g.CheckUpstream(t.Context(), func(string) UpstreamChecker {
+		return fakeUpstream{present: map[string]bool{"tunnel_abc": true}}
+	})
+	st := g.Status()
+	if st[0].Upstream != "present" || st[1].Upstream != "missing" {
+		t.Fatalf("upstream = %q, %q", st[0].Upstream, st[1].Upstream)
+	}
+
+	g.CheckUpstream(t.Context(), func(string) UpstreamChecker {
+		return fakeUpstream{err: errors.New("admin key expired")}
+	})
+	if st := g.Status(); st[1].Upstream != "missing" || st[0].Upstream != "present" {
+		t.Fatalf("a check that could not run must leave the answer alone: %+v", st)
+	}
+
+	// No admin key for the account: nothing is asked, nothing is said.
+	h := NewGroup(discardLogger())
+	if err := h.Apply(t.Context(), cfgs[:1], testFactory()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	h.CheckUpstream(t.Context(), func(string) UpstreamChecker { return nil })
+	if st := h.Status(); st[0].Upstream != "" {
+		t.Fatalf("unchecked should stay unchecked: %q", st[0].Upstream)
+	}
+}
+
+func TestGroupRestart_NeedsATunnelItKnows(t *testing.T) {
+	g := NewGroup(discardLogger())
+	g.Factory = testFactory()
+	if err := g.Restart(t.Context(), "tunnel_nope"); err == nil {
+		t.Fatal("restarting a tunnel that is not configured should refuse")
 	}
 }

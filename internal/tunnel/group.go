@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Group owns every configured tunnel.
@@ -29,7 +30,13 @@ type Group struct {
 	// It lives here rather than on Config because it is a property of the
 	// host rather than of any one tunnel, and every manager the group builds
 	// should reach the same place.
-	OnFailure func(plugin, tunnelID, reason string)
+	OnFailure func(plugin, tunnelID, reason string, retrying bool)
+	// OnRecovered is told when a tunnel that had failed is serving again.
+	OnRecovered func(plugin, tunnelID string)
+	// Factory builds a tunnel's MCP server, for a restart asked for by name:
+	// the dashboard knows a tunnel id and nothing about servers. Set once by
+	// the composition root, beside the hooks.
+	Factory ServerFactory
 
 	mu       sync.RWMutex
 	managers map[string]*Manager
@@ -129,6 +136,7 @@ func (g *Group) Apply(ctx context.Context, configs []Config, factory ServerFacto
 
 		m := NewManager(cfg, factory, g.log.With("tunnel", key))
 		m.onFailure = g.OnFailure
+		m.onRecovered = g.OnRecovered
 		g.mu.Lock()
 		g.managers[key] = m
 		g.mu.Unlock()
@@ -214,6 +222,7 @@ func (g *Group) rebuildOne(ctx context.Context, key string, factory ServerFactor
 
 	m := NewManager(cfg, factory, g.log.With("tunnel", key))
 	m.onFailure = g.OnFailure
+	m.onRecovered = g.OnRecovered
 	g.mu.Lock()
 	g.managers[key] = m
 	g.mu.Unlock()
@@ -227,6 +236,64 @@ func (g *Group) rebuildOne(ctx context.Context, key string, factory ServerFactor
 	g.log.InfoContext(ctx, "tunnel rebuilt for a changed plugin",
 		"tunnel", key, "plugin", cfg.Plugin)
 	return nil
+}
+
+// Restart stops one tunnel and starts it again, rebuilt against the plugins
+// as they are now. The dashboard's button.
+func (g *Group) Restart(ctx context.Context, tunnelID string) error {
+	key := Key(tunnelID)
+	g.mu.RLock()
+	_, ok := g.managers[key]
+	g.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("tunnel: %s is not configured here", tunnelID)
+	}
+	if g.Factory == nil {
+		return errors.New("tunnel: the group has no server factory")
+	}
+	// A rebuild rather than the manager's own Restart, so a plugin remounted
+	// since the tunnel started is picked up -- a person pressing Restart is
+	// usually pressing it because something changed.
+	return g.rebuildOne(ctx, key, g.Factory)
+}
+
+// UpstreamChecker answers whether a tunnel still exists at OpenAI.
+type UpstreamChecker interface {
+	// Exists reports whether the tunnel is still there. An error means the
+	// question could not be asked, which is not an answer either way.
+	Exists(ctx context.Context, tunnelID string) (bool, error)
+}
+
+// CheckUpstream asks OpenAI about every configured tunnel and records the
+// answer on each, so the status can say "this tunnel no longer exists" of a
+// connector whose client would otherwise poll for it for ever.
+//
+// checker resolves the directory for an account, because a tunnel is asked
+// about in the organisation it was made in. A nil directory or one with no
+// admin key leaves that tunnel unchecked rather than marking it missing.
+func (g *Group) CheckUpstream(ctx context.Context, checker func(accountID string) UpstreamChecker) {
+	for _, m := range g.all() {
+		cfg := m.Config()
+		if cfg.TunnelID == "" {
+			continue
+		}
+		dir := checker(cfg.AccountID)
+		if dir == nil {
+			continue
+		}
+		present, err := dir.Exists(ctx, cfg.TunnelID)
+		if err != nil {
+			// Not an answer. The previous one stands, and the log has why.
+			g.log.DebugContext(ctx, "could not ask OpenAI about a tunnel",
+				"tunnel", cfg.TunnelID, "error", err)
+			continue
+		}
+		m.SetUpstream(present, time.Now())
+		if !present {
+			g.log.WarnContext(ctx, "OpenAI no longer has this tunnel; its connector cannot work",
+				"tunnel", cfg.TunnelID, "plugin", cfg.Plugin)
+		}
+	}
 }
 
 // Status reports every tunnel, in configuration order.

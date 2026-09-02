@@ -3,6 +3,8 @@ package tunnel
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -103,5 +105,30 @@ func TestBothCredentialsAreNeeded(t *testing.T) {
 	missing := NewDirectory("sk-admin-test", "", "").Missing()
 	if !strings.Contains(missing, "organization") {
 		t.Errorf("Missing = %q, want it to name what is absent", missing)
+	}
+}
+
+// A 404 is the answer "no"; anything else is the question not being
+// answered, and must not mark a tunnel missing because an admin key expired.
+func TestDirectoryExists_TellsMissingFromUnanswered(t *testing.T) {
+	const id = "tunnel_0123456789abcdef0123456789abcdef"
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"id":"` + id + `","name":"x"}`))
+	}))
+	defer srv.Close()
+	d := NewDirectory("sk-admin-x", "org_1", srv.URL)
+
+	if ok, err := d.Exists(t.Context(), id); err != nil || !ok {
+		t.Fatalf("200 = %v, %v; want present", ok, err)
+	}
+	status = http.StatusNotFound
+	if ok, err := d.Exists(t.Context(), id); err != nil || ok {
+		t.Fatalf("404 = %v, %v; want missing", ok, err)
+	}
+	status = http.StatusUnauthorized
+	if _, err := d.Exists(t.Context(), id); err == nil {
+		t.Fatal("a 401 is not an answer about the tunnel")
 	}
 }

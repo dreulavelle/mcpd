@@ -38,7 +38,7 @@ func discardLogger() *slog.Logger {
 // that is a tunnel command the client can only run against a URL. mcpd is no
 // longer an authorization server, so there is nothing to discover.
 func TestInMemoryBindingIsTheOnlyOne(t *testing.T) {
-	r, err := newRuntime(testConfig(), testServer(), t.Context(), discardLogger(), logWriter{log: discardLogger()})
+	r, err := newRuntime(testConfig(), testServer(), t.Context(), discardLogger(), logWriter{log: discardLogger()}, nil)
 	if err != nil {
 		t.Fatalf("newRuntime: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestInMemoryBindingIsTheOnlyOne(t *testing.T) {
 // Without the guard this is a nil dereference inside a goroutine, which takes
 // the whole process down instead of just failing to start the tunnel.
 func TestInMemoryBindingNeedsAServer(t *testing.T) {
-	if _, err := newInMemoryRuntime(testConfig(), nil, t.Context(), discardLogger(), logWriter{log: discardLogger()}); err == nil {
+	if _, err := newInMemoryRuntime(testConfig(), nil, t.Context(), discardLogger(), logWriter{log: discardLogger()}, nil); err == nil {
 		t.Fatal("a missing MCP server must be an error, not a panic")
 	}
 }

@@ -146,6 +146,30 @@ func (d *Directory) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// Exists reports whether OpenAI still has a tunnel.
+//
+// A 404 is the answer "no"; anything else is the question not being
+// answered, and is returned as an error so a caller does not mark a tunnel
+// missing because the admin key expired.
+func (d *Directory) Exists(ctx context.Context, id string) (bool, error) {
+	client, err := d.client()
+	if err != nil {
+		return false, err
+	}
+	if !tunnelIDPattern(id) {
+		return false, fmt.Errorf("tunnel: %q is not a tunnel id", id)
+	}
+	_, err = client.GetTunnel(ctx, id)
+	if err == nil {
+		return true, nil
+	}
+	var req *tcadmin.RequestError
+	if errors.As(err, &req) && req.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	return false, d.explain(err)
+}
+
 func (d *Directory) client() (*tcadmin.AdminTunnelClient, error) {
 	if !d.Available() {
 		return nil, ErrNoAdminKey

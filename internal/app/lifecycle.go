@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"github.com/spoked/mcpd/internal/tunnel"
 	"net"
 	"net/http"
 	"syscall"
@@ -146,6 +147,36 @@ func (a *App) Run(ctx context.Context) error {
 			}
 			<-ctx.Done()
 			return a.tunnels.Stop(context.WithoutCancel(ctx))
+		})
+		// Whether OpenAI still has each tunnel. A tunnel deleted in OpenAI's
+		// own dashboard is never told; its client polls for ever and the
+		// status here says connected. Asked every few minutes with the
+		// account's admin key, where there is one, and recorded on the
+		// tunnel's status for the page and the digest to show.
+		a.startWorker("tunnel-upstream", workerCtx, func(ctx context.Context) error {
+			check := func(accountID string) tunnel.UpstreamChecker {
+				dir := a.chatgptDirectory(ctx, accountID)
+				if !dir.Available() {
+					return nil
+				}
+				return dir
+			}
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(30 * time.Second):
+					// Once soon after start, then on the ticker.
+				}
+				a.tunnels.CheckUpstream(ctx, check)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-ticker.C:
+				}
+			}
 		})
 	}
 

@@ -180,6 +180,74 @@ type Status struct {
 	// quotes a credential.
 	Message     string     `json:"message,omitempty"`
 	ConnectedAt *time.Time `json:"connected_at,omitempty"`
+
+	// Requests counts what ChatGPT has actually sent through this tunnel
+	// since it last connected, and LastRequestAt is when the latest arrived.
+	// "Connected" is decided once, on the first completed poll, and says
+	// nothing about the hours after it; these are what say something.
+	Requests      int64      `json:"requests"`
+	LastRequestAt *time.Time `json:"last_request_at,omitempty"`
+
+	// Trouble is the last error the tunnel client reported, and TroubleAt is
+	// when. The client backs off on its own and never tells mcpd its poll is
+	// failing; its error lines are the only sign, so they are kept.
+	Trouble   string     `json:"trouble,omitempty"`
+	TroubleAt *time.Time `json:"trouble_at,omitempty"`
+	// Degraded is a connected tunnel whose client has been reporting errors
+	// for a while with nothing served since. Not failed -- the client is
+	// still trying -- but not something to trust either, and the watchdog
+	// restarts it if it goes on long enough.
+	Degraded bool `json:"degraded"`
+
+	// Attempts counts restarts since the tunnel last worked, and NextRetryAt
+	// is when the next one is due. A failure the supervisor will not retry --
+	// a rejected credential, a configuration that cannot start -- leaves
+	// NextRetryAt empty with the state at failed, which is the signal that a
+	// person is needed.
+	Attempts    int        `json:"attempts,omitempty"`
+	NextRetryAt *time.Time `json:"next_retry_at,omitempty"`
+
+	// Upstream reports whether OpenAI still has this tunnel: "present",
+	// "missing", or "" when nothing has checked -- there is no admin key, or
+	// the check has not run yet. A tunnel deleted in OpenAI's dashboard polls
+	// for ever and is never told.
+	Upstream          string     `json:"upstream,omitempty"`
+	UpstreamCheckedAt *time.Time `json:"upstream_checked_at,omitempty"`
+}
+
+// The supervisor's timings. Variables so a test can shorten them.
+var (
+	// retryBase is the first delay after a retryable failure; each further
+	// attempt doubles it up to retryCap.
+	retryBase = 2 * time.Second
+	retryCap  = 5 * time.Minute
+	// stillDownAfter is the attempt at which the operator is told again: the
+	// first notice said mcpd was retrying, and this one says it has not
+	// worked. About ten minutes of continuous failure at the timings above.
+	stillDownAfter = 8
+	// degradedAfter is how long the client has to keep reporting errors, with
+	// nothing served in between, before a connected tunnel is called
+	// degraded; restartAfter is how long before the watchdog restarts it.
+	// Generous on purpose: a tunnel that logs a processing error while
+	// serving requests is working, and must not be flapped.
+	degradedAfter = 2 * time.Minute
+	restartAfter  = 10 * time.Minute
+	// troubleWindow is how long a client error counts as current.
+	troubleWindow = 5 * time.Minute
+	// watchdogEvery is how often the watchdog looks.
+	watchdogEvery = 30 * time.Second
+)
+
+// backoff is the delay before the nth retry, starting at 1.
+func backoff(attempt int) time.Duration {
+	d := retryBase
+	for i := 1; i < attempt && d < retryCap; i++ {
+		d *= 2
+	}
+	if d > retryCap {
+		d = retryCap
+	}
+	return d
 }
 
 // ServerFactory builds the MCP server the tunnel exposes.
@@ -198,10 +266,17 @@ type Manager struct {
 	factory ServerFactory
 	log     *slog.Logger
 
-	// onFailure is told when this tunnel stops serving, so that something
-	// which will not restart on its own can reach a person. Set by the group
-	// from the composition root, and nil wherever nobody is listening.
-	onFailure func(plugin, tunnelID, reason string)
+	// onFailure is told when this tunnel stops serving, so that a person can
+	// be reached. retrying says whether the supervisor will keep trying on
+	// its own: a rejected credential will not fix itself, a control plane
+	// that is briefly unreachable will. Set by the group from the
+	// composition root, and nil wherever nobody is listening.
+	onFailure func(plugin, tunnelID, reason string, retrying bool)
+	// onRecovered is told when a tunnel that had failed is serving again, so
+	// the person told about the failure is told it is over.
+	onRecovered func(plugin, tunnelID string)
+	// now is the clock, replaceable by a test.
+	now func() time.Time
 
 	// ops serialises the lifecycle transitions -- Start, Stop, Reconfigure --
 	// end to end.
@@ -233,6 +308,27 @@ type Manager struct {
 	connectedAt *time.Time
 	cancel      context.CancelFunc
 	running     sync.WaitGroup
+
+	// Liveness, all guarded by mu.
+	requests     int64
+	lastRequest  *time.Time
+	trouble      string
+	troubleAt    *time.Time
+	troubleSince *time.Time
+
+	// The supervisor, guarded by mu. attempts counts restarts since the
+	// tunnel last reached connected; retry is the pending restart, nil when
+	// none is due; failedBefore remembers that somebody was told, so they
+	// are told when it is over.
+	attempts     int
+	retry        *time.Timer
+	retryAt      *time.Time
+	failedBefore bool
+
+	// What OpenAI last said about this tunnel, set by the group's upstream
+	// check. Guarded by mu.
+	upstream   string
+	upstreamAt *time.Time
 }
 
 // NewManager builds a tunnel manager. A zero TunnelID leaves it disabled.
@@ -241,7 +337,7 @@ func NewManager(cfg Config, factory ServerFactory, log *slog.Logger) *Manager {
 	if cfg.TunnelID == "" {
 		state = StateDisabled
 	}
-	return &Manager{cfg: cfg, factory: factory, log: log, state: state}
+	return &Manager{cfg: cfg, factory: factory, log: log, state: state, now: time.Now}
 }
 
 // Status reports the current state.
@@ -250,9 +346,18 @@ func (m *Manager) Status() Status {
 	defer m.mu.RUnlock()
 
 	s := Status{
-		State:       m.state,
-		Message:     m.message,
-		ConnectedAt: m.connectedAt,
+		State:             m.state,
+		Message:           m.message,
+		ConnectedAt:       m.connectedAt,
+		Requests:          m.requests,
+		LastRequestAt:     m.lastRequest,
+		Trouble:           m.trouble,
+		TroubleAt:         m.troubleAt,
+		Degraded:          m.degradedLocked(m.now()) >= degradedAfter,
+		Attempts:          m.attempts,
+		NextRetryAt:       m.retryAt,
+		Upstream:          m.upstream,
+		UpstreamCheckedAt: m.upstreamAt,
 	}
 	s.Plugin = m.cfg.Plugin
 	if m.state != StateDisabled {
@@ -294,8 +399,11 @@ func (m *Manager) start(ctx context.Context) error {
 	cfg := m.cfg
 	m.mu.Unlock()
 
+	// Neither of these will be different in two seconds: a configuration
+	// that does not validate and a server that cannot be built are for a
+	// person, not the supervisor.
 	if err := cfg.Validate(); err != nil {
-		m.fail(err)
+		m.fail(err, false)
 		return err
 	}
 
@@ -304,7 +412,7 @@ func (m *Manager) start(ctx context.Context) error {
 	principal := cfg.Principal
 	server, err := m.factory(&principal)
 	if err != nil {
-		m.fail(fmt.Errorf("tunnel: could not build the MCP server: %w", err))
+		m.fail(fmt.Errorf("tunnel: could not build the MCP server: %w", err), false)
 		return err
 	}
 
@@ -316,35 +424,41 @@ func (m *Manager) start(ctx context.Context) error {
 	// The client logs the same 401 on every backoff, and one explanation is
 	// the useful number.
 	var rejectOnce sync.Once
-	out := logWriter{log: m.log, rejected: func(code string) {
-		rejectOnce.Do(func() {
-			m.fail(fmt.Errorf("tunnel: %s", diagnose(cfg.APIKey, code)))
-			// Stopping is the point. The client would otherwise keep retrying
-			// a credential the control plane has already rejected, filling the
-			// log with a failure nobody is going to see.
-			go func() {
-				stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer stopCancel()
-				if err := m.Stop(stopCtx); err != nil {
-					m.log.WarnContext(ctx, "tunnel did not stop cleanly after a rejected key", "error", err)
-				}
-				// Stop resets the state to stopped, which would erase the
-				// explanation the operator needs.
-				m.fail(fmt.Errorf("tunnel: %s", diagnose(cfg.APIKey, code)))
-			}()
-		})
-	}}
+	out := logWriter{
+		log: m.log,
+		rejected: func(code string) {
+			rejectOnce.Do(func() {
+				// Not retried: the key will still be wrong in ten minutes.
+				m.fail(fmt.Errorf("tunnel: %s", diagnose(cfg.APIKey, code)), false)
+				// Stopping is the point. The client would otherwise keep
+				// retrying a credential the control plane has already
+				// rejected, filling the log with a failure nobody is going
+				// to see.
+				go func() {
+					stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer stopCancel()
+					if err := m.Stop(stopCtx); err != nil {
+						m.log.WarnContext(ctx, "tunnel did not stop cleanly after a rejected key", "error", err)
+					}
+					// Stop resets the state to stopped, which would erase
+					// the explanation the operator needs.
+					m.fail(fmt.Errorf("tunnel: %s", diagnose(cfg.APIKey, code)), false)
+				}()
+			})
+		},
+		trouble: func(line string) { m.noteTrouble(redactKey(errors.New(line), cfg.APIKey).Error()) },
+	}
 
-	client, err := newRuntime(cfg, server, runCtx, m.log, out)
+	client, err := newRuntime(cfg, server, runCtx, m.log, out, m.noteRequest)
 	if err != nil {
 		cancel()
-		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)))
+		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)), true)
 		return err
 	}
 
 	if err := client.Start(runCtx); err != nil {
 		cancel()
-		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)))
+		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)), true)
 		return err
 	}
 
@@ -374,20 +488,65 @@ func (m *Manager) start(ctx context.Context) error {
 		defer m.running.Done()
 		select {
 		case <-client.Ready():
-			now := time.Now()
+			now := m.now()
 			m.mu.Lock()
 			// Only claim connected if nothing stopped us in the meantime.
+			recovered := false
 			if m.state == StateStarting {
 				m.state = StateConnected
 				m.connectedAt = &now
 				m.message = ""
+				// Working again: the supervisor starts from the beginning
+				// next time, and whoever was told about the failure is told
+				// it is over.
+				m.attempts = 0
+				m.retryAt = nil
+				recovered = m.failedBefore
+				m.failedBefore = false
 			}
 			m.mu.Unlock()
 			m.log.InfoContext(ctx, "tunnel connected",
 				"tunnel_id", cfg.TunnelID,
 				"principal", cfg.Principal.ID,
 				"plugins", cfg.Principal.Plugins)
+			if recovered && m.onRecovered != nil {
+				m.onRecovered(cfg.Plugin, cfg.TunnelID)
+			}
 		case <-runCtx.Done():
+		}
+	}()
+
+	// The watchdog. The client backs off for ever on its own and never says
+	// so; a tunnel whose client has been reporting errors for restartAfter
+	// with nothing served in between is restarted, because a fresh client
+	// is the one thing that reliably clears a stuck one.
+	m.running.Add(1)
+	go func() {
+		defer m.running.Done()
+		ticker := time.NewTicker(watchdogEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			m.mu.RLock()
+			stuck := m.state == StateConnected && m.degradedLocked(m.now()) >= restartAfter
+			m.mu.RUnlock()
+			if !stuck {
+				continue
+			}
+			m.log.WarnContext(ctx, "tunnel has been reporting errors with nothing served; restarting it",
+				"tunnel_id", cfg.TunnelID, "for", restartAfter.String())
+			go func() {
+				restartCtx, done := context.WithTimeout(context.Background(), 30*time.Second)
+				defer done()
+				if err := m.Restart(restartCtx); err != nil {
+					m.log.WarnContext(ctx, "tunnel did not restart cleanly", "error", err)
+				}
+			}()
+			return
 		}
 	}()
 
@@ -419,6 +578,17 @@ func (m *Manager) stop(ctx context.Context) error {
 		m.state = StateStopped
 	}
 	m.connectedAt = nil
+	// A stop is a decision, and a retry that fired after it would undo it.
+	if m.retry != nil {
+		m.retry.Stop()
+		m.retry = nil
+	}
+	m.retryAt = nil
+	m.attempts = 0
+	m.failedBefore = false
+	m.requests = 0
+	m.lastRequest = nil
+	m.troubleSince = nil
 	m.mu.Unlock()
 
 	if cancel != nil {
@@ -473,6 +643,22 @@ func (m *Manager) Reconfigure(ctx context.Context, cfg Config) error {
 	return m.start(ctx)
 }
 
+// Restart stops the tunnel and starts it again with the configuration it
+// has. It is what the dashboard's button does, what the watchdog does, and
+// what the supervisor does between attempts -- one path, so a restart means
+// the same thing however it was asked for.
+func (m *Manager) Restart(ctx context.Context) error {
+	m.ops.Lock()
+	defer m.ops.Unlock()
+	if !m.Enabled() {
+		return errors.New("tunnel: no tunnel is configured")
+	}
+	if err := m.stop(ctx); err != nil {
+		m.log.WarnContext(ctx, "tunnel did not stop cleanly before restarting", "error", err)
+	}
+	return m.start(ctx)
+}
+
 // Enabled reports whether a tunnel is configured.
 func (m *Manager) Enabled() bool {
 	m.mu.RLock()
@@ -480,23 +666,133 @@ func (m *Manager) Enabled() bool {
 	return m.state != StateDisabled
 }
 
-func (m *Manager) fail(err error) {
+// fail records a failure and, where retrying could help, schedules the next
+// attempt.
+//
+// retryable is decided by the caller, because only it knows what failed: a
+// control plane that could not be reached is worth trying again, a rejected
+// credential or a configuration that does not validate is not. The
+// supervisor never guesses.
+func (m *Manager) fail(err error, retryable bool) {
 	m.mu.Lock()
 	was := m.state
 	m.state = StateFailed
 	m.message = err.Error()
 	m.connectedAt = nil
 	plugin, tunnelID := m.cfg.Plugin, m.cfg.TunnelID
+	first := !m.failedBefore
+	m.failedBefore = true
+	var attempt int
+	var delay time.Duration
+	if retryable && m.cfg.Enabled && m.retry == nil {
+		m.attempts++
+		attempt = m.attempts
+		delay = backoff(attempt)
+		at := m.now().Add(delay)
+		m.retryAt = &at
+		m.retry = time.AfterFunc(delay, m.retryNow)
+	}
 	m.mu.Unlock()
-	m.log.Error("tunnel failed", "error", err)
+	m.log.Error("tunnel failed", "error", err, "retrying", retryable, "attempt", attempt)
 
-	// Once per failure rather than once per report of one. The
+	if m.onFailure == nil {
+		return
+	}
+	// Once per failure rather than once per report of one, and again at the
+	// attempt where "retrying" has stopped being reassuring. The
 	// rejected-credential path calls this twice deliberately -- Stop resets
 	// the state and would erase the explanation -- and nobody needs telling
 	// the same thing twice.
-	if m.onFailure != nil && was != StateFailed {
-		m.onFailure(plugin, tunnelID, err.Error())
+	switch {
+	case was != StateFailed && first:
+		m.onFailure(plugin, tunnelID, err.Error(), retryable)
+	case retryable && attempt == stillDownAfter:
+		m.onFailure(plugin, tunnelID,
+			fmt.Sprintf("still not connecting after %d attempts: %s", attempt, err.Error()), true)
+	case !retryable && was != StateFailed:
+		// A failure that was being retried and has now become final: the
+		// person who was told mcpd would keep trying needs to know it will
+		// not.
+		m.onFailure(plugin, tunnelID, err.Error(), false)
 	}
+}
+
+// retryNow is the supervisor's next attempt, from the timer.
+func (m *Manager) retryNow() {
+	m.mu.Lock()
+	m.retry = nil
+	m.retryAt = nil
+	enabled := m.cfg.Enabled && m.state == StateFailed
+	m.mu.Unlock()
+	if !enabled {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// Start, not Restart: the failed attempt left nothing running to stop,
+	// and stop would reset the attempt count the backoff is built on.
+	if err := m.Start(ctx); err != nil {
+		// Already recorded by fail, which scheduled the attempt after this.
+		return
+	}
+}
+
+// noteRequest records that ChatGPT sent something through the tunnel. Called
+// from the transport for every message, so it is cheap and holds no lock for
+// longer than two stores.
+func (m *Manager) noteRequest() {
+	now := m.now()
+	m.mu.Lock()
+	m.requests++
+	m.lastRequest = &now
+	// Something got through, so whatever the client was complaining about
+	// was not stopping it.
+	m.troubleSince = nil
+	m.mu.Unlock()
+}
+
+// noteTrouble records an error line from the client. The first of a run
+// starts the clock the watchdog reads; a run ends when a request is served
+// or the errors stop for troubleWindow.
+func (m *Manager) noteTrouble(line string) {
+	now := m.now()
+	m.mu.Lock()
+	if m.troubleSince == nil || m.troubleAt == nil || now.Sub(*m.troubleAt) > troubleWindow {
+		since := now
+		m.troubleSince = &since
+	}
+	m.trouble = line
+	m.troubleAt = &now
+	m.mu.Unlock()
+}
+
+// degradedLocked reports how long the client has been reporting errors with
+// nothing served since, or zero. The caller holds mu.
+func (m *Manager) degradedLocked(now time.Time) time.Duration {
+	if m.troubleSince == nil || m.troubleAt == nil {
+		return 0
+	}
+	if now.Sub(*m.troubleAt) > troubleWindow {
+		// The errors stopped on their own.
+		return 0
+	}
+	if m.lastRequest != nil && m.lastRequest.After(*m.troubleSince) {
+		return 0
+	}
+	return now.Sub(*m.troubleSince)
+}
+
+// SetUpstream records what OpenAI said about this tunnel: whether it still
+// exists there. Called by the group's check, and read by Status.
+func (m *Manager) SetUpstream(present bool, at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if present {
+		m.upstream = "present"
+	} else {
+		m.upstream = "missing"
+	}
+	m.upstreamAt = &at
 }
 
 // redactKey removes the API key from an error before it reaches a log line or
@@ -522,6 +818,9 @@ func redactKey(err error, key string) error {
 type logWriter struct {
 	log      *slog.Logger
 	rejected func(string)
+	// trouble is told every error line, so the manager can tell a tunnel
+	// that is quietly failing from one that is quietly idle.
+	trouble func(string)
 }
 
 func (w logWriter) Write(p []byte) (int, error) {
@@ -539,6 +838,18 @@ func (w logWriter) Write(p []byte) (int, error) {
 		// operator scanning for a cause should not have to read past the rest.
 		if strings.Contains(line, "level=ERROR") || strings.Contains(line, `"level":"ERROR"`) {
 			w.log.Error("tunnel-client", "line", line)
+			if w.trouble != nil {
+				w.trouble(shorten(line, 300))
+			}
+			continue
+		}
+		if pollFailure(line) {
+			// A poll that failed is the tunnel not being served, whatever
+			// level the client filed it under.
+			if w.trouble != nil {
+				w.trouble(shorten(line, 300))
+			}
+			w.log.Warn("tunnel-client", "line", line)
 			continue
 		}
 		w.log.Info("tunnel-client", "line", line)
@@ -553,15 +864,33 @@ func (w logWriter) Write(p []byte) (int, error) {
 // backing off for; a key the control plane says is wrong will still be wrong
 // in ten minutes.
 func credentialRejection(line string) string {
-	switch {
-	case strings.Contains(line, "error_code=invalid_api_key"),
-		strings.Contains(line, `"error_code":"invalid_api_key"`):
-		return "invalid_api_key"
-	case strings.Contains(line, "error_code=token_invalidated"),
-		strings.Contains(line, `"error_code":"token_invalidated"`):
-		return "token_invalidated"
+	for _, code := range []string{"invalid_api_key", "token_invalidated", "tunnel_use_forbidden"} {
+		if strings.Contains(line, "error_code="+code) ||
+			strings.Contains(line, `"error_code":"`+code+`"`) {
+			return code
+		}
 	}
 	return ""
+}
+
+// pollFailure reports whether a client line is its poll loop backing off.
+//
+// The client logs these at WARN, once per attempt, for as long as the
+// control plane refuses it. They are the only running sign that a tunnel
+// which once connected is no longer being served -- and, left alone, the one
+// line that floods a log at one every ten seconds.
+func pollFailure(line string) bool {
+	return strings.Contains(line, "poll failed") &&
+		(strings.Contains(line, "level=WARN") || strings.Contains(line, `"level":"WARN"`) ||
+			strings.Contains(line, "level=ERROR") || strings.Contains(line, `"level":"ERROR"`))
+}
+
+// shorten cuts a log line to what a status can carry.
+func shorten(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // diagnose names the likeliest cause of a failure to connect.
@@ -571,6 +900,13 @@ func credentialRejection(line string) string {
 // admin key is recognisable by its prefix, which turns a guess into a
 // statement.
 func diagnose(apiKey, code string) string {
+	if code == "tunnel_use_forbidden" {
+		return "OpenAI says this API key's principal is not allowed to use this " +
+			"tunnel. The tunnel was made in a different organisation or workspace " +
+			"from the key, or the key's principal lacks Tunnels Use there. Use a " +
+			"runtime key from the account the tunnel was made in, or make the " +
+			"tunnel again under this account"
+	}
 	if code == "token_invalidated" {
 		return "OpenAI has invalidated that API key. Create a new runtime key " +
 			"under Settings, Organization, API keys and paste it in -- rotating a " +
