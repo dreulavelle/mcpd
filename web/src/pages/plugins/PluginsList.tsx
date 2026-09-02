@@ -7,11 +7,12 @@ import {
 import { when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
+import { parseHealth } from "@/lib/health";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import {
   EmptyState, Loading, Notice, PageHeader, Section,
- Clamp } from "@/components/chrome";
+} from "@/components/chrome";
 import { Chip, healthTone, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -258,6 +259,23 @@ export function PluginsList() {
   );
 }
 
+function HealthSummary({ message }: { message: string }) {
+  const h = parseHealth(message);
+  if (h.status !== undefined) {
+    const tone = h.status >= 200 && h.status < 300 ? "good" : "problem";
+    return (
+      <span className="mt-1 block" title={h.title}>
+        <Chip tone={tone} className="font-mono">HTTP {h.status}</Chip>
+      </span>
+    );
+  }
+  return (
+    <span className="mt-1 block max-w-[40ch] truncate text-xs text-muted-foreground" title={message}>
+      {h.title}
+    </span>
+  );
+}
+
 function PluginTable({ rows, mayManage, onChanged }: {
   rows: PluginRow[];
   mayManage: boolean;
@@ -318,10 +336,16 @@ function PluginTable({ rows, mayManage, onChanged }: {
                   ) : (
                     <Chip tone="attention">Not running</Chip>
                   )}
-                  {(row.removed || row.health !== "healthy") && row.healthMessage && (
-                    <Clamp className="max-w-[40ch] text-xs text-muted-foreground">
+                  {/* The number, where the message names one: a table cell
+                      has room for "408" and not for the paragraph that
+                      explains it, which is on the plugin's page. */}
+                  {row.removed && row.healthMessage && (
+                    <div className="max-w-[40ch] text-xs text-muted-foreground">
                       {row.healthMessage}
-                    </Clamp>
+                    </div>
+                  )}
+                  {!row.removed && row.health !== "healthy" && row.healthMessage && (
+                    <HealthSummary message={row.healthMessage} />
                   )}
                   {row.removed && mayManage && (
                     <RestoreButton

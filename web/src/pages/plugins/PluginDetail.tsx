@@ -6,6 +6,7 @@ import {
 import { unprefixed, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link, useRouter } from "@/lib/router";
+import { parseHealth } from "@/lib/health";
 import { useCan } from "@/lib/session";
 import {
   Copyable, Detail, Loading, Notice, PageHeader, Section,
@@ -142,9 +143,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
             onChanged={onChanged}
           />
         ) : health !== "healthy" && healthMessage && (
-          <Notice tone={health === "degraded" ? "attention" : "problem"}>
-            {healthMessage}
-          </Notice>
+          <HealthNotice health={health} message={healthMessage} />
         )}
 
         {runtime === "mcp" && (
@@ -497,6 +496,34 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * The plugin's diagnosis, laid out: the upstream's status and reference as
+ * facts to quote, the first sentence as the headline, and the explanation
+ * as the paragraph it is. This is the page with room for it; the table has
+ * only the number.
+ */
+function HealthNotice({ health, message }: { health: string; message: string }) {
+  const h = parseHealth(message);
+  return (
+    <Notice tone={health === "degraded" ? "attention" : "problem"}>
+      <span className="block space-y-2">
+        {(h.status !== undefined || h.reference) && (
+          <span className="flex flex-wrap items-center gap-2">
+            {h.status !== undefined && <Chip tone="problem" className="font-mono">HTTP {h.status}</Chip>}
+            {h.reference && (
+              <span className="text-xs">
+                reference <code className="font-mono select-all">{h.reference}</code>
+              </span>
+            )}
+          </span>
+        )}
+        <strong className="block font-medium">{h.title}</strong>
+        {h.body && <span className="block text-sm opacity-90">{h.body}</span>}
+      </span>
+    </Notice>
   );
 }
 
