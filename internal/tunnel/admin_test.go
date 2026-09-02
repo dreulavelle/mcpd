@@ -132,3 +132,24 @@ func TestDirectoryExists_TellsMissingFromUnanswered(t *testing.T) {
 		t.Fatal("a 401 is not an answer about the tunnel")
 	}
 }
+
+// Deleting a tunnel OpenAI no longer has is the outcome asked for, not a
+// failure: refusing on the 404 left the assignment behind, and mcpd went on
+// reporting the tunnel as stopped on every restart with no way to remove it.
+func TestDirectoryDelete_TreatsGoneAsDeleted(t *testing.T) {
+	const id = "tunnel_0123456789abcdef0123456789abcdef"
+	status := http.StatusNotFound
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"error":{"message":"not found"}}`))
+	}))
+	defer srv.Close()
+	d := NewDirectory("sk-admin-x", "org_1", srv.URL)
+	if err := d.Delete(t.Context(), id); err != nil {
+		t.Fatalf("404 should count as deleted: %v", err)
+	}
+	status = http.StatusForbidden
+	if err := d.Delete(t.Context(), id); err == nil {
+		t.Fatal("a refusal is still a refusal")
+	}
+}
