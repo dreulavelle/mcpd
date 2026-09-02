@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { capabilityFor, redirectFor } from "@/lib/nav";
+import { capabilityFor, entryFor, redirectFor } from "@/lib/nav";
 import { useRouter, useSegments } from "@/lib/router";
 import { useCan } from "@/lib/session";
 import { Notice, PageHeader } from "@/components/chrome";
@@ -44,6 +44,18 @@ export function Routes() {
   useEffect(() => {
     if (moved) navigate(moved, { replace: true });
   }, [moved, navigate]);
+
+  // The tab and the history say where somebody is, not "mcpd" six times
+  // over. The section's own label, and the thing within it where there is
+  // one -- a plugin's name, a change's reference.
+  useEffect(() => {
+    const entry = entryFor(path);
+    const parts = [entry?.label ?? "mcpd"];
+    if (param && (section === "plugins" || section === "approvals")) parts.unshift(decodeURIComponent(param));
+    if (section === "settings" && param) parts.unshift(param[0]!.toUpperCase() + param.slice(1));
+    document.title = `${parts.join(" · ")} · mcpd`;
+    return () => { document.title = "mcpd"; };
+  }, [path, section, param]);
 
   function page(): ReactNode {
     switch (section) {

@@ -29,6 +29,19 @@ on `GET /api/session`, computed by `Principal.Capabilities`) and `useCan`
 reads that. Deriving it from the role showed a restricted administrator
 every button and refused every click.
 
+Three dashboard primitives exist so that nobody reaches for the browser's:
+`useConfirm` from `components/confirm.tsx` in place of `window.confirm`, which
+some browsers suppress after the first call and then every Delete silently
+returns false; `useQueryParam` from `lib/router.tsx` for any filter, so it
+lives in the address and a link can arrive with it set; and the command
+palette in `components/CommandPalette.tsx`, which lists pages from `nav.ts`
+and settings tabs from `SettingsTabs.tsx` — a new section belongs in one of
+those, never in the palette by hand. Appearance is a `data-theme` attribute
+that `public/theme.js` sets before first paint; the dark palette in
+`index.css` is keyed on it alone, and Tailwind's `dark:` variant is
+re-pointed at it. Keep it that way: a second copy of the palette under the
+media query is one more than can be kept in step.
+
 The container's data lives in `./data` — one bind mount holding `config.yaml`,
 the database, TLS material, the rotating log in `logs/` and out-of-process
 plugins. It is generated on first start if it is empty, and the container runs

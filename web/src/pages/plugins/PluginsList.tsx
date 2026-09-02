@@ -127,8 +127,13 @@ export function PluginsList() {
     () => (plugins ? toRows(plugins, instances, types) : null),
     [plugins, instances, types],
   );
-  const builtin = rows?.filter((r) => r.runtime === "builtin") ?? [];
-  const remote = rows?.filter((r) => r.runtime === "mcp") ?? [];
+  // By name, title or health, once the list is long enough to need finding in.
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const matches = (r: PluginRow) =>
+    !q || [String(r.name ?? ""), String(r.title ?? ""), String(r.health ?? "")].join(" ").toLowerCase().includes(q);
+  const builtin = rows?.filter((r) => r.runtime === "builtin" && matches(r)) ?? [];
+  const remote = rows?.filter((r) => r.runtime === "mcp" && matches(r)) ?? [];
   // Two different things to say, so two different notices. An instance nobody
   // has finished filling in is waiting and will serve on its own; one that
   // tried and failed is not, and telling somebody it "starts as soon as it has
@@ -143,9 +148,20 @@ export function PluginsList() {
       <PageHeader
         title="Plugins"
         lede="What mcpd can work with, and what each one is set up to reach."
-        actions={mayAdd && rows
-          ? <Button onClick={() => setAdding(true)}>Add plugin</Button>
-          : undefined}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {(rows?.length ?? 0) > 8 && (
+              <Input
+                aria-label="Find a plugin"
+                className="w-48"
+                placeholder="Find a plugin…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            )}
+            {mayAdd && rows && <Button onClick={() => setAdding(true)}>Add plugin</Button>}
+          </div>
+        }
       />
 
       <AddPlugin
@@ -206,6 +222,11 @@ export function PluginsList() {
         </EmptyState>
       ) : (
         <div className="mt-4 space-y-8">
+          {q && builtin.length === 0 && remote.length === 0 && (
+            <EmptyState title="No plugin matches that">
+              Try part of a name, a type, or a health state.
+            </EmptyState>
+          )}
           {builtin.length > 0 && (
             <Section
               title="Built in"
