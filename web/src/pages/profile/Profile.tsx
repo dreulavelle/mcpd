@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import {
   api, ApiError, type Meta, type ProviderName, type Session, type User,
 } from "@/lib/api";
-import { capabilitiesOf, type Capability } from "@/lib/capabilities";
+import type { Capability } from "@/lib/capabilities";
 import { whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { signedInAs, useAdoptSession, useCan, useSession } from "@/lib/session";
@@ -43,7 +43,7 @@ export function Profile() {
   const self: User | undefined = (users?.users ?? []).find((u) => u.self);
 
   if (!session) return null;
-  const held = capabilitiesOf(session.role);
+  const held = session.capabilities;
 
   return (
     <>
@@ -87,7 +87,7 @@ export function Profile() {
 
         <Section
           title="What you may do"
-          description="mcpd checks capabilities rather than roles. These are the ones your role carries."
+          description="mcpd checks capabilities rather than roles. These are the ones you hold: what your role carries, less anything a group you belong to takes away."
         >
           <Card>
             <CardContent>

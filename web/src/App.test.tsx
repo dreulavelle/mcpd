@@ -3,6 +3,7 @@ import { act, screen, waitFor } from "@testing-library/react";
 import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "@/lib/api";
+import { capabilitiesOf } from "@/lib/capabilities";
 import App from "@/App";
 
 /**
@@ -33,7 +34,9 @@ function stubApi(role: "user" | "admin" = "admin") {
   vi.spyOn(api, "meta").mockResolvedValue({
     version: "dev", auth_mode: "static", needs_setup: false,
   });
-  vi.spyOn(api, "session").mockResolvedValue({ ...SESSION, role });
+  vi.spyOn(api, "session").mockResolvedValue({
+    ...SESSION, role, capabilities: [...capabilitiesOf(role)],
+  });
   vi.spyOn(api, "health").mockResolvedValue({
     status: "up",
     checks: [{ name: "database", status: "up", critical: true }],

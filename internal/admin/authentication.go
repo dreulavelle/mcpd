@@ -556,7 +556,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, r, token, sess.ExpiresAt)
-	s.writeJSON(w, r, http.StatusCreated, sessionView(user, sess, s.grantsFor(r, user)))
+	s.writeJSON(w, r, http.StatusCreated, s.sessionView(r, user, sess))
 }
 
 // --- the pending queue ------------------------------------------------------

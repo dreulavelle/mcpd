@@ -648,6 +648,14 @@ as permitting everything — otherwise ordinary membership of a general group
 would undo every restriction, which is precisely the shape of the grant bug
 described below.
 
+**The console draws its controls from the effective set, never from the
+role.** `GET /api/session` carries `capabilities`, computed by
+`Principal.Capabilities` from the same `Can` the server refuses with, and
+`useCan` in the dashboard reads that list. `capabilities.ts` still mirrors the
+role map, but only to describe what a role means; the moment the page derived
+what a person may do from their role, a group ceiling was invisible to it, and
+a restricted administrator saw every button and had every click refused.
+
 Note the two rules point in opposite directions and that is deliberate. For
 *reach*, a subject's own grant wins and groups fill in when it has none. For
 *capabilities*, the role grants and groups narrow. Both follow the same

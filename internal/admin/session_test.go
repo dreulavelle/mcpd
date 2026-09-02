@@ -337,6 +337,54 @@ func TestSessionCarriesTheAccountsRole(t *testing.T) {
 	}
 }
 
+// The session says what the account may actually do, after its groups have
+// had their say. The page draws its controls from this list; when it derived
+// the set from the role instead, an administrator whose group permitted only
+// reading saw every button and had every click refused.
+func TestSessionCarriesTheEffectiveCapabilities(t *testing.T) {
+	cases := []struct {
+		name    string
+		role    auth.Role
+		ceiling []auth.Capability
+		want    []string
+	}{
+		{"an unrestricted admin", auth.RoleAdmin, nil, []string{"read", "propose", "approve", "admin"}},
+		{"an admin a group narrows to reading", auth.RoleAdmin, []auth.Capability{auth.CapRead}, []string{"read"}},
+		{"a suspended group permits nothing", auth.RoleUser, []auth.Capability{}, []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			accounts := newFakeAccounts()
+			accounts.user.Role = tc.role
+			accounts.ceiling = tc.ceiling
+			s := newTestServer(t, accounts)
+
+			r := httptest.NewRequest(http.MethodGet, "/api/session", nil)
+			r.AddCookie(&http.Cookie{Name: sessionCookie, Value: accounts.token})
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+			}
+
+			var body struct {
+				Capabilities []string `json:"capabilities"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			// Never null on the wire: the page reads the list as what is
+			// held, and "nothing" has to arrive as an empty list.
+			if body.Capabilities == nil {
+				t.Fatalf("capabilities is null; want %v", tc.want)
+			}
+			if strings.Join(body.Capabilities, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("capabilities = %v, want %v", body.Capabilities, tc.want)
+			}
+		})
+	}
+}
+
 // A new instance says so, so the dashboard can offer to claim it rather than
 // asking for credentials nobody has yet.
 func TestMetaReportsWhetherSetupIsNeeded(t *testing.T) {

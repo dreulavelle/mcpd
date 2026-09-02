@@ -22,7 +22,12 @@ The dashboard is React with Tailwind and shadcn/ui. shadcn components are
 them rather than working around them. `web/src/lib/nav.ts` is the one place
 that decides what appears in the sidebar, and `web/src/lib/capabilities.ts`
 mirrors the role-to-capability map from `internal/auth/principal.go` — if that
-map changes, this one has to follow.
+map changes, this one has to follow. That mirror describes what a *role*
+carries; it is not what decides whether a control is drawn. A group can take
+capabilities away, so the session reports the effective set (`capabilities`
+on `GET /api/session`, computed by `Principal.Capabilities`) and `useCan`
+reads that. Deriving it from the role showed a restricted administrator
+every button and refused every click.
 
 The container's data lives in `./data` — one bind mount holding `config.yaml`,
 the database, TLS material, the rotating log in `logs/` and out-of-process

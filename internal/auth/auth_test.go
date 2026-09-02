@@ -86,6 +86,49 @@ func TestRoleCapabilities(t *testing.T) {
 	}
 }
 
+// Capabilities has to agree with Can, because the dashboard draws its
+// controls from the list and the server refuses from the check. A group
+// ceiling is the case that used to split them: the role said approve, the
+// ceiling said no, and the page showed a button that always failed.
+func TestCapabilities_AgreesWithCan(t *testing.T) {
+	cases := []struct {
+		name string
+		p    *Principal
+		want []Capability
+	}{
+		{"nil holds nothing", nil, []Capability{}},
+		{"admin without a ceiling", &Principal{Role: RoleAdmin},
+			[]Capability{CapRead, CapPropose, CapApprove, CapAdmin}},
+		{"user without a ceiling", &Principal{Role: RoleUser},
+			[]Capability{CapRead, CapPropose, CapApprove}},
+		{"a ceiling only removes", &Principal{Role: RoleUser, Ceiling: []Capability{CapRead, CapAdmin}},
+			[]Capability{CapRead}},
+		{"an empty ceiling suspends", &Principal{Role: RoleAdmin, Ceiling: []Capability{}},
+			[]Capability{}},
+		{"pending holds nothing", &Principal{Role: RoleAdmin, Pending: true},
+			[]Capability{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.p.Capabilities()
+			if got == nil {
+				t.Fatal("Capabilities() returned nil; an empty list is the answer, not the absence of one")
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("Capabilities() = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("Capabilities() = %v, want %v", got, tc.want)
+				}
+				if !tc.p.Can(got[i]) {
+					t.Errorf("Capabilities() lists %s but Can refuses it", got[i])
+				}
+			}
+		})
+	}
+}
+
 func TestAnonymousHoldsNothing(t *testing.T) {
 	p := Anonymous()
 	for _, c := range []Capability{CapRead, CapPropose, CapApprove, CapAdmin} {
@@ -220,5 +263,30 @@ func TestFingerprint_IsNotReversibleAndIsStable(t *testing.T) {
 	}
 	if a == Fingerprint(tokenB) {
 		t.Fatal("distinct tokens must fingerprint differently")
+	}
+}
+
+// A ceiling is part of what a principal grants, so two principals that differ
+// only in one are not equal. A tunnel restarts when its principal changes;
+// one whose ceiling changed and whose Equal said nothing had would keep
+// serving with rights that had been taken away.
+func TestEqual_SeesTheCeiling(t *testing.T) {
+	base := Principal{ID: "user:a", Role: RoleAdmin, Plugins: []string{"*"}}
+	none := base
+	empty := base
+	empty.Ceiling = []Capability{}
+	read := base
+	read.Ceiling = []Capability{CapRead}
+	readAgain := base
+	readAgain.Ceiling = []Capability{CapRead}
+
+	if !none.Equal(base) || !read.Equal(readAgain) {
+		t.Error("principals with the same ceiling are equal")
+	}
+	if none.Equal(empty) {
+		t.Error("no ceiling and a ceiling permitting nothing are different grants")
+	}
+	if none.Equal(read) || empty.Equal(read) {
+		t.Error("a ceiling that differs makes the principals differ")
 	}
 }
