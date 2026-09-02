@@ -219,10 +219,12 @@ type Status struct {
 	// errors began.
 	Errors []int64 `json:"errors"`
 
-	// Upstream reports whether OpenAI still has this tunnel: "present",
-	// "missing", or "" when nothing has checked -- there is no admin key, or
-	// the check has not run yet. A tunnel deleted in OpenAI's dashboard polls
-	// for ever and is never told.
+	// Upstream reports whether this account's organisation has this tunnel:
+	// "present", "missing", or "" when nothing has checked -- there is no
+	// admin key, or the check has not run yet. OpenAI scopes its admin API
+	// to one organisation, so "missing" means deleted *or* owned by another
+	// organisation; the dashboard tells the two apart from the listings it
+	// already has. Either way the client polls for ever and is never told.
 	Upstream          string     `json:"upstream,omitempty"`
 	UpstreamCheckedAt *time.Time `json:"upstream_checked_at,omitempty"`
 }
@@ -1015,9 +1017,9 @@ func diagnose(apiKey, code string) string {
 		// The same code for a tunnel that is gone and one in another
 		// organisation; only the upstream check can tell them apart, and
 		// the Tunnels page shows its answer.
-		return "OpenAI refused this account's key for this tunnel (tunnel_use_forbidden). " +
-			"Either the tunnel no longer exists in OpenAI, or it belongs to another " +
-			"organisation or workspace. The Tunnels page says which; remove it if it is gone"
+		return "OpenAI refused this account's key for this tunnel (tunnel_use_forbidden): " +
+			"the tunnel is not in this account's organisation. The Tunnels page names " +
+			"the account that owns it; assign the tunnel there, or forget it"
 	}
 	if code == "token_invalidated" {
 		return "OpenAI has invalidated this account's key (token_invalidated). " +

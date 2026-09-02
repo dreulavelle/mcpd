@@ -76,7 +76,7 @@ export function attention(input: {
     if (t.upstream === "missing") {
       out.push({
         key: `tunnel-gone:${t.tunnel_id}`, tone: "problem",
-        text: `${name(t)} points at a tunnel OpenAI no longer has. Its client will poll for it for ever; make a new one.`,
+        text: `${name(t)} points at a tunnel that is not in its account's organisation. Its client will poll for it for ever; move it to the account that owns it, or forget it.`,
         to: "/tunnels", linkLabel: "Tunnels",
       });
     } else if (t.state === "failed" && !t.next_retry_at) {

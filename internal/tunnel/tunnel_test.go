@@ -609,8 +609,8 @@ func TestCredentialRejection_KnowsAForbiddenTunnel(t *testing.T) {
 	if got := credentialRejection(line); got != "tunnel_use_forbidden" {
 		t.Fatalf("credentialRejection = %q", got)
 	}
-	if !strings.Contains(diagnose("sk-proj-x", "tunnel_use_forbidden"), "organisation or workspace") {
-		t.Error("the diagnosis should say where the tunnel and the key disagree")
+	if !strings.Contains(diagnose("sk-proj-x", "tunnel_use_forbidden"), "organisation") {
+		t.Error("the diagnosis should say the tunnel is in another organisation")
 	}
 	if !pollFailure(line) {
 		t.Error("a poll backing off is trouble, whatever level the client filed it under")

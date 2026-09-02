@@ -291,7 +291,7 @@ func (g *Group) CheckUpstream(ctx context.Context, checker func(accountID string
 		}
 		m.SetUpstream(present, time.Now())
 		if !present {
-			g.log.WarnContext(ctx, "OpenAI no longer has this tunnel; its connector cannot work",
+			g.log.WarnContext(ctx, "this tunnel is not in its account's organisation; its connector cannot work",
 				"tunnel", cfg.TunnelID, "plugin", cfg.Plugin)
 		}
 	}

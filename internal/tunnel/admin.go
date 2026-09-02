@@ -154,11 +154,12 @@ func (d *Directory) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Exists reports whether OpenAI still has a tunnel.
+// Exists reports whether this directory's organisation has a tunnel.
 //
-// A 404 is the answer "no"; anything else is the question not being
-// answered, and is returned as an error so a caller does not mark a tunnel
-// missing because the admin key expired.
+// The admin API is scoped to one organisation, so a 404 means the tunnel is
+// not in this one: deleted, or made in another. Anything else is the
+// question not being answered, and is returned as an error so a caller does
+// not mark a tunnel missing because the admin key expired.
 func (d *Directory) Exists(ctx context.Context, id string) (bool, error) {
 	client, err := d.client()
 	if err != nil {

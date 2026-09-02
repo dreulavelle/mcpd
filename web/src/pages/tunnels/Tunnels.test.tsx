@@ -84,6 +84,21 @@ describe("the tunnels page", () => {
     expect(rows[0]).toHaveTextContent("mcpd: graylog");
   });
 
+  it("moves a tunnel to the account that owns it", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      tunnels: [status({ tunnel_id: "tunnel_b", plugin: "echo", state: "failed", message: "refused", requests: 0, last_request_at: undefined })],
+      available: [{ id: "tunnel_b", name: "mcpd: echo", account_id: "acct_2" }] as never,
+      assignments: { tunnel_b: "echo" },
+      account_assignments: { tunnel_b: "acct_1" },
+    }));
+    const assign = vi.spyOn(api, "assignTunnel").mockResolvedValue({ status: "assigned" });
+    renderWith(<Tunnels />);
+    expect((await screen.findAllByText("Wrong account")).length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByRole("button", { name: "Details for mcpd: echo" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Move to Lab" }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("tunnel_b", "echo", "acct_2"));
+  });
+
   it("restarts a tunnel from its row without opening it", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info());
     const restart = vi.spyOn(api, "restartTunnel").mockResolvedValue({ status: "restarted", tunnels: [] });
@@ -158,7 +173,7 @@ describe("what a tunnel is doing", () => {
     ({ id: "t", name: "t", account: "acct_1", assigned: "graylog", status: s === null ? undefined : status(s), ...extra }) as never;
   const one = [account()];
   it.each([
-    ["gone from OpenAI", row({ upstream: "missing" }), "gone", 0],
+    ["not in this organisation", row({ upstream: "missing" }), "gone", 0],
     ["stopped for good", row({ state: "failed", message: "bad key" }), "stopped", 0],
     ["retrying", row({ state: "failed", attempts: 2, next_retry_at: new Date(Date.now() + 60_000).toISOString() }), "retrying", 1],
     ["degraded", row({ degraded: true }), "degraded", 2],
@@ -182,5 +197,15 @@ describe("what a tunnel is doing", () => {
     const idle = row({ requests: 0, last_request_at: undefined });
     expect(reading(idle, ["graylog"], one, new Set(["t"])).kind).toBe("attach");
     expect(reading(idle, ["graylog"], one, new Set()).kind).toBe("ready");
+  });
+
+  // The listing says who owns a tunnel and the assignment says who runs it;
+  // when they differ the key is refused, and the remedy is a move.
+  it("names the account that owns a tunnel assigned to the wrong one", () => {
+    const two = [account(), account({ id: "acct_2", name: "Nick" })];
+    const r = reading(row({ state: "failed", message: "refused" }, { account: "acct_1", account_id: "acct_2" }), ["graylog"], two);
+    expect(r.kind).toBe("elsewhere");
+    expect(r.detail).toContain("Nick's organisation");
+    expect(r.detail).toContain("Move it to Nick");
   });
 });
