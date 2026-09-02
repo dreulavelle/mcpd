@@ -221,6 +221,14 @@ const (
 	ReasonOrgIDRejected = "openai_org_id_rejected"
 )
 
+// Refused builds a refusal with the same reason and a fuller sentence, for a
+// caller that has learned something the control plane's one line did not
+// say -- such as that the same key can list tunnels and so lacks only the
+// scope to make them.
+func Refused(reason, msg string) error {
+	return &refusal{reason: reason, msg: msg}
+}
+
 // refusal is an error that names why OpenAI said no.
 type refusal struct {
 	reason string

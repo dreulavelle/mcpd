@@ -1737,6 +1737,28 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 	created, err := dir.Create(r.Context(),
 		tunnelName(body.Name, body.Plugin), createdByMCPD, body.Workspace)
 	if err != nil {
+		// A 403 on create says only that the key may not do this. Two things
+		// produce it -- a key without the write scope, and a workspace the
+		// organisation may not list a tunnel in -- and the same key's
+		// ability to list tells them apart: a key that can read and cannot
+		// write lacks a scope; one that cannot even read lacks them all.
+		if tunnel.Reason(err) == tunnel.ReasonTunnelsManageRequired {
+			if _, lerr := dir.List(r.Context()); lerr == nil {
+				where := "the key lacks the tunnel write scope (api.organization.tunnel.write)"
+				if body.Workspace != "" {
+					where += ", or workspace " + body.Workspace + " is not one this " +
+						"organisation may list a tunnel in -- making it with " +
+						"\"None, organisation only\" tells the two apart"
+				}
+				err = tunnel.Refused(tunnel.ReasonTunnelsManageRequired,
+					"This account's admin key can list tunnels but OpenAI refused to "+
+						"make one: "+where+".")
+			} else {
+				err = tunnel.Refused(tunnel.ReasonTunnelsManageRequired,
+					"This account's admin key cannot list tunnels either, so it has "+
+						"no tunnel scopes at all: "+lerr.Error())
+			}
+		}
 		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
 		return
 	}
