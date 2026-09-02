@@ -197,16 +197,22 @@ func (p *Plugin) listOrders(ctx context.Context, in OrdersInput) (Listing, error
 			if err != nil {
 				return Listing{}, err
 			}
-			notes, note, err := p.tenDLCSubNotes(ctx, base+"/notes")
-			switch {
-			case err != nil:
+			// Through getXML, which adds the Dashboard prefix, and not the
+			// bare variant the 10DLC tools use: the notes live beside the
+			// order, and a request for them at a path the allow-list does
+			// not know is refused before it reaches the network.
+			rec, err := p.client.getXML(ctx, base+"/notes", nil)
+			if err != nil {
 				out.Note = "the order was read; its notes were not: " + shortErr(err)
-			case note != "":
-				out.Note = "notes: " + note
-			default:
-				out.Items = append(out.Items, notes...)
-				out.Returned = len(out.Items)
+				return out, nil
 			}
+			notes, note := collect(rec, "Notes", "Note")
+			if note != "" {
+				out.Note = "notes: " + note
+				return out, nil
+			}
+			out.Items = append(out.Items, notes...)
+			out.Returned = len(out.Items)
 			return out, nil
 		}
 		return p.listDisconnects(ctx, DisconnectsInput{

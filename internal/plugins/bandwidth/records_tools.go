@@ -251,8 +251,3 @@ func (p *Plugin) listPortoutPasscodes(ctx context.Context, in PasscodesInput) (L
 	return p.orderPage(ctx, fmt.Sprintf("/accounts/%s/tnPortoutPasscodes", account),
 		q, "TelephoneNumber", limit)
 }
-
-// tenDLCSubNotes reads a notes sub-resource, keeping collect's note.
-func (p *Plugin) tenDLCSubNotes(ctx context.Context, path string) ([]Record, string, error) {
-	return p.tenDLCSub(ctx, path, "Notes", "Note")
-}
