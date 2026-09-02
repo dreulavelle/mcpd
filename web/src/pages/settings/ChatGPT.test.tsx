@@ -117,6 +117,40 @@ describe("the ChatGPT accounts page", () => {
     expect(body.rate_per_sec).toBe(5);
   });
 
+  // The admin key follows the same rule. It used to be sent on every edit,
+  // blank included, so changing a rate limit erased it and the Tunnels page
+  // lost its Add form with nothing saying why.
+  it("leaves the stored admin key alone on an edit that did not mention it", async () => {
+    stub([account()]);
+    const update = vi.spyOn(api, "updateChatGPTAccount")
+      .mockResolvedValue(account({ rate_per_sec: 5 }));
+    renderWith(<ChatGPT />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const rate = await screen.findByLabelText("Rate limit");
+    await userEvent.clear(rate);
+    await userEvent.type(rate, "5");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    const [, body] = update.mock.calls[0]!;
+    expect(body).not.toHaveProperty("admin_key");
+  });
+
+  // Clearing it is still possible, and has to be asked for by name.
+  it("removes the stored admin key only when told to", async () => {
+    stub([account()]);
+    const update = vi.spyOn(api, "updateChatGPTAccount")
+      .mockResolvedValue(account({ has_admin_key: false }));
+    renderWith(<ChatGPT />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.click(await screen.findByLabelText("Remove the stored admin key"));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    const [, body] = update.mock.calls[0]!;
+    expect(body.admin_key).toBe("");
+  });
+
   // An empty grant would reach nothing, which is never what leaving the field
   // blank meant.
   it("reads a blank reach as everything", async () => {
