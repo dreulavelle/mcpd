@@ -38,7 +38,13 @@ type Instance struct {
 	// FromFile reports that this instance came from the configuration file
 	// rather than the dashboard.
 	FromFile bool `json:"from_file"`
-	Enabled  bool `json:"enabled"`
+	// FromPluginsDir reports that this instance is a plugin found in the
+	// plugins directory, mounted under its own name unless something says
+	// otherwise. Like a file declaration, it is removed and switched through
+	// an override rather than by deleting a record, because the directory is
+	// still there on the next start.
+	FromPluginsDir bool `json:"from_plugins_dir,omitempty"`
+	Enabled        bool `json:"enabled"`
 	// Required is the file's `required` flag: a deployment saying the host
 	// should not run without this integration. Only a file can say it, so it
 	// is false for everything else.
@@ -74,14 +80,27 @@ type instanceRecord struct {
 func (a *App) instances(ctx context.Context) []Instance {
 	byName := map[string]Instance{}
 
-	for name, pc := range a.cfg.Plugins {
+	// A plugin in the plugins directory is an instance of itself, so a binary
+	// dropped in still mounts with nothing else configured. The file and the
+	// store layer over it, so it can also be named there with settings, or
+	// configured twice under other names.
+	for name, m := range a.externalManifests {
 		byName[name] = Instance{
-			Name:     name,
-			Type:     pc.ResolvedType(name),
-			Runtime:  plugins.RuntimeBuiltin,
-			FromFile: true,
-			Enabled:  pc.Enabled,
-			Required: pc.Required,
+			Name: name, Type: name, Runtime: plugins.RuntimeBuiltin,
+			FromPluginsDir: true, Enabled: true, Required: m.Required,
+		}
+	}
+
+	for name, pc := range a.cfg.Plugins {
+		existing := byName[name]
+		byName[name] = Instance{
+			Name:           name,
+			Type:           pc.ResolvedType(name),
+			Runtime:        plugins.RuntimeBuiltin,
+			FromFile:       true,
+			FromPluginsDir: existing.FromPluginsDir,
+			Enabled:        pc.Enabled,
+			Required:       pc.Required || existing.Required,
 		}
 	}
 
@@ -98,11 +117,12 @@ func (a *App) instances(ctx context.Context) []Instance {
 		}
 		existing := byName[name]
 		byName[name] = Instance{
-			Name:     name,
-			Type:     rec.Type,
-			Runtime:  plugins.RuntimeBuiltin,
-			FromFile: existing.FromFile,
-			Enabled:  rec.Enabled,
+			Name:           name,
+			Type:           rec.Type,
+			Runtime:        plugins.RuntimeBuiltin,
+			FromFile:       existing.FromFile,
+			FromPluginsDir: existing.FromPluginsDir,
+			Enabled:        rec.Enabled,
 			// Only the file can say this, so it survives the store's record of
 			// the same name. Dropping it would let a `required: true` plugin
 			// be removed without the acknowledgement that flag exists to
@@ -123,7 +143,7 @@ func (a *App) instances(ctx context.Context) []Instance {
 	// plugin disappears with nothing saying why.
 	for name, ov := range a.overrides() {
 		existing, declared := byName[name]
-		if !declared || !existing.FromFile {
+		if !declared || !(existing.FromFile || existing.FromPluginsDir) {
 			continue
 		}
 		if ov.Removed {
@@ -264,7 +284,7 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 			"DELETE /api/mcp-servers/%s, which also takes its tool approvals "+
 			"and its settings with it", name, name)
 	}
-	if found.FromFile {
+	if found.FromFile || found.FromPluginsDir {
 		if found.Removed {
 			return fmt.Errorf("%q is already removed; restore it if you want it back", name)
 		}
@@ -281,12 +301,7 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 				"Removing it here overrides that, and the next start comes up "+
 				"without it. Confirm that you mean to", name)
 		}
-		pc := a.pluginConfigFor(name)
-		if err := a.pluginOverrides.Remove(ctx, actor, name, sqlite.PluginDeclaration{
-			Type:     pc.ResolvedType(name),
-			Enabled:  pc.Enabled,
-			Required: pc.Required,
-		}); err != nil {
+		if err := a.pluginOverrides.Remove(ctx, actor, name, a.declaredAs(*found)); err != nil {
 			return err
 		}
 		return a.overridesChanged(ctx, name)
@@ -347,17 +362,12 @@ func (a *App) SetInstanceEnabled(ctx context.Context, actor, name string, enable
 			return fmt.Errorf("%q is a remote MCP server; turn it on or off with "+
 				"PATCH /api/mcp-servers/%s", name, name)
 		}
-		if inst.FromFile {
+		if inst.FromFile || inst.FromPluginsDir {
 			if inst.Removed {
 				return fmt.Errorf("%q is removed, so there is nothing to switch "+
 					"on or off; restore it first", name)
 			}
-			pc := a.pluginConfigFor(name)
-			if err := a.pluginOverrides.SetEnabled(ctx, actor, name, sqlite.PluginDeclaration{
-				Type:     pc.ResolvedType(name),
-				Enabled:  pc.Enabled,
-				Required: pc.Required,
-			}, enabled); err != nil {
+			if err := a.pluginOverrides.SetEnabled(ctx, actor, name, a.declaredAs(inst), enabled); err != nil {
 				return err
 			}
 			return a.overridesChanged(ctx, name)
@@ -531,4 +541,17 @@ func (a *App) declarationFor(name string) *admin.PluginDeclaration {
 		Required:     pc.Required,
 		SettingsKeys: keys,
 	}
+}
+
+// declaredAs renders what a declaration outside the dashboard says about an
+// instance, for the override that ignores or switches it: the file's entry
+// when there is one, otherwise the plugins directory's, which declares a
+// plugin of its own name, enabled, and required if its manifest says so.
+func (a *App) declaredAs(inst Instance) sqlite.PluginDeclaration {
+	if pc, declared := a.cfg.Plugins[inst.Name]; declared {
+		return sqlite.PluginDeclaration{
+			Type: pc.ResolvedType(inst.Name), Enabled: pc.Enabled, Required: pc.Required,
+		}
+	}
+	return sqlite.PluginDeclaration{Type: inst.Type, Enabled: true, Required: inst.Required}
 }

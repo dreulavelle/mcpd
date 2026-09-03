@@ -22,7 +22,7 @@ type echoOut struct {
 func newTestPlugin() *Plugin {
 	p := New("test", "1.0.0", "Test", "A plugin for tests.")
 	Tool(p, ToolSpec{
-		Name: "echo", Title: "Echo", Description: "Echoes a message.", Idempotent: true,
+		Name: "get_echo", Title: "Echo", Description: "Echoes a message.", Idempotent: true,
 	}, func(_ context.Context, in echoIn) (echoOut, error) {
 		if in.Message == "" {
 			return echoOut{}, fmt.Errorf("message is required")
@@ -84,7 +84,7 @@ func TestCallTool(t *testing.T) {
 	p := newTestPlugin()
 
 	resp := call(t, p, "call_tool", callToolParams{
-		Name: "echo", Args: json.RawMessage(`{"message":"hi"}`),
+		Name: "get_echo", Args: json.RawMessage(`{"message":"hi"}`),
 	})
 	if resp.Error != nil {
 		t.Fatal(resp.Error)
@@ -95,13 +95,13 @@ func TestCallTool(t *testing.T) {
 
 	// The plugin's own validation must surface as a protocol error.
 	resp = call(t, p, "call_tool", callToolParams{
-		Name: "echo", Args: json.RawMessage(`{"message":""}`),
+		Name: "get_echo", Args: json.RawMessage(`{"message":""}`),
 	})
 	if resp.Error == nil {
 		t.Fatal("the handler's error must reach the host")
 	}
 
-	resp = call(t, p, "call_tool", callToolParams{Name: "nope"})
+	resp = call(t, p, "call_tool", callToolParams{Name: "get_nope"})
 	if resp.Error == nil || resp.Error.Code != "INVALID_PARAMS" {
 		t.Fatalf("unknown tool should be INVALID_PARAMS, got %+v", resp.Error)
 	}
@@ -111,10 +111,10 @@ func TestCallTool(t *testing.T) {
 // mid-conversation.
 func TestPanicBecomesAnError(t *testing.T) {
 	p := New("boom", "1.0.0", "Boom", "x")
-	Tool(p, ToolSpec{Name: "explode", Description: "Panics."},
+	Tool(p, ToolSpec{Name: "get_explode", Description: "Panics."},
 		func(context.Context, struct{}) (struct{}, error) { panic("kaboom") })
 
-	resp := call(t, p, "call_tool", callToolParams{Name: "explode", Args: json.RawMessage(`{}`)})
+	resp := call(t, p, "call_tool", callToolParams{Name: "get_explode", Args: json.RawMessage(`{}`)})
 	if resp.Error == nil || resp.Error.Code != "INTERNAL" {
 		t.Fatalf("a panic should surface as INTERNAL, got %+v", resp.Error)
 	}
@@ -178,7 +178,7 @@ func TestValidate_CollectsRegistrationErrors(t *testing.T) {
 	p := New("Bad Name", "", "T", "x")
 	Tool(p, ToolSpec{Name: "BadTool", Description: "x"},
 		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
-	Tool(p, ToolSpec{Name: "nodesc"},
+	Tool(p, ToolSpec{Name: "get_nodesc"},
 		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
 
 	err := p.validate()
@@ -195,6 +195,176 @@ func TestValidate_CollectsRegistrationErrors(t *testing.T) {
 func TestValidate_RequiresSomethingToServe(t *testing.T) {
 	if err := New("empty", "1.0.0", "E", "x").validate(); err == nil {
 		t.Fatal("a plugin exposing nothing must not start")
+	}
+	// Resources or prompts alone are something, as the host agrees.
+	only := New("docs", "1.0.0", "D", "x")
+	Resource(only, ResourceSpec{Path: "state", Name: "state", Description: "d"},
+		func(context.Context) (string, error) { return "", nil })
+	if err := only.validate(); err != nil {
+		t.Errorf("a resources-only plugin should be allowed to start: %v", err)
+	}
+}
+
+// A tool is named verb_resource with a verb from the closed set, and the SDK
+// says so at the author's desk. Left to the host, the mistake surfaces at
+// mount time by skipping the whole plugin, every tool with it.
+func TestTool_RefusesANameOutsideTheVocabulary(t *testing.T) {
+	cases := map[string]bool{
+		"list_devices": true, "get_device": true, "search_logs": true, "aggregate_calls": true,
+		"devices": false, "search": false, "fetch_devices": false, "list_": false,
+	}
+	for name, ok := range cases {
+		p := New("tt", "1.0.0", "T", "x")
+		Tool(p, ToolSpec{Name: name, Description: "x"},
+			func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
+		err := p.validate()
+		if ok && err != nil {
+			t.Errorf("%q should be accepted: %v", name, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), name)) {
+			t.Errorf("%q should be refused by name, got %v", name, err)
+		}
+	}
+}
+
+// What the host would refuse at mount, the SDK refuses at registration: an
+// unknown capability, a negative rate limit, a resource with no name.
+func TestRegistration_MatchesTheHostsRules(t *testing.T) {
+	p := New("tt", "1.0.0", "T", "x")
+	Tool(p, ToolSpec{Name: "get_a", Description: "x", Capability: "root"},
+		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
+	Tool(p, ToolSpec{Name: "get_b", Description: "x", RateLimit: -1},
+		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
+	Resource(p, ResourceSpec{Path: "x", Description: "d"},
+		func(context.Context) (string, error) { return "", nil })
+	Prompt(p, PromptSpec{Name: "help", Description: "d", Capability: "owner"},
+		func(context.Context, map[string]string) (string, error) { return "", nil })
+	err := p.validate()
+	if err == nil {
+		t.Fatal("expected refusals")
+	}
+	for _, want := range []string{`capability "root"`, "negative rate limit", "requires a name", `capability "owner"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("should refuse with %q: %v", want, err)
+		}
+	}
+	ok := New("tt", "1.0.0", "T", "x")
+	Tool(ok, ToolSpec{Name: "get_a", Description: "x", Capability: CapPropose, RateLimit: 2},
+		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
+	if err := ok.validate(); err != nil {
+		t.Errorf("a legal capability and rate limit should pass: %v", err)
+	}
+}
+
+// Apply is handed back the plan Plan produced. A host built against the first
+// protocol sends only the opaque state; a current one sends the whole plan,
+// and the typed halves come back typed.
+func TestRestore_RebuildsTheTypedPlan(t *testing.T) {
+	type state struct {
+		V int `json:"v"`
+	}
+	legacy, err := restore[state](json.RawMessage(`{"plan":7}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := legacy.State.(map[string]any); st["plan"] != float64(7) || legacy.Before.V != 0 {
+		t.Errorf("legacy state only: %+v", legacy)
+	}
+
+	full, err := restore[state](nil, &wirePlan{
+		Before: json.RawMessage(`{"v":1}`), Desired: json.RawMessage(`{"v":2}`),
+		Preconditions: json.RawMessage(`{"rev":"abc"}`),
+		Changes:       []Change{{Field: "v", From: 1, To: 2}}, Impact: "changes v",
+		Rollback: json.RawMessage(`{"v":1}`), RiskOverride: "high", State: json.RawMessage(`{"plan":7}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.Before.V != 1 || full.Desired.V != 2 || full.Impact != "changes v" || full.RiskOverride != RiskHigh {
+		t.Errorf("full plan: %+v", full)
+	}
+	if full.Preconditions["rev"] != "abc" || len(full.Changes) != 1 {
+		t.Errorf("preconditions %v changes %v", full.Preconditions, full.Changes)
+	}
+	if st, _ := full.State.(map[string]any); st["plan"] != float64(7) {
+		t.Errorf("state %v", full.State)
+	}
+	if _, err := restore[state](nil, &wirePlan{Before: json.RawMessage(`"not an object"`)}); err == nil {
+		t.Error("a plan that will not decode into the plugin's type must be refused, not zeroed")
+	}
+}
+
+// Settings arrive typed: a string as itself, a number as its text, a list and
+// a table through ConfiguredJSON, an empty or absent value as not set.
+func TestConfigured_ReadsTypedValues(t *testing.T) {
+	p := New("tt", "1.0.0", "T", "x")
+	Tool(p, ToolSpec{Name: "get_a", Description: "x"},
+		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
+	resp := call(t, p, "configure", map[string]any{
+		"greeting": "hello", "retries": 3, "on": true, "empty": "",
+		"aliases": []string{"a", "b"},
+		"hosts":   []map[string]any{{"name": "alpha", "password": "pw"}},
+	})
+	if resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	if v, ok := p.Configured("greeting"); v != "hello" || !ok {
+		t.Errorf("greeting = %q %v", v, ok)
+	}
+	if v, ok := p.Configured("retries"); v != "3" || !ok {
+		t.Errorf("retries = %q %v", v, ok)
+	}
+	if v, ok := p.Configured("on"); v != "true" || !ok {
+		t.Errorf("on = %q %v", v, ok)
+	}
+	if _, ok := p.Configured("empty"); ok {
+		t.Error("an empty string is not set")
+	}
+	if _, ok := p.Configured("missing"); ok {
+		t.Error("an absent key is not set")
+	}
+	var aliases []string
+	if present, err := p.ConfiguredJSON("aliases", &aliases); err != nil || !present || len(aliases) != 2 {
+		t.Errorf("aliases: %v %v %v", aliases, present, err)
+	}
+	var hosts []struct {
+		Name     string `json:"name"`
+		Password string `json:"password"`
+	}
+	if present, err := p.ConfiguredJSON("hosts", &hosts); err != nil || !present || hosts[0].Password != "pw" {
+		t.Errorf("hosts: %+v %v %v", hosts, present, err)
+	}
+	if present, _ := p.ConfiguredJSON("missing", &hosts); present {
+		t.Error("an absent key is not present")
+	}
+}
+
+// A collection setting is validated the way the host validates it, and
+// travels over the wire with its columns.
+func TestSettings_CollectionIsDeclaredWithColumns(t *testing.T) {
+	p := New("tt", "1.0.0", "T", "x")
+	Tool(p, ToolSpec{Name: "get_a", Description: "x"},
+		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
+	Settings(p, SettingField{Key: "hosts", Label: "Hosts", Kind: KindCollection, Columns: []SettingField{
+		{Key: "name", Label: "Name", Kind: KindString, Required: true},
+		{Key: "password", Label: "Password", Kind: KindSecret},
+	}})
+	if err := p.validate(); err != nil {
+		t.Fatal(err)
+	}
+	d := p.describe()
+	if len(d.Settings) != 1 || len(d.Settings[0].Columns) != 2 || d.Settings[0].Columns[1].Kind != KindSecret {
+		t.Errorf("describe: %+v", d.Settings)
+	}
+	for name, bad := range map[string]SettingField{
+		"no columns":          {Key: "a", Label: "A", Kind: KindCollection},
+		"int identity":        {Key: "a", Label: "A", Kind: KindCollection, Columns: []SettingField{{Key: "n", Label: "N", Kind: KindInt}}},
+		"nested":              {Key: "a", Label: "A", Kind: KindCollection, Columns: []SettingField{{Key: "n", Label: "N", Kind: KindString, Required: true}, {Key: "c", Label: "C", Kind: KindCollection}}},
+		"columns on a string": {Key: "a", Label: "A", Kind: KindString, Columns: []SettingField{{Key: "n", Label: "N", Kind: KindString}}},
+	} {
+		if err := bad.validate(); err == nil {
+			t.Errorf("%s should be refused", name)
+		}
 	}
 }
 
@@ -337,7 +507,7 @@ func TestSettingsAndConfigure(t *testing.T) {
 		SettingField{Key: "api_token", Label: "API token", Kind: KindSecret, Required: true},
 		SettingField{Key: "host", Label: "Address", Kind: KindString, Default: "example.test"},
 	)
-	Tool(p, ToolSpec{Name: "noop", Description: "Does nothing."},
+	Tool(p, ToolSpec{Name: "get_noop", Description: "Does nothing."},
 		func(context.Context, struct{}) (struct{}, error) { return struct{}{}, nil })
 
 	d := p.describe()

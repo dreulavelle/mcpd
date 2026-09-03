@@ -163,6 +163,21 @@ func NewCatalog(types ...Type) (*Catalog, error) {
 	return c, nil
 }
 
+// Add registers a type discovered after construction: an out-of-process
+// plugin found in the plugins directory. Validated like the compiled-in ones,
+// and refused if the name is taken, so a bind mount cannot shadow an
+// integration the operator reviewed.
+func (c *Catalog) Add(t Type) error {
+	if err := t.Validate(); err != nil {
+		return err
+	}
+	if _, dup := c.byName[t.Name]; dup {
+		return fmt.Errorf("plugins: type %q is declared twice", t.Name)
+	}
+	c.byName[t.Name] = t
+	return nil
+}
+
 // Lookup returns a type by name.
 func (c *Catalog) Lookup(name string) (Type, bool) {
 	t, ok := c.byName[name]

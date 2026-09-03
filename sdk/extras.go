@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -20,10 +21,13 @@ type SettingField struct {
 	Key   string
 	Label string
 	Help  string
-	// Kind is one of: string, secret, bool, int, duration, enum, list.
+	// Kind is one of: string, secret, bool, int, duration, enum, list,
+	// collection.
 	//
 	// secret is the one that matters: it is stored encrypted, never sent back
 	// to the dashboard, and withheld from anything that dumps configuration.
+	// collection is a table of rows shaped by Columns, for the setting whose
+	// size nobody knows in advance; it arrives as a list of records.
 	Kind        string
 	Default     any
 	Options     []string
@@ -31,17 +35,21 @@ type SettingField struct {
 	Max         *int
 	Required    bool
 	Placeholder string
+	// Columns shape each row of a collection. The first names the row and
+	// must be a required string; none may itself be a collection.
+	Columns []SettingField
 }
 
 // SettingKinds are the kinds a field may declare.
 const (
-	KindString   = "string"
-	KindSecret   = "secret"
-	KindBool     = "bool"
-	KindInt      = "int"
-	KindDuration = "duration"
-	KindEnum     = "enum"
-	KindList     = "list"
+	KindString     = "string"
+	KindSecret     = "secret"
+	KindBool       = "bool"
+	KindInt        = "int"
+	KindDuration   = "duration"
+	KindEnum       = "enum"
+	KindList       = "list"
+	KindCollection = "collection"
 )
 
 var settingKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -54,12 +62,36 @@ func (f SettingField) validate() error {
 		return fmt.Errorf("sdk: setting %q needs a label", f.Key)
 	}
 	switch f.Kind {
-	case KindString, KindSecret, KindBool, KindInt, KindDuration, KindEnum, KindList:
+	case KindString, KindSecret, KindBool, KindInt, KindDuration, KindEnum, KindList, KindCollection:
 	default:
 		return fmt.Errorf("sdk: setting %q has unknown kind %q", f.Key, f.Kind)
 	}
 	if f.Kind == KindEnum && len(f.Options) == 0 {
 		return fmt.Errorf("sdk: setting %q is an enum with no options", f.Key)
+	}
+	if f.Kind != KindCollection && len(f.Columns) > 0 {
+		return fmt.Errorf("sdk: setting %q declares columns but is not a collection", f.Key)
+	}
+	if f.Kind == KindCollection {
+		if len(f.Columns) == 0 {
+			return fmt.Errorf("sdk: setting %q is a collection with no columns", f.Key)
+		}
+		seen := map[string]bool{}
+		for i, c := range f.Columns {
+			if c.Kind == KindCollection {
+				return fmt.Errorf("sdk: setting %q nests a collection in column %q", f.Key, c.Key)
+			}
+			if err := c.validate(); err != nil {
+				return fmt.Errorf("sdk: setting %q: %w", f.Key, err)
+			}
+			if seen[c.Key] {
+				return fmt.Errorf("sdk: setting %q declares column %q twice", f.Key, c.Key)
+			}
+			seen[c.Key] = true
+			if i == 0 && (c.Kind != KindString || !c.Required) {
+				return fmt.Errorf("sdk: setting %q: the first column %q names each row, so it must be a required string", f.Key, c.Key)
+			}
+		}
 	}
 	return nil
 }
@@ -80,16 +112,41 @@ func Settings(p *Plugin, fields ...SettingField) {
 	p.mu.Unlock()
 }
 
-// Configured returns the resolved value of one setting.
+// Configured returns the resolved value of one setting as text.
 //
 // Available once the host has handed over configuration, which happens before
-// any tool is called. A field the operator left empty returns "" and false, so
-// a plugin can tell "not set" from "set to nothing".
+// any tool is called. A string arrives as itself; a number or a switch as its
+// JSON text. A field the operator left empty returns "" and false, so a plugin
+// can tell "not set" from "set to nothing". A list or a collection is read
+// with ConfiguredJSON.
 func (p *Plugin) Configured(key string) (string, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	v, ok := p.config[key]
-	return v, ok && v != ""
+	raw, ok := p.config[key]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return "", false
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, text != ""
+	}
+	return string(raw), true
+}
+
+// ConfiguredJSON decodes one setting into a value of the plugin's choosing:
+// a []string for a list, a slice of structs for a collection. It reports
+// whether the setting was present at all.
+func (p *Plugin) ConfiguredJSON(key string, into any) (bool, error) {
+	p.mu.RLock()
+	raw, ok := p.config[key]
+	p.mu.RUnlock()
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return false, nil
+	}
+	if err := json.Unmarshal(raw, into); err != nil {
+		return true, fmt.Errorf("sdk: setting %q could not be read as %T: %w", key, into, err)
+	}
+	return true, nil
 }
 
 // --- resources -------------------------------------------------------------
@@ -130,6 +187,14 @@ func Resource(p *Plugin, spec ResourceSpec, fn func(context.Context) (string, er
 		p.errs = append(p.errs, fmt.Errorf(
 			"sdk: resource %q requires a description; a model reading a list of "+
 				"them has nothing else to go on", spec.Path))
+		return
+	}
+	if strings.TrimSpace(spec.Name) == "" {
+		p.errs = append(p.errs, fmt.Errorf("sdk: resource %q requires a name; the host refuses one without", spec.Path))
+		return
+	}
+	if !validCapability(spec.Capability) {
+		p.errs = append(p.errs, fmt.Errorf("sdk: resource %q has unknown capability %q", spec.Path, spec.Capability))
 		return
 	}
 	p.mu.Lock()
@@ -193,6 +258,10 @@ func Prompt(p *Plugin, spec PromptSpec, fn func(context.Context, map[string]stri
 	}
 	if strings.TrimSpace(spec.Description) == "" {
 		p.errs = append(p.errs, fmt.Errorf("sdk: prompt %q requires a description", spec.Name))
+		return
+	}
+	if !validCapability(spec.Capability) {
+		p.errs = append(p.errs, fmt.Errorf("sdk: prompt %q has unknown capability %q", spec.Name, spec.Capability))
 		return
 	}
 	p.mu.Lock()

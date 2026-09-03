@@ -140,6 +140,12 @@ func builtinTypes() (*plugins.Catalog, error) {
 
 // registerPlugins mounts every enabled plugin.
 func (a *App) registerPlugins(ctx context.Context) error {
+	// Out-of-process plugins first, because they are types the instance list
+	// below has to know about before it can mount an instance of one.
+	if err := a.discoverExternalTypes(ctx); err != nil {
+		return err
+	}
+
 	// Said once, here, rather than from the instance list -- which the
 	// dashboard reads on every request.
 	a.shadowedNames()
@@ -204,12 +210,9 @@ func (a *App) registerPlugins(ctx context.Context) error {
 			a.noteReconcile(name, err)
 			continue
 		}
-		if err := a.manager.Register(ctx, p, name, pc.Required); err != nil {
+		if err := a.manager.Register(ctx, p, name, pc.Required || inst.Required); err != nil {
 			return err
 		}
-	}
-	if err := a.registerExternalPlugins(ctx); err != nil {
-		return err
 	}
 
 	if len(a.manager.Names()) == 0 {
@@ -218,14 +221,19 @@ func (a *App) registerPlugins(ctx context.Context) error {
 	return nil
 }
 
-// registerExternalPlugins mounts every plugin found in the plugins directory.
+// discoverExternalTypes turns every plugin in the plugins directory into a
+// type, so its instances are configured and mounted like everything else.
 //
-// Discovery is additive: a plugin that fails to start is reported and skipped
-// unless its manifest marks it required. One bad directory in a bind mount
-// must not stop the others from loading.
-func (a *App) registerExternalPlugins(ctx context.Context) error {
+// Each is started once, long enough to say what it is and what it needs
+// configured, and stopped again; the instances built from the type run their
+// own processes. A plugin that fails to describe itself is reported and
+// skipped unless its manifest marks it required, because one bad directory in
+// a bind mount must not stop the others from loading.
+//
+// A compiled-in type of the same name wins. Otherwise a writable bind mount
+// could shadow an integration the operator reviewed.
+func (a *App) discoverExternalTypes(ctx context.Context) error {
 	dir := a.cfg.PluginsDir()
-
 	manifests, dirs, err := external.Discover(dir, a.log)
 	if err != nil {
 		return err
@@ -234,33 +242,31 @@ func (a *App) registerExternalPlugins(ctx context.Context) error {
 		return nil
 	}
 	a.log.InfoContext(ctx, "discovered external plugins", "dir", dir, "count", len(manifests))
+	a.externalManifests = map[string]external.Manifest{}
 
 	for _, m := range manifests {
-		// A compiled-in plugin of the same name wins. Otherwise a writable
-		// bind mount could shadow an integration the operator reviewed.
-		if a.manager.Lookup(m.Name) != nil {
+		if _, taken := a.types.Lookup(m.Name); taken {
 			a.log.WarnContext(ctx, "ignoring an external plugin that shadows a compiled-in one",
 				"plugin", m.Name)
 			continue
 		}
-
-		p := external.NewPlugin(dirs[m.Name], m, a.pluginDeps(m.Name))
-		if err := p.Handshake(ctx); err != nil {
+		describe, err := external.Probe(ctx, dirs[m.Name], m, a.pluginDeps(m.Name))
+		if err == nil {
+			var t plugins.Type
+			t, err = external.TypeFor(dirs[m.Name], m, describe)
+			if err == nil {
+				err = a.types.Add(t)
+			}
+		}
+		if err != nil {
 			if m.Required {
 				return fmt.Errorf("app: required external plugin %s: %w", m.Name, err)
 			}
-			a.log.ErrorContext(ctx, "external plugin failed to start; continuing without it",
+			a.log.ErrorContext(ctx, "external plugin could not be described; continuing without it",
 				"plugin", m.Name, "error", err)
 			continue
 		}
-		if err := a.manager.Register(ctx, p, m.Name, m.Required); err != nil {
-			if m.Required {
-				return err
-			}
-			a.log.ErrorContext(ctx, "external plugin failed to register; continuing without it",
-				"plugin", m.Name, "error", err)
-			_ = p.Shutdown(ctx)
-		}
+		a.externalManifests[m.Name] = m
 	}
 	return nil
 }

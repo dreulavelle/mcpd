@@ -43,7 +43,9 @@ const (
 	MethodGetPrompt = "get_prompt"
 	// MethodConfigure hands over resolved settings, before anything is
 	// called. A plugin therefore reads values rather than references and never
-	// has to understand env:, file:, or credential:.
+	// has to understand env:, file:, or credential:. The parameter is a JSON
+	// object keyed by setting: strings as strings, numbers and switches as
+	// themselves, a list as an array and a collection as an array of objects.
 	MethodConfigure = "configure"
 	// MethodHealth reports the plugin's view of its upstream.
 	MethodHealth = "health"
@@ -161,6 +163,10 @@ type SettingDescriptor struct {
 	Max         *int     `json:"max,omitempty"`
 	Required    bool     `json:"required,omitempty"`
 	Placeholder string   `json:"placeholder,omitempty"`
+	// Columns shape each row of a "collection" field: a table setting, edited
+	// row by row on the dashboard and handed to the plugin as a list of
+	// records. Absent for every other kind.
+	Columns []SettingDescriptor `json:"columns,omitempty"`
 }
 
 // ToolDescriptor describes one read-only tool.
@@ -233,8 +239,14 @@ type CallToolParams struct {
 type MutationParams struct {
 	Action string          `json:"action"`
 	Params json.RawMessage `json:"params"`
-	// Plan is supplied to apply, carrying what the plugin returned from plan.
+	// Plan is supplied to apply, carrying the opaque state the plugin
+	// returned from plan. Kept as the state alone, because a plugin built
+	// against the first protocol decodes this field straight into its state.
 	Plan json.RawMessage `json:"plan,omitempty"`
+	// PlanFull is the whole plan as the plugin returned it, so apply can be
+	// handed what plan produced -- before, desired, the diff, the impact --
+	// rather than only the opaque state. Additive: an older plugin ignores it.
+	PlanFull *PlanResult `json:"plan_full,omitempty"`
 }
 
 // PlanResult is the plugin's plan, in wire form.
