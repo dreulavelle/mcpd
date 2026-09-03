@@ -2,6 +2,7 @@ package threecx
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -82,9 +83,24 @@ func TestResolve_NeverGuesses(t *testing.T) {
 		t.Errorf("no name with two customers should be refused with the list, got %v", err)
 	}
 
+	// An unknown customer says where it would be added, names the instance
+	// somebody has to open, and tells the model not to settle for a nearby
+	// one -- reading the wrong business's phone system confidently is the
+	// failure this wording exists to prevent.
 	_, err = p.resolve("Initech")
-	if err == nil || !strings.Contains(err.Error(), `no customer here is called "Initech"`) || !strings.Contains(err.Error(), "Acme Dental Group, Globex Roofing") {
-		t.Errorf("an unknown name should be refused with the list, got %v", err)
+	if err == nil {
+		t.Fatal("an unknown customer must be refused")
+	}
+	for _, want := range []string{
+		`no customer here is called "Initech"`, "Acme Dental Group, Globex Roofing",
+		"add it on the mcpd Plugins page", "Customers", "rather than reading one of the others",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal should say %q, got %v", want, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "(threecx)") {
+		t.Errorf("the refusal should name the instance to open, got %v", err)
 	}
 }
 
@@ -185,5 +201,51 @@ func TestStart_ReachesNothingUntilAsked(t *testing.T) {
 	}
 	if h := p.Check(ctx); h.State != "degraded" || !strings.Contains(h.Message, "Globex Roofing") {
 		t.Errorf("health should name the failing customer: %+v", h)
+	}
+}
+
+// A long customer list is not spelled out in full on every mistyped name: the
+// sentence saying what to do is the part that matters, and sixty names would
+// bury it.
+func TestResolve_BoundsTheNamesItLists(t *testing.T) {
+	customers := make([]Customer, 0, 14)
+	for i := range 14 {
+		customers = append(customers, Customer{
+			Name:      fmt.Sprintf("Customer %02d", i),
+			Host:      fmt.Sprintf("pbx%02d.example", i),
+			Extension: "100", Password: "p",
+		})
+	}
+	p, err := New(testDeps(), Config{Customers: customers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.resolve("nobody")
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if !strings.Contains(err.Error(), "and 4 more (list_customers has them all)") {
+		t.Errorf("the list should be bounded, got %v", err)
+	}
+	if strings.Contains(err.Error(), "Customer 12") {
+		t.Errorf("only the first ten should be spelled out, got %v", err)
+	}
+}
+
+// A plugin with no customers at all says so, and says where to add one, rather
+// than reporting the tool as broken.
+func TestResolve_NoCustomersPointsAtThePluginsPage(t *testing.T) {
+	p, err := New(testDeps(), Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.resolve("Acme")
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	for _, want := range []string{"has no customers yet", "mcpd Plugins page", "system owner extension"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("should say %q, got %v", want, err)
+		}
 	}
 }
