@@ -59,7 +59,8 @@ describe("the clients page", () => {
   it("says when the address is only a path, and names the setting", async () => {
     stub("/mcp");
     renderWith(<Clients />, { path: "/clients" });
-    expect(await screen.findByText(/That is only a path/)).toBeInTheDocument();
+    expect(await screen.findByText(/has not been told its own address/)).toBeInTheDocument();
+    expect(screen.getAllByText(/YOUR-HOST/).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: "Settings › General" }).length).toBeGreaterThan(0);
   });
 

@@ -65,10 +65,13 @@ function Connect({ endpoints, plugins, chosen, onReach, client, onClient }: {
   client: string;
   onClient: (id: string) => void;
 }) {
-  const address = chosen ? chosen.connect_url : endpoints.aggregate;
+  const stored = chosen ? chosen.connect_url : endpoints.aggregate;
   // An address that is only a path means nothing has been advertised: the
   // server returns the route bare rather than inventing a host from a header.
-  const advertised = /^https?:\/\//.test(address);
+  // The snippet then carries an obvious placeholder rather than a bare
+  // path, which read as a command that could work and was not.
+  const advertised = /^https?:\/\//.test(stored);
+  const address = advertised ? stored : `https://YOUR-HOST:8080${stored}`;
   const canIssue = useCan("access:write");
   const guide = CLIENTS.find((c) => c.id === client)!;
 
@@ -105,9 +108,10 @@ function Connect({ endpoints, plugins, chosen, onReach, client, onClient }: {
           <Copyable value={address} label="address" />
           {!advertised && (
             <Notice tone="attention">
-              That is only a path. Set <em>Address assistants use</em> under{" "}
+              This host has not been told its own address, so YOUR-HOST is a
+              placeholder. Set <em>Address assistants use</em> under{" "}
               <Link to="/settings" className="text-primary hover:underline">Settings › General</Link>
-              {" "}and the snippet fills in.
+              {" "}to how the MCP listener is reached, and this fills in.
             </Notice>
           )}
         </div>
