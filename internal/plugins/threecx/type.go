@@ -44,7 +44,7 @@ func Type() plugins.Type {
 						Key: "host", Label: "Address", Kind: settings.KindString,
 						Required:    true,
 						Placeholder: "acme.ny.3cx.us",
-						Help:        "The phone system's FQDN, with or without https://.",
+						Help:        "The phone system's FQDN, with a port if it uses one.",
 					},
 					{
 						Key: "extension", Label: "System owner extension", Kind: settings.KindString,
