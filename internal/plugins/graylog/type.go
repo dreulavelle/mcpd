@@ -21,6 +21,17 @@ func Type() plugins.Type {
 		Description: "Reads a Graylog installation: log messages, counts and " +
 			"summaries over them, the alerts and rules built on them, and " +
 			"whether Graylog itself is well. Read-only.",
+		Guide: plugins.Guide{
+			Questions: []string{
+				"What errors has the web server logged in the last hour?",
+				"Show me the alerts that fired today and which streams they came from.",
+				"Search the last 24 hours for the hostname of a machine that is misbehaving.",
+			},
+			Notes: []string{
+				"Ask for a time window. Searches without one read the last hour.",
+				"Graylog's own stream and field names work as they appear in its interface.",
+			},
+		},
 		Settings: []settings.Field{
 			{
 				Key: "base_url", Label: "Address", Kind: settings.KindString,

@@ -133,6 +133,16 @@ The value is read when the plugin is built, so editing it remounts the instance
 and the new text reaches a client on its next connection. An assistant halfway
 through a conversation keeps the tool list it already fetched.
 
+## Telling people how to use it
+
+A type may declare a `Guide`: three or so questions worth asking an assistant
+connected to it, written the way a person would ask them, and the notes that
+save a wrong first attempt -- what to configure first, what a name has to look
+like, what the integration will not do. The dashboard shows it on the plugin's
+page under the address, for the person about to ask their first question. It
+is not for developers and it does not list what the tools do: the tool names
+already say that.
+
 ## A setting that is a table
 
 A plugin's settings are ordinarily scalars: an address, a token, a number. Some

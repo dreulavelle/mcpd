@@ -15,6 +15,15 @@ type PluginTypeInfo struct {
 	// Configurable reports whether the type declares any settings, so the
 	// dashboard can say what adding one will ask for.
 	Configurable bool `json:"configurable"`
+	// Guide is how to use the integration: sample questions and notes for the
+	// person about to ask their first one. Absent when the type declares none.
+	Guide *GuideInfo `json:"guide,omitempty"`
+}
+
+// GuideInfo is a type's getting-started notes.
+type GuideInfo struct {
+	Questions []string `json:"questions"`
+	Notes     []string `json:"notes"`
 }
 
 // PluginDeclaration is what the configuration file says about an instance,

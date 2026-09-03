@@ -20,6 +20,16 @@ func Type() plugins.Type {
 		Title: "Cambium cnMaestro",
 		Description: "Reads a Cambium cnMaestro estate: networks, devices, and " +
 			"the state of each. Read-only.",
+		Guide: plugins.Guide{
+			Questions: []string{
+				"Which access points are offline, and since when?",
+				"How many clients are on the network at the Springfield site?",
+				"What alarms are open, and which devices raised them?",
+			},
+			Notes: []string{
+				"Sites and towers are named the way cnMaestro names them.",
+			},
+		},
 		Settings: []settings.Field{
 			{
 				Key: "client_id", Label: "Client ID", Kind: settings.KindSecret,

@@ -21,6 +21,17 @@ func Type() plugins.Type {
 		Description: "Reads an Observium network monitoring estate: devices, " +
 			"interfaces, sensors, capacity, topology and alerts. Read-only. " +
 			"Needs Observium's REST API, which is a subscription feature.",
+		Guide: plugins.Guide{
+			Questions: []string{
+				"Which devices are down right now?",
+				"What ports on the core switch are in error or near capacity?",
+				"Show me the alerts raised in the last day and what they are about.",
+			},
+			Notes: []string{
+				"Read-only. It will not add, change or remove a device.",
+				"There is no trend data over the API; ask for a graph link when you need history.",
+			},
+		},
 		Settings: []settings.Field{
 			{
 				Key: "base_url", Label: "Address", Kind: settings.KindString,
