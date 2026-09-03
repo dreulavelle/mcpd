@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.13.0](https://github.com/dreulavelle/mcpd/compare/v0.12.0...v0.13.0) (2026-09-03)
+
+
+### Features
+
+* **auth:** editable roles, per-plugin grants, and additive groups ([8fb423b](https://github.com/dreulavelle/mcpd/commit/8fb423b73cc0adb580b99e1b95368d7dc436bf3c))
+* **tunnel:** an account owns its workspaces, and a tunnel may belong to several accounts ([cc53897](https://github.com/dreulavelle/mcpd/commit/cc53897516745e70a4f6efb6edc473b81a0bff6d))
+* **tunnel:** making a tunnel is one call, and the host supplies the workspaces ([655c387](https://github.com/dreulavelle/mcpd/commit/655c38725d8e20dfad6fed9bea9ccecee5b877c7))
+* **tunnel:** one authority per tunnel, and the account that owns it is a fact ([a0cdaf3](https://github.com/dreulavelle/mcpd/commit/a0cdaf33d2e67b818f96ac71f3b5a64a21e101cc))
+* **web:** a Clients page for reaching this host from Claude Code, Codex and an IDE ([acdbffc](https://github.com/dreulavelle/mcpd/commit/acdbffcd82f34db22ad0f7dd62b68fa63a4a3240))
+* **web:** a settings rail, and access pages that read as a set ([e1f7eda](https://github.com/dreulavelle/mcpd/commit/e1f7eda099887c8b39a00d6e56422090477fe668))
+* **web:** an unset address falls back to the host this page is on ([d553869](https://github.com/dreulavelle/mcpd/commit/d5538690be25fbd75be8ab34bc22c7a102979c31))
+* **web:** the Clients page is one panel ([7f0bf28](https://github.com/dreulavelle/mcpd/commit/7f0bf2898490c5b092b49f5fdd6b77105f5c68eb))
+
+
+### Fixes
+
+* **tunnel:** a tunnel assigned to the wrong account is named as such, and moved with one press ([3e2ae4f](https://github.com/dreulavelle/mcpd/commit/3e2ae4f5936141e8becfbbe29b51fee9a9655b84))
+* **tunnel:** a tunnel OpenAI has already deleted can be removed here ([4307e92](https://github.com/dreulavelle/mcpd/commit/4307e9239f1614a5fa0d354db4fc96382f9912d1))
+* **tunnel:** say which of two things a refused create means ([3b87020](https://github.com/dreulavelle/mcpd/commit/3b87020d8f43ab1ed969fffafbdf67ae5ca8fbc4))
+* **web:** a client snippet never prints a bare path ([ecb2570](https://github.com/dreulavelle/mcpd/commit/ecb2570e8753d9ff13ee46cb0a5f2f30e3c1c0bd))
+* **web:** a plugin's diagnosis stays on its page; a table cell gets the first lines ([0eb4c6c](https://github.com/dreulavelle/mcpd/commit/0eb4c6c4fcbeb2f58414dfe681be1970a7dcf768))
+* **web:** a table shows the upstream's status number; the plugin's page shows the diagnosis ([8808334](https://github.com/dreulavelle/mcpd/commit/8808334ad9a1a3f8cb6651429a08c3c60338b6a2))
+* **web:** settings pages are centred like every other, in a wider column ([c862a54](https://github.com/dreulavelle/mcpd/commit/c862a54ceabf785691ae76e120d09c52eebaeea5))
+* **web:** settings pages take the full width, with the rail at the left edge ([9c3b150](https://github.com/dreulavelle/mcpd/commit/9c3b1503211811f7d00e9793fc39dd3c7c9b6e0d))
+* **web:** several tunnels for one plugin is not something to flag ([e04341e](https://github.com/dreulavelle/mcpd/commit/e04341efc1bca6cac4732eb66ab3c1e88a460d3b))
+
 ## [0.12.0](https://github.com/dreulavelle/mcpd/compare/v0.11.0...v0.12.0) (2026-09-02)
 
 
