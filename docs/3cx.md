@@ -19,7 +19,7 @@ The Customers setting is a table (`settings.KindCollection`; see
 |---|---|
 | Business name | what the assistant is told and answers with; unique within the instance |
 | Aliases | other names people use, so "acme" finds "Acme Dental Group" |
-| Address | the PBX's FQDN, with or without `https://` |
+| Address | the PBX's FQDN, with a port where the console is not on 443 |
 | System owner extension | the number or email to sign in as; needs the System Owner role |
 | Password | that extension's web-client password, stored encrypted |
 
@@ -42,6 +42,16 @@ plugins:
 ```
 
 Rows in the dashboard win outright over the file when any exist.
+
+An address is accepted the way a person writes one: `acme.ny.3cx.us`,
+`acme.ny.3cx.us:5001`, or either with `https://` in front. A bare name and
+port has to have the scheme prepended *before* it is parsed, because
+`url.Parse` reads `acme.ny.3cx.us:5001` as a scheme and an opaque body; the
+port is then part of the host everywhere it matters, including the
+transport's check that a request is going to the configured system. A
+different port is a different phone system and is refused. The dashboard drops
+a trailing slash on save and shows an https address without its scheme, while
+`http://` stays visible because that one is the exception.
 
 **A customer added while the host runs is answerable at once.** Saving a row
 reconciles the instance: the plugin is rebuilt from its stored rows and

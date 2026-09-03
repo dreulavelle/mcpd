@@ -183,8 +183,10 @@ function RowDialog({ field, row, onClose, onSaved }: {
     setBusy(true);
     setProblems([]);
     try {
-      if (row) await api.updateSettingRow(field.key, row.id, values, clearing);
-      else await api.addSettingRow(field.key, values);
+      const cleaned = tidyValues(columns, values);
+      setValues(cleaned);
+      if (row) await api.updateSettingRow(field.key, row.id, cleaned, clearing);
+      else await api.addSettingRow(field.key, cleaned);
       notify("good", "Saved.");
       onSaved();
     } catch (e) {
@@ -284,4 +286,30 @@ function RowDialog({ field, row, onClose, onSaved }: {
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Tidies what a row form submits: a trailing slash off every plain string.
+ *
+ * An address is pasted out of a browser bar as often as it is typed, and it
+ * arrives with the slash the bar puts there. It means nothing in a field like
+ * this and it survives into every place the value is shown, so it is dropped
+ * once, here, rather than tolerated everywhere downstream.
+ *
+ * Plain strings only. A secret is bytes and must reach the store exactly as
+ * typed; a list has its own separator; a number and a switch have no slash to
+ * lose.
+ */
+function tidyValues(columns: SettingField[], values: Record<string, string>): Record<string, string> {
+  const out = { ...values };
+  for (const c of columns) {
+    if (c.kind !== "string") continue;
+    const v = out[c.key];
+    if (typeof v !== "string") continue;
+    const trimmed = v.trim().replace(/\/+$/, "");
+    // A value that is only slashes keeps what was typed, so the server can
+    // refuse it and say why rather than the form silently emptying the field.
+    out[c.key] = trimmed || v.trim();
+  }
+  return out;
 }

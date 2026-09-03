@@ -67,6 +67,32 @@ describe("CollectionField", () => {
     expect(within(initech).getByText("http://pbx.internal:5000")).toBeInTheDocument();
   });
 
+  // An address pasted out of a browser bar brings a trailing slash that means
+  // nothing here, so the form drops it on the way to the store rather than
+  // letting it survive into every place the value is shown.
+  it("drops a trailing slash from a string column on save", async () => {
+    const add = vi.spyOn(api, "addSettingRow").mockResolvedValue(ROWS[0]!);
+    renderWith(<CollectionField field={FIELD} readOnly={false} />);
+    await screen.findByText("Acme");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText(/Business name/), "Initech");
+    await user.type(within(dialog).getByLabelText(/Address/), "https://initech.example:5001/");
+    await user.type(within(dialog).getByLabelText(/Password/), "pw/");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(add).toHaveBeenCalledWith("plugins.pbx.customers", {
+      name: "Initech",
+      aliases: "",
+      // The port survives; the slash does not.
+      host: "https://initech.example:5001",
+      // A secret is bytes and reaches the store as typed.
+      password: "pw/",
+    }));
+  });
+
   // Editing shows what is stored, scheme included: the tidying is the table's,
   // and a form that quietly rewrote the value would be saving something the
   // operator did not type.

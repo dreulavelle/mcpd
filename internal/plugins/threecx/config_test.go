@@ -24,6 +24,14 @@ func TestConfig_AddressForms(t *testing.T) {
 		{host: "https://acme.ny.3cx.us", root: "https://acme.ny.3cx.us"},
 		{host: "https://acme.ny.3cx.us/", root: "https://acme.ny.3cx.us"},
 		{host: "http://pbx.internal:5000", root: "http://pbx.internal:5000"},
+		// A port on a bare name. url.Parse reads "example.com:5001" as a
+		// scheme and an opaque body, so the scheme is prepended before it is
+		// parsed rather than after -- which is what keeps a customer whose
+		// console is on a non-standard port working.
+		{host: "acme.ny.3cx.us:5001", root: "https://acme.ny.3cx.us:5001"},
+		{host: "https://acme.ny.3cx.us:5001", root: "https://acme.ny.3cx.us:5001"},
+		{host: "https://acme.ny.3cx.us:5001/", root: "https://acme.ny.3cx.us:5001"},
+		{host: "  acme.ny.3cx.us:5001/  ", root: "https://acme.ny.3cx.us:5001"},
 		{host: "  acme.ny.3cx.us  ", root: "https://acme.ny.3cx.us"},
 		{host: "https://acme.ny.3cx.us/xapi/v1", refused: "web root"},
 		{host: "https://acme.ny.3cx.us/webclient", refused: "web root"},
@@ -134,5 +142,36 @@ func TestNew_DoesNotRetainThePassword(t *testing.T) {
 	}
 	if p.accounts[0].client.password != "secret-pass" {
 		t.Error("the client should hold the password, and only the client")
+	}
+}
+
+// A port is part of the host everywhere it matters: the address requests are
+// built on, the transport's check that a request is going to the configured
+// phone system, and what the customer list reports.
+func TestConfig_PortsSurviveEverywhere(t *testing.T) {
+	cfg := oneCustomer("acme.ny.3cx.us:5001")
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	root := rootOf(cfg.Customers[0].Host)
+	if root != "https://acme.ny.3cx.us:5001" {
+		t.Fatalf("root = %q", root)
+	}
+	if got := displayHost(root); got != "acme.ny.3cx.us:5001" {
+		t.Errorf("the customer list should keep the port, got %q", got)
+	}
+
+	// The guard is built from that root, so a request to the same host and
+	// port is permitted and one to the default port is not: they are two
+	// different phone systems.
+	c := readOnly(nil, root)
+	if err := try(t, c, "GET", "https://acme.ny.3cx.us:5001/xapi/v1/Users?$select=Id"); err == nil {
+		t.Error("the configured host and port should be permitted (no transport, so a dial error is expected, not a refusal)")
+	} else if strings.Contains(err.Error(), "not the configured phone system") {
+		t.Errorf("the configured host and port was refused: %v", err)
+	}
+	err := try(t, c, "GET", "https://acme.ny.3cx.us/xapi/v1/Users?$select=Id")
+	if err == nil || !strings.Contains(err.Error(), "not the configured phone system") {
+		t.Errorf("a different port is a different system and should be refused, got %v", err)
 	}
 }
