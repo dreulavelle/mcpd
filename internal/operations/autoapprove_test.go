@@ -448,9 +448,7 @@ func proposal(risk RiskLevel, reversible bool) ProposeRequest {
 }
 
 func proposer() *auth.Principal {
-	return &auth.Principal{
-		ID: "user:alice", Role: auth.RoleUser, Plugins: []string{"cnmaestro"},
-	}
+	return principal("user:alice", auth.RoleOperator)
 }
 
 func rulesPolicy(t *testing.T, rules ...AutoApprovalRule) Policy {

@@ -45,7 +45,7 @@ export function SettingsSection({ section, title, lede, children }: {
   /** Rendered above the form, for a tab that is more than its settings. */
   children?: ReactNode;
 }) {
-  const mayWrite = useCan("admin");
+  const mayWrite = useCan("settings:write");
   const load = useCallback(() => api.settings(), []);
   const { data, error, reload } = useLoader(load, "Couldn't load settings.");
   const [query, setQuery] = useState("");

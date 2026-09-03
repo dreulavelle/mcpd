@@ -424,8 +424,8 @@ func (m *Manager) Status() Status {
 	if m.state != StateDisabled {
 		s.TunnelID = m.cfg.TunnelID
 		s.Principal = m.cfg.Principal.ID
-		s.Role = m.cfg.Principal.Role.String()
-		s.Plugins = m.cfg.Principal.Plugins
+		s.Role = m.cfg.Principal.RoleName
+		s.Plugins = m.cfg.Principal.Grants.Plugins()
 	}
 	return s
 }
@@ -569,7 +569,7 @@ func (m *Manager) start(ctx context.Context) error {
 			m.log.InfoContext(ctx, "tunnel connected",
 				"tunnel_id", cfg.TunnelID,
 				"principal", cfg.Principal.ID,
-				"plugins", cfg.Principal.Plugins)
+				"plugins", cfg.Principal.Grants.Plugins())
 			if recovered && m.onRecovered != nil {
 				m.onRecovered(cfg.Plugin, cfg.TunnelID, cfg.AccountName)
 			}
@@ -618,7 +618,7 @@ func (m *Manager) start(ctx context.Context) error {
 	m.log.InfoContext(ctx, "tunnel started; waiting for the first control-plane poll",
 		"tunnel_id", cfg.TunnelID,
 		"principal", cfg.Principal.ID,
-		"plugins", cfg.Principal.Plugins)
+		"plugins", cfg.Principal.Grants.Plugins())
 	return nil
 }
 

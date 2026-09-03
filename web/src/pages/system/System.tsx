@@ -19,7 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
  * putting them on a page of forms would make both harder to find.
  */
 export function System() {
-  const mayAdmin = useCan("admin");
+  const mayAdmin = useCan("system:write");
   return (
     <>
       <PageHeader

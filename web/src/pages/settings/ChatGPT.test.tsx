@@ -10,7 +10,9 @@ function account(overrides: Partial<ChatGPTAccount> = {}): ChatGPTAccount {
     id: "acct_1",
     name: "Work",
     principal: "svc:chatgpt:work",
-    role: "user",
+    role: "role_operator",
+    role_name: "Operator",
+    grants: [{ plugin: "*", level: "write" }],
     plugins: ["*"],
     rate_per_sec: 0,
     enabled: true,
@@ -51,7 +53,8 @@ describe("the ChatGPT accounts page", () => {
       account(),
       account({
         id: "acct_2", name: "Support", principal: "svc:chatgpt:support",
-        role: "user", plugins: ["graylog"], rate_per_sec: 2,
+        role: "role_operator", role_name: "Operator",
+        grants: [{ plugin: "graylog", level: "read" }], plugins: ["graylog"], rate_per_sec: 2,
       }),
     ]);
     renderWith(<ChatGPT />);
@@ -65,23 +68,26 @@ describe("the ChatGPT accounts page", () => {
 
   /**
    * The role decides one thing: whether a plugin tool marked administrative
-   * may be called. It is not the control over whether ChatGPT can change your
-   * systems -- every account can propose a change, and the conversation is
-   * where that is agreed. An ordinary account must not be rendered in a way
-   * that reads as a permission granted.
+   * may be called (`plugins:write`). It is not the control over whether
+   * ChatGPT can change your systems -- every account can propose a change,
+   * and the conversation is where that is agreed. Each row shows its own
+   * account's role by name, not a marker that collapses every role but one
+   * into "ordinary".
    */
-  it("marks only an account allowed administrative tools", async () => {
+  it("shows each account's own role by name", async () => {
     stub([
-      account({ id: "acct_1", name: "Work", role: "user" }),
+      account({ id: "acct_1", name: "Work", role: "role_operator", role_name: "Operator" }),
       account({
-        id: "acct_2", name: "Ops", principal: "svc:chatgpt:ops", role: "admin",
+        id: "acct_2", name: "Ops", principal: "svc:chatgpt:ops",
+        role: "role_administrator", role_name: "Administrator",
       }),
     ]);
     renderWith(<ChatGPT />);
 
     const work = (await screen.findByText("Work")).closest("tr")!;
-    expect(work).not.toHaveTextContent("Allowed");
-    expect(screen.getByText("Ops").closest("tr")!).toHaveTextContent("Allowed");
+    expect(work).toHaveTextContent("Operator");
+    const ops = screen.getByText("Ops").closest("tr")!;
+    expect(ops).toHaveTextContent("Administrator");
   });
 
   // Zero is unlimited and is the ordinary answer. Rendering it as "0/sec"
@@ -164,7 +170,7 @@ describe("the ChatGPT accounts page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add" }));
 
     expect(add).toHaveBeenCalled();
-    expect(add.mock.calls[0]![0].plugins).toEqual(["*"]);
+    expect(add.mock.calls[0]![0].grants).toEqual([{ plugin: "*", level: "write" }]);
   });
 
   // A new account with no key cannot run a tunnel, so the form does not offer

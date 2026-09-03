@@ -6,14 +6,12 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 )
 
 var (
 	tokenIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,63}$`)
-	validRoles     = []string{"user", "admin"}
 )
 
 // Validate checks the configuration for internal consistency.
@@ -129,13 +127,22 @@ func (c *Config) validateTokens() []error {
 		if strings.TrimSpace(t.Principal) == "" {
 			errs = append(errs, fmt.Errorf("config: %s.principal is required", where))
 		}
-		if !slices.Contains(validRoles, t.Role) {
-			errs = append(errs, fmt.Errorf("config: %s.role must be one of %v (got %q)",
-				where, validRoles, t.Role))
+		if strings.TrimSpace(t.Role) == "" {
+			errs = append(errs, fmt.Errorf("config: %s.role is required; "+
+				"reader, operator, administrator, or a role's name", where))
 		}
-		if len(t.Plugins) == 0 {
-			errs = append(errs, fmt.Errorf("config: %s.plugins is empty; "+
-				`list plugins explicitly or use ["*"]`, where))
+		if len(t.Plugins) == 0 && len(t.Grants) == 0 {
+			errs = append(errs, fmt.Errorf("config: %s grants nothing; "+
+				`list plugins explicitly, use ["*"], or give grants`, where))
+		}
+		for j, g := range t.Grants {
+			if strings.TrimSpace(g.Plugin) == "" {
+				errs = append(errs, fmt.Errorf("config: %s.grants[%d] names no plugin", where, j))
+			}
+			if g.Level != "read" && g.Level != "write" {
+				errs = append(errs, fmt.Errorf("config: %s.grants[%d].level must be read or write (got %q)",
+					where, j, g.Level))
+			}
 		}
 		for _, name := range t.Plugins {
 			if name == "*" {

@@ -99,7 +99,7 @@ export function warningsByRule(
 
 export function ApprovalPolicy() {
   const confirm = useConfirm();
-  const mayWrite = useCan("admin");
+  const mayWrite = useCan("policies:write");
   const notify = useNotify();
 
   const [policy, setPolicy] = useState<Policy | null>(null);
@@ -760,7 +760,7 @@ function DefaultDecision({ policy, mayWrite, onSaved }: {
  * its own.
  */
 function ApprovalTimings() {
-  const mayWrite = useCan("admin");
+  const mayWrite = useCan("policies:write");
   const load = useCallback(() => api.settings(), []);
   const { data, reload } = useLoader(load, "Couldn't load the approval settings.");
 

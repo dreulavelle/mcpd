@@ -30,7 +30,7 @@ export function BypassControl() {
   const [ceiling, setCeiling] = useState("low");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
-  const mayWrite = useCan("admin");
+  const mayWrite = useCan("policies:write");
   const notify = useNotify();
 
   const load = useCallback(() => {

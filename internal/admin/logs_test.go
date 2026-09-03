@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/observability"
 )
 
@@ -155,11 +156,12 @@ func TestLogStream_FramesOneEventPerRecord(t *testing.T) {
 	}
 }
 
-// The log says which systems were called and by whom, which is a wider view
-// than any one account's own work.
-func TestLogStream_IsRefusedWithoutAdmin(t *testing.T) {
+// The log says which systems were called and by whom, gated by history:read
+// like the call ledger -- which every built-in role carries, so the refusal
+// has to come from a principal with no permissions at all.
+func TestLogStream_IsRefusedWithoutHistoryRead(t *testing.T) {
 	s, _, accounts := streamServer(t)
-	accounts.user.Role = auth.RoleUser
+	accounts.resolved = &groups.Resolved{Permissions: auth.Permissions{}, Grants: auth.Grants{}}
 
 	r := httptest.NewRequest(http.MethodGet, "/api/logs/stream", nil)
 	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: accounts.token})

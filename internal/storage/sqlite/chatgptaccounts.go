@@ -59,6 +59,9 @@ var ErrAccountExists = errors.New(
 	"sqlite: a ChatGPT account with that name already exists")
 
 // ErrNoCipher reports that a credential cannot be handled without a key.
+// ErrNoSuchRole reports a role id that names nothing.
+var ErrNoSuchRole = errors.New("sqlite: no such role")
+
 var ErrNoCipher = errors.New(
 	"sqlite: no encryption key is configured, so a ChatGPT account's " +
 		"credentials cannot be stored or read")
@@ -72,11 +75,12 @@ func (s *ChatGPTAccountStore) Create(ctx context.Context, actor string, a tunnel
 	if strings.TrimSpace(a.Principal) == "" {
 		a.Principal = tunnel.PrincipalFor(a.Name)
 	}
-	if len(a.Plugins) == 0 {
-		a.Plugins = []string{auth.Wildcard}
+	if len(a.Grants) == 0 {
+		a.Grants = auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite)
 	}
-	if a.Role == "" {
-		a.Role = auth.RoleUser
+	a.Grants = a.Grants.Normalize()
+	if a.RoleID == "" {
+		a.RoleID = auth.RoleOperator
 	}
 	if err := a.Validate(); err != nil {
 		return tunnel.Account{}, err
@@ -93,11 +97,6 @@ func (s *ChatGPTAccountStore) Create(ctx context.Context, actor string, a tunnel
 	if err != nil {
 		return tunnel.Account{}, err
 	}
-	plugins, err := json.Marshal(a.Plugins)
-	if err != nil {
-		return tunnel.Account{}, fmt.Errorf("sqlite: encode account grant: %w", err)
-	}
-
 	now := s.now()
 	a.ID = newAccountID()
 	a.CreatedBy = actor
@@ -105,13 +104,16 @@ func (s *ChatGPTAccountStore) Create(ctx context.Context, actor string, a tunnel
 	a.UpdatedAt = now
 
 	err = s.db.WriteTx(ctx, now.UnixMilli(), func(u *UnitOfWork) error {
+		if err := roleExists(u, a.RoleID); err != nil {
+			return err
+		}
 		_, err := u.exec(`
 			INSERT INTO chatgpt_accounts
-			  (id, name, api_key, admin_key, org_id, workspaces, principal, role, plugins,
+			  (id, name, api_key, admin_key, org_id, workspaces, principal, role_id, grants_json,
 			   rate_per_sec, enabled, created_by, created_at, updated_at)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			a.ID, a.Name, apiKey, adminKey, nullIfEmpty(a.OrgID), encodeWorkspaces(a.Workspaces), a.Principal,
-			string(a.Role), string(plugins), a.RatePerSec, boolToInt(a.Enabled),
+			a.RoleID, auth.EncodeGrants(a.Grants), a.RatePerSec, boolToInt(a.Enabled),
 			actor, now.UnixMilli(), now.UnixMilli())
 		if err != nil {
 			if isAccountConflict(err) {
@@ -121,8 +123,8 @@ func (s *ChatGPTAccountStore) Create(ctx context.Context, actor string, a tunnel
 		}
 		return auditAccount(u, "chatgpt.account.added", actor, a, "add", map[string]any{
 			"principal":    a.Principal,
-			"role":         string(a.Role),
-			"plugins":      a.Plugins,
+			"role":         a.RoleID,
+			"grants":       a.Grants,
 			"rate_per_sec": a.RatePerSec,
 			// Whether tunnels can be created from this account, which is the
 			// difference between an account that manages its organisation and
@@ -173,16 +175,18 @@ func (s *ChatGPTAccountStore) Update(ctx context.Context, actor, id string, up t
 			changed["workspaces"] = next.Workspaces
 		}
 	}
-	if up.Role != nil && *up.Role != current.Role {
-		next.Role = *up.Role
-		changed["role"] = string(next.Role)
+	if up.RoleID != nil && *up.RoleID != current.RoleID {
+		next.RoleID = *up.RoleID
+		changed["role"] = next.RoleID
 	}
-	if up.Plugins != nil {
-		next.Plugins = *up.Plugins
-		if len(next.Plugins) == 0 {
-			next.Plugins = []string{auth.Wildcard}
+	if up.Grants != nil {
+		next.Grants = up.Grants.Normalize()
+		if len(next.Grants) == 0 {
+			next.Grants = auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite)
 		}
-		changed["plugins"] = next.Plugins
+		if !next.Grants.Equal(current.Grants) {
+			changed["grants"] = next.Grants
+		}
 	}
 	if up.RatePerSec != nil && *up.RatePerSec != current.RatePerSec {
 		next.RatePerSec = *up.RatePerSec
@@ -213,24 +217,24 @@ func (s *ChatGPTAccountStore) Update(ctx context.Context, actor, id string, up t
 	if err != nil {
 		return tunnel.Account{}, err
 	}
-	plugins, err := json.Marshal(next.Plugins)
-	if err != nil {
-		return tunnel.Account{}, fmt.Errorf("sqlite: encode account grant: %w", err)
-	}
-
 	now := s.now()
 	next.UpdatedAt = now
 	err = s.db.WriteTx(ctx, now.UnixMilli(), func(u *UnitOfWork) error {
+		if _, moved := changed["role"]; moved {
+			if err := roleExists(u, next.RoleID); err != nil {
+				return err
+			}
+		}
 		// Guarded on updated_at as well as id: two administrators editing one
 		// account at once must not have the second silently overwrite a change
 		// the first made and nobody saw.
 		res, err := u.exec(`
 			UPDATE chatgpt_accounts
-			   SET name = ?, api_key = ?, admin_key = ?, org_id = ?, workspaces = ?, role = ?,
-			       plugins = ?, rate_per_sec = ?, enabled = ?, updated_at = ?
+			   SET name = ?, api_key = ?, admin_key = ?, org_id = ?, workspaces = ?, role_id = ?,
+			       grants_json = ?, rate_per_sec = ?, enabled = ?, updated_at = ?
 			 WHERE id = ? AND updated_at = ?`,
-			next.Name, apiKey, adminKey, nullIfEmpty(next.OrgID), encodeWorkspaces(next.Workspaces), string(next.Role),
-			string(plugins), next.RatePerSec, boolToInt(next.Enabled),
+			next.Name, apiKey, adminKey, nullIfEmpty(next.OrgID), encodeWorkspaces(next.Workspaces), next.RoleID,
+			auth.EncodeGrants(next.Grants), next.RatePerSec, boolToInt(next.Enabled),
 			now.UnixMilli(), id, current.UpdatedAt.UnixMilli())
 		if err != nil {
 			if isAccountConflict(err) {
@@ -284,9 +288,11 @@ func (s *ChatGPTAccountStore) Delete(ctx context.Context, actor, id string) erro
 // List returns every account, by name.
 func (s *ChatGPTAccountStore) List(ctx context.Context) ([]tunnel.Account, error) {
 	rows, err := s.db.Reader().QueryContext(ctx, `
-		SELECT id, name, api_key, admin_key, org_id, workspaces, principal, role, plugins,
-		       rate_per_sec, enabled, created_by, created_at, updated_at
-		  FROM chatgpt_accounts ORDER BY lower(name)`)
+		SELECT a.id, a.name, a.api_key, a.admin_key, a.org_id, a.workspaces, a.principal, a.role_id,
+		       COALESCE(r.name, ''), COALESCE(r.permissions_json, '{}'), a.grants_json,
+		       a.rate_per_sec, a.enabled, a.created_by, a.created_at, a.updated_at
+		  FROM chatgpt_accounts a LEFT JOIN roles r ON r.id = a.role_id
+		 ORDER BY lower(a.name)`)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: list chatgpt accounts: %w", err)
 	}
@@ -306,9 +312,11 @@ func (s *ChatGPTAccountStore) List(ctx context.Context) ([]tunnel.Account, error
 // Get returns one account.
 func (s *ChatGPTAccountStore) Get(ctx context.Context, id string) (tunnel.Account, bool, error) {
 	row := s.db.Reader().QueryRowContext(ctx, `
-		SELECT id, name, api_key, admin_key, org_id, workspaces, principal, role, plugins,
-		       rate_per_sec, enabled, created_by, created_at, updated_at
-		  FROM chatgpt_accounts WHERE id = ?`, id)
+		SELECT a.id, a.name, a.api_key, a.admin_key, a.org_id, a.workspaces, a.principal, a.role_id,
+		       COALESCE(r.name, ''), COALESCE(r.permissions_json, '{}'), a.grants_json,
+		       a.rate_per_sec, a.enabled, a.created_by, a.created_at, a.updated_at
+		  FROM chatgpt_accounts a LEFT JOIN roles r ON r.id = a.role_id
+		 WHERE a.id = ?`, id)
 	a, err := s.scan(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return tunnel.Account{}, false, nil
@@ -337,12 +345,12 @@ func (s *ChatGPTAccountStore) scan(sc scanner) (tunnel.Account, error) {
 		apiKey             string
 		adminKey, orgID    sql.NullString
 		workspaces         string
-		role, plugins      string
+		perms, grants      string
 		enabled            int
 		createdAt, updated int64
 	)
 	if err := sc.Scan(&a.ID, &a.Name, &apiKey, &adminKey, &orgID, &workspaces, &a.Principal,
-		&role, &plugins, &a.RatePerSec, &enabled, &a.CreatedBy,
+		&a.RoleID, &a.RoleName, &perms, &grants, &a.RatePerSec, &enabled, &a.CreatedBy,
 		&createdAt, &updated); err != nil {
 		return tunnel.Account{}, err
 	}
@@ -365,15 +373,29 @@ func (s *ChatGPTAccountStore) scan(sc scanner) (tunnel.Account, error) {
 		a.AdminKey = admin
 	}
 	a.OrgID = orgID.String
-	a.Role = auth.Role(role)
-	if err := json.Unmarshal([]byte(plugins), &a.Plugins); err != nil {
+	if err := json.Unmarshal([]byte(perms), &a.Permissions); err != nil {
 		return tunnel.Account{}, fmt.Errorf(
-			"sqlite: decode grant for account %q: %w", a.Name, err)
+			"sqlite: decode permissions for account %q: %w", a.Name, err)
 	}
+	a.Grants = auth.DecodeGrants(grants)
 	a.Enabled = enabled == 1
 	a.CreatedAt = time.UnixMilli(createdAt)
 	a.UpdatedAt = time.UnixMilli(updated)
 	return a, nil
+}
+
+// roleExists refuses a role id that names nothing, inside the write. The
+// roles package cannot be imported from here -- it is built on this one --
+// so the one-line check is repeated rather than shared.
+func roleExists(u *UnitOfWork, id string) error {
+	var n int
+	if err := u.queryRow(`SELECT COUNT(*) FROM roles WHERE id = ?`, id).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNoSuchRole
+	}
+	return nil
 }
 
 func (s *ChatGPTAccountStore) encryptOptional(v string) (any, error) {

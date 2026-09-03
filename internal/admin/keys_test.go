@@ -27,6 +27,11 @@ type fakeKeys struct {
 	// passed through rather than only what came back.
 	created apikeys.CreateRequest
 	revoked []string
+	// rotated records the last rotation, and rotatedSecret what it returns.
+	rotated       apikeys.Key
+	rotatedGrace  time.Duration
+	rotatedSecret string
+	rotateErr     error
 }
 
 func (f *fakeKeys) List(context.Context) ([]*apikeys.Key, error) { return f.keys, nil }
@@ -43,7 +48,7 @@ func (f *fakeKeys) ByID(_ context.Context, id string) (*apikeys.Key, error) {
 func (f *fakeKeys) Create(_ context.Context, actor string, req apikeys.CreateRequest) (*apikeys.Key, string, error) {
 	f.created = req
 	k := &apikeys.Key{
-		ID: "key_1", Name: req.Name, Role: req.Role, Plugins: req.Plugins,
+		ID: "key_1", Name: req.Name, RoleID: req.RoleID, Grants: req.Grants,
 		CreatedBy: actor, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		ExpiresAt: req.ExpiresAt,
 	}
@@ -53,6 +58,19 @@ func (f *fakeKeys) Create(_ context.Context, actor string, req apikeys.CreateReq
 
 func (f *fakeKeys) Update(_ context.Context, _, id string, _ apikeys.UpdateRequest) (*apikeys.Key, error) {
 	return f.ByID(context.Background(), id)
+}
+
+func (f *fakeKeys) Rotate(_ context.Context, _, id string, grace time.Duration) (*apikeys.Key, string, error) {
+	if f.rotateErr != nil {
+		return nil, "", f.rotateErr
+	}
+	f.rotatedGrace = grace
+	k, err := f.ByID(context.Background(), id)
+	if err != nil {
+		return nil, "", err
+	}
+	f.rotated = *k
+	return k, f.rotatedSecret, nil
 }
 
 func (f *fakeKeys) Revoke(_ context.Context, _, id string) error {
@@ -68,8 +86,8 @@ func newKeyServer(t *testing.T, accounts Accounts, keys Keys) *Server {
 		Keys:     keys,
 		Version:  "test",
 		Health:   observability.NewHealthRegistry(time.Second),
-		KeyGrants: func(context.Context, string) ([]string, error) {
-			return []string{}, nil
+		KeyAccess: func(context.Context, string) (groups.Resolved, error) {
+			return groups.Resolved{Permissions: auth.Permissions{}, Grants: auth.Grants{}}, nil
 		},
 	})
 }
@@ -98,7 +116,7 @@ func TestKeys_TheSecretIsShownOnceAndNeverAgain(t *testing.T) {
 	s := newKeyServer(t, accounts, keys)
 
 	w := asAdmin(t, s, accounts, http.MethodPost, "/api/keys",
-		`{"name":"agent","role":"user","plugins":["echo"]}`)
+		`{"name":"agent","role":"role_operator","grants":[{"plugin":"echo","level":"write"}]}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("POST /api/keys = %d: %s", w.Code, w.Body.String())
 	}
@@ -116,7 +134,7 @@ func TestKeys_TheSecretIsShownOnceAndNeverAgain(t *testing.T) {
 	// Every other shape this API can return.
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodGet, "/api/keys", ""},
-		{http.MethodPatch, "/api/keys/key_1", `{"plugins":["netbox"]}`},
+		{http.MethodPatch, "/api/keys/key_1", `{"grants":[{"plugin":"netbox","level":"read"}]}`},
 		{http.MethodPost, "/api/keys/key_1/revoke", ""},
 	} {
 		w := asAdmin(t, s, accounts, tc.method, tc.path, tc.body)
@@ -139,28 +157,30 @@ func TestKeys_TheSecretIsShownOnceAndNeverAgain(t *testing.T) {
 	}
 }
 
-// Only an administrator may create a key, which is the owner's rule: a key
-// acts on this host with a role and a reach, and issuing one hands out both.
-func TestKeys_EveryRouteTakesAdmin(t *testing.T) {
+// Only an administrator may reach the access routes, which is the owner's
+// rule: a key or a group carries a role and a reach, and creating or editing
+// one hands out both.
+func TestKeys_EveryRouteTakesAccessWrite(t *testing.T) {
 	accounts := newFakeAccounts()
-	accounts.user.Role = auth.RoleUser
+	accounts.user.RoleID = auth.RoleOperator
 	s := newKeyServer(t, accounts, &fakeKeys{secret: "mcpd_secret"})
 
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodGet, "/api/keys", ""},
-		{http.MethodPost, "/api/keys", `{"name":"agent","role":"user"}`},
-		{http.MethodPatch, "/api/keys/key_1", `{"plugins":[]}`},
+		{http.MethodPost, "/api/keys", `{"name":"agent","role":"role_operator"}`},
+		{http.MethodPatch, "/api/keys/key_1", `{"grants":[]}`},
 		{http.MethodPost, "/api/keys/key_1/revoke", ""},
+		{http.MethodPost, "/api/keys/key_1/rotate", ""},
 		{http.MethodGet, "/api/groups", ""},
 		{http.MethodPost, "/api/groups", `{"name":"Field"}`},
-		{http.MethodPatch, "/api/groups/grp_1", `{"plugins":[]}`},
+		{http.MethodPatch, "/api/groups/grp_1", `{"grants":[]}`},
 		{http.MethodDelete, "/api/groups/grp_1", ""},
 		{http.MethodPost, "/api/groups/grp_1/members", `{"kind":"user","id":"usr_1"}`},
 		{http.MethodDelete, "/api/groups/grp_1/members/user/usr_1", ""},
 	} {
 		w := asAdmin(t, s, accounts, tc.method, tc.path, tc.body)
 		if w.Code != http.StatusForbidden {
-			t.Errorf("%s %s = %d for a user, want 403", tc.method, tc.path, w.Code)
+			t.Errorf("%s %s = %d for an operator, want 403", tc.method, tc.path, w.Code)
 		}
 	}
 }
@@ -173,7 +193,7 @@ func TestKeys_ANewKeyRendersAsReachingNothing(t *testing.T) {
 	s := newKeyServer(t, accounts, keys)
 
 	w := asAdmin(t, s, accounts, http.MethodPost, "/api/keys",
-		`{"name":"agent","role":"user"}`)
+		`{"name":"agent","role":"role_operator"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("POST /api/keys = %d: %s", w.Code, w.Body.String())
 	}
@@ -186,8 +206,8 @@ func TestKeys_ANewKeyRendersAsReachingNothing(t *testing.T) {
 	if created.Key.Reaches == nil || len(created.Key.Reaches) != 0 {
 		t.Errorf("reaches = %v, want an empty list", created.Key.Reaches)
 	}
-	if created.Key.Plugins == nil {
-		t.Error("plugins came back null; a page cannot count that")
+	if created.Key.Grants == nil {
+		t.Error("grants came back null; a page cannot count that")
 	}
 	if created.Key.Status != string(apikeys.StatusActive) {
 		t.Errorf("status = %q, want active", created.Key.Status)
@@ -200,9 +220,59 @@ func TestKeys_ARubbishExpiryIsRefused(t *testing.T) {
 	accounts := newFakeAccounts()
 	s := newKeyServer(t, accounts, &fakeKeys{secret: "mcpd_secret"})
 	w := asAdmin(t, s, accounts, http.MethodPost, "/api/keys",
-		`{"name":"agent","role":"user","expires_at":"next tuesday"}`)
+		`{"name":"agent","role":"role_operator","expires_at":"next tuesday"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("POST with a bad expiry = %d, want 400", w.Code)
+	}
+}
+
+// Rotating shows the new secret once, the same way creating does, and the old
+// key's identity, role, grants and groups stay -- only the secret moves.
+func TestKeys_RotateReturnsTheSecretOnce(t *testing.T) {
+	accounts := newFakeAccounts()
+	keys := &fakeKeys{
+		secret:        "mcpd_original",
+		rotatedSecret: "mcpd_rotated-secret-shown-once",
+		keys: []*apikeys.Key{{
+			ID: "key_1", Name: "agent", RoleID: auth.RoleOperator,
+			CreatedBy: "user:alice", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}},
+	}
+	s := newKeyServer(t, accounts, keys)
+
+	w := asAdmin(t, s, accounts, http.MethodPost, "/api/keys/key_1/rotate", `{"grace_seconds":3600}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST rotate = %d: %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Secret string  `json:"secret"`
+		Key    keyView `json:"key"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Secret != keys.rotatedSecret {
+		t.Errorf("secret = %q, want the rotated one", got.Secret)
+	}
+	if keys.rotatedGrace != time.Hour {
+		t.Errorf("grace = %s, want 1h from grace_seconds", keys.rotatedGrace)
+	}
+	if got.Key.ID != "key_1" {
+		t.Errorf("key = %+v, want the same identity", got.Key)
+	}
+}
+
+// A revoked key cannot be rotated back to life; the handler maps the store's
+// refusal onto a 409 an operator can act on, telling them to issue a new key
+// instead.
+func TestKeys_RotateRefusesARevokedKey(t *testing.T) {
+	accounts := newFakeAccounts()
+	keys := &fakeKeys{rotateErr: apikeys.ErrRevoked}
+	s := newKeyServer(t, accounts, keys)
+
+	w := asAdmin(t, s, accounts, http.MethodPost, "/api/keys/key_1/rotate", "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("POST rotate on a revoked key = %d, want 409: %s", w.Code, w.Body.String())
 	}
 }
 

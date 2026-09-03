@@ -1,75 +1,105 @@
 import { describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWith } from "@/test/render";
+import type { PermissionSet } from "@/lib/permissions";
 import { PermissionMatrix } from "./PermissionMatrix";
-import type { Capability } from "@/lib/api";
 
-function setup(value: Capability[] | null) {
+/** Renders the matrix and reports what it last handed back. */
+function mount(value: PermissionSet = {}, extra: { disabled?: boolean; readOnly?: boolean } = {}) {
   const onChange = vi.fn();
-  renderWith(<PermissionMatrix id="t" value={value} onChange={onChange} />);
+  render(<PermissionMatrix id="perm" value={value} onChange={onChange} {...extra} />);
   return onChange;
 }
 
-describe("PermissionMatrix", () => {
-  // "No ceiling" and "permits nothing" are different states, and the whole
-  // control exists to keep them apart. Representing no-ceiling as every box
-  // ticked would turn it into permits-everything the moment somebody unticked
-  // one, which silently restricts a group nobody meant to restrict.
-  it("treats no ceiling as its own state rather than everything ticked", () => {
-    setup(null);
-    expect(
-      screen.getByText(/Members do whatever their own role allows/i),
-    ).toBeInTheDocument();
-    // No per-capability switches until the group is actually restricted.
-    expect(screen.queryByLabelText("Approve changes")).not.toBeInTheDocument();
+/**
+ * Eight rows, each a level in one area -- the vocabulary the server actually
+ * enforces, so a typo here is a refused save rather than a stored permission
+ * nobody holds.
+ */
+describe("editing a permission set", () => {
+  it("starts every area at none when the set holds nothing", () => {
+    mount();
+    expect(screen.getByLabelText("Settings level")).toHaveValue("none");
+    expect(screen.getByLabelText("Access level")).toHaveValue("none");
   });
 
-  it("turning restriction on starts from permitting nothing", async () => {
-    const onChange = setup(null);
-    await userEvent.click(
-      screen.getByLabelText(/Restrict what this group may do/i),
+  it("shows what the set already holds", () => {
+    mount({ settings: "write", history: "read" });
+    expect(screen.getByLabelText("Settings level")).toHaveValue("write");
+    expect(screen.getByLabelText("History level")).toHaveValue("read");
+    expect(screen.getByLabelText("Access level")).toHaveValue("none");
+  });
+
+  it("raises one area's level without touching the others", async () => {
+    const onChange = mount({ history: "read" });
+
+    await userEvent.selectOptions(screen.getByLabelText("Settings level"), "write");
+    expect(onChange).toHaveBeenCalledWith({ history: "read", settings: "write" });
+  });
+
+  // "None" is a real choice -- taking a permission away -- and has to remove
+  // the key rather than leave a "none" value sitting in the set the server
+  // would have to also know how to ignore.
+  it("drops the area from the set when it is put back to none", async () => {
+    const onChange = mount({ settings: "write", history: "read" });
+
+    await userEvent.selectOptions(screen.getByLabelText("Settings level"), "none");
+    expect(onChange).toHaveBeenCalledWith({ history: "read" });
+  });
+
+  // Approvals is decided, not written -- the row offers "read" and "decide",
+  // never "write", because the server has no such level for that area.
+  it("offers approvals read-or-decide rather than read-or-write", () => {
+    mount();
+    const select = screen.getByLabelText("Approvals level");
+    const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+    expect(options).toEqual(["None", "Read", "Read and decide"]);
+  });
+
+  it("offers every other area read-or-write", () => {
+    mount();
+    const select = screen.getByLabelText("Settings level");
+    const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+    expect(options).toEqual(["None", "Read", "Read and write"]);
+  });
+
+  it("sets approvals to decide, not write", async () => {
+    const onChange = mount();
+
+    await userEvent.selectOptions(screen.getByLabelText("Approvals level"), "decide");
+    expect(onChange).toHaveBeenCalledWith({ approvals: "decide" });
+  });
+
+  // Access at more than read can hand out any role, including one that
+  // reaches this very matrix -- a warning belongs beside the row that can
+  // grant it, not in a document nobody reads before they check the box.
+  it("warns beside access once it is held at more than read", () => {
+    const { rerender } = render(
+      <PermissionMatrix id="perm" value={{ access: "read" }} onChange={() => undefined} />,
     );
-    // Not null, and not everything: an empty list, which the caller can then
-    // add to. Starting from everything would mean switching this on grants
-    // nothing until something is removed, which reads backwards.
-    expect(onChange).toHaveBeenCalledWith([]);
+    expect(screen.queryByText(/hand out any role/i)).not.toBeInTheDocument();
+
+    rerender(<PermissionMatrix id="perm" value={{ access: "write" }} onChange={() => undefined} />);
+    expect(screen.getByText(/hand out any role/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * A built-in role's matrix, or one shown to somebody who may read roles but
+ * not write them, draws the same eight rows as a description rather than a
+ * form -- no select to operate, no `onChange` it could ever call.
+ */
+describe("showing a permission set read-only", () => {
+  it("draws a chip rather than a select for every area", () => {
+    mount({ settings: "write" }, { readOnly: true });
+    expect(screen.queryByLabelText("Settings level")).not.toBeInTheDocument();
+    expect(screen.getByText("Write")).toBeInTheDocument();
+    // Every other area is held at none, and says so rather than sitting blank.
+    expect(screen.getAllByText("None").length).toBeGreaterThan(0);
   });
 
-  it("turning restriction off removes the ceiling rather than emptying it", async () => {
-    const onChange = setup(["read"]);
-    await userEvent.click(
-      screen.getByLabelText(/Restrict what this group may do/i),
-    );
-    expect(onChange).toHaveBeenCalledWith(null);
-  });
-
-  it("ticking a capability adds it and unticking removes it", async () => {
-    const onChange = setup(["read"]);
-    await userEvent.click(screen.getByLabelText("Approve changes"));
-    expect(onChange).toHaveBeenCalledWith(["read", "approve"]);
-
-    onChange.mockClear();
-    await userEvent.click(screen.getByLabelText("Read"));
-    expect(onChange).toHaveBeenCalledWith([]);
-  });
-
-  // An empty ceiling is legitimate and easy to reach by accident, so it says
-  // out loud what it means rather than looking like an unfinished form.
-  it("says plainly that an empty ceiling suspends the group", () => {
-    setup([]);
-    expect(
-      screen.getByText(/may do nothing at all/i),
-    ).toBeInTheDocument();
-  });
-
-  // The control must not imply it grants anything. An ordinary user in a group
-  // permitting "admin" is still not an administrator, and somebody ticking that
-  // box needs to know it before they wonder why it did not work.
-  it("says it can only take rights away", () => {
-    setup(["read"]);
-    expect(
-      screen.getByText(/can only take rights away/i),
-    ).toBeInTheDocument();
+  it("still names approvals' held level as decide, not write", () => {
+    mount({ approvals: "decide" }, { readOnly: true });
+    expect(screen.getByText("Decide")).toBeInTheDocument();
   });
 });

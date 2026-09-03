@@ -3,7 +3,7 @@ import { act, screen, waitFor } from "@testing-library/react";
 import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "@/lib/api";
-import { capabilitiesOf } from "@/lib/capabilities";
+import { BUILTIN_ROLES, builtinPermissions } from "@/lib/permissions";
 import App from "@/App";
 
 /**
@@ -20,8 +20,6 @@ const SESSION = {
   // `display_name` is the stored value an edit field round-trips.
   name: "Smoke Test",
   display_name: "Smoke Test",
-  role: "admin" as const,
-  plugins: ["*"],
   csrf_token: "test-csrf",
   expires_at: "2026-08-23T13:51:51Z",
   // An ordinary account: somebody decided about it, and it has a password.
@@ -34,8 +32,14 @@ function stubApi(role: "user" | "admin" = "admin") {
   vi.spyOn(api, "meta").mockResolvedValue({
     version: "dev", auth_mode: "static", needs_setup: false,
   });
+  const roleId = role === "admin" ? "role_administrator" : "role_operator";
   vi.spyOn(api, "session").mockResolvedValue({
-    ...SESSION, role, capabilities: [...capabilitiesOf(role)],
+    ...SESSION,
+    role: roleId,
+    role_name: BUILTIN_ROLES[roleId]?.name ?? roleId,
+    plugins: ["*"],
+    grants: [{ plugin: "*", level: "write" }],
+    permissions: builtinPermissions(roleId),
   });
   vi.spyOn(api, "health").mockResolvedValue({
     status: "up",
@@ -195,13 +199,13 @@ describe("a signed-out visitor", () => {
  * answer than a sentence saying why.
  */
 describe("reaching an admin-only section by URL", () => {
-  it("refuses a user, naming the capability they lack", async () => {
+  it("refuses a user, naming the permission they lack", async () => {
     stubApi("user");
     window.history.replaceState(null, "", "/marketplace");
 
     render(<App />);
     expect(await screen.findByText("Not for this account")).toBeInTheDocument();
-    expect(screen.getByText("admin")).toBeInTheDocument();
+    expect(screen.getByText("plugins:write")).toBeInTheDocument();
     await waitFor(() => expect(api.mcpServers).not.toHaveBeenCalled());
   });
 

@@ -49,7 +49,9 @@ describe("the command palette", () => {
       { session: sessionFor("user") },
     );
     await screen.findByRole("option", { name: /Approvals/ });
-    expect(screen.queryByRole("option", { name: /Logs/ })).not.toBeInTheDocument();
+    // An operator holds history:read, so Logs is now open to it -- Marketplace
+    // and API Keys still take plugins:write and access:read, which it does not.
+    expect(screen.queryByRole("option", { name: /Marketplace/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /API Keys/ })).not.toBeInTheDocument();
   });
 

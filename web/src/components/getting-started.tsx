@@ -2,13 +2,12 @@ import {
   useCallback, useEffect, useMemo, useRef, useState, type Ref,
 } from "react";
 import { Circle, CircleCheck, ListChecks, X } from "lucide-react";
-import type { Capability } from "@/lib/capabilities";
 import {
   isHidden, nothingLeft, probeAll, probeInOrder, progress, remember, STEPS,
   whenIdle, type Found, type Step,
 } from "@/lib/getting-started";
 import { Link } from "@/lib/router";
-import { useCan } from "@/lib/session";
+import { useCanFn } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -25,15 +24,12 @@ import { Button } from "@/components/ui/button";
 export function GettingStarted() {
   // Up front rather than inside the filter: `useCan` is a hook, and a predicate
   // may not run for every entry.
-  const read = useCan("read");
-  const propose = useCan("propose");
-  const approve = useCan("approve");
-  const admin = useCan("admin");
+  const can = useCanFn();
 
-  const steps = useMemo<readonly Step[]>(() => {
-    const held: Record<Capability, boolean> = { read, propose, approve, admin };
-    return STEPS.filter((step) => held[step.capability]);
-  }, [read, propose, approve, admin]);
+  const steps = useMemo<readonly Step[]>(
+    () => STEPS.filter((step) => can(step.permission)),
+    [can],
+  );
 
   const [found, setFound] = useState<Found>(() => new Map());
   const [probed, setProbed] = useState(false);

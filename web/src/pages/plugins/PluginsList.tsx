@@ -102,7 +102,7 @@ export function toRows(
  * builtin proposes changes mcpd can plan against, a remote server cannot.
  */
 export function PluginsList() {
-  const mayAdd = useCan("admin");
+  const mayAdd = useCan("plugins:write");
   const [plugins, setPlugins] = useState<Plugin[] | null>(null);
   const [instances, setInstances] = useState<PluginInstance[]>([]);
   const [stale, setStale] = useState<StaleRemoval[]>([]);

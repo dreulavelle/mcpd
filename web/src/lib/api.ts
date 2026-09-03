@@ -1,3 +1,4 @@
+import type { Area, Level, Permission } from "./permissions";
 // The dashboard's typed view of the mcpd admin API, mirroring the Go DTOs in
 // internal/admin. Hand-written: the surface is small.
 
@@ -82,7 +83,36 @@ export interface AuditRecord {
 }
 
 /** A user reads, proposes and approves; an administrator also administers. */
-export type Role = "user" | "admin";
+/** A role's id: one of the built-ins, or a custom role's generated id. */
+export type Role = string;
+export type { Area, Level, Permission } from "./permissions";
+
+/** One plugin, or every plugin ("*"), at read or write. */
+export interface Grant {
+  plugin: string;
+  level: "read" | "write";
+}
+
+/** A named set of host permissions. */
+export interface RoleDef {
+  id: string;
+  name: string;
+  description: string;
+  /** Defined by this build; cannot be edited or deleted. */
+  builtin: boolean;
+  /** The level held in each area; an area absent is held at nothing. */
+  permissions: Partial<Record<Area, Level>>;
+  /** Users, keys, accounts and groups holding it. */
+  assigned: number;
+  created_by: string;
+  created_at: string;
+}
+
+/** One row of the permission matrix, from the server's vocabulary. */
+export interface AreaDef {
+  area: Area;
+  levels: Level[];
+}
 
 /** The signed-in person, as returned by the session endpoints. */
 export interface Session {
@@ -91,8 +121,12 @@ export interface Session {
   name: string;
   /** The raw stored value, which may be empty. Only for an edit field. */
   display_name: string;
+  /** The account's own role, by id, and its name. For rendering only. */
   role: Role;
+  role_name: string;
+  /** What it reaches, by name; `grants` says at which level. */
   plugins: string[];
+  grants: Grant[];
   csrf_token: string;
   expires_at: string;
   /**
@@ -107,13 +141,13 @@ export interface Session {
   /** False for an account that only signs in through a provider. */
   has_password: boolean;
   /**
-   * What this account may actually do: its role, less whatever its groups
-   * take away, and nothing while it is pending. The console draws its
-   * controls from this and never from the role, because a group ceiling is
-   * invisible in the role and a control the server refuses is worse than one
-   * that is missing. Advisory: the server checks again on every call.
+   * What this account may actually do: its role merged with its groups'
+   * roles, as "area:level" strings, and nothing while it is pending. The
+   * console draws its controls from this and never from the role, because
+   * a group can add to a role and only the server knows by how much.
+   * Advisory: the server checks again on every call.
    */
-  capabilities: Capability[];
+  permissions: Permission[];
 }
 
 /** What has been decided about an account. Not the same axis as `disabled`. */
@@ -170,10 +204,13 @@ export interface User {
   /** Raw, and only for an edit field. See `Session.display_name`. */
   display_name: string;
   role: Role;
-  /** The account's own grant, for an edit field. See `reaches`. */
-  plugins: string[];
-  /** What it actually reaches: its own grant plus every group's. */
-  reaches: string[];
+  role_name: string;
+  /** The account's own grants, for an edit field. See `reaches`. */
+  grants: Grant[];
+  /** What it actually reaches: its own grants plus every group's. */
+  reaches: Grant[];
+  /** What it may do, its role merged with its groups' roles. */
+  permissions: Permission[];
   groups: GroupRef[];
   disabled: boolean;
   /** "pending" is waiting for an administrator; `disabled` is switched off. */
@@ -187,49 +224,30 @@ export interface User {
 }
 
 /**
- * A group is a name and a set of systems. Membership is what hands those
- * systems to an account or a key; nothing else about a group grants anything.
+ * A group is a name, a role and a set of grants. Membership hands all of
+ * them to an account or a key; nothing about a group takes anything away.
  */
-/** What a caller may do, as opposed to what it may reach. */
-export type Capability = "read" | "propose" | "approve" | "admin";
-
-/** Every capability, in the order the permission matrix shows them. */
-export const CAPABILITIES: Capability[] = ["read", "propose", "approve", "admin"];
-
-/** What each capability lets somebody do, for the matrix's column headings. */
-export const CAPABILITY_LABELS: Record<Capability, string> = {
-  read: "Read",
-  propose: "Propose changes",
-  approve: "Approve changes",
-  admin: "Administer mcpd",
-};
-
 export interface Group {
   id: string;
   name: string;
   description: string;
-  /** Empty means the group hands out nothing, which is what a new one does. */
-  plugins: string[];
-  /**
-   * What this group permits its members to do, which can only ever narrow what
-   * their role already allows — a role grants, a group takes away.
-   *
-   * `null` means the group imposes no ceiling and each member's role stands.
-   * An empty array is the opposite and is a real setting: a group that permits
-   * nothing, which suspends its members without deleting them. Keep the two
-   * apart; collapsing them hands a suspended group its rights back.
-   */
-  capabilities: Capability[] | null;
+  /** The role every member holds through it, or "" for reach only. */
+  role: Role;
+  role_name: string;
+  /** Empty means the group hands out no reach, which is what a new one does. */
+  grants: Grant[];
   members: number;
   created_by: string;
   created_at: string;
 }
 
-/** A group as it appears beside a member, where only the grant matters. */
+/** A group as it appears beside a member. */
 export interface GroupRef {
   id: string;
   name: string;
-  plugins: string[];
+  role: Role;
+  role_name: string;
+  grants: Grant[];
 }
 
 export interface GroupMember {
@@ -248,10 +266,13 @@ export interface ApiKey {
   id: string;
   name: string;
   role: Role;
-  /** The key's own grant, for an edit field. See `reaches`. */
-  plugins: string[];
-  /** What it actually reaches: its own grant plus its groups'. */
-  reaches: string[];
+  role_name: string;
+  /** The key's own grants, for an edit field. See `reaches`. */
+  grants: Grant[];
+  /** What it actually reaches: its own grants plus its groups'. */
+  reaches: Grant[];
+  /** What it may do, its role merged with its groups' roles. */
+  permissions: Permission[];
   groups: GroupRef[];
   status: KeyStatus;
   created_by: string;
@@ -260,12 +281,14 @@ export interface ApiKey {
   last_used_at?: string;
   revoked_at?: string;
   revoked_by?: string;
+  /** While set, a secret this key was rotated away from still works, until then. */
+  previous_until?: string;
 }
 
 export interface CreateKey {
   name: string;
   role: Role;
-  plugins: string[];
+  grants: Grant[];
   groups: string[];
   /** RFC 3339, or absent for a key that never expires. */
   expires_at?: string;
@@ -274,7 +297,9 @@ export interface CreateKey {
 export interface UpdateKey {
   name?: string;
   role?: Role;
-  plugins?: string[];
+  grants?: Grant[];
+  /** The whole membership; absent leaves it alone. */
+  groups?: string[];
   /** A date to set one, "" to clear it, absent to leave it alone. */
   expires_at?: string;
 }
@@ -284,14 +309,14 @@ export interface CreateUser {
   password: string;
   display_name?: string;
   role: Role;
-  plugins: string[];
+  grants: Grant[];
   groups?: string[];
 }
 
 export interface UpdateUser {
   display_name?: string;
   role?: Role;
-  plugins?: string[];
+  grants?: Grant[];
   disabled?: boolean;
   password?: string;
 }
@@ -516,8 +541,11 @@ export interface ChatGPTAccount {
   name: string;
   /** The identity this account's calls act as, and what history records. */
   principal: string;
-  role: "user" | "admin";
-  /** What this account may reach, or ["*"]. */
+  role: Role;
+  role_name: string;
+  /** What this account may reach, and at which level. */
+  grants: Grant[];
+  /** The same reach by name, with "*" for everything. */
   plugins: string[];
   /** Calls per second across every tunnel it owns. 0 is unlimited. */
   rate_per_sec: number;
@@ -564,8 +592,8 @@ export interface ChatGPTAccountBody {
   api_key?: string;
   admin_key?: string;
   organization_id?: string;
-  role?: "user" | "admin";
-  plugins?: string[];
+  role?: Role;
+  grants?: Grant[];
   rate_per_sec?: number;
   enabled?: boolean;
   /** The workspaces this account's connectors sit in, by id. */
@@ -1408,22 +1436,19 @@ export const api = {
   createGroup: (body: {
     name: string;
     description?: string;
-    plugins?: string[];
-    capabilities?: Capability[];
+    role?: Role;
+    grants?: Grant[];
   }) =>
     request<Group>("/api/groups", { method: "POST", body: JSON.stringify(body) }),
 
   updateGroup: (
     id: string,
-    // `capabilities` absent leaves the ceiling alone, `null` removes it, and an
-    // array sets it — including an empty array, which permits nothing. Three
-    // different requests, so the field is deliberately nullable rather than
-    // optional-only.
+    // `role` as "" removes the group's role; absent leaves it alone.
     body: {
       name?: string;
       description?: string;
-      plugins?: string[];
-      capabilities?: Capability[] | null;
+      role?: Role;
+      grants?: Grant[];
     },
   ) =>
     request<Group>(`/api/groups/${encodeURIComponent(id)}`, {
@@ -1467,6 +1492,31 @@ export const api = {
   /** Revokes rather than deletes, so the trail can still name what acted. */
   revokeKey: (id: string) =>
     request<ApiKey>(`/api/keys/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+
+  /**
+   * A new secret for the same key. The old one keeps working for
+   * `graceSeconds` (0 ends it at once), so a deployment can swap without a
+   * gap. The secret in the reply exists nowhere else.
+   */
+  rotateKey: (id: string, graceSeconds: number) =>
+    request<{ key: ApiKey; secret: string }>(`/api/keys/${encodeURIComponent(id)}/rotate`, {
+      method: "POST",
+      body: JSON.stringify({ grace_seconds: graceSeconds }),
+    }),
+
+  roles: () => request<{ roles: RoleDef[]; count: number; areas: AreaDef[] }>("/api/roles"),
+
+  createRole: (body: { name: string; description?: string; permissions: Partial<Record<Area, Level>> }) =>
+    request<RoleDef>("/api/roles", { method: "POST", body: JSON.stringify(body) }),
+
+  updateRole: (id: string, body: { name?: string; description?: string; permissions?: Partial<Record<Area, Level>> }) =>
+    request<RoleDef>(`/api/roles/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  deleteRole: (id: string) =>
+    request<void>(`/api/roles/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   certificates: () =>
     request<{ certificates: Certificate[]; count: number }>("/api/certificates"),

@@ -182,16 +182,17 @@ func (a *App) seedChatGPTAccount(ctx context.Context) error {
 		// recording the old one, and every entry before the upgrade would
 		// refer to an identity nothing else mentions.
 		Principal:  a.settings.String(ctx, settings.KeyTunnelPrincipal, "svc:chatgpt"),
-		Role:       auth.Role(a.settings.FieldString(ctx, settings.KeyTunnelRole)),
-		Plugins:    a.settings.Strings(ctx, settings.KeyTunnelPlugins, nil),
+		Grants:     auth.GrantsAt(a.settings.Strings(ctx, settings.KeyTunnelPlugins, nil), auth.LevelWrite),
 		RatePerSec: 0,
 		Enabled:    true,
 	}
-	if !seeded.Role.Valid() {
-		seeded.Role = auth.RoleUser
+	if id, ok := auth.LegacyRoleID(a.settings.FieldString(ctx, settings.KeyTunnelRole)); ok {
+		seeded.RoleID = id
+	} else {
+		seeded.RoleID = auth.RoleOperator
 	}
-	if len(seeded.Plugins) == 0 {
-		seeded.Plugins = []string{auth.Wildcard}
+	if len(seeded.Grants) == 0 {
+		seeded.Grants = auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite)
 	}
 
 	created, err := a.chatgpt.Create(ctx, "system:account-seed", seeded)

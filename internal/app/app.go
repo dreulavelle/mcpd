@@ -19,6 +19,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/apikeys"
 	"github.com/spoked/mcpd/internal/auth/groups"
+	"github.com/spoked/mcpd/internal/auth/roles"
 	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/backup"
@@ -61,6 +62,7 @@ type App struct {
 
 	accounts *users.Store
 	groups   *groups.Store
+	roles    *roles.Store
 	keys     *apikeys.Store
 	trust    *trust.Store
 	// trustPool caches the roots built from that store: the system ones plus
@@ -418,9 +420,19 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	// the first from the dashboard, and whoever does becomes administrator.
 	a.accounts = users.NewStore(db, time.Now)
 
-	// Groups are the one place plugin access is decided, for an account and
-	// for a key alike. The key store is handed the group store rather than
-	// resolving grants itself, so there is exactly one union in the process.
+	// Roles first, and the built-ins written before anything resolves a
+	// permission: a subject pointing at Administrator holds what this build
+	// says Administrator means, not what the row said when it was migrated.
+	a.roles = roles.NewStore(db, time.Now)
+	if err := a.roles.EnsureBuiltins(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	a.reportAccessNotes(ctx)
+
+	// Groups are the one place access is resolved, for an account and for a
+	// key alike. The key store is handed the group store rather than
+	// resolving anything itself, so there is exactly one union in the process.
 	a.groups = groups.NewStore(db, time.Now)
 	a.keys = apikeys.NewStore(db, a.groups, time.Now)
 	a.trust = trust.NewStore(db, time.Now)
@@ -429,7 +441,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	// believed by nothing that was already running.
 	a.loadTrustPool(ctx)
 
-	fileTokens, err := buildVerifier(cfg, log)
+	fileTokens, err := buildVerifier(ctx, cfg, a.roles, log)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -472,6 +484,12 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 
 	a.manager = plugins.NewManager(log, Version, a.toolGate(authorizer), a.opsService,
 		inlinePolicyFunc(policyFn), a.newToolObserver())
+	// The listing filter reads the same decision the gate refuses with, so a
+	// caller is never shown a tool it would be refused.
+	a.manager.SetToolVisibility(func(ctx context.Context, tool string, required auth.Capability) bool {
+		plugin, _, _ := splitToolName(tool)
+		return authorizer.AuthorizeTool(auth.FromContext(ctx), plugin, required).Allowed
+	})
 
 	// What an instance covers, in the operator's words, for the tool
 	// descriptions and the connect-time instructions. Read at each build
@@ -619,9 +637,10 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			Keys:              a.keys,
 			Certificates:      a.trust,
 			TrustChanged:      a.trustChanged,
-			KeyGrants: func(ctx context.Context, keyID string) ([]string, error) {
-				return a.groups.Effective(ctx, groups.Key(keyID))
+			KeyAccess: func(ctx context.Context, keyID string) (groups.Resolved, error) {
+				return a.groups.Resolve(ctx, groups.Key(keyID))
 			},
+			Roles:              a.roles,
 			SSO:                a.sso,
 			RegistrationPolicy: a.registrationPolicy,
 			Catalog:            a.settingsCatalog,
@@ -1010,6 +1029,9 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 				return next(auth.WithPrincipal(ctx, principal), method, req)
 			}
 		})
+		// After the principal, so the listing filter sees it. See
+		// Manager.FilterTools for why the order matters.
+		a.manager.FilterTools(srv, a.manager.Capabilities(granted))
 		return srv, nil
 	}
 
@@ -1174,9 +1196,10 @@ func (a *App) bindAccount(ctx context.Context, base tunnel.Config, accounts []tu
 			return tunnel.Config{}, false
 		}
 		// Scoped by the principal it carries, which is the whole point: the
-		// connector reaches this plugin and cannot discover any other. Every
-		// tunnel binds in process, so there is no URL to scope instead.
-		cfg.Principal.Plugins = []string{plugin}
+		// connector reaches this plugin and cannot discover any other, at the
+		// level the account held it. Every tunnel binds in process, so there
+		// is no URL to scope instead.
+		cfg.Principal.Grants = auth.Grants{{Plugin: plugin, Level: cfg.Principal.Grants.LevelFor(plugin)}}
 	}
 	return cfg, true
 }

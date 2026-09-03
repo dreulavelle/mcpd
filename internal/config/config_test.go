@@ -34,9 +34,22 @@ func TestValidate_Rejects(t *testing.T) {
 	}{
 		{"relative storage path", func(c *Config) { c.Storage.Path = "mcpd.db" }, "must be absolute"},
 		{"token without secret ref", func(c *Config) { c.Auth.StaticTokens[0].SecretRef = "" }, "secret_ref is required"},
-		{"token with no plugins", func(c *Config) { c.Auth.StaticTokens[0].Plugins = nil }, "plugins is empty"},
+		{"token reaching nothing", func(c *Config) {
+			c.Auth.StaticTokens[0].Plugins = nil
+			c.Auth.StaticTokens[0].Grants = nil
+		}, "grants nothing"},
 		{"token granting unknown plugin", func(c *Config) { c.Auth.StaticTokens[0].Plugins = []string{"ghost"} }, "not configured"},
-		{"bad role", func(c *Config) { c.Auth.StaticTokens[0].Role = "wizard" }, "role must be one of"},
+		// A role is now a row rather than one of two words, so the file
+		// cannot know which names exist; startup resolves it against the
+		// store. All validation can say is that one was named at all.
+		{"no role", func(c *Config) { c.Auth.StaticTokens[0].Role = "" }, "role is required"},
+		{"grant at a level that is not read or write", func(c *Config) {
+			c.Auth.StaticTokens[0].Plugins = nil
+			c.Auth.StaticTokens[0].Grants = []GrantConfig{{Plugin: "cnmaestro", Level: "decide"}}
+		}, "must be read or write"},
+		{"grant naming no plugin", func(c *Config) {
+			c.Auth.StaticTokens[0].Grants = []GrantConfig{{Plugin: "  ", Level: "read"}}
+		}, "names no plugin"},
 		{"required but disabled plugin", func(c *Config) {
 			c.Plugins["cnmaestro"] = PluginConfig{Enabled: false, Required: true}
 		}, "required but not enabled"},
@@ -57,6 +70,30 @@ func TestValidate_Rejects(t *testing.T) {
 				t.Fatalf("error %q does not mention %q", err, tc.wantSub)
 			}
 		})
+	}
+}
+
+// A role naming something this build does not define is no longer a refusal:
+// roles are rows now, so the file cannot be checked against them without the
+// database open. buildVerifier resolves the name at startup and fails there,
+// where the store can say which roles exist.
+func TestValidate_AcceptsAnUnknownRoleName(t *testing.T) {
+	c := validConfig()
+	c.Auth.StaticTokens[0].Role = "Night Shift"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a custom role name must reach startup to be resolved: %v", err)
+	}
+}
+
+// The finer form stands on its own: a token that lists grants and no plugins
+// still says what it reaches, so requiring the older list too would refuse a
+// file that is complete.
+func TestValidate_AcceptsATokenWithGrantsAndNoPlugins(t *testing.T) {
+	c := validConfig()
+	c.Auth.StaticTokens[0].Plugins = nil
+	c.Auth.StaticTokens[0].Grants = []GrantConfig{{Plugin: "cnmaestro", Level: "read"}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("grants alone must be enough to describe a token: %v", err)
 	}
 }
 

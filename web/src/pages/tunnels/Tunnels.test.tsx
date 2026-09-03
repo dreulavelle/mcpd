@@ -7,7 +7,8 @@ import { reading, Tunnels } from "./Tunnels";
 
 function account(overrides: Partial<ChatGPTAccount> = {}): ChatGPTAccount {
   return {
-    id: "acct_1", name: "Work", principal: "svc:chatgpt:work", role: "user", plugins: ["*"],
+    id: "acct_1", name: "Work", principal: "svc:chatgpt:work", role: "role_operator",
+    role_name: "Operator", grants: [{ plugin: "*", level: "write" }], plugins: ["*"],
     rate_per_sec: 0, enabled: true, organization_id: "org_1", has_admin_key: true,
     can_manage: true, created_at: "2026-08-27T09:00:00Z", workspaces: ["ws_1"], ...overrides,
   };

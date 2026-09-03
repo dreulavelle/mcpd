@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/backup"
 	"github.com/spoked/mcpd/internal/observability"
 )
@@ -78,8 +79,8 @@ func newBackupServer(t *testing.T, accounts Accounts, service BackupService, sup
 		Backup:   service,
 		Version:  "test",
 		Health:   observability.NewHealthRegistry(time.Second),
-		KeyGrants: func(context.Context, string) ([]string, error) {
-			return []string{}, nil
+		KeyAccess: func(context.Context, string) (groups.Resolved, error) {
+			return groups.Resolved{Permissions: auth.Permissions{}, Grants: auth.Grants{}}, nil
 		},
 	}
 	if supervised {
@@ -136,8 +137,8 @@ func postUpload(t *testing.T, s *Server, accounts *fakeAccounts, path, contentTy
 // take one, nor to learn this host's shape from what one would hold.
 func TestBackupNeedsAdmin(t *testing.T) {
 	accounts := newFakeAccounts()
-	accounts.user.Role = auth.RoleUser
-	accounts.user.Plugins = []string{"echo"}
+	accounts.user.RoleID = auth.RoleOperator
+	accounts.user.Grants = auth.GrantsAt([]string{"echo"}, auth.LevelWrite)
 	s := newBackupServer(t, accounts, &fakeBackup{}, true)
 
 	for _, tc := range []struct{ method, path string }{
@@ -235,8 +236,8 @@ func TestStageRestoreRestartsTheHost(t *testing.T) {
 		Version:  "test",
 		Health:   observability.NewHealthRegistry(time.Second),
 		Restart:  func(reason string) error { restartedFor = reason; return nil },
-		KeyGrants: func(context.Context, string) ([]string, error) {
-			return []string{}, nil
+		KeyAccess: func(context.Context, string) (groups.Resolved, error) {
+			return groups.Resolved{Permissions: auth.Permissions{}, Grants: auth.Grants{}}, nil
 		},
 	})
 
@@ -283,8 +284,8 @@ func TestStageKeepsTheArchiveWhenTheRestartFails(t *testing.T) {
 		Restart: func(string) error {
 			return errors.New("a restart is already under way")
 		},
-		KeyGrants: func(context.Context, string) ([]string, error) {
-			return []string{}, nil
+		KeyAccess: func(context.Context, string) (groups.Resolved, error) {
+			return groups.Resolved{Permissions: auth.Permissions{}, Grants: auth.Grants{}}, nil
 		},
 	})
 

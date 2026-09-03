@@ -102,14 +102,14 @@ auth:
     - id: chatgpt-echo
       secret_ref: env:MCPD_TOKEN_CHATGPT
       principal: svc:chatgpt
-      role: user
+      role: operator
       plugins:
         - echo
 
     - id: diagnostics
       secret_ref: credential:diagnostics
       principal: svc:diagnostics
-      role: user
+      role: operator
       plugins:
         - echo
 

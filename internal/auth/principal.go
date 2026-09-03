@@ -2,54 +2,42 @@
 // (what they may do). The two are deliberately distinct types: a verified
 // identity carries no permissions on its own, and a permission check never
 // re-derives identity.
+//
+// Two questions, two predicates. Can answers what a caller may *do* on this
+// host, from the permissions its role and its groups' roles carry. Reaches
+// answers what it may *reach* through this host, from its grants. Nothing
+// else in the process decides either; a rule applied here is applied
+// everywhere.
 package auth
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 )
 
-// Role is a coarse capability bundle.
+// Capability is what a tool declares it takes to call.
 //
-// There are two, and the line between them is administering the host rather
-// than operating it. A user reads, proposes, and approves -- everything the
-// integrations exist to do. An administrator additionally changes settings,
-// makes and assigns tunnels, manages accounts, and clears history.
-//
-// It used to be four, laddered viewer -> operator -> approver -> admin. The
-// finer steps were never asked for and the ladder invited a reading it did not
-// support: separating proposing from approving only means something when the
-// two are different people, and the second-approver rule that would have made
-// that so was dropped. Two roles say what is actually enforced.
-type Role string
-
-const (
-	// RoleUser may read, propose, and approve.
-	RoleUser Role = "user"
-	// RoleAdmin may additionally administer the host and its plugins.
-	RoleAdmin Role = "admin"
-)
-
-// Valid reports whether r is a recognised role.
-func (r Role) Valid() bool {
-	switch r {
-	case RoleUser, RoleAdmin:
-		return true
-	}
-	return false
-}
-
-func (r Role) String() string { return string(r) }
-
-// Capability names a single permitted action.
+// It is the plugin author's vocabulary rather than the host's: a tool says
+// whether it reads, proposes a change, decides on one, or reveals something
+// that is itself the privilege. The authorizer translates that into a grant
+// level or a host permission. Kept separate from Permission so that a plugin
+// written against one version of this host keeps working when the host's
+// permission areas change.
 type Capability string
 
 const (
-	CapRead    Capability = "read"
+	// CapRead is an ordinary read of the plugin. Needs the plugin at read.
+	CapRead Capability = "read"
+	// CapPropose proposes a change through the plugin. Needs it at write.
 	CapPropose Capability = "propose"
+	// CapApprove decides on a proposed change. Needs the plugin at read and
+	// approvals at decide.
 	CapApprove Capability = "approve"
-	CapAdmin   Capability = "admin"
+	// CapAdmin is a read whose answer is itself the privilege -- a credential,
+	// a passcode. Needs the plugin at read and plugins at write, which is the
+	// permission that could have read the credential out of the plugin's own
+	// settings anyway.
+	CapAdmin Capability = "admin"
 )
 
 // Valid reports whether c is a recognised capability. Plugins name one when a
@@ -62,58 +50,37 @@ func (c Capability) Valid() bool {
 	return false
 }
 
-// allCapabilities lists every capability in the order they are displayed:
-// the broadest reach first, the one that administers the host last.
-var allCapabilities = []Capability{CapRead, CapPropose, CapApprove, CapAdmin}
-
-// roleCapabilities is the authoritative role-to-capability mapping.
-var roleCapabilities = map[Role][]Capability{
-	RoleUser:  {CapRead, CapPropose, CapApprove},
-	RoleAdmin: {CapRead, CapPropose, CapApprove, CapAdmin},
-}
-
-// Wildcard grants access to every plugin. It is spelled out rather than
-// represented by an empty set, so that a misconfigured principal with no
-// plugins listed is denied everything rather than granted everything.
-const Wildcard = "*"
-
 // Principal is a verified caller. It is produced only by a TokenVerifier and
 // is immutable thereafter.
 type Principal struct {
 	// ID uniquely identifies the caller, e.g. "user:alice" or
-	// "service:chatgpt-connector". It appears in every audit record.
+	// "service:chatgpt-connector". It appears in every audit record, and
+	// every stored approval rule matches on it, so it never changes shape.
 	ID string
 
 	// DisplayName is for dashboards and logs. It is never used for
 	// authorization decisions.
 	DisplayName string
 
-	// Role is the caller's capability bundle.
-	Role Role
+	// RoleID and RoleName say which role the caller holds directly. For
+	// rendering and for the ledger; Permissions is what decides.
+	RoleID   string
+	RoleName string
 
-	// Plugins lists the plugin endpoints this principal may reach, or the
-	// single element Wildcard. This is what lets one agent be handed access to
-	// exactly one plugin while another sees a different set.
-	Plugins []string
+	// Permissions is everything the caller may do: its own role, merged with
+	// the role of every group it belongs to. Resolved when the credential is
+	// verified, so a role edited or a membership changed takes effect on the
+	// next request.
+	Permissions Permissions
+
+	// Grants is everything the caller may reach, resolved the same way. An
+	// empty list reaches nothing, which is the safe reading of an incomplete
+	// configuration.
+	Grants Grants
 
 	// TokenID identifies the credential used, for revocation and audit. It is
 	// never the credential itself.
 	TokenID string
-
-	// Ceiling narrows what the role allows, and can never widen it.
-	//
-	// It is how a group restricts its members: a role is the grant, and a
-	// group may take away from it. Nil is the ordinary case and means no
-	// group imposed one, so the role stands unchanged -- which is what every
-	// principal that is not an account or a key has always been.
-	//
-	// A ceiling rather than a second grant, deliberately. Two mechanisms that
-	// both *give* rights make "why can this person approve" answerable only by
-	// reading both and knowing which wins; one that gives and one that takes
-	// away is answerable in one direction, and the answer is always the
-	// smaller of the two. It is the same rule this host applies where a tunnel
-	// meets a ChatGPT account, and where a subject's grant meets its groups.
-	Ceiling []Capability
 
 	// Pending reports a registration nobody has approved yet.
 	//
@@ -130,62 +97,49 @@ type Principal struct {
 	Pending bool
 }
 
-// Can reports whether the principal holds a capability.
+// Can reports whether the principal holds a permission.
 //
 // A pending registration holds none, whatever its row says its role is. The
-// check belongs here rather than in each handler for the same reason the
-// role-to-capability map does: this is the one function every authorization
-// decision in the process goes through, so a capability that is withheld here
-// is withheld everywhere -- the dashboard API, the MCP endpoint, a tool call,
-// and anything added later that forgets pending accounts exist.
-func (p *Principal) Can(c Capability) bool {
+// check belongs here rather than in each handler because this is the one
+// function every host-permission decision in the process goes through, so a
+// permission withheld here is withheld everywhere -- the dashboard API, the
+// MCP endpoint, a tool call, and anything added later that forgets pending
+// accounts exist.
+func (p *Principal) Can(perm Permission) bool {
 	if p == nil || p.Pending {
 		return false
 	}
-	if !slices.Contains(roleCapabilities[p.Role], c) {
-		return false
-	}
-	// A ceiling only ever removes. Nil imposes none, which is why every
-	// caller that never had a group keeps exactly the rights it had.
-	if p.Ceiling == nil {
-		return true
-	}
-	return slices.Contains(p.Ceiling, c)
+	return p.Permissions.Holds(perm)
 }
 
-// Capabilities lists everything the principal holds, in display order.
+// Reaches reports whether the principal may use a plugin at a level.
+//
+// Pending holds nothing here either, for the same reason as Can.
+func (p *Principal) Reaches(plugin string, level Level) bool {
+	if p == nil || p.Pending {
+		return false
+	}
+	return p.Grants.Reaches(plugin, level)
+}
+
+// CanAccessPlugin reports whether the principal may reach a plugin at all.
+// Reaches at read, under the name the rest of the process has always used.
+func (p *Principal) CanAccessPlugin(name string) bool {
+	return p.Reaches(name, LevelRead)
+}
+
+// PermissionList lists everything the principal may do, in display order.
 //
 // It is derived from Can rather than kept alongside it, so that a page
 // rendering "what you may do" cannot disagree with the check that decides it.
-// The dashboard draws its controls from this list; the moment it computed the
-// set from the role instead, a group ceiling would leave a person looking at
-// buttons the server refuses. Never nil: an empty list is an answer, and a
-// principal that holds nothing should render as holding nothing rather than
-// as a question nobody asked.
-func (p *Principal) Capabilities() []Capability {
-	held := make([]Capability, 0, len(allCapabilities))
-	for _, c := range allCapabilities {
-		if p.Can(c) {
-			held = append(held, c)
-		}
+// The dashboard draws its controls from this list. Never nil: an empty list
+// is an answer, and a principal that holds nothing should render as holding
+// nothing rather than as a question nobody asked.
+func (p *Principal) PermissionList() []Permission {
+	if p == nil || p.Pending {
+		return []Permission{}
 	}
-	return held
-}
-
-// CanAccessPlugin reports whether the principal may reach a plugin endpoint.
-//
-// A principal with no plugins listed is denied everything. Empty means "no
-// grants were made", which is the safe reading of an incomplete configuration.
-func (p *Principal) CanAccessPlugin(name string) bool {
-	if p == nil || name == "" {
-		return false
-	}
-	for _, allowed := range p.Plugins {
-		if allowed == Wildcard || allowed == name {
-			return true
-		}
-	}
-	return false
+	return p.Permissions.List()
 }
 
 // Validate checks that a principal is internally coherent. It runs when
@@ -198,17 +152,15 @@ func (p *Principal) Validate() error {
 	if strings.TrimSpace(p.ID) == "" {
 		return fmt.Errorf("auth: principal requires an id")
 	}
-	if !p.Role.Valid() {
-		return fmt.Errorf("auth: principal %s has unknown role %q", p.ID, p.Role)
+	if err := p.Permissions.Validate(); err != nil {
+		return fmt.Errorf("auth: principal %s: %w", p.ID, err)
 	}
-	if len(p.Plugins) == 0 {
+	if len(p.Grants) == 0 {
 		return fmt.Errorf("auth: principal %s grants no plugin access; "+
 			"list plugins explicitly or use %q", p.ID, Wildcard)
 	}
-	for _, name := range p.Plugins {
-		if strings.TrimSpace(name) == "" {
-			return fmt.Errorf("auth: principal %s has an empty plugin grant", p.ID)
-		}
+	if err := p.Grants.Validate(); err != nil {
+		return fmt.Errorf("auth: principal %s: %w", p.ID, err)
 	}
 	return nil
 }
@@ -220,44 +172,27 @@ func (p *Principal) String() string {
 	if p == nil {
 		return "anonymous"
 	}
-	return fmt.Sprintf("%s(%s)", p.ID, p.Role)
+	role := p.RoleName
+	if role == "" {
+		role = p.RoleID
+	}
+	return fmt.Sprintf("%s(%s)", p.ID, role)
 }
 
-// Anonymous is the principal for unauthenticated requests. It holds no role
-// and no plugin grants, so every capability check against it fails.
+// Anonymous is the principal for unauthenticated requests. It holds no
+// permission and no grant, so every check against it fails.
 func Anonymous() *Principal {
-	return &Principal{ID: "anonymous", Role: "", Plugins: nil}
+	return &Principal{ID: "anonymous"}
 }
 
 // Equal reports whether two principals grant exactly the same thing.
 //
-// Plugin order is not significant: the same grants listed differently are the
-// same grants, and treating them as a change would restart a tunnel for
-// nothing.
+// Order is not significant: the same grants listed differently are the same
+// grants, and treating them as a change would restart a tunnel for nothing.
 func (p Principal) Equal(other Principal) bool {
-	if p.ID != other.ID || p.Role != other.Role ||
+	if p.ID != other.ID || p.RoleID != other.RoleID ||
 		p.TokenID != other.TokenID || p.Pending != other.Pending {
 		return false
 	}
-	if len(p.Plugins) != len(other.Plugins) {
-		return false
-	}
-	mine := slices.Clone(p.Plugins)
-	theirs := slices.Clone(other.Plugins)
-	slices.Sort(mine)
-	slices.Sort(theirs)
-	if !slices.Equal(mine, theirs) {
-		return false
-	}
-	// A ceiling is part of what a principal grants. Nil and empty are
-	// different answers -- no ceiling against one that permits nothing -- so
-	// they are told apart before the contents are compared.
-	if (p.Ceiling == nil) != (other.Ceiling == nil) {
-		return false
-	}
-	myCeiling := slices.Clone(p.Ceiling)
-	theirCeiling := slices.Clone(other.Ceiling)
-	slices.Sort(myCeiling)
-	slices.Sort(theirCeiling)
-	return slices.Equal(myCeiling, theirCeiling)
+	return p.Permissions.Equal(other.Permissions) && p.Grants.Equal(other.Grants)
 }

@@ -23,13 +23,13 @@ func TestKey_AuthenticatesAndIsScopedLikeAnyOtherCredential(t *testing.T) {
 	h := a.Handler()
 
 	_, granted, err := a.keys.Create(ctx, "user:admin@example.com", apikeys.CreateRequest{
-		Name: "granted", Role: auth.RoleUser, Plugins: []string{"echo"},
+		Name: "granted", RoleID: auth.RoleOperator, Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 	_, bare, err := a.keys.Create(ctx, "user:admin@example.com", apikeys.CreateRequest{
-		Name: "bare", Role: auth.RoleUser,
+		Name: "bare", RoleID: auth.RoleOperator,
 	})
 	if err != nil {
 		t.Fatalf("create key: %v", err)
@@ -54,7 +54,7 @@ func TestKey_AGroupWidensReachOnTheNextRequest(t *testing.T) {
 	const admin = "user:admin@example.com"
 
 	key, secret, err := a.keys.Create(ctx, admin, apikeys.CreateRequest{
-		Name: "agent", Role: auth.RoleUser,
+		Name: "agent", RoleID: auth.RoleOperator,
 	})
 	if err != nil {
 		t.Fatalf("create key: %v", err)
@@ -64,7 +64,7 @@ func TestKey_AGroupWidensReachOnTheNextRequest(t *testing.T) {
 	}
 
 	g, err := a.groups.Create(ctx, admin, groups.CreateRequest{
-		Name: "Echo", Plugins: []string{"echo"},
+		Name: "Echo", Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create group: %v", err)
@@ -95,7 +95,7 @@ func TestKey_RevokedAndExpiredAreRefusedIdentically(t *testing.T) {
 	const admin = "user:admin@example.com"
 
 	revoked, revokedSecret, err := a.keys.Create(ctx, admin, apikeys.CreateRequest{
-		Name: "revoked", Role: auth.RoleUser, Plugins: []string{"echo"},
+		Name: "revoked", RoleID: auth.RoleOperator, Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create key: %v", err)
@@ -115,7 +115,7 @@ func TestKey_RevokedAndExpiredAreRefusedIdentically(t *testing.T) {
 	// testing the store rather than the wiring, which apikeys already does.
 	soon := time.Now().Add(50 * time.Millisecond)
 	_, expiring, err := a.keys.Create(ctx, admin, apikeys.CreateRequest{
-		Name: "expiring", Role: auth.RoleUser, Plugins: []string{"echo"},
+		Name: "expiring", RoleID: auth.RoleOperator, Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 		ExpiresAt: &soon,
 	})
 	if err != nil {
@@ -147,7 +147,7 @@ func TestStaticTokens_AreUnaffectedByGroupsAndKeys(t *testing.T) {
 	// A group granting everything, with the file token's own id in it as far
 	// as anything could contrive.
 	g, err := a.groups.Create(ctx, admin, groups.CreateRequest{
-		Name: "Everything", Plugins: []string{auth.Wildcard},
+		Name: "Everything", Grants: auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create group: %v", err)

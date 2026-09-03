@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 )
 
 func TestValidateDisplayName(t *testing.T) {
@@ -88,11 +89,11 @@ func TestName_FallsBackToTheAddress(t *testing.T) {
 	if got := u.Name(); got != "Alice" {
 		t.Errorf("Name() = %q, want the display name", got)
 	}
-	if got := u.Principal("ses_1", u.Plugins, nil).DisplayName; got != "Alice" {
+	if got := u.Principal("ses_1", groups.Resolved{}).DisplayName; got != "Alice" {
 		t.Errorf("principal DisplayName = %q", got)
 	}
 	// And the identity is never the name.
-	if got := u.Principal("ses_1", u.Plugins, nil).ID; got != "user:alice@example.com" {
+	if got := u.Principal("ses_1", groups.Resolved{}).ID; got != "user:alice@example.com" {
 		t.Errorf("principal ID = %q, want it built from the address", got)
 	}
 }
@@ -102,8 +103,8 @@ func TestName_FallsBackToTheAddress(t *testing.T) {
 func TestUpdate_RefusesAnotherAccountsAddress(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
-	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdmin)
-	mustCreate(t, store, "bob@example.com", auth.RoleUser)
+	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdministrator)
+	mustCreate(t, store, "bob@example.com", auth.RoleOperator)
 
 	name := "bob@example.com"
 	if _, err := store.Update(ctx, alice.ID, UpdateRequest{DisplayName: &name}); !errors.Is(err, ErrNameCollides) {
@@ -130,7 +131,7 @@ func TestUpdate_RefusesAnotherAccountsAddress(t *testing.T) {
 func TestCreate_RefusesAnAddressSomebodyIsAlreadyNamedAfter(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
-	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdmin)
+	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdministrator)
 
 	name := "bob@example.com"
 	if _, err := store.Update(ctx, alice.ID, UpdateRequest{DisplayName: &name}); err != nil {
@@ -139,7 +140,7 @@ func TestCreate_RefusesAnAddressSomebodyIsAlreadyNamedAfter(t *testing.T) {
 
 	_, err := store.Create(ctx, CreateRequest{
 		Email: "bob@example.com", Password: "a-sufficiently-long-passphrase",
-		Role: auth.RoleUser, Plugins: []string{auth.Wildcard},
+		RoleID: auth.RoleOperator, Grants: auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite),
 	})
 	if !errors.Is(err, ErrNameCollides) {
 		t.Fatalf("err = %v, want ErrNameCollides", err)
@@ -149,7 +150,7 @@ func TestCreate_RefusesAnAddressSomebodyIsAlreadyNamedAfter(t *testing.T) {
 func TestUpdate_ValidatesTheName(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
-	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdmin)
+	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdministrator)
 
 	bad := "Alice\nBob"
 	if _, err := store.Update(ctx, alice.ID, UpdateRequest{DisplayName: &bad}); err == nil {
@@ -171,7 +172,7 @@ func TestUpdate_ValidatesTheName(t *testing.T) {
 func TestUpdate_ANameChangeKeepsSessionsAlive(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
-	alice := mustCreate(t, store, "alice@example.com", auth.RoleUser)
+	alice := mustCreate(t, store, "alice@example.com", auth.RoleOperator)
 
 	token, _, err := store.NewSession(ctx, alice.ID, 0)
 	if err != nil {
@@ -186,8 +187,8 @@ func TestUpdate_ANameChangeKeepsSessionsAlive(t *testing.T) {
 	}
 
 	// A role change is a privilege change and still does end them.
-	role := auth.RoleAdmin
-	if _, err := store.Update(ctx, alice.ID, UpdateRequest{Role: &role}); err != nil {
+	role := auth.RoleAdministrator
+	if _, err := store.Update(ctx, alice.ID, UpdateRequest{RoleID: &role}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.ResolveSession(ctx, token); err == nil {
@@ -200,7 +201,7 @@ func TestUpdate_ANameChangeKeepsSessionsAlive(t *testing.T) {
 func TestDisplayName_TheDatabaseEnforcesTheBound(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
-	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdmin)
+	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdministrator)
 
 	_, err := store.db.Writer().ExecContext(ctx,
 		`UPDATE users SET display_name = ? WHERE id = ?`,
@@ -218,12 +219,12 @@ func TestDisplayName_TheDatabaseEnforcesTheBound(t *testing.T) {
 func TestCreate_RefusesANameThatIsAnotherAccountsAddress(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
-	mustCreate(t, store, "alice@example.com", auth.RoleAdmin)
+	mustCreate(t, store, "alice@example.com", auth.RoleAdministrator)
 
 	_, err := store.Create(ctx, CreateRequest{
 		Email: "bob@example.com", Password: "a-sufficiently-long-passphrase",
 		DisplayName: "alice@example.com",
-		Role:        auth.RoleUser, Plugins: []string{auth.Wildcard},
+		RoleID:      auth.RoleOperator, Grants: auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite),
 	})
 	if !errors.Is(err, ErrNameCollides) {
 		t.Fatalf("err = %v, want ErrNameCollides", err)
@@ -232,7 +233,7 @@ func TestCreate_RefusesANameThatIsAnotherAccountsAddress(t *testing.T) {
 	// And an ordinary name is still fine.
 	if _, err := store.Create(ctx, CreateRequest{
 		Email: "bob@example.com", Password: "a-sufficiently-long-passphrase",
-		DisplayName: "Bob", Role: auth.RoleUser, Plugins: []string{auth.Wildcard},
+		DisplayName: "Bob", RoleID: auth.RoleOperator, Grants: auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite),
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -251,7 +252,7 @@ func TestCreate_RefusesANameThatIsAnotherAccountsAddress(t *testing.T) {
 func TestName_FallsBackForALegacyValueTheRulesRefuse(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
-	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdmin)
+	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdministrator)
 
 	for _, tc := range []struct {
 		name     string
@@ -290,7 +291,7 @@ func TestName_FallsBackForALegacyValueTheRulesRefuse(t *testing.T) {
 				t.Errorf("Name() = %q, want %q", got, want)
 			}
 			// The principal a page and a log line read is built from Name().
-			if got := u.Principal("ses_1", u.Plugins, nil).DisplayName; got != want {
+			if got := u.Principal("ses_1", groups.Resolved{}).DisplayName; got != want {
 				t.Errorf("principal DisplayName = %q, want %q", got, want)
 			}
 			// The stored value is left alone, so its owner can see what is
@@ -307,7 +308,7 @@ func TestName_FallsBackForALegacyValueTheRulesRefuse(t *testing.T) {
 func TestUpdate_StillRefusesTheValuesNameFallsBackFrom(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
-	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdmin)
+	alice := mustCreate(t, store, "alice@example.com", auth.RoleAdministrator)
 
 	for _, bad := range []string{
 		"Alice‮Bob", "Al​ice", "Alice\x01", "Ali\xffce",

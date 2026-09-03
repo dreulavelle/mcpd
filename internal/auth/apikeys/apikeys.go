@@ -1,18 +1,19 @@
 // Package apikeys holds bearer credentials this host issued itself.
 //
 // A key is not a second authorization model. It carries a principal identity,
-// a role and a set of plugin grants, which is exactly what a static token in
+// a role and a set of grants, which is exactly what a static token in
 // `auth.static_tokens` has always carried -- so a key is that declaration
-// moved into the database, and what moving it buys is revocation, expiry, a
-// last-used timestamp, and grants that follow a group rather than a file.
+// moved into the database, and what moving it buys is revocation, expiry,
+// rotation, a last-used timestamp, and access that follows a group rather
+// than a file.
 //
 // Because a key has an identity of its own, the audit trail names *which key*
 // acted rather than a shared service identity. That is the reason the feature
 // is worth building: with a standing rule able to authorise a write unasked,
 // "which agent did this" has to be answerable.
 //
-// The secret is shown once, at creation, and stored as a digest. There is no
-// endpoint that reads one back, and no error body carries one.
+// The secret is shown once, at creation or rotation, and stored as a digest.
+// There is no endpoint that reads one back, and no error body carries one.
 package apikeys
 
 import (
@@ -22,22 +23,23 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/groups"
+	"github.com/spoked/mcpd/internal/auth/roles"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
 
 // Errors returned by this package.
 //
-// The three refusals are separate values on purpose, and the separation is
+// The refusals are separate values on purpose, and the separation is
 // operator-facing rather than caller-facing. "This key was revoked", "this key
 // expired" and "no such key" need different words in a log and different words
 // on the Keys page -- an operator chasing a connector that stopped working
@@ -54,6 +56,8 @@ var (
 	ErrExpired = errors.New("apikeys: that key has expired")
 	// ErrAlreadyRevoked reports revoking a key that is already revoked.
 	ErrAlreadyRevoked = errors.New("apikeys: that key is already revoked")
+	// ErrNoSuchRole reports a role id that names nothing.
+	ErrNoSuchRole = errors.New("apikeys: no such role")
 )
 
 // SecretPrefix marks a credential this host issued.
@@ -66,13 +70,18 @@ const SecretPrefix = "mcpd_"
 // IDPrefix begins every key identifier.
 //
 // Key identifiers are generated rather than chosen, which is what keeps them
-// from colliding with a static token's id. Config validation refuses a file
+// from colliding with a static token's. Config validation refuses a file
 // token whose id begins with this, so the two namespaces cannot meet from
 // either direction and an audit entry naming a credential names exactly one.
 const IDPrefix = "key_"
 
 // MaxNameRunes bounds a key's name. The schema enforces the same bound.
-const MaxNameRunes = 64
+const MaxNameRunes = auth.MaxLabelRunes
+
+// MaxGrace bounds how long a rotated key's old secret keeps working. A week
+// is enough for any deployment to roll; longer than that is not a rotation,
+// it is two keys.
+const MaxGrace = 7 * 24 * time.Hour
 
 // Status is what a key is, right now.
 type Status string
@@ -87,20 +96,26 @@ const (
 )
 
 // Key is one credential. The secret is not a field: it exists once, in the
-// reply to the request that created it.
+// reply to the request that created or rotated it.
 type Key struct {
-	ID          string
-	Name        string
-	Role        auth.Role
-	Plugins     []string
-	CreatedBy   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	ExpiresAt   *time.Time
-	LastUsedAt  *time.Time
-	RevokedAt   *time.Time
-	RevokedBy   string
-	groupsCache []*groups.Group
+	ID       string
+	Name     string
+	RoleID   string
+	RoleName string
+	// Grants is the key's own reach, exactly as stored. What it actually
+	// reaches once its groups are counted is resolved per request.
+	Grants     auth.Grants
+	CreatedBy  string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	ExpiresAt  *time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+	RevokedBy  string
+	// PreviousUntil is when the secret this key was rotated away from stops
+	// working. Nil when there is no such secret.
+	PreviousUntil *time.Time
+	groupsCache   []*groups.Group
 }
 
 // Status reports whether the key would be accepted at t.
@@ -140,16 +155,16 @@ func NewStore(db *sqlite.DB, gs *groups.Store, now func() time.Time) *Store {
 
 // CreateRequest describes a new key.
 type CreateRequest struct {
-	Name string
-	Role auth.Role
-	// Plugins are the key's own grants. Empty is the default and reaches
-	// nothing; groups are how a key usually gets its reach.
-	Plugins []string
+	Name   string
+	RoleID string
+	// Grants are the key's own reach. Empty is the default and reaches
+	// nothing; groups are the other way a key gets its reach.
+	Grants auth.Grants
 	// Groups the key joins, in the same transaction.
 	Groups []string
 	// ExpiresAt is optional. Nil never expires, which is honest for a
 	// long-lived connector: inventing a date would mean an integration that
-	// stops working on a day nobody chose.
+	// stops working on a day nobody chose. The dashboard defaults it on.
 	ExpiresAt *time.Time
 }
 
@@ -168,15 +183,14 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*K
 	if err != nil {
 		return nil, "", err
 	}
-	if !req.Role.Valid() {
-		return nil, "", fmt.Errorf("apikeys: role %q is not one of %q or %q",
-			req.Role, auth.RoleUser, auth.RoleAdmin)
+	roleID := strings.TrimSpace(req.RoleID)
+	if roleID == "" {
+		return nil, "", fmt.Errorf("apikeys: a role is required")
 	}
-	plugins := groups.NormalizeGrants(req.Plugins)
-	encoded, err := json.Marshal(plugins)
-	if err != nil {
-		return nil, "", fmt.Errorf("apikeys: encode plugin grants: %w", err)
+	if err := req.Grants.Validate(); err != nil {
+		return nil, "", err
 	}
+	grants := req.Grants.Normalize()
 	id, err := newID()
 	if err != nil {
 		return nil, "", err
@@ -198,11 +212,16 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*K
 
 	stamp := now.UnixMilli()
 	err = s.db.WriteTx(ctx, stamp, func(tx *sqlite.UnitOfWork) error {
+		if ok, err := roles.Exists(tx, roleID); err != nil {
+			return err
+		} else if !ok {
+			return ErrNoSuchRole
+		}
 		if err := tx.Exec(`
-			INSERT INTO api_keys (id, name, secret_hash, role, plugins_json,
+			INSERT INTO api_keys (id, name, secret_hash, role_id, grants_json,
 			                      created_by, created_at, updated_at, expires_at)
 			VALUES (?,?,?,?,?,?,?,?,?)`,
-			id, name, digest(secret), string(req.Role), string(encoded),
+			id, name, digest(secret), roleID, auth.EncodeGrants(grants),
 			actor, stamp, stamp, expires); err != nil {
 			return err
 		}
@@ -221,8 +240,8 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*K
 			Action:  "create",
 			Detail: map[string]any{
 				"name":       name,
-				"role":       string(req.Role),
-				"plugins":    plugins,
+				"role":       roleID,
+				"grants":     grants,
 				"groups":     joined,
 				"expires_at": expiryDetail(req.ExpiresAt),
 			},
@@ -231,28 +250,28 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*K
 	if err != nil {
 		return nil, "", err
 	}
-
-	key := &Key{
-		ID: id, Name: name, Role: req.Role, Plugins: plugins,
-		CreatedBy: actor,
-		CreatedAt: time.UnixMilli(stamp).UTC(),
-		UpdatedAt: time.UnixMilli(stamp).UTC(),
-		ExpiresAt: req.ExpiresAt,
+	key, err := s.ByID(ctx, id)
+	if err != nil {
+		return nil, "", err
 	}
 	return key, secret, nil
 }
 
 // --- reading ---------------------------------------------------------------
 
-const keyColumns = `id, name, role, plugins_json, created_by, created_at,
-	updated_at, expires_at, last_used_at, revoked_at, revoked_by`
+// keyColumns is every column a key renders with. The secret digests are
+// deliberately not among them: nothing above this layer has a use for them,
+// and every serialisation is a chance to leak one.
+const keyColumns = `k.id, k.name, k.role_id, COALESCE(r.name, ''), k.grants_json,
+	k.created_by, k.created_at, k.updated_at, k.expires_at, k.last_used_at,
+	k.revoked_at, k.revoked_by, k.previous_until`
 
-// List returns every key, newest first. The secret digest is deliberately not
-// among the columns: nothing above this layer has a use for it, and every
-// serialisation is a chance to leak one.
+const keyFrom = ` FROM api_keys k LEFT JOIN roles r ON r.id = k.role_id`
+
+// List returns every key, newest first.
 func (s *Store) List(ctx context.Context) ([]*Key, error) {
 	rows, err := s.db.Reader().QueryContext(ctx,
-		`SELECT `+keyColumns+` FROM api_keys ORDER BY created_at DESC`)
+		`SELECT `+keyColumns+keyFrom+` ORDER BY k.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +299,7 @@ func (s *Store) List(ctx context.Context) ([]*Key, error) {
 // ByID loads one key.
 func (s *Store) ByID(ctx context.Context, id string) (*Key, error) {
 	k, err := scanKey(s.db.Reader().QueryRowContext(ctx,
-		`SELECT `+keyColumns+` FROM api_keys WHERE id = ?`, id))
+		`SELECT `+keyColumns+keyFrom+` WHERE k.id = ?`, id))
 	if err != nil {
 		return nil, err
 	}
@@ -294,9 +313,12 @@ func (s *Store) ByID(ctx context.Context, id string) (*Key, error) {
 
 // UpdateRequest describes a re-scope. Nil fields are left alone.
 type UpdateRequest struct {
-	Name    *string
-	Role    *auth.Role
-	Plugins *[]string
+	Name   *string
+	RoleID *string
+	Grants *auth.Grants
+	// Groups sets the whole membership: groups not listed are left, groups
+	// listed are joined. A pointer to an empty list leaves every group.
+	Groups *[]string
 	// ExpiresAt sets or clears the expiry. The double pointer distinguishes
 	// "leave it alone" from "clear it", which one pointer cannot.
 	ExpiresAt **time.Time
@@ -309,7 +331,7 @@ type UpdateRequest struct {
 // value leaves "what did this widen" unanswerable.
 //
 // It takes effect on the key's next request. Nothing about a key is cached
-// between requests: the row is read and the grants are resolved every time,
+// between requests: the row is read and the access is resolved every time,
 // which is the same property Can() already has for a pending account.
 func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest) (*Key, error) {
 	var name string
@@ -319,24 +341,26 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			return nil, err
 		}
 	}
-	if req.Role != nil && !req.Role.Valid() {
-		return nil, fmt.Errorf("apikeys: role %q is not one of %q or %q",
-			*req.Role, auth.RoleUser, auth.RoleAdmin)
+	if req.RoleID != nil && strings.TrimSpace(*req.RoleID) == "" {
+		return nil, fmt.Errorf("apikeys: a role is required")
 	}
-	var plugins []string
-	if req.Plugins != nil {
-		plugins = groups.NormalizeGrants(*req.Plugins)
+	var grants auth.Grants
+	if req.Grants != nil {
+		if err := req.Grants.Validate(); err != nil {
+			return nil, err
+		}
+		grants = req.Grants.Normalize()
 	}
 
 	now := s.now()
 	stamp := now.UnixMilli()
 	err = s.db.WriteTx(ctx, stamp, func(tx *sqlite.UnitOfWork) error {
-		var wasName, wasRole, wasPlugins string
+		var wasName, wasRole, wasGrants string
 		var wasExpiry, revoked sql.NullInt64
 		if err := tx.QueryRow(
-			`SELECT name, role, plugins_json, expires_at, revoked_at
+			`SELECT name, role_id, grants_json, expires_at, revoked_at
 			   FROM api_keys WHERE id = ?`, id).
-			Scan(&wasName, &wasRole, &wasPlugins, &wasExpiry, &revoked); err != nil {
+			Scan(&wasName, &wasRole, &wasGrants, &wasExpiry, &revoked); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -357,21 +381,23 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			detail["name"] = name
 			detail["name_before"] = wasName
 		}
-		if req.Role != nil {
-			sets = append(sets, "role = ?")
-			args = append(args, string(*req.Role))
-			detail["role"] = string(*req.Role)
+		if req.RoleID != nil {
+			roleID := strings.TrimSpace(*req.RoleID)
+			if ok, err := roles.Exists(tx, roleID); err != nil {
+				return err
+			} else if !ok {
+				return ErrNoSuchRole
+			}
+			sets = append(sets, "role_id = ?")
+			args = append(args, roleID)
+			detail["role"] = roleID
 			detail["role_before"] = wasRole
 		}
-		if req.Plugins != nil {
-			encoded, err := json.Marshal(plugins)
-			if err != nil {
-				return fmt.Errorf("apikeys: encode plugin grants: %w", err)
-			}
-			sets = append(sets, "plugins_json = ?")
-			args = append(args, string(encoded))
-			detail["plugins"] = plugins
-			detail["plugins_before"] = decodeGrants(wasPlugins)
+		if req.Grants != nil {
+			sets = append(sets, "grants_json = ?")
+			args = append(args, auth.EncodeGrants(grants))
+			detail["grants"] = grants
+			detail["grants_before"] = auth.DecodeGrants(wasGrants)
 		}
 		if req.ExpiresAt != nil {
 			var ms *int64
@@ -391,6 +417,31 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			// grant of a year's more reach, and the trail has to say how much
 			// was added rather than only when it now ends.
 			detail["expires_at_before"] = expiryDetail(optionalTime(wasExpiry))
+		}
+		if req.Groups != nil {
+			// Membership is set as a whole: the groups listed are the groups
+			// the key is in afterwards. Each join and each leave is its own
+			// entry, through the same functions every other membership
+			// change goes through, so the trail reads the same however a
+			// membership arose.
+			current, err := s.groups.Of(ctx, groups.Key(id))
+			if err != nil {
+				return err
+			}
+			wanted := *req.Groups
+			for _, g := range current {
+				if !slices.Contains(wanted, g.ID) {
+					if err := groups.RemoveMemberAudited(tx, actor, g.ID, groups.Key(id)); err != nil {
+						return err
+					}
+				}
+			}
+			for _, groupID := range wanted {
+				if err := groups.AddMemberAudited(tx, actor, groupID, groups.Key(id), stamp); err != nil {
+					return err
+				}
+			}
+			detail["groups"] = wanted
 		}
 		if len(detail) == 0 {
 			return nil
@@ -423,6 +474,79 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 	return s.ByID(ctx, id)
 }
 
+// Rotate issues a new secret for a key and returns it, once.
+//
+// The key keeps its identity, its role, its grants and its groups: every
+// audit entry and every standing rule naming `key:<id>` goes on meaning the
+// same credential. What changes is the secret. The old one keeps working
+// until now plus grace, so a deployment can be told the new secret and
+// restarted without a window in which neither works; a grace of zero ends
+// the old secret at once. Rotating again before the grace is over replaces
+// the old secret with the one being rotated away from, so at most two
+// secrets ever open a key.
+func (s *Store) Rotate(ctx context.Context, actor, id string, grace time.Duration) (*Key, string, error) {
+	if grace < 0 || grace > MaxGrace {
+		return nil, "", fmt.Errorf("apikeys: the grace period must be between nothing and %s", MaxGrace)
+	}
+	secret, err := GenerateSecret()
+	if err != nil {
+		return nil, "", err
+	}
+	now := s.now()
+	stamp := now.UnixMilli()
+	err = s.db.WriteTx(ctx, stamp, func(tx *sqlite.UnitOfWork) error {
+		var name, current string
+		var revoked sql.NullInt64
+		if err := tx.QueryRow(`SELECT name, secret_hash, revoked_at FROM api_keys WHERE id = ?`, id).
+			Scan(&name, &current, &revoked); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if revoked.Valid {
+			return ErrRevoked
+		}
+		var previous any
+		var until any
+		if grace > 0 {
+			previous = current
+			until = now.Add(grace).UnixMilli()
+		}
+		affected, err := tx.ExecAffected(`
+			UPDATE api_keys
+			   SET secret_hash = ?, previous_secret_hash = ?, previous_until = ?, updated_at = ?
+			 WHERE id = ? AND revoked_at IS NULL AND secret_hash = ?`,
+			digest(secret), previous, until, stamp, id, current)
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			// Revoked or rotated by somebody else since the read. Either way
+			// the secret this call generated must not be handed out.
+			return ErrRevoked
+		}
+		return tx.AppendAudit(sqlite.AdminAct{
+			Kind:    "apikey.rotated",
+			Actor:   actor,
+			Subject: id,
+			Action:  "rotate",
+			Detail: map[string]any{
+				"name":          name,
+				"grace_seconds": int(grace.Seconds()),
+			},
+		})
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	key, err := s.ByID(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+	return key, secret, nil
+}
+
 // Revoke withdraws a key.
 //
 // The row stays. A deleted key would leave every audit entry naming an
@@ -431,7 +555,7 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 //
 // Guarded on the key being live, so two administrators revoking the same key
 // produce one revocation and one refusal rather than two entries claiming
-// something that happened once.
+// something that happened once. A revoked key's old secret dies with it.
 func (s *Store) Revoke(ctx context.Context, actor, id string) error {
 	stamp := s.now().UnixMilli()
 	return s.db.WriteTx(ctx, stamp, func(tx *sqlite.UnitOfWork) error {
@@ -443,7 +567,8 @@ func (s *Store) Revoke(ctx context.Context, actor, id string) error {
 			return err
 		}
 		affected, err := tx.ExecAffected(`
-			UPDATE api_keys SET revoked_at = ?, revoked_by = ?, updated_at = ?
+			UPDATE api_keys SET revoked_at = ?, revoked_by = ?, updated_at = ?,
+			                    previous_secret_hash = NULL, previous_until = NULL
 			 WHERE id = ? AND revoked_at IS NULL`, stamp, actor, stamp, id)
 		if err != nil {
 			return err
@@ -472,10 +597,14 @@ const lastUsedResolution = time.Minute
 
 // Verify turns a presented secret into a principal.
 //
-// The grants on the returned principal are the union groups.Effective
-// computes: the key's own, plus every group it belongs to. It is resolved here
-// rather than stored on the row, which is what makes adding a key to a group
-// take effect on the next request.
+// What the returned principal may do and reach is what groups.Resolve
+// computes: the key's own role and grants, plus every group it belongs to.
+// It is resolved here rather than stored on the row, which is what makes
+// adding a key to a group, or editing a role, take effect on the next
+// request.
+//
+// A secret this key was rotated away from is accepted until its grace ends,
+// and not a moment after: the condition is in the query.
 //
 // Returns a typed refusal so that a caller can log which of the three it was.
 // Nothing above this returns it to whoever presented the credential; see
@@ -484,13 +613,16 @@ func (s *Store) Verify(ctx context.Context, secret string) (*auth.Principal, err
 	if !strings.HasPrefix(secret, SecretPrefix) {
 		return nil, ErrNotFound
 	}
+	now := s.now()
 	k, err := scanKey(s.db.Reader().QueryRowContext(ctx,
-		`SELECT `+keyColumns+` FROM api_keys WHERE secret_hash = ?`, digest(secret)))
+		`SELECT `+keyColumns+keyFrom+`
+		  WHERE k.secret_hash = ?1
+		     OR (k.previous_secret_hash = ?1 AND k.previous_until > ?2)`,
+		digest(secret), now.UnixMilli()))
 	if err != nil {
 		return nil, err
 	}
 
-	now := s.now()
 	switch k.Status(now) {
 	case StatusRevoked:
 		return nil, ErrRevoked
@@ -498,15 +630,7 @@ func (s *Store) Verify(ctx context.Context, secret string) (*auth.Principal, err
 		return nil, ErrExpired
 	}
 
-	granted, err := s.groups.Effective(ctx, groups.Key(k.ID))
-	if err != nil {
-		return nil, err
-	}
-	// What the key's groups permit it to do, which can only narrow the role.
-	// Resolved on every verification rather than stored on the key, for the
-	// same reason grants are: taking a capability away from a group has to
-	// take effect on the next call, not the next restart.
-	ceiling, err := s.groups.CeilingFor(ctx, groups.Key(k.ID))
+	access, err := s.groups.Resolve(ctx, groups.Key(k.ID))
 	if err != nil {
 		return nil, err
 	}
@@ -517,9 +641,10 @@ func (s *Store) Verify(ctx context.Context, secret string) (*auth.Principal, err
 		// can change it; the trail has to name the credential that acted.
 		ID:          "key:" + k.ID,
 		DisplayName: k.Name,
-		Role:        k.Role,
-		Plugins:     granted,
-		Ceiling:     ceiling,
+		RoleID:      k.RoleID,
+		RoleName:    access.RoleName,
+		Permissions: access.Permissions,
+		Grants:      access.Grants,
 		TokenID:     k.ID,
 	}, nil
 }
@@ -607,7 +732,7 @@ func (v *Verifier) Verify(ctx context.Context, token string, r *http.Request) (*
 // in a list, it appears beside an audit entry, and a control or
 // invisible-formatting character in it makes it read as something it is not.
 func ValidateName(raw string) (string, error) {
-	return groups.ValidateLabel("apikeys", "key name", raw)
+	return auth.ValidateLabel("apikeys", "key name", raw)
 }
 
 // GenerateSecret returns a credential with 32 bytes of entropy behind the
@@ -646,31 +771,31 @@ type rowScanner interface{ Scan(...any) error }
 func scanKey(row rowScanner) (*Key, error) {
 	var (
 		k         Key
-		role      string
-		plugins   string
+		grants    string
 		created   int64
 		updated   int64
 		expires   sql.NullInt64
 		lastUsed  sql.NullInt64
 		revoked   sql.NullInt64
 		revokedBy sql.NullString
+		previous  sql.NullInt64
 	)
-	err := row.Scan(&k.ID, &k.Name, &role, &plugins, &k.CreatedBy,
-		&created, &updated, &expires, &lastUsed, &revoked, &revokedBy)
+	err := row.Scan(&k.ID, &k.Name, &k.RoleID, &k.RoleName, &grants, &k.CreatedBy,
+		&created, &updated, &expires, &lastUsed, &revoked, &revokedBy, &previous)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	k.Role = auth.Role(role)
-	k.Plugins = decodeGrants(plugins)
+	k.Grants = auth.DecodeGrants(grants)
 	k.CreatedAt = time.UnixMilli(created).UTC()
 	k.UpdatedAt = time.UnixMilli(updated).UTC()
 	k.ExpiresAt = optionalTime(expires)
 	k.LastUsedAt = optionalTime(lastUsed)
 	k.RevokedAt = optionalTime(revoked)
 	k.RevokedBy = revokedBy.String
+	k.PreviousUntil = optionalTime(previous)
 	return &k, nil
 }
 
@@ -680,19 +805,6 @@ func optionalTime(v sql.NullInt64) *time.Time {
 	}
 	t := time.UnixMilli(v.Int64).UTC()
 	return &t
-}
-
-// decodeGrants reads a stored grant list. A value this build cannot parse
-// reads as no grants, which is the safe direction.
-func decodeGrants(encoded string) []string {
-	var list []string
-	if err := json.Unmarshal([]byte(encoded), &list); err != nil {
-		return []string{}
-	}
-	if list == nil {
-		return []string{}
-	}
-	return list
 }
 
 func expiryDetail(t *time.Time) any {

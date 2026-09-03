@@ -20,14 +20,14 @@ copied there.
 The dashboard is React with Tailwind and shadcn/ui. shadcn components are
 *copied in* under `web/src/components/ui`, so they are ordinary source: edit
 them rather than working around them. `web/src/lib/nav.ts` is the one place
-that decides what appears in the sidebar, and `web/src/lib/capabilities.ts`
-mirrors the role-to-capability map from `internal/auth/principal.go` — if that
-map changes, this one has to follow. That mirror describes what a *role*
-carries; it is not what decides whether a control is drawn. A group can take
-capabilities away, so the session reports the effective set (`capabilities`
-on `GET /api/session`, computed by `Principal.Capabilities`) and `useCan`
-reads that. Deriving it from the role showed a restricted administrator
-every button and refused every click.
+that decides what appears in the sidebar, and `web/src/lib/permissions.ts`
+mirrors the permission vocabulary and the built-in roles from
+`internal/auth/permissions.go` and `roles.go` — if those change, this one has
+to follow. That mirror describes the vocabulary; it is not what decides
+whether a control is drawn. A group can add to a role, so the session reports
+the effective set (`permissions` on `GET /api/session`, computed by
+`Principal.PermissionList`) and `useCan("settings:write")` reads that.
+Deriving it from the role showed a person the wrong buttons.
 
 Three dashboard primitives exist so that nobody reaches for the browser's:
 `useConfirm` from `components/confirm.tsx` in place of `window.confirm`, which
@@ -79,9 +79,18 @@ authority for what it holds; what stays in `settings` is the *assignment* of a
 tunnel to an account, beside the tunnel id it already held, because those are
 one decision made on one page.
 
-**Capabilities, not roles.** Check `principal.Can(auth.CapAdmin)`, never
-`role == "admin"`. Roles are `user` and `admin`; the map from roles to
-capabilities is the only place that knows the difference.
+**Permissions, not roles.** Check `principal.Can(auth.PermSettingsWrite)`,
+never `role == "admin"` or `RoleID == auth.RoleAdministrator`. A role is a
+named set of permissions, three are built in and any number are composed on
+the Roles tab, and `groups.Resolve` is the only place that works out what a
+subject holds: its own role and grants merged with every group's. Nothing
+subtracts — there is no ceiling and no deny, on purpose — so a subject that
+must hold less is given less. What a tool takes to call stays in the tool's
+own vocabulary (`auth.Capability`: read, propose, approve, admin), and
+`Authorizer.AuthorizeTool` is the one translation from that into a grant level
+or a permission. The last-administrator guard is one query,
+`roles.CountAdministrators`, asked before and after every write that could
+change its answer.
 
 **A claim of verification is earned, never assumed.** A mutation declares
 `Verifiable`; when it is false the executor performs no check and settles

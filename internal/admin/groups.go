@@ -2,11 +2,8 @@ package admin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
@@ -34,18 +31,16 @@ type groupView struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	// Plugins is the grant, exactly as stored. Empty is legitimate and means
+	// Role is what every member holds through this group, by id, or "" for
+	// a group that only hands out reach. RoleName is for reading.
+	Role     string `json:"role"`
+	RoleName string `json:"role_name"`
+	// Grants is the reach, exactly as stored. Empty is legitimate and means
 	// the group hands out nothing.
-	Plugins []string `json:"plugins"`
-	// Capabilities is the ceiling this group imposes on what its members may
-	// do. null means it imposes none and each member's role stands; an empty
-	// array is a group that permits nothing, which suspends its members
-	// without deleting them. The dashboard has to keep those apart, so this is
-	// a nullable array rather than one that defaults to empty.
-	Capabilities []string `json:"capabilities"`
-	Members      int      `json:"members"`
-	CreatedBy    string   `json:"created_by"`
-	CreatedAt    string   `json:"created_at"`
+	Grants    []auth.Grant `json:"grants"`
+	Members   int          `json:"members"`
+	CreatedBy string       `json:"created_by"`
+	CreatedAt string       `json:"created_at"`
 }
 
 func viewOfGroup(g *groups.Group) groupView {
@@ -53,28 +48,30 @@ func viewOfGroup(g *groups.Group) groupView {
 		ID:          g.ID,
 		Name:        g.Name,
 		Description: g.Description,
-		Plugins:     nonNil(g.Plugins),
-		// nil stays nil on the wire: a group imposing no ceiling and a group
-		// permitting nothing are different, and nonNil would collapse them.
-		Capabilities: capabilityNames(g.Capabilities),
-		Members:      g.Members,
-		CreatedBy:    g.CreatedBy,
-		CreatedAt:    g.CreatedAt.Format(time.RFC3339),
+		Role:        g.RoleID,
+		RoleName:    g.RoleName,
+		Grants:      nonNilGrants(g.Grants),
+		Members:     g.Members,
+		CreatedBy:   g.CreatedBy,
+		CreatedAt:   g.CreatedAt.Format(time.RFC3339),
 	}
 }
 
 // groupRefView is a group as it appears beside a member, where the grant is
 // worth showing and the rest is not.
 type groupRefView struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Plugins []string `json:"plugins"`
+	ID       string       `json:"id"`
+	Name     string       `json:"name"`
+	Role     string       `json:"role"`
+	RoleName string       `json:"role_name"`
+	Grants   []auth.Grant `json:"grants"`
 }
 
 func viewOfGroupRefs(list []*groups.Group) []groupRefView {
 	out := make([]groupRefView, 0, len(list))
 	for _, g := range list {
-		out = append(out, groupRefView{ID: g.ID, Name: g.Name, Plugins: nonNil(g.Plugins)})
+		out = append(out, groupRefView{ID: g.ID, Name: g.Name, Role: g.RoleID,
+			RoleName: g.RoleName, Grants: nonNilGrants(g.Grants)})
 	}
 	return out
 }
@@ -141,53 +138,11 @@ func (s *Server) handleGetGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 type groupRequest struct {
-	Name        *string   `json:"name,omitempty"`
-	Description *string   `json:"description,omitempty"`
-	Plugins     *[]string `json:"plugins,omitempty"`
-	// Capabilities sets the ceiling. Absent leaves it alone; null removes it;
-	// an array sets it, including an empty one. Three distinct requests, which
-	// is why this is a pointer to a pointer's worth of meaning rather than a
-	// plain slice.
-	Capabilities *[]string `json:"capabilities,omitempty"`
-	// capabilitiesSet records whether the caller mentioned the field at all,
-	// which a nil pointer alone cannot distinguish from an explicit null.
-	capabilitiesSet bool `json:"-"`
-}
-
-// UnmarshalJSON records whether "capabilities" was present, so that omitting it
-// and sending null mean different things -- leave the ceiling alone, and remove
-// it. Without this a group could never have its ceiling cleared.
-func (g *groupRequest) UnmarshalJSON(b []byte) error {
-	type alias groupRequest
-	var a alias
-	if err := json.Unmarshal(b, &a); err != nil {
-		return err
-	}
-	var probe map[string]json.RawMessage
-	if err := json.Unmarshal(b, &probe); err != nil {
-		return err
-	}
-	*g = groupRequest(a)
-	_, g.capabilitiesSet = probe["capabilities"]
-	return nil
-}
-
-// parseCapabilities turns the wire form into capabilities, refusing a name that
-// is not one rather than dropping it.
-//
-// Dropping would be the wrong direction here, unlike when reading a stored
-// ceiling: this is somebody typing, and a typo that silently widens a group is
-// exactly the failure this whole mechanism exists to prevent.
-func parseCapabilities(raw []string) ([]auth.Capability, error) {
-	out := make([]auth.Capability, 0, len(raw))
-	for _, name := range raw {
-		c := auth.Capability(strings.TrimSpace(name))
-		if !c.Valid() {
-			return nil, fmt.Errorf("%q is not a capability; use read, propose, approve or admin", name)
-		}
-		out = append(out, c)
-	}
-	return out, nil
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	// Role sets the group's role by id; "" removes it. Absent leaves it alone.
+	Role   *string       `json:"role,omitempty"`
+	Grants *[]auth.Grant `json:"grants,omitempty"`
 }
 
 func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
@@ -207,22 +162,20 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	if req.Description != nil {
 		create.Description = *req.Description
 	}
-	if req.Plugins != nil {
-		create.Plugins = *req.Plugins
+	if req.Role != nil {
+		create.RoleID = *req.Role
 	}
-	if req.Capabilities != nil {
-		caps, err := parseCapabilities(*req.Capabilities)
-		if err != nil {
-			s.writeError(w, r, http.StatusBadRequest, err.Error())
-			return
-		}
-		create.Capabilities = caps
+	if req.Grants != nil {
+		create.Grants = auth.Grants(*req.Grants)
 	}
 	actor := auth.FromContext(r.Context()).ID
 	g, err := s.opts.Groups.Create(r.Context(), actor, create)
 	switch {
 	case errors.Is(err, groups.ErrDuplicateName):
 		s.writeError(w, r, http.StatusConflict, "a group with that name already exists")
+		return
+	case errors.Is(err, groups.ErrNoSuchRole):
+		s.writeError(w, r, http.StatusBadRequest, "that role does not exist")
 		return
 	case err != nil:
 		// Every remaining refusal is a statement about the request, and each
@@ -246,23 +199,11 @@ func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 	update := groups.UpdateRequest{
 		Name:        req.Name,
 		Description: req.Description,
-		Plugins:     req.Plugins,
+		RoleID:      req.Role,
 	}
-	// Three requests, kept apart: the field absent leaves the ceiling alone,
-	// null removes it, and an array sets it -- including an empty array, which
-	// is a group that permits nothing rather than one that restricts nothing.
-	if req.capabilitiesSet {
-		if req.Capabilities == nil {
-			var none []auth.Capability
-			update.Capabilities = &none
-		} else {
-			caps, err := parseCapabilities(*req.Capabilities)
-			if err != nil {
-				s.writeError(w, r, http.StatusBadRequest, err.Error())
-				return
-			}
-			update.Capabilities = &caps
-		}
+	if req.Grants != nil {
+		gs := auth.Grants(*req.Grants)
+		update.Grants = &gs
 	}
 	actor := auth.FromContext(r.Context()).ID
 	g, err := s.opts.Groups.Update(r.Context(), actor, r.PathValue("id"), update)
@@ -273,10 +214,13 @@ func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, groups.ErrDuplicateName):
 		s.writeError(w, r, http.StatusConflict, "a group with that name already exists")
 		return
+	case errors.Is(err, groups.ErrNoSuchRole):
+		s.writeError(w, r, http.StatusBadRequest, "that role does not exist")
+		return
 	case errors.Is(err, groups.ErrLastAdmin):
 		s.writeError(w, r, http.StatusConflict,
-			"that would leave nobody able to administer this host; "+
-				"give another administrator a group that permits admin first")
+			"that would leave nobody able to manage access to this host; "+
+				"give someone else that first")
 		return
 	case err != nil:
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
@@ -344,7 +288,7 @@ func (s *Server) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, groups.ErrLastAdmin):
 		s.writeError(w, r, http.StatusConflict,
-			"this group's restriction would take admin away from the last administrator")
+			"that would leave nobody able to manage access to this host")
 		return
 	case err != nil:
 		s.opts.Log.Error("could not add a group member", "error", err)
@@ -395,16 +339,4 @@ func nonNil(list []string) []string {
 		return []string{}
 	}
 	return list
-}
-
-// capabilityNames renders a ceiling for the wire, keeping nil as null.
-func capabilityNames(caps []auth.Capability) []string {
-	if caps == nil {
-		return nil
-	}
-	out := make([]string, 0, len(caps))
-	for _, c := range caps {
-		out = append(out, string(c))
-	}
-	return out
 }

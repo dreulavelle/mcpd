@@ -25,7 +25,7 @@ const LIMITS = [100, 250, 500];
  * happened. Silent when intact, so the one failure is not skipped over.
  */
 export function Audit() {
-  const mayVerify = useCan("admin");
+  const mayVerify = useCan("history:read");
   const [limit, setLimit] = useState(LIMITS[0]!);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [brokenAt, setBrokenAt] = useState<number | null>(null);
@@ -300,7 +300,7 @@ function ClearHistory({ disabled, onCleared }: {
   onCleared: () => void;
 }) {
   const confirm = useConfirm();
-  const mayClear = useCan("admin");
+  const mayClear = useCan("history:write");
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
 

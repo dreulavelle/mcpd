@@ -1,14 +1,16 @@
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { KeyRound } from "lucide-react";
 import {
-  api, ApiError, type ApiKey, type Group, type Role,
-  type Caller,
+  api, ApiError, type ApiKey, type Grant, type Group, type Caller,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { collect, describe } from "@/lib/permissions";
 import { Link } from "@/lib/router";
+import { useCan } from "@/lib/session";
 import { Copyable, EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
 import { SettingsTabs } from "./SettingsTabs";
-import { ReachPicker } from "@/components/ReachPicker";
+import { GrantsPicker, grantsLabel } from "@/components/GrantsPicker";
+import { RolePicker } from "@/components/RolePicker";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -24,12 +26,24 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useConfirm } from "@/components/confirm";
-import { reachLabel } from "./Groups";
 
-const ROLES: [Role, string][] = [
-  ["user", "User"],
-  ["admin", "Admin"],
+/**
+ * The shapes a key usually takes, offered before the form so that the common
+ * case is two clicks. Each is a role and a level; the systems are still
+ * chosen. "Custom" leaves everything as it is.
+ */
+const TEMPLATES: { id: string; label: string; hint: string; role: string; level: Grant["level"] }[] = [
+  { id: "readonly", label: "Read-only", hint: "Calls read tools, proposes nothing. A monitor, a report.", role: "role_reader", level: "read" },
+  { id: "operator", label: "Operator", hint: "Reads and proposes changes, decides within the inline ceiling. Claude Code, Codex.", role: "role_operator", level: "write" },
+  { id: "custom", label: "Custom", hint: "Pick the role and the level yourself.", role: "", level: "read" },
 ];
+
+/** Ninety days, as the expiry a new key starts with. */
+function defaultExpiry(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 90);
+  return toDay(d.toISOString());
+}
 
 /** Credentials for scripts and agents. Each one acts as itself. */
 export function Keys() {
@@ -39,10 +53,12 @@ export function Keys() {
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ApiKey | null>(null);
+  const [rotating, setRotating] = useState<ApiKey | null>(null);
   const [query, setQuery] = useState("");
   // The secret lives here and nowhere else: never in storage, and gone from
   // the page the moment the dialog closes.
-  const [secret, setSecret] = useState<{ name: string; value: string } | null>(null);
+  const [secret, setSecret] = useState<{ name: string; value: string; rotated?: boolean } | null>(null);
+  const mayWrite = useCan("access:write");
   const notify = useNotify();
 
   const load = useCallback(() => {
@@ -66,6 +82,7 @@ export function Keys() {
     return keys.filter((k) =>
       k.name.toLowerCase().includes(q) ||
       k.id.toLowerCase().includes(q) ||
+      k.role_name.toLowerCase().includes(q) ||
       k.groups.some((g) => g.name.toLowerCase().includes(q)));
   }, [keys, query]);
 
@@ -75,7 +92,7 @@ export function Keys() {
       <PageHeader
         title="API Keys"
         lede="A key lets a script call this host. Each one acts as itself, so the history says which."
-        actions={keys && <Button onClick={() => setAdding(true)}>Add key</Button>}
+        actions={keys && mayWrite && <Button onClick={() => setAdding(true)}>Add key</Button>}
       />
 
       {error && <Notice tone="problem">{error}</Notice>}
@@ -92,21 +109,38 @@ export function Keys() {
         />
       )}
 
-      {secret && <SecretOnce name={secret.name} value={secret.value}
-                             onClose={() => setSecret(null)} />}
+      {secret && (
+        <SecretOnce
+          name={secret.name} value={secret.value} rotated={secret.rotated}
+          onClose={() => setSecret(null)}
+        />
+      )}
 
       {editing && (
         <EditKey
           apiKey={editing}
+          groups={groups}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); load(); notify("good", "Key saved."); }}
+        />
+      )}
+
+      {rotating && (
+        <RotateKey
+          apiKey={rotating}
+          onClose={() => setRotating(null)}
+          onRotated={(value) => {
+            setRotating(null);
+            setSecret({ name: rotating.name, value, rotated: true });
+            load();
+          }}
         />
       )}
 
       {!keys ? <Loading rows={3} /> : keys.length === 0 ? (
         <EmptyState mark={<KeyRound />} title="No keys yet">
           Tokens set in the configuration file keep working; a key made here
-          can be revoked and re-scoped without a restart.
+          can be revoked, rotated and re-scoped without a restart.
         </EmptyState>
       ) : (
         <>
@@ -114,7 +148,7 @@ export function Keys() {
             <div className="mt-4">
               <Input
                 aria-label="Find a key"
-                placeholder="Find by name, id or group…"
+                placeholder="Find by name, id, role or group…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 className="max-w-sm"
@@ -147,8 +181,10 @@ export function Keys() {
                       apiKey={k}
                       activity={activity[`key:${k.id}`]}
                       notify={notify}
+                      mayWrite={mayWrite}
                       onChanged={load}
                       onEdit={() => setEditing(k)}
+                      onRotate={() => setRotating(k)}
                     />
                   ))}
                 </TableBody>
@@ -189,12 +225,14 @@ function Reached({ activity, principal }: { activity?: Caller; principal: string
   );
 }
 
-function KeyRow({ apiKey, activity, notify, onChanged, onEdit }: {
+function KeyRow({ apiKey, activity, notify, mayWrite, onChanged, onEdit, onRotate }: {
   apiKey: ApiKey;
   activity?: Caller;
   notify: Notify;
+  mayWrite: boolean;
   onChanged: () => void;
   onEdit: () => void;
+  onRotate: () => void;
 }) {
   const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
@@ -218,6 +256,8 @@ function KeyRow({ apiKey, activity, notify, onChanged, onEdit }: {
     }
   }
 
+  const held = describe(collect(apiKey.permissions));
+
   return (
     <TableRow className={dead ? "opacity-55" : undefined}>
       <TableCell>
@@ -225,6 +265,11 @@ function KeyRow({ apiKey, activity, notify, onChanged, onEdit }: {
           <span className="font-medium">{apiKey.name}</span>
           {apiKey.status === "revoked" && <Chip tone="problem">revoked</Chip>}
           {apiKey.status === "expired" && <Chip tone="attention">expired</Chip>}
+          {apiKey.previous_until && (
+            <span title={`The old secret works until ${new Date(apiKey.previous_until).toLocaleString()}`}>
+              <Chip tone="info">rotating</Chip>
+            </span>
+          )}
           {apiKey.groups.map((g) => <Chip key={g.id}>{g.name}</Chip>)}
         </span>
         <div className="font-mono text-xs text-muted-foreground">{apiKey.id}</div>
@@ -236,10 +281,14 @@ function KeyRow({ apiKey, activity, notify, onChanged, onEdit }: {
         {error && <div className="mt-1 text-xs text-problem">{error}</div>}
       </TableCell>
       <TableCell className="text-muted-foreground">
-        {apiKey.role === "admin" ? "Admin" : "User"}
+        <div>{apiKey.role_name || apiKey.role}</div>
+        {/* The role's name is somebody's shorthand; what the key may do is
+            the union with its groups, in words the reader does not have to
+            look up. */}
+        <div className="text-xs">{held}</div>
       </TableCell>
       <TableCell className="text-muted-foreground">
-        {reachLabel(apiKey.reaches)}
+        {grantsLabel(apiKey.reaches)}
       </TableCell>
       {/* What it is permitted to reach and what it has actually reached are
           different facts, and the gap between them is the whole of a grant
@@ -254,12 +303,19 @@ function KeyRow({ apiKey, activity, notify, onChanged, onEdit }: {
           : "Never"}
       </TableCell>
       <TableCell className="whitespace-nowrap">
-        <Button variant="ghost" size="sm" disabled={busy || dead} onClick={onEdit}>
-          Edit
-        </Button>
-        <Button variant="ghost" size="sm" disabled={busy || dead} onClick={revoke}>
-          Revoke
-        </Button>
+        {mayWrite && (
+          <>
+            <Button variant="ghost" size="sm" disabled={busy || dead} onClick={onEdit}>
+              Edit
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy || dead} onClick={onRotate}>
+              Rotate
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy || dead} onClick={revoke}>
+              Revoke
+            </Button>
+          </>
+        )}
       </TableCell>
     </TableRow>
   );
@@ -273,9 +329,10 @@ function KeyRow({ apiKey, activity, notify, onChanged, onEdit }: {
  * storage of any kind. There is no endpoint that would return it again, which
  * is what the copy underneath says.
  */
-function SecretOnce({ name, value, onClose }: {
+function SecretOnce({ name, value, rotated, onClose }: {
   name: string;
   value: string;
+  rotated?: boolean;
   onClose: () => void;
 }) {
   return (
@@ -284,14 +341,87 @@ function SecretOnce({ name, value, onClose }: {
         <DialogHeader>
           <DialogTitle>Copy this key now</DialogTitle>
           <DialogDescription>
-            This is the only time {name} will be shown. Nothing here can show it
-            again, and losing it means making a new one.
+            This is the only time {name}{rotated ? "'s new secret" : ""} will be
+            shown. Nothing here can show it again, and losing it means
+            {rotated ? " rotating again" : " making a new one"}.
           </DialogDescription>
         </DialogHeader>
         <Copyable value={value} label="key" />
         <DialogFooter>
           <Button onClick={onClose}>I have copied it</Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const GRACE: [number, string][] = [
+  [0, "Right away"],
+  [3600, "An hour"],
+  [86_400, "A day"],
+  [7 * 86_400, "A week"],
+];
+
+/**
+ * A new secret for the same key.
+ *
+ * Nothing else about the key moves: its id, role, grants and groups stay, so
+ * every rule and every audit entry naming it keeps meaning it. The old secret
+ * keeps working for the grace chosen here, which is what lets a deployment be
+ * told the new one and restarted without a window in which neither works.
+ */
+function RotateKey({ apiKey, onClose, onRotated }: {
+  apiKey: ApiKey;
+  onClose: () => void;
+  onRotated: (secret: string) => void;
+}) {
+  const [grace, setGrace] = useState(3600);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const { secret } = await api.rotateKey(apiKey.id, grace);
+      onRotated(secret);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : "Couldn't rotate that key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Rotate {apiKey.name}</DialogTitle>
+          <DialogDescription>
+            A new secret for the same key. Everything else about it stays, and
+            the history goes on naming it.
+          </DialogDescription>
+        </DialogHeader>
+        {error && <Notice tone="problem">{error}</Notice>}
+        <form onSubmit={submit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="rotate-grace">The old secret stops working</Label>
+            <NativeSelect id="rotate-grace" value={String(grace)} onChange={(e) => setGrace(Number(e.target.value))}>
+              {GRACE.map(([seconds, label]) => (
+                <option key={seconds} value={seconds}>{label}</option>
+              ))}
+            </NativeSelect>
+            <p className="text-xs text-muted-foreground">
+              Long enough to put the new secret where the old one was. If the
+              old one has leaked, choose right away.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={busy}>{busy ? "Rotating…" : "Rotate"}</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
@@ -304,14 +434,16 @@ function SecretOnce({ name, value, onClose }: {
  * grant with whatever the page happened to hold. The secret is not here and
  * cannot be: nothing on the server can show it again.
  */
-function EditKey({ apiKey, onClose, onSaved }: {
+function EditKey({ apiKey, groups, onClose, onSaved }: {
   apiKey: ApiKey;
+  groups: Group[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [name, setName] = useState(apiKey.name);
-  const [role, setRole] = useState<Role>(apiKey.role);
-  const [reach, setReach] = useState<string[]>(apiKey.plugins);
+  const [role, setRole] = useState(apiKey.role);
+  const [grants, setGrants] = useState<Grant[]>(apiKey.grants);
+  const [joined, setJoined] = useState<string[]>(apiKey.groups.map((g) => g.id));
   // The date input wants a day; the stored value is an instant.
   const [expires, setExpires] = useState(
     apiKey.expires_at ? toDay(apiKey.expires_at) : "",
@@ -320,9 +452,11 @@ function EditKey({ apiKey, onClose, onSaved }: {
   const [busy, setBusy] = useState(false);
 
   const wasExpiry = apiKey.expires_at ? toDay(apiKey.expires_at) : "";
+  const wasGroups = apiKey.groups.map((g) => g.id);
   const changed =
     name.trim() !== apiKey.name || role !== apiKey.role ||
-    !sameSet(reach, apiKey.plugins) || expires !== wasExpiry;
+    !sameGrants(grants, apiKey.grants) || !sameSet(joined, wasGroups) ||
+    expires !== wasExpiry;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -332,7 +466,8 @@ function EditKey({ apiKey, onClose, onSaved }: {
       await api.updateKey(apiKey.id, {
         ...(name.trim() !== apiKey.name ? { name: name.trim() } : {}),
         ...(role !== apiKey.role ? { role } : {}),
-        ...(!sameSet(reach, apiKey.plugins) ? { plugins: reach } : {}),
+        ...(!sameGrants(grants, apiKey.grants) ? { grants } : {}),
+        ...(!sameSet(joined, wasGroups) ? { groups: joined } : {}),
         ...(expires !== wasExpiry
           ? { expires_at: expires ? new Date(`${expires}T00:00:00`).toISOString() : "" }
           : {}),
@@ -347,13 +482,12 @@ function EditKey({ apiKey, onClose, onSaved }: {
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit {apiKey.name}</DialogTitle>
           <DialogDescription>
             Takes effect on the key's next call. The secret itself does not
-            change and is not shown; a key whose secret has leaked is revoked,
-            not edited.
+            change and is not shown; rotate it for a new one.
           </DialogDescription>
         </DialogHeader>
         {error && <Notice tone="problem">{error}</Notice>}
@@ -365,26 +499,12 @@ function EditKey({ apiKey, onClose, onSaved }: {
               onChange={(e) => setName(e.target.value)}
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="edit-key-role">Role</Label>
-            <NativeSelect
-              id="edit-key-role" value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-            >
-              {ROLES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-            </NativeSelect>
-          </div>
-          <ReachPicker
-            id="edit-key-reach" value={reach} onChange={setReach}
+          <RolePicker id="edit-key-role" value={role} onChange={setRole} />
+          <GrantsPicker
+            id="edit-key-reach" value={grants} onChange={setGrants}
             subject="this key"
           />
-          {apiKey.groups.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              It also reaches whatever {apiKey.groups.map((g) => g.name).join(", ")}{" "}
-              {apiKey.groups.length === 1 ? "reaches" : "reach"}. Membership is
-              changed on the Users &amp; Groups tab.
-            </p>
-          )}
+          <GroupBoxes groups={groups} joined={joined} onChange={setJoined} subject="A key" />
           <div className="space-y-1.5">
             <Label htmlFor="edit-key-expires">Stops working on</Label>
             <Input
@@ -407,6 +527,35 @@ function EditKey({ apiKey, onClose, onSaved }: {
   );
 }
 
+function GroupBoxes({ groups, joined, onChange, subject }: {
+  groups: Group[];
+  joined: string[];
+  onChange: (next: string[]) => void;
+  subject: string;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <fieldset className="space-y-1.5">
+      <legend className="text-sm font-medium">Groups</legend>
+      <p className="text-xs text-muted-foreground">
+        {subject} also holds whatever its groups hold: their role and their reach.
+      </p>
+      {groups.map((g) => (
+        <label key={g.id} className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox" checked={joined.includes(g.id)}
+            onChange={() => onChange(joined.includes(g.id) ? joined.filter((id) => id !== g.id) : [...joined, g.id])}
+          />
+          <span>{g.name}</span>
+          <span className="text-muted-foreground">
+            — {[g.role_name, grantsLabel(g.grants)].filter(Boolean).join(", ")}
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 /** The local day an instant falls on, in the form a date input takes. */
 function toDay(iso: string): string {
   const d = new Date(iso);
@@ -419,22 +568,33 @@ function sameSet(a: string[], b: string[]): boolean {
   return a.length === b.length && [...a].sort().every((v, i) => v === [...b].sort()[i]);
 }
 
+function sameGrants(a: Grant[], b: Grant[]): boolean {
+  const key = (g: Grant) => `${g.plugin}:${g.level}`;
+  return sameSet(a.map(key), b.map(key));
+}
+
 function AddKey({ groups, onClose, onAdded }: {
   groups: Group[];
   onClose: () => void;
   onAdded: (name: string, secret: string) => void;
 }) {
   const [name, setName] = useState("");
-  const [role, setRole] = useState<Role>("user");
-  const [reach, setReach] = useState<string[]>([]);
+  const [template, setTemplate] = useState("operator");
+  const [role, setRole] = useState("role_operator");
+  const [grants, setGrants] = useState<Grant[]>([]);
   const [joined, setJoined] = useState<string[]>([]);
-  const [expires, setExpires] = useState("");
+  const [expires, setExpires] = useState(defaultExpiry);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  function toggleGroup(id: string) {
-    setJoined((current) =>
-      current.includes(id) ? current.filter((g) => g !== id) : [...current, id]);
+  function chooseTemplate(id: string) {
+    setTemplate(id);
+    const t = TEMPLATES.find((x) => x.id === id);
+    if (!t || !t.role) return;
+    setRole(t.role);
+    // The level the template means, applied to whatever systems are chosen;
+    // a system chosen afterwards takes the level it is given.
+    setGrants((current) => current.map((g) => ({ ...g, level: t.level })));
   }
 
   async function submit(e: FormEvent) {
@@ -442,11 +602,10 @@ function AddKey({ groups, onClose, onAdded }: {
     setBusy(true);
     setError("");
     try {
-
       const { secret } = await api.createKey({
         name: name.trim(),
         role,
-        plugins: reach,
+        grants,
         groups: joined,
         // A date input gives a day; the key dies at the start of it, in the
         // operator's own time zone, so that the row renders the day they
@@ -479,49 +638,39 @@ function AddKey({ groups, onClose, onAdded }: {
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="key-role">Role</Label>
-            <NativeSelect
-              id="key-role" value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-            >
-              {ROLES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-            </NativeSelect>
-            {role === "admin" && (
-              <p className="text-xs text-muted-foreground">
-                An admin key can change settings, manage accounts and make more
-                keys. Most scripts want User.
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <ReachPicker
-              id="key-reach" value={reach} onChange={setReach}
-              subject="this key"
-            />
-          </div>
-
-          {groups.length > 0 && (
-            <fieldset className="space-y-1.5">
-              <legend className="text-sm font-medium">Groups</legend>
-              <p className="text-xs text-muted-foreground">
-                A key also reaches whatever its groups reach.
-              </p>
-              {groups.map((g) => (
-                <label key={g.id} className="flex items-center gap-2 text-sm">
+          <fieldset className="space-y-1.5">
+            <legend className="text-sm font-medium">Shape</legend>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {TEMPLATES.map((t) => (
+                <label
+                  key={t.id}
+                  className={`cursor-pointer rounded-md border p-2 text-sm ${template === t.id ? "border-primary bg-primary/5" : ""}`}
+                >
                   <input
-                    type="checkbox" checked={joined.includes(g.id)}
-                    onChange={() => toggleGroup(g.id)}
+                    type="radio" name="key-template" value={t.id} className="sr-only"
+                    checked={template === t.id} onChange={() => chooseTemplate(t.id)}
                   />
-                  <span>{g.name}</span>
-                  <span className="text-muted-foreground">
-                    — {reachLabel(g.plugins)}
-                  </span>
+                  <div className="font-medium">{t.label}</div>
+                  <div className="text-xs text-muted-foreground">{t.hint}</div>
                 </label>
               ))}
-            </fieldset>
+            </div>
+          </fieldset>
+
+          {template === "custom" && (
+            <RolePicker id="key-role" value={role} onChange={setRole} />
           )}
+
+          <GrantsPicker
+            id="key-reach" value={grants}
+            onChange={(next) => {
+              const t = TEMPLATES.find((x) => x.id === template);
+              setGrants(t && t.role ? next.map((g) => ({ ...g, level: g.level === "write" && t.level === "read" ? "read" : g.level })) : next);
+            }}
+            subject="this key"
+          />
+
+          <GroupBoxes groups={groups} joined={joined} onChange={setJoined} subject="A key" />
 
           <div className="space-y-1.5">
             <Label htmlFor="key-expires">Stops working on</Label>
@@ -530,12 +679,13 @@ function AddKey({ groups, onClose, onAdded }: {
               onChange={(e) => setExpires(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Leave empty for a key that does not expire.
+              Ninety days to start with. Clear it for a key that does not
+              expire, which is a choice rather than a field left blank.
             </p>
           </div>
 
           <div className="flex items-center gap-2">
-            <Button type="submit" disabled={busy || !name.trim()}>
+            <Button type="submit" disabled={busy || !name.trim() || !role}>
               {busy ? "Adding…" : "Add key"}
             </Button>
             <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>

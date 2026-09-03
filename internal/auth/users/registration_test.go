@@ -65,7 +65,7 @@ func TestRegister_AnUnlinkedIdentityDoesNotBecomeAnExistingAccount(t *testing.T)
 	s, _ := newStoreWithDB(t)
 	claim(t, s)
 
-	existing := mustCreate(t, s, "alice@example.com", auth.RoleAdmin)
+	existing := mustCreate(t, s, "alice@example.com", auth.RoleAdministrator)
 
 	_, err := s.Register(ctx, RegisterRequest{
 		Email: "Alice@Example.com",
@@ -105,7 +105,7 @@ func TestLinkIdentity_TheAccountAttachesItsOwnProvider(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newStoreWithDB(t)
 	claim(t, s)
-	alice := mustCreate(t, s, "alice@example.com", auth.RoleUser)
+	alice := mustCreate(t, s, "alice@example.com", auth.RoleOperator)
 
 	if err := s.LinkIdentity(ctx, "user:alice@example.com", Identity{
 		Provider: ProviderGoogle,
@@ -127,7 +127,7 @@ func TestLinkIdentity_TheAccountAttachesItsOwnProvider(t *testing.T) {
 	// One provider account cannot be attached to two mcpd accounts, and one
 	// mcpd account cannot hold two of the same provider. Both would make "who
 	// signed in" unanswerable.
-	bob := mustCreate(t, s, "bob@example.com", auth.RoleUser)
+	bob := mustCreate(t, s, "bob@example.com", auth.RoleOperator)
 	if err := s.LinkIdentity(ctx, "user:bob@example.com", Identity{
 		Provider: ProviderGoogle, Subject: "google-alice", UserID: bob.ID,
 	}); !errors.Is(err, ErrIdentityLinked) {
@@ -209,11 +209,31 @@ func TestPending_AuthenticatesAndHoldsNoCapability(t *testing.T) {
 		t.Fatalf("a pending account must still be able to authenticate: %v", err)
 	}
 
+	// Given a real role and a real grant directly on the row, so the
+	// assertion below proves Pending overrides them rather than merely
+	// reflecting an account that would have held nothing anyway.
+	admin := auth.RoleAdministrator
+	wildcard := auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite)
+	if _, err := s.Update(ctx, signedIn.ID, UpdateRequest{RoleID: &admin, Grants: &wildcard}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	signedIn, err = s.ByID(ctx, signedIn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signedIn.Status != StatusPending {
+		t.Fatal("the update must not have approved the account")
+	}
+
 	authorizer := auth.NewAuthorizer()
-	p := signedIn.Principal("ses_test", signedIn.Plugins, nil)
-	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove, auth.CapAdmin} {
-		if p.Can(c) {
-			t.Errorf("a pending account holds %q", c)
+	access, err := s.Resolve(ctx, signedIn.ID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	p := signedIn.Principal("ses_test", access)
+	for _, perm := range []auth.Permission{auth.PermSettingsRead, auth.PermApprovalsDecide, auth.PermAccessWrite} {
+		if p.Can(perm) {
+			t.Errorf("a pending account holds %q", perm)
 		}
 	}
 	if d := authorizer.AuthorizeEndpoint(p, "anything"); d.Allowed {
@@ -222,7 +242,7 @@ func TestPending_AuthenticatesAndHoldsNoCapability(t *testing.T) {
 	if d := authorizer.AuthorizeTool(p, "anything", auth.CapPropose); d.Allowed {
 		t.Error("the authorizer let a pending account call a tool")
 	}
-	if d := authorizer.AuthorizeAdmin(p); d.Allowed {
+	if d := authorizer.AuthorizeTool(p, "anything", auth.CapAdmin); d.Allowed {
 		t.Error("the authorizer let a pending account administer the host")
 	}
 
@@ -258,7 +278,11 @@ func TestApproveRegistration_IsAuditedWithTheActingAdministrator(t *testing.T) {
 	if approved.Status != StatusActive {
 		t.Errorf("status after approval = %q; want active", approved.Status)
 	}
-	if !approved.Principal("ses", approved.Plugins, nil).Can(auth.CapRead) {
+	access, err := s.Resolve(ctx, approved.ID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !approved.Principal("ses", access).Can(auth.PermSettingsRead) {
 		t.Error("an approved account still holds nothing")
 	}
 
@@ -576,10 +600,14 @@ func TestRegister_ThePasswordDoorAlwaysWaits(t *testing.T) {
 	if typed.Status != StatusPending {
 		t.Fatalf("status = %q; an address nobody checked must wait", typed.Status)
 	}
-	p := typed.Principal("ses", typed.Plugins, nil)
-	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove} {
-		if p.Can(c) {
-			t.Errorf("an unchecked address walked in holding %q", c)
+	access, err := s.Resolve(ctx, typed.ID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	p := typed.Principal("ses", access)
+	for _, perm := range []auth.Permission{auth.PermSettingsRead, auth.PermApprovalsDecide} {
+		if p.Can(perm) {
+			t.Errorf("an unchecked address walked in holding %q", perm)
 		}
 	}
 
@@ -638,15 +666,19 @@ func TestRegister_GrantsNoPluginAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if len(u.Plugins) != 0 {
-		t.Fatalf("plugins = %v; a self-registered account starts reaching nothing", u.Plugins)
+	if len(u.Grants) != 0 {
+		t.Fatalf("grants = %v; a self-registered account starts reaching nothing", u.Grants)
 	}
 
-	// Active, so it holds its capabilities -- and still reaches no
+	// Active, so it holds its permissions -- and still reaches no
 	// integration, which is a grant an administrator makes deliberately.
-	p := u.Principal("ses", u.Plugins, nil)
-	if !p.Can(auth.CapRead) {
-		t.Error("an approved account holds no capabilities at all")
+	access, err := s.Resolve(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	p := u.Principal("ses", access)
+	if !p.Can(auth.PermSettingsRead) {
+		t.Error("an approved account holds no permissions at all")
 	}
 	if p.CanAccessPlugin("echo") || p.CanAccessPlugin(auth.Wildcard) {
 		t.Error("a self-registered account reaches an integration nobody granted it")
@@ -733,8 +765,8 @@ func TestGuardLastAdmin_DoesNotCountAPendingAdministrator(t *testing.T) {
 	// Promoted while still waiting. Permitted -- the role is a grant somebody
 	// may make in advance -- and it must not register as the host gaining an
 	// administrator.
-	admin := auth.RoleAdmin
-	if _, err := s.Update(ctx, pending.ID, UpdateRequest{Role: &admin}); err != nil {
+	admin := auth.RoleAdministrator
+	if _, err := s.Update(ctx, pending.ID, UpdateRequest{RoleID: &admin}); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
 	promoted, err := s.ByID(ctx, pending.ID)
@@ -744,14 +776,18 @@ func TestGuardLastAdmin_DoesNotCountAPendingAdministrator(t *testing.T) {
 	if promoted.Status != StatusPending {
 		t.Fatalf("status = %q; promoting must not approve", promoted.Status)
 	}
-	if promoted.Principal("ses", promoted.Plugins, nil).Can(auth.CapAdmin) {
-		t.Fatal("a pending account holds admin")
+	promotedAccess, err := s.Resolve(ctx, promoted.ID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if promoted.Principal("ses", promotedAccess).Can(auth.PermAccessWrite) {
+		t.Fatal("a pending account holds access:write")
 	}
 
 	// Now the only real administrator tries to edit themselves out. Each of
 	// the three ways has to be refused.
-	user := auth.RoleUser
-	if _, err := s.Update(ctx, owner.ID, UpdateRequest{Role: &user}); !errors.Is(err, ErrLastAdmin) {
+	user := auth.RoleOperator
+	if _, err := s.Update(ctx, owner.ID, UpdateRequest{RoleID: &user}); !errors.Is(err, ErrLastAdmin) {
 		t.Errorf("demoting the last real administrator = %v; want ErrLastAdmin", err)
 	}
 	disabled := true
@@ -767,7 +803,7 @@ func TestGuardLastAdmin_DoesNotCountAPendingAdministrator(t *testing.T) {
 	if _, err := s.ApproveRegistration(ctx, "user:owner@example.com", pending.ID, nil); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	if _, err := s.Update(ctx, owner.ID, UpdateRequest{Role: &user}); err != nil {
+	if _, err := s.Update(ctx, owner.ID, UpdateRequest{RoleID: &user}); err != nil {
 		t.Errorf("with a second real administrator, standing down was refused: %v", err)
 	}
 }

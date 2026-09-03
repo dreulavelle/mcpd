@@ -14,7 +14,7 @@ import (
 	"github.com/spoked/mcpd/internal/observability"
 )
 
-func metricsDashboard(t *testing.T, role auth.Role, public bool) *Server {
+func metricsDashboard(t *testing.T, role string, public bool) *Server {
 	t.Helper()
 	m := observability.NewMetrics()
 	m.ToolCall(context.Background(), "cnmaestro", "devices", observability.OutcomeOK, 25*time.Millisecond)
@@ -42,7 +42,7 @@ func scrape(t *testing.T, s *Server, credential bool) *httptest.ResponseRecorder
 // readiness probe carries on purpose -- so by default a scrape presents a
 // credential like any other machine caller.
 func TestMetrics_RequireACredentialByDefault(t *testing.T) {
-	s := metricsDashboard(t, auth.RoleUser, false)
+	s := metricsDashboard(t, auth.RoleOperator, false)
 
 	if w := scrape(t, s, false); w.Code != http.StatusUnauthorized {
 		t.Errorf("an unauthenticated scrape returned %d, want 401", w.Code)
@@ -61,7 +61,7 @@ func TestMetrics_RequireACredentialByDefault(t *testing.T) {
 // read means everywhere else here, and a scraper holds a machine token rather
 // than an administrator's.
 func TestMetrics_TakeReadRatherThanAdmin(t *testing.T) {
-	s := metricsDashboard(t, auth.RoleUser, false)
+	s := metricsDashboard(t, auth.RoleOperator, false)
 	if w := scrape(t, s, true); w.Code != http.StatusOK {
 		t.Errorf("a reader was refused: %d", w.Code)
 	}
@@ -71,7 +71,7 @@ func TestMetrics_TakeReadRatherThanAdmin(t *testing.T) {
 // shape, and refusing to support it produces a token pasted into a scrape
 // config and never rotated.
 func TestMetrics_PublicDropsTheCheck(t *testing.T) {
-	s := metricsDashboard(t, auth.RoleUser, true)
+	s := metricsDashboard(t, auth.RoleOperator, true)
 	w := scrape(t, s, false)
 	if w.Code != http.StatusOK {
 		t.Fatalf("a public endpoint refused an unauthenticated scrape: %d", w.Code)
@@ -86,7 +86,7 @@ func TestMetrics_PublicDropsTheCheck(t *testing.T) {
 func TestMetrics_AbsentWhenSwitchedOff(t *testing.T) {
 	s := NewServer(Options{
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Verifier: roleVerifier{role: auth.RoleAdmin},
+		Verifier: roleVerifier{role: auth.RoleAdministrator},
 	})
 	if w := scrape(t, s, true); w.Code == http.StatusOK {
 		t.Errorf("a host with metrics off served /metrics: %d", w.Code)

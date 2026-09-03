@@ -722,6 +722,30 @@ func (r *Registry) ToolDescriptions() map[string]string {
 	return out
 }
 
+// Capabilities returns what each registered tool takes to call, by qualified
+// name: every read tool's declared capability, every propose tool at
+// propose, and the approval tools this plugin is attached with.
+//
+// For the listing filter. A caller that could not call a tool is not shown
+// it, and the rule that decides which is the same one the gate refuses
+// with, read from the same declarations.
+func (r *Registry) Capabilities() map[string]auth.Capability {
+	out := make(map[string]auth.Capability, len(r.tools)+len(r.mutations)+5)
+	for _, t := range r.tools {
+		out[t.qualified] = t.capability
+	}
+	for _, m := range r.mutations {
+		out[m.qualified] = auth.CapPropose
+	}
+	plugin := r.descriptor.Name
+	out[plugin+"_list_operations"] = auth.CapRead
+	out[plugin+"_get_operation"] = auth.CapRead
+	out[plugin+"_approve_operation"] = auth.CapApprove
+	out[plugin+"_reject_operation"] = auth.CapApprove
+	out[plugin+"_cancel_operation"] = auth.CapPropose
+	return out
+}
+
 // MutationActions returns every registered mutation action.
 func (r *Registry) MutationActions() []string {
 	out := make([]string, 0, len(r.mutations))

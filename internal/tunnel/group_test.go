@@ -191,9 +191,9 @@ func TestStatusNamesTheSystemEachTunnelServes(t *testing.T) {
 
 func TestSameAsIgnoresPluginOrder(t *testing.T) {
 	a := groupConfig("", "tunnel_0123456789abcdef0123456789abcdef")
-	a.Principal.Plugins = []string{"echo", "cnmaestro"}
+	a.Principal.Grants = auth.GrantsAt([]string{"echo", "cnmaestro"}, auth.LevelWrite)
 	b := a
-	b.Principal.Plugins = []string{"cnmaestro", "echo"}
+	b.Principal.Grants = auth.GrantsAt([]string{"cnmaestro", "echo"}, auth.LevelWrite)
 
 	m := NewManager(a, testFactory(), discardLogger())
 	if !m.SameAs(b) {
@@ -242,7 +242,7 @@ func TestSameAsComparesEveryFieldThatChangesBehaviour(t *testing.T) {
 		{"control plane", func(c *Config) { c.ControlPlaneBaseURL = "https://elsewhere" }},
 		{"diagnostics", func(c *Config) { c.DiagnosticsAddr = "127.0.0.1:1234" }},
 		{"debug", func(c *Config) { c.Debug = !c.Debug }},
-		{"role", func(c *Config) { c.Principal.Role = auth.RoleAdmin }},
+		{"role", func(c *Config) { c.Principal.RoleID = auth.RoleAdministrator }},
 	}
 	for _, tc := range changed {
 		cfg := base

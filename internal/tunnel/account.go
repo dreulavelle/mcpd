@@ -43,11 +43,16 @@ type Account struct {
 	// It is what the audit trail records, which is why two accounts may not
 	// share one.
 	Principal string
-	Role      auth.Role
-	// Plugins is what this account may reach, or the single element
-	// auth.Wildcard. Never empty: an empty grant reaches nothing, which is
-	// not what leaving the field blank meant.
-	Plugins []string
+	// RoleID is the role this account's tunnels act with. RoleName and
+	// Permissions are what the store resolved it to, for the principal; they
+	// are read, never written.
+	RoleID      string
+	RoleName    string
+	Permissions auth.Permissions
+	// Grants is what this account may reach. Never empty: an empty grant
+	// reaches nothing, which is not what leaving the field blank meant, so
+	// the store fills in everything at write.
+	Grants auth.Grants
 
 	// RatePerSec bounds calls per second across every tunnel this account
 	// owns. Zero is unlimited, and is the default.
@@ -123,17 +128,14 @@ func (a *Account) Validate() error {
 	if strings.TrimSpace(a.Principal) == "" {
 		problems = append(problems, "a principal is required")
 	}
-	if !a.Role.Valid() {
-		problems = append(problems, fmt.Sprintf("unknown role %q", a.Role))
+	if strings.TrimSpace(a.RoleID) == "" {
+		problems = append(problems, "a role is required")
 	}
 	if a.RatePerSec < 0 {
 		problems = append(problems, "the rate limit cannot be negative")
 	}
-	for _, p := range a.Plugins {
-		if strings.TrimSpace(p) == "" {
-			problems = append(problems, "a blank entry in the systems list")
-			break
-		}
+	if err := a.Grants.Validate(); err != nil {
+		problems = append(problems, "a blank entry in the systems list")
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("chatgpt account: %s", strings.Join(problems, "; "))
@@ -148,15 +150,17 @@ func (a *Account) Validate() error {
 // is configured, so that assigning a tunnel to an account can only ever reduce
 // what that tunnel reaches.
 func (a *Account) AsPrincipal() auth.Principal {
-	plugins := a.Plugins
-	if len(plugins) == 0 {
-		plugins = []string{auth.Wildcard}
+	grants := a.Grants
+	if len(grants) == 0 {
+		grants = auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite)
 	}
 	return auth.Principal{
 		ID:          a.Principal,
 		DisplayName: "chatgpt: " + a.Name,
-		Role:        a.Role,
-		Plugins:     plugins,
+		RoleID:      a.RoleID,
+		RoleName:    a.RoleName,
+		Permissions: a.Permissions,
+		Grants:      grants,
 		// The account is the credential, so it is also what a revocation
 		// would name. There is no separate token to identify.
 		TokenID: a.ID,
@@ -226,8 +230,8 @@ type AccountUpdate struct {
 	AdminKey   *string
 	OrgID      *string
 	Workspaces *[]string
-	Role       *auth.Role
-	Plugins    *[]string
+	RoleID     *string
+	Grants     *auth.Grants
 	RatePerSec *float64
 	Enabled    *bool
 }

@@ -183,7 +183,7 @@ export function Tunnels() {
   const [awaiting, setAwaiting] = useState<string[]>(readAwaiting);
 
   const notify = useNotify();
-  const admin = useCan("admin");
+  const admin = useCan("tunnels:write");
 
   const load = useCallback(() => {
     api.tunnel()
@@ -434,7 +434,7 @@ function TunnelRow({ row, reading: r, accounts, selected, onSelect, onDone, noti
   notify: Notify;
   onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
 }) {
-  const admin = useCan("admin");
+  const admin = useCan("tunnels:write");
   const [busy, setBusy] = useState(false);
   const s = row.status;
   const reaches = s ? (s.plugin || "Everything") : row.assigned === undefined ? "—" : (row.assigned || "Everything");
@@ -595,7 +595,7 @@ function Chart({ values, errors }: { values: number[]; errors: number[] }) {
 function RecentCalls({ principal, plugin }: { principal?: string; plugin: string }) {
   const [calls, setCalls] = useState<ToolCall[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const mayRead = useCan("admin");
+  const mayRead = useCan("history:read");
   useEffect(() => {
     if (!mayRead || !principal) return;
     let live = true;
@@ -701,7 +701,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
   onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
 }) {
   const confirm = useConfirm();
-  const admin = useCan("admin");
+  const admin = useCan("tunnels:write");
   const manages = info.can_manage && admin;
   const [busy, setBusy] = useState<"restart" | "remove" | "assign" | null>(null);
   const s = row.status;

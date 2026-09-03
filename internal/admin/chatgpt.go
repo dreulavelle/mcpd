@@ -24,7 +24,10 @@ type accountView struct {
 	Name      string `json:"name"`
 	Principal string `json:"principal"`
 	Role      string `json:"role"`
-	// Plugins is what this account may reach, or ["*"].
+	RoleName  string `json:"role_name"`
+	// Grants is what this account may reach, and at which level.
+	Grants []auth.Grant `json:"grants"`
+	// Plugins is the same reach by name, for the pages that only ask which.
 	Plugins    []string `json:"plugins"`
 	RatePerSec float64  `json:"rate_per_sec"`
 	Enabled    bool     `json:"enabled"`
@@ -62,8 +65,10 @@ func newAccountView(a tunnel.Account) accountView {
 		ID:          a.ID,
 		Name:        a.Name,
 		Principal:   a.Principal,
-		Role:        string(a.Role),
-		Plugins:     a.Plugins,
+		Role:        a.RoleID,
+		RoleName:    a.RoleName,
+		Grants:      nonNilGrants(a.Grants),
+		Plugins:     a.Grants.Plugins(),
 		RatePerSec:  a.RatePerSec,
 		Enabled:     a.Enabled,
 		OrgID:       a.OrgID,
@@ -149,15 +154,15 @@ func (s *Server) handleListChatGPTAccounts(w http.ResponseWriter, r *http.Reques
 // never reads one back, so an edit that changes only the rate limit arrives
 // with no key at all, and a plain string would read that as an erasure.
 type accountBody struct {
-	Name       *string   `json:"name"`
-	APIKey     *string   `json:"api_key"`
-	AdminKey   *string   `json:"admin_key"`
-	OrgID      *string   `json:"organization_id"`
-	Workspaces *[]string `json:"workspaces"`
-	Role       *string   `json:"role"`
-	Plugins    *[]string `json:"plugins"`
-	RatePerSec *float64  `json:"rate_per_sec"`
-	Enabled    *bool     `json:"enabled"`
+	Name       *string       `json:"name"`
+	APIKey     *string       `json:"api_key"`
+	AdminKey   *string       `json:"admin_key"`
+	OrgID      *string       `json:"organization_id"`
+	Workspaces *[]string     `json:"workspaces"`
+	Role       *string       `json:"role"`
+	Grants     *[]auth.Grant `json:"grants"`
+	RatePerSec *float64      `json:"rate_per_sec"`
+	Enabled    *bool         `json:"enabled"`
 }
 
 // handleAddChatGPTAccount stores a new account.
@@ -172,7 +177,7 @@ func (s *Server) handleAddChatGPTAccount(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	acct := tunnel.Account{Enabled: true, Role: auth.RoleUser}
+	acct := tunnel.Account{Enabled: true, RoleID: auth.RoleOperator}
 	if body.Name != nil {
 		acct.Name = *body.Name
 	}
@@ -189,10 +194,10 @@ func (s *Server) handleAddChatGPTAccount(w http.ResponseWriter, r *http.Request)
 		acct.Workspaces = *body.Workspaces
 	}
 	if body.Role != nil {
-		acct.Role = auth.Role(*body.Role)
+		acct.RoleID = *body.Role
 	}
-	if body.Plugins != nil {
-		acct.Plugins = *body.Plugins
+	if body.Grants != nil {
+		acct.Grants = auth.Grants(*body.Grants)
 	}
 	if body.RatePerSec != nil {
 		acct.RatePerSec = *body.RatePerSec
@@ -200,7 +205,7 @@ func (s *Server) handleAddChatGPTAccount(w http.ResponseWriter, r *http.Request)
 	if body.Enabled != nil {
 		acct.Enabled = *body.Enabled
 	}
-	if err := s.checkAccountPlugins(acct.Plugins); err != nil {
+	if err := s.checkAccountPlugins(acct.Grants.Plugins()); err != nil {
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -227,15 +232,13 @@ func (s *Server) handleUpdateChatGPTAccount(w http.ResponseWriter, r *http.Reque
 
 	up := tunnel.AccountUpdate{
 		Name: body.Name, APIKey: body.APIKey, AdminKey: body.AdminKey,
-		OrgID: body.OrgID, Workspaces: body.Workspaces, Plugins: body.Plugins,
+		OrgID: body.OrgID, Workspaces: body.Workspaces, RoleID: body.Role,
 		RatePerSec: body.RatePerSec, Enabled: body.Enabled,
 	}
-	if body.Role != nil {
-		role := auth.Role(*body.Role)
-		up.Role = &role
-	}
-	if body.Plugins != nil {
-		if err := s.checkAccountPlugins(*body.Plugins); err != nil {
+	if body.Grants != nil {
+		gs := auth.Grants(*body.Grants)
+		up.Grants = &gs
+		if err := s.checkAccountPlugins(gs.Plugins()); err != nil {
 			s.writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}

@@ -8,11 +8,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/roles"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/plugins/bandwidth"
@@ -49,8 +51,11 @@ func decodeSettings(settings map[string]any, into any) error {
 //
 // Secrets are resolved here, once, at startup. A missing credential fails the
 // process rather than producing a host that silently rejects every request
-// from one agent.
-func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, error) {
+// from one agent. The role named for each token is resolved the same way: a
+// token naming a role this host does not have fails startup, because the
+// alternative is a token that authenticates and holds nothing, which reads
+// as a broken host rather than a typo in a file.
+func buildVerifier(ctx context.Context, cfg *config.Config, rs *roles.Store, log *slog.Logger) (auth.TokenVerifier, error) {
 	resolver := config.NewSecretResolver()
 
 	var tokens []*auth.StaticToken
@@ -59,11 +64,21 @@ func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, er
 		if err != nil {
 			return nil, fmt.Errorf("auth: token %q: %w", t.ID, err)
 		}
+		role, err := resolveRole(ctx, rs, t.Role)
+		if err != nil {
+			return nil, fmt.Errorf("auth: token %q: %w", t.ID, err)
+		}
+		grants := auth.GrantsAt(t.Plugins, auth.LevelWrite)
+		for _, g := range t.Grants {
+			grants = append(grants, auth.Grant{Plugin: g.Plugin, Level: auth.Level(g.Level)})
+		}
 		st, err := auth.NewStaticToken(t.ID, secret, auth.Principal{
 			ID:          t.Principal,
 			DisplayName: t.ID,
-			Role:        auth.Role(t.Role),
-			Plugins:     t.Plugins,
+			RoleID:      role.ID,
+			RoleName:    role.Name,
+			Permissions: role.Permissions,
+			Grants:      grants.Normalize(),
 		})
 		if err != nil {
 			return nil, err
@@ -71,7 +86,7 @@ func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, er
 		tokens = append(tokens, st)
 		log.Info("static credential loaded",
 			"token_id", t.ID, "principal", t.Principal,
-			"role", t.Role, "plugins", t.Plugins)
+			"role", role.Name, "grants", grants.Normalize())
 	}
 
 	// Static tokens are the only bearer credential now. People sign in to the
@@ -81,6 +96,26 @@ func buildVerifier(cfg *config.Config, log *slog.Logger) (auth.TokenVerifier, er
 	// An empty set is legitimate: a deployment reached only through the tunnel
 	// and the dashboard has no machine caller to issue one to.
 	return auth.NewStaticVerifier(tokens...)
+}
+
+// resolveRole finds the role a configuration file named: a built-in by its
+// old or new name, or any role by its name or id.
+func resolveRole(ctx context.Context, rs *roles.Store, name string) (*auth.Role, error) {
+	if id, ok := auth.LegacyRoleID(strings.ToLower(strings.TrimSpace(name))); ok {
+		if r, ok := auth.BuiltinRole(id); ok {
+			return &r, nil
+		}
+	}
+	if rs == nil {
+		return nil, fmt.Errorf("role %q is not one of reader, operator or administrator", name)
+	}
+	if r, err := rs.ByName(ctx, name); err == nil {
+		return r, nil
+	}
+	if r, err := rs.ByID(ctx, strings.TrimSpace(name)); err == nil {
+		return r, nil
+	}
+	return nil, fmt.Errorf("role %q does not exist on this host; make it under Settings, Roles, or name a built-in", name)
 }
 
 // builtinTypes is the complete list of integrations this binary can serve.

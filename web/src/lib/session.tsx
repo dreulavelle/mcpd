@@ -1,11 +1,11 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { Session } from "./api";
-import type { Capability } from "./capabilities";
+import type { Permission } from "./permissions";
 
 interface SessionValue {
   session: Session | null;
-  /** Whether the signed-in principal carries a capability. */
-  can: (capability: Capability) => boolean;
+  /** Whether the signed-in principal holds a permission. "" is anybody signed in. */
+  can: (permission: Permission) => boolean;
   /** Pushes a renamed session out, so the sidebar follows without a reload. */
   adopt: (session: Session) => void;
 }
@@ -25,12 +25,12 @@ export function SessionProvider({ session, onSession, children }: {
   children: ReactNode;
 }) {
   const value = useMemo<SessionValue>(() => {
-    // The server's answer, never the role's: a group can narrow a role, and
+    // The server's answer, never the role's: a group can add to a role, and
     // only the server knows by how much.
-    const held = new Set<Capability>(session?.capabilities ?? []);
+    const held = new Set<Permission>(session?.permissions ?? []);
     return {
       session,
-      can: (c) => held.has(c),
+      can: (p) => (p === "" ? session !== null : held.has(p)),
       adopt: (next) => onSession?.(next),
     };
   }, [session, onSession]);
@@ -48,8 +48,17 @@ export function useAdoptSession(): (session: Session) => void {
 }
 
 /** The only question a component may ask. There is deliberately no `useRole`. */
-export function useCan(capability: Capability): boolean {
-  return useContext(SessionContext).can(capability);
+export function useCan(permission: Permission): boolean {
+  return useContext(SessionContext).can(permission);
+}
+
+/**
+ * The predicate itself, for a list that has to ask about many permissions
+ * at once -- the sidebar, the palette. A hook per entry would break the
+ * rules of hooks the moment the list changed length.
+ */
+export function useCanFn(): (permission: Permission) => boolean {
+  return useContext(SessionContext).can;
 }
 
 /**

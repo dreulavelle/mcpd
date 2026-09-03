@@ -299,7 +299,7 @@ func validateMoved(m movedSetting) error {
 	// checked against what that consumer accepts rather than waved through
 	// because the form no longer offers it.
 	if m.key == settings.KeyTunnelRole {
-		if role := auth.Role(m.value); !role.Valid() {
+		if _, ok := auth.LegacyRoleID(m.value); !ok {
 			return fmt.Errorf("unknown role %q", m.value)
 		}
 		return nil

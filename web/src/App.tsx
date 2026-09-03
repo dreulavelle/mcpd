@@ -99,7 +99,7 @@ function Console({ onSignOut, version }: { onSignOut: () => void; version: strin
   const badges = usePendingCount();
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
-  const admin = useCan("admin");
+  const history = useCan("history:read");
 
   // "g" then a letter, for the sections; the rest are one chord each. Only
   // the sections this account may open are listed, so the help sheet does
@@ -116,14 +116,14 @@ function Console({ onSignOut, version }: { onSignOut: () => void; version: strin
       { keys: "g u", label: "Go to Audit", run: go("/audit") },
       { keys: "g s", label: "Go to Settings", run: go("/settings") },
     ];
-    if (admin) {
+    if (history) {
       list.push(
         { keys: "g l", label: "Go to Logs", run: go("/logs") },
         { keys: "g c", label: "Go to Activity", run: go("/activity") },
       );
     }
     return list;
-  }, [navigate, admin]);
+  }, [navigate, history]);
   useShortcuts(shortcuts);
 
   return (
@@ -152,7 +152,7 @@ function Console({ onSignOut, version }: { onSignOut: () => void; version: strin
 
 /** The count beside Approvals, polled wherever the operator is standing. */
 function usePendingCount(): Record<string, number> {
-  const mayRead = useCan("read");
+  const mayRead = useCan("approvals:read");
   const [pending, setPending] = useState(0);
 
   const load = useCallback(() => {

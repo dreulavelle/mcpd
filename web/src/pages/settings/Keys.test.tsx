@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type ApiKey, type Group } from "@/lib/api";
+import { builtinPermissions } from "@/lib/permissions";
 import { renderWith } from "@/test/render";
 import { Keys } from "./Keys";
 
@@ -9,9 +10,11 @@ function keyView(overrides: Partial<ApiKey> = {}): ApiKey {
   return {
     id: "key_1",
     name: "Nightly report",
-    role: "user",
-    plugins: [],
+    role: "role_operator",
+    role_name: "Operator",
+    grants: [],
     reaches: [],
+    permissions: builtinPermissions("role_operator"),
     groups: [],
     status: "active",
     created_by: "user:admin@example.com",
@@ -50,9 +53,12 @@ describe("the keys page", () => {
   it("shows what a key reaches, not only what is listed against it", async () => {
     stub({
       keys: [keyView({
-        plugins: ["echo"],
-        reaches: ["cnmaestro", "echo"],
-        groups: [{ id: "grp_1", name: "Field", plugins: ["cnmaestro"] }],
+        grants: [{ plugin: "echo", level: "write" }],
+        reaches: [{ plugin: "cnmaestro", level: "write" }, { plugin: "echo", level: "write" }],
+        groups: [{
+          id: "grp_1", name: "Field", role: "", role_name: "",
+          grants: [{ plugin: "cnmaestro", level: "write" }],
+        }],
       })],
     });
     renderWith(<Keys />);
@@ -129,7 +135,7 @@ describe("the keys page", () => {
   // Only what changed is sent, so renaming a key does not also rewrite its
   // grant with whatever the form happened to hold.
   it("re-scopes a key without reissuing it, sending only what changed", async () => {
-    stub({ keys: [keyView({ plugins: ["echo"] })] });
+    stub({ keys: [keyView({ grants: [{ plugin: "echo", level: "write" }] })] });
     const update = vi.spyOn(api, "updateKey").mockResolvedValue(keyView({ name: "Weekly" }));
     renderWith(<Keys />);
 

@@ -1,5 +1,6 @@
 import { Link, useRouter } from "@/lib/router";
-import { useCan } from "@/lib/session";
+import { useCanFn } from "@/lib/session";
+import type { Permission } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 
 /**
@@ -21,19 +22,21 @@ export interface Tab {
   label: string;
   /** The schema section this tab renders, where it renders one. */
   section?: string;
-  admin: boolean;
+  /** What it takes to open the tab. Mirrors ROUTE_CAPABILITIES in nav.ts. */
+  requires: Permission;
 }
 
 export const TABS: Tab[] = [
-  { path: "/settings", label: "General", section: "settings", admin: false },
-  { path: "/settings/chatgpt", label: "ChatGPT", section: "chatgpt", admin: true },
-  { path: "/settings/authentication", label: "Authentication", section: "authentication", admin: true },
-  { path: "/settings/users", label: "Users & Groups", admin: true },
-  { path: "/settings/keys", label: "API Keys", admin: true },
-  { path: "/settings/certificates", label: "Certificates", admin: true },
-  { path: "/settings/diagnostics", label: "Diagnostics", section: "diagnostics", admin: true },
-  { path: "/settings/backup", label: "Backup & Restore", admin: true },
-  { path: "/settings/advanced", label: "Advanced", section: "advanced", admin: true },
+  { path: "/settings", label: "General", section: "settings", requires: "settings:read" },
+  { path: "/settings/chatgpt", label: "ChatGPT", section: "chatgpt", requires: "tunnels:write" },
+  { path: "/settings/authentication", label: "Authentication", section: "authentication", requires: "access:write" },
+  { path: "/settings/users", label: "Users & Groups", requires: "access:read" },
+  { path: "/settings/roles", label: "Roles", requires: "access:read" },
+  { path: "/settings/keys", label: "API Keys", requires: "access:read" },
+  { path: "/settings/certificates", label: "Certificates", requires: "plugins:write" },
+  { path: "/settings/diagnostics", label: "Diagnostics", section: "diagnostics", requires: "settings:write" },
+  { path: "/settings/backup", label: "Backup & Restore", requires: "system:write" },
+  { path: "/settings/advanced", label: "Advanced", section: "advanced", requires: "settings:write" },
 ];
 
 /**
@@ -51,11 +54,11 @@ export function tabForSection(section: string): string {
 
 export function SettingsTabs() {
   const { path } = useRouter();
-  const admin = useCan("admin");
+  const can = useCanFn();
 
   // An operator who cannot open a tab is not shown it, which is the rule the
   // sidebar applied to these when they were entries in it.
-  const shown = TABS.filter((t) => !t.admin || admin);
+  const shown = TABS.filter((t) => can(t.requires));
 
   return (
     <nav aria-label="Settings sections" className="mb-4 border-b">

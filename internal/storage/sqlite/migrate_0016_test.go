@@ -90,7 +90,7 @@ func TestMigrate0016_TheOperatorsOwnProviderCanBeStored(t *testing.T) {
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	seedUser(t, db, "usr_own", "own@example.com")
+	seedUserAtHead(t, db, "usr_own", "own@example.com")
 
 	if _, err := db.Writer().ExecContext(ctx, `
 		INSERT INTO user_identities (provider, subject, user_id, email, linked_by, created_at)
@@ -115,7 +115,7 @@ func TestMigrate0016_AProviderNobodyConfiguredIsStillRefused(t *testing.T) {
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	seedUser(t, db, "usr_unknown", "unknown@example.com")
+	seedUserAtHead(t, db, "usr_unknown", "unknown@example.com")
 
 	_, err := db.Writer().ExecContext(ctx, `
 		INSERT INTO user_identities (provider, subject, user_id, email, linked_by, created_at)
@@ -137,7 +137,7 @@ func TestMigrate0016_DeletingAnAccountStillTakesItsIdentities(t *testing.T) {
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	seedUser(t, db, "usr_gone", "gone@example.com")
+	seedUserAtHead(t, db, "usr_gone", "gone@example.com")
 
 	if _, err := db.Writer().ExecContext(ctx, `
 		INSERT INTO user_identities (provider, subject, user_id, email, linked_by, created_at)

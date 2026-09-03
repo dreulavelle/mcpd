@@ -91,7 +91,10 @@ copy of the database without it is unreadable.
 
 **Scoping is per credential.** This agent reaches `/mcp/echo` and nothing else
 — every other endpoint returns 404, so it cannot discover what else is
-deployed:
+deployed. `role` names a role: `reader`, `operator` or `administrator`, the
+older `user` and `admin` (which mean operator and administrator), or a role
+composed on the Roles tab, by name. `plugins` grants each system at write;
+`grants` gives a level per system for a token that should only read:
 
 ```yaml
 auth:
@@ -99,8 +102,15 @@ auth:
     - id: chatgpt-echo
       secret_ref: env:MCPD_TOKEN_CHATGPT
       principal: svc:chatgpt
-      role: user
+      role: operator
       plugins: [echo]
+    - id: dashboard-monitor
+      secret_ref: env:MCPD_TOKEN_MONITOR
+      principal: svc:monitor
+      role: reader
+      grants:
+        - plugin: "*"
+          level: read
 ```
 
 ## Connecting a client

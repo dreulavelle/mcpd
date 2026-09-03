@@ -36,11 +36,19 @@ describe("the sidebar", () => {
     }
   });
 
-  it("hides the administrative pages from a user, and keeps the rest", () => {
-    mount("user", "/settings");
+  // The sidebar is gated per permission, not per role: a session holding only
+  // a couple of "area:read" permissions sees only the sections those cover,
+  // whatever built-in role it happens to carry.
+  it("hides a section a custom permission set does not cover, and keeps the rest", () => {
+    renderWith(<Shell badges={{}} onSignOut={() => {}} version="1.2.3">page</Shell>, {
+      session: sessionFor("user", { permissions: ["settings:read", "policies:read"] }),
+      path: "/settings",
+    });
     expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Policies" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Approvals" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Plugins" })).not.toBeInTheDocument();
   });
 
   // Settings is how the host is configured. Your own account is not, and is

@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 import { render, type RenderResult } from "@testing-library/react";
 import type { Role, Session } from "@/lib/api";
-import { capabilitiesOf } from "@/lib/capabilities";
+import { builtinPermissions, BUILTIN_ROLES } from "@/lib/permissions";
 import { RouterProvider } from "@/lib/router";
 import { SessionProvider } from "@/lib/session";
 import { ConfirmProvider } from "@/components/confirm";
@@ -17,21 +17,26 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  * the real endpoint would never send.
  */
 export function sessionFor(role: Role, overrides: Partial<Session> = {}): Session {
+  // The two names tests have always used, mapped onto the built-in roles
+  // that mean the same thing, so a fixture reads as it did.
+  const roleId = role === "admin" ? "role_administrator" : role === "user" ? "role_operator" : role;
   const email = `${role}@example.com`;
   const displayName = role === "admin" ? "An Admin" : "A User";
   const base: Session = {
     email,
     name: displayName,
     display_name: displayName,
-    role,
+    role: roleId,
+    role_name: BUILTIN_ROLES[roleId]?.name ?? roleId,
     plugins: ["*"],
+    grants: [{ plugin: "*", level: "write" }],
     csrf_token: "test-csrf",
     expires_at: new Date(Date.now() + 3_600_000).toISOString(),
     status: "active",
     has_password: true,
-    // What the server would send for an account no group restricts. A test
-    // about a ceiling overrides this, and only this.
-    capabilities: [...capabilitiesOf(role)],
+    // What the server would send for an account in no group. A test about
+    // a group's role overrides this, and only this.
+    permissions: builtinPermissions(roleId),
   };
   const merged = { ...base, ...overrides };
   if (overrides.display_name !== undefined && overrides.name === undefined) {

@@ -42,9 +42,9 @@ func TestTheOldCredentialsAreCarriedIntoAnAccount(t *testing.T) {
 	if got.AdminKey != "sk-admin" || got.OrgID != "org_123" {
 		t.Errorf("admin credentials = %q/%q, want the stored pair", got.AdminKey, got.OrgID)
 	}
-	if len(got.Plugins) != 1 || got.Plugins[0] != "echo" {
+	if got2 := got.Grants.Plugins(); len(got2) != 1 || got2[0] != "echo" {
 		t.Errorf("grant = %v, want the stored one; widening it on upgrade would "+
-			"hand a connector systems nobody granted it", got.Plugins)
+			"hand a connector systems nobody granted it", got2)
 	}
 	// The identity has to be the one the audit trail has been recording, or
 	// every entry written before the upgrade refers to a principal that
@@ -98,8 +98,8 @@ func TestSeedingPinsTheTunnelsItFound(t *testing.T) {
 
 	// And the consequence that matters: a second account does not disturb them.
 	if _, err := a.chatgpt.Create(ctx, "user:test", tunnel.Account{
-		Name: "Second", APIKey: "sk-other", Role: auth.RoleUser,
-		Plugins: []string{auth.Wildcard}, Enabled: true,
+		Name: "Second", APIKey: "sk-other", RoleID: auth.RoleOperator,
+		Grants: auth.Grants{{Plugin: auth.Wildcard, Level: auth.LevelWrite}}, Enabled: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestAnAccountGrantNarrowsButNeverWidens(t *testing.T) {
 	if len(configs) != 1 {
 		t.Fatalf("got %d tunnels, want the one for echo", len(configs))
 	}
-	got := configs[0].Principal.Plugins
+	got := configs[0].Principal.Grants.Plugins()
 	if len(got) != 1 || got[0] != "echo" {
 		t.Fatalf("grant = %v, want echo alone despite the account's wildcard", got)
 	}

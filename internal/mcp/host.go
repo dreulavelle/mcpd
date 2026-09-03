@@ -179,7 +179,7 @@ func (h *Host) authenticate(next http.Handler) http.Handler {
 			// The aggregate endpoint: resolve the credential's grants to the
 			// plugins that are actually mounted.
 			granted := h.opts.Authorizer.VisiblePlugins(principal, h.opts.Manager.Names())
-			if !principal.Can(auth.CapRead) || len(granted) == 0 {
+			if len(granted) == 0 {
 				log.Warn("aggregate access denied",
 					"principal", principal.ID, "granted", granted)
 				h.writeError(w, r, http.StatusNotFound, "unknown endpoint")

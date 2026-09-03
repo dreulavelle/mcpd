@@ -2,7 +2,8 @@ import { useCallback, useState } from "react";
 import {
   api, ApiError, type Meta, type ProviderName, type Session, type User,
 } from "@/lib/api";
-import type { Capability } from "@/lib/capabilities";
+import { collect, describe } from "@/lib/permissions";
+import { PermissionMatrix } from "@/components/PermissionMatrix";
 import { whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { signedInAs, useAdoptSession, useCan, useSession } from "@/lib/session";
@@ -17,12 +18,6 @@ import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/confirm";
 import { Label } from "@/components/ui/label";
 
-const CAPABILITY_MEANING: Record<Capability, string> = {
-  read: "See plugins, settings, proposed changes and the audit trail.",
-  propose: "Suggest a change, and withdraw one you suggested.",
-  approve: "Decide on a proposed change — approve it or turn it down.",
-  admin: "Change settings, manage accounts and tunnels, and clear the history.",
-};
 
 /**
  * Your own account: what you may do here, and the things about it you can
@@ -30,7 +25,10 @@ const CAPABILITY_MEANING: Record<Capability, string> = {
  */
 export function Profile() {
   const session = useSession();
-  const mayEditAccounts = useCan("admin");
+  // Two questions. Learning your own id is a read of the accounts list;
+  // changing your password goes through the same write as editing anybody's.
+  const mayReadAccounts = useCan("access:read");
+  const mayEditAccounts = useCan("access:write");
 
   const loadMeta = useCallback(() => api.meta(), []);
   const { data: meta } = useLoader<Meta>(loadMeta, "Couldn't read the host's details.");
@@ -38,14 +36,14 @@ export function Profile() {
   // The only way to learn your own id, and it takes admin -- so it is not
   // asked for without one.
   const loadSelf = useCallback(
-    () => (mayEditAccounts ? api.users() : Promise.resolve({ users: [], count: 0 })),
-    [mayEditAccounts],
+    () => (mayReadAccounts ? api.users() : Promise.resolve({ users: [], count: 0 })),
+    [mayReadAccounts],
   );
   const { data: users, error: usersError } = useLoader(loadSelf, "Couldn't load your account.");
   const self: User | undefined = (users?.users ?? []).find((u) => u.self);
 
   if (!session) return null;
-  const held = session.capabilities;
+  const held = collect(session.permissions);
 
   return (
     <>
@@ -61,9 +59,7 @@ export function Profile() {
               <Detail label="Email">{session.email}</Detail>
               {/* The one place a role is read rather than a capability, and it
                   is reading it in order to print it. Nothing branches here. */}
-              <Detail label="Role">
-                {session.role === "admin" ? "Administrator" : "User"}
-              </Detail>
+              <Detail label="Role">{session.role_name || session.role}</Detail>
               <Detail label="This session expires">
                 {whenExact(session.expires_at)}
               </Detail>
@@ -77,7 +73,7 @@ export function Profile() {
           </CardContent>
         </Card>
 
-        {usersError && mayEditAccounts && (
+        {usersError && mayReadAccounts && (
           <Notice tone="problem">{usersError}</Notice>
         )}
 
@@ -100,25 +96,11 @@ export function Profile() {
 
         <Section
           title="What you may do"
-          description="mcpd checks capabilities rather than roles. These are the ones you hold: what your role carries, less anything a group you belong to takes away."
+          description={`mcpd checks permissions rather than roles. These are the ones you hold: ${describe(held).toLowerCase()}. Your role, merged with the role of every group you are in.`}
         >
           <Card>
             <CardContent>
-              <dl className="space-y-3">
-                {(["read", "propose", "approve", "admin"] as Capability[]).map((c) => {
-                  const has = held.includes(c);
-                  return (
-                    <div key={c} className="flex items-start gap-3">
-                      <Chip tone={has ? "good" : "neutral"} className="mt-0.5 w-20 justify-center">
-                        {c}
-                      </Chip>
-                      <p className={has ? "text-sm" : "text-sm text-muted-foreground line-through"}>
-                        {CAPABILITY_MEANING[c]}
-                      </p>
-                    </div>
-                  );
-                })}
-              </dl>
+              <PermissionMatrix id="mine" value={held} readOnly />
             </CardContent>
           </Card>
         </Section>
