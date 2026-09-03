@@ -1927,13 +1927,13 @@ path and a domain name are the same shape.
 What an integration does belongs with the integration. Each has its own
 document when it needs one — [cnmaestro.md](cnmaestro.md),
 [observium.md](observium.md), [graylog.md](graylog.md),
-[extremecloudiq.md](extremecloudiq.md), [bandwidth.md](bandwidth.md) and
-[textable.md](textable.md) — because the API a plugin talks to changes on
+[extremecloudiq.md](extremecloudiq.md), [bandwidth.md](bandwidth.md),
+[textable.md](textable.md) and [3cx.md](3cx.md) — because the API a plugin talks to changes on
 someone else's schedule, and mixing that into the host's design makes both
 harder to read.
 
-Those documents are worth reading as a set before writing a seventh
-integration. They record the same *kinds* of surprise in six different
+Those documents are worth reading as a set before writing an eighth
+integration. They record the same *kinds* of surprise in seven different
 vendors: where
 pagination hides, what an empty result is spelled as, which status code means
 two things, what unit a timestamp is in, and what the API will not give you at

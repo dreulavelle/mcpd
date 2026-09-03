@@ -74,6 +74,12 @@ var toolListBudget = map[string]int{
 	// row array, a returned count and a truncation note. Output schemas are the
 	// largest line item and one shape reused across five tools is paid for once.
 	"textable": 12_000,
+	// Sixteen read tools over a PBX. Wider per tool than textable because
+	// several answers are composite by nature -- one extension carries its
+	// handsets, its forwarding profiles and its key layout, and a status
+	// report carries the licence, the offline trunks and the stopped services
+	// -- and a flat row shape cannot say those without a nested array each.
+	"threecx": 28_000,
 }
 
 // budgetTotal bounds every plugin at once, which is what the aggregate
@@ -100,11 +106,12 @@ var toolListBudget = map[string]int{
 // six only for a host that mounted one of them, and nobody mounts one -- the
 // question "why is this number not receiving texts" crosses four.
 // Raised from 155,000 with the bandwidth expansion above and the arrival of
-// textable. Nobody in practice mounts every integration -- a host with two is
-// the ordinary case -- so this bounds the worst arrangement rather than the
+// textable, and again to 210,000 when threecx arrived with sixteen tools.
+// Nobody in practice mounts every integration -- a host with two is the
+// ordinary case -- so this bounds the worst arrangement rather than the
 // likely one, and it is the aggregate endpoint's cost for one credential scoped
 // to everything.
-const budgetTotal = 175_000
+const budgetTotal = 210_000
 
 func TestToolList_StaysWithinItsContextBudget(t *testing.T) {
 	h := allPluginsApp(t).Handler()
@@ -234,6 +241,8 @@ func allPluginsApp(t *testing.T) *App {
 			"client_id": "i", "client_secret": "s"}},
 		"textable": {Enabled: true, Settings: map[string]any{
 			"base_url": "https://textable.invalid", "api_key": "svc-token"}},
+		"threecx": {Enabled: true, Settings: map[string]any{
+			"host": "pbx.invalid", "extension": "100", "password": "p"}},
 	}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
 		ID: "wildcard", SecretRef: "env:MCPD_TOKEN_WILDCARD",
