@@ -102,11 +102,10 @@ func (p *Plugin) Descriptor() plugins.Descriptor {
 		Name:    "threecx",
 		Version: "0.2.0",
 		Title:   "3CX",
-		Description: "The 3CX v20 phone systems of one or more customers. Every tool " +
-			"takes customer: a business name or alias from list_customers, optional " +
-			"when there is one. A name matching several customers is refused with " +
-			"the candidates: ask the person, do not pick. Read-only; credentials " +
-			"the API would return are never requested. Start with get_system_status.",
+		Description: "Answers questions about your customers' phone systems: whether " +
+			"the phones are working, who is registered, where a number rings, and " +
+			"what happened to a call. Name the customer you mean; list_customers " +
+			"has them. Nothing here changes anything.",
 	}
 }
 
