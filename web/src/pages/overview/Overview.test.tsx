@@ -14,6 +14,7 @@ function stub(health: HealthReport | null) {
   vi.spyOn(api, "audit").mockResolvedValue({ records: [], count: 0 });
   vi.spyOn(api, "endpoints").mockResolvedValue({
     aggregate: "http://127.0.0.1:18080/mcp", per_plugin_example: "/mcp/{plugin}",
+    advertised: true, port: "18080",
   });
   if (health === null) {
     vi.spyOn(api, "health").mockRejectedValue(new Error("down"));

@@ -18,10 +18,17 @@ export interface FieldLink {
 }
 
 /** A form over a set of setting groups, shared by every page that has some. */
-export function SettingsForm({ groups, settings, links, onSaved, readOnly = false }: {
+export function SettingsForm({ groups, settings, links, placeholders, onSaved, readOnly = false }: {
   groups: SettingGroup[];
   settings: SettingsPayload;
   links?: Record<string, FieldLink>;
+  /**
+   * What an empty field means, by key, when the page knows better than the
+   * schema: the address this page was reached on, say. Shown in the field
+   * rather than saved, so an empty field stays empty and keeps meaning
+   * "work it out".
+   */
+  placeholders?: Record<string, string>;
   onSaved: () => void;
   /** Read-only, so nobody fills in a field and then meets a 403. */
   readOnly?: boolean;
@@ -113,7 +120,8 @@ export function SettingsForm({ groups, settings, links, onSaved, readOnly = fals
                 }
                 return (
                   <Field
-                    key={f.key} field={f} value={valueOf(f.key)}
+                    key={f.key} value={valueOf(f.key)}
+                    field={placeholders?.[f.key] ? { ...f, placeholder: placeholders[f.key] } : f}
                     link={links?.[f.key]}
                     isSet={settings.secrets_set[f.key] ?? false}
                     clearing={clearing.includes(f.key)}

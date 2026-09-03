@@ -101,6 +101,7 @@ function stubApi(role: "user" | "admin" = "admin") {
   });
   vi.spyOn(api, "endpoints").mockResolvedValue({
     aggregate: "http://127.0.0.1:18080/mcp", per_plugin_example: "/mcp/{plugin}",
+    advertised: true, port: "18080",
   });
   vi.spyOn(api, "settings").mockResolvedValue({
     groups: [], values: {}, secrets_set: {}, encryption_available: true,

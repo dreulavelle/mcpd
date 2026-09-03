@@ -511,12 +511,12 @@ func schema() []Group {
 					Key: KeyServerPublicURL, Label: "Address assistants use",
 					Kind: KindString, Group: "server", Apply: ApplyLive,
 					Placeholder: "https://mcp.example.net",
-					Help: "The MCP endpoint as it looks from outside, which is what " +
-						"gets copied into a client. Behind a proxy it is also how " +
-						"mcpd knows the connection is really https. If this host " +
-						"serves its own certificate, that certificate names the " +
-						"address it was issued for, so changing this needs a restart " +
-						"to reissue it.",
+					Help: "The MCP endpoint as clients reach it, with the scheme and " +
+						"the port. Empty means the host this page is on, at the MCP " +
+						"port, which is right on one network and wrong through a " +
+						"proxy. Behind a proxy it is also how mcpd knows the " +
+						"connection is really https. A self-signed certificate is " +
+						"issued for this address, so changing it needs a restart.",
 				},
 				{
 					Key: KeyServerFrontendPublicURL, Label: "Address this page is on",
@@ -529,11 +529,10 @@ func schema() []Group {
 					// the thing it now decides. An operator who read it, left
 					// it empty and turned on a provider got a button that never
 					// appeared and no message saying why.
-					Help: "Required for signing in with a provider: the address " +
-						"they send people back to is built from this, and while it " +
-						"is empty no provider is offered at all. Otherwise needed " +
-						"only when something in front of mcpd terminates TLS for " +
-						"the dashboard.",
+					Help: "This dashboard as a browser reaches it. Required for " +
+						"signing in with a provider, which sends people back here; " +
+						"while it is empty no provider is offered. Otherwise needed " +
+						"only when something in front of mcpd terminates TLS.",
 				},
 				{
 					Key: KeyServerTLSMode, Label: "Certificate for the MCP endpoint",

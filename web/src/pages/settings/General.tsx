@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { api, type BootstrapSetting } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,12 +16,27 @@ import { SettingsSection } from "./SettingsSection";
 export function General() {
   const load = useCallback(() => api.settings(), []);
   const { data } = useLoader(load, "Couldn't load settings.");
+  const loadEndpoints = useCallback(() => api.endpoints(), []);
+  const { data: endpoints } = useLoader(loadEndpoints, "");
+
+  // What an empty address means, as this browser sees it: the host this
+  // page was reached on, at the MCP port for one and this page's own
+  // address for the other. Shown in the field rather than saved, because
+  // what is right from this desk may be wrong through a proxy.
+  const placeholders = useMemo(() => {
+    const host = window.location.hostname;
+    return {
+      "server.public_url": `http://${host}:${endpoints?.port ?? "8080"}`,
+      "server.frontend_public_url": `${window.location.protocol}//${window.location.host}`,
+    };
+  }, [endpoints]);
 
   return (
     <SettingsSection
       section="settings"
       title="Settings"
       lede="Addresses and housekeeping. Changes apply at once unless a field says otherwise."
+      placeholders={placeholders}
     >
       {data && <StartupFile values={data.bootstrap} />}
     </SettingsSection>

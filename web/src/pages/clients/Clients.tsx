@@ -66,12 +66,13 @@ function Connect({ endpoints, plugins, chosen, onReach, client, onClient }: {
   onClient: (id: string) => void;
 }) {
   const stored = chosen ? chosen.connect_url : endpoints.aggregate;
-  // An address that is only a path means nothing has been advertised: the
-  // server returns the route bare rather than inventing a host from a header.
-  // The snippet then carries an obvious placeholder rather than a bare
-  // path, which read as a command that could work and was not.
+  // With no public address set the server returns the route bare rather
+  // than inventing a host from a header. The page knows one thing the
+  // server refuses to guess: the host it was itself reached on. That plus
+  // the MCP port is right for a client on the same network, and is said
+  // to be a guess.
   const advertised = /^https?:\/\//.test(stored);
-  const address = advertised ? stored : `https://YOUR-HOST:8080${stored}`;
+  const address = advertised ? stored : `http://${window.location.hostname}:${endpoints.port}${stored}`;
   const canIssue = useCan("access:write");
   const guide = CLIENTS.find((c) => c.id === client)!;
 
@@ -107,11 +108,10 @@ function Connect({ endpoints, plugins, chosen, onReach, client, onClient }: {
           <Label>Address</Label>
           <Copyable value={address} label="address" />
           {!advertised && (
-            <Notice tone="attention">
-              This host has not been told its own address, so YOUR-HOST is a
-              placeholder. Set <em>Address assistants use</em> under{" "}
-              <Link to="/settings" className="text-primary hover:underline">Settings › General</Link>
-              {" "}to how the MCP listener is reached, and this fills in.
+            <Notice tone="neutral">
+              A guess from this page's host and the MCP port. If clients reach
+              this host another way, set <em>Address assistants use</em> under{" "}
+              <Link to="/settings" className="text-primary hover:underline">Settings › General</Link>.
             </Notice>
           )}
         </div>

@@ -38,10 +38,12 @@ export const SETTING_LINKS = {
  * it does not exist. Matches come from every section and each says where it
  * lives.
  */
-export function SettingsSection({ section, title, lede, children }: {
+export function SettingsSection({ section, title, lede, placeholders, children }: {
   section: string;
   title: string;
   lede: ReactNode;
+  /** Passed through to the form; see SettingsForm. */
+  placeholders?: Record<string, string>;
   /** Rendered above the form, for a tab that is more than its settings. */
   children?: ReactNode;
 }) {
@@ -119,6 +121,7 @@ export function SettingsSection({ section, title, lede, children }: {
                       {tabForSection(g.section)}
                     </p>
                     <SettingsForm
+                  placeholders={placeholders}
                       groups={[g]} settings={data} links={SETTING_LINKS}
                       onSaved={reload} readOnly={!mayWrite}
                     />
@@ -131,6 +134,7 @@ export function SettingsSection({ section, title, lede, children }: {
               {children}
               {mine.length > 0 && (
                 <SettingsForm
+                  placeholders={placeholders}
                   groups={mine} settings={data} links={SETTING_LINKS}
                   onSaved={reload} readOnly={!mayWrite}
                 />
