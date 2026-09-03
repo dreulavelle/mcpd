@@ -219,6 +219,12 @@ type Extension struct {
 	BlockRemoteNonTunnel bool   `json:"block_remote_non_tunnel"`
 	LanOnly              bool   `json:"lan_only"`
 	SRTP                 string `json:"srtp,omitempty"`
+	// EmergencyLocation is where an emergency call from this extension is
+	// reported to be. Empty is the finding: an extension with none set is one
+	// whose 911 call carries the site's default address, wherever the person
+	// actually is.
+	EmergencyLocation string `json:"emergency_location,omitempty"`
+	EmergencyInfo     string `json:"emergency_info,omitempty"`
 
 	Phones     []PhoneRow      `json:"phones"`
 	Forwarding []ForwardingRow `json:"forwarding"`
@@ -261,7 +267,8 @@ const extensionFields = "Id,Number,DisplayName,FirstName,LastName,EmailAddress,M
 	"Enabled,IsRegistered,CurrentProfileName,QueueStatus,OutboundCallerID,Language," +
 	"VMEnabled,VMEmailOptions,VMPlayCallerID,SendEmailMissedCalls,EnableHotdesking," +
 	"Require2FA,HideInPhonebook,Internal,RecordCalls,CallScreening," +
-	"PbxDeliversAudio,BlockTunnel,AllowLanOnly,SRTPMode,Blfs"
+	"PbxDeliversAudio,BlockTunnel,AllowLanOnly,SRTPMode,Blfs," +
+	"EmergencyLocationId,EmergencyAdditionalInfo"
 
 // extensionExpand names the fields of each related record too, because an
 // expanded property's default projection can carry credentials: Phones without
@@ -299,6 +306,8 @@ type userDetail struct {
 	LanOnly        bool   `json:"AllowLanOnly"`
 	SRTPMode       string `json:"SRTPMode"`
 	Blfs           string `json:"Blfs"`
+	EmergencyID    string `json:"EmergencyLocationId"`
+	EmergencyInfo  string `json:"EmergencyAdditionalInfo"`
 	Phones         []struct {
 		Name      string `json:"Name"`
 		Template  string `json:"TemplateName"`
@@ -376,7 +385,7 @@ func (p *Plugin) getExtension(ctx context.Context, args extensionArgs) (Extensio
 		HiddenInPhonebook: u.Hidden, InternalCallsOnly: u.Internal, RecordCalls: u.RecordCalls,
 		CallScreening:    u.CallScreening,
 		PbxDeliversAudio: u.PbxAudio, BlockRemoteNonTunnel: u.BlockTunnel, LanOnly: u.LanOnly,
-		SRTP:   u.SRTPMode,
+		SRTP: u.SRTPMode, EmergencyInfo: u.EmergencyInfo,
 		Phones: []PhoneRow{}, Forwarding: []ForwardingRow{}, Keys: []KeyRow{},
 		WhyCallsMayNotLand: []string{},
 	}
@@ -395,6 +404,7 @@ func (p *Plugin) getExtension(ctx context.Context, args extensionArgs) (Extensio
 		out.Forwarding = append(out.Forwarding, forwardingRow(prof))
 	}
 	out.Keys = parseKeys(u.Blfs)
+	out.EmergencyLocation = p.emergencyLocationName(ctx, acct, u.EmergencyID)
 
 	if !u.Enabled {
 		out.WhyCallsMayNotLand = append(out.WhyCallsMayNotLand, "the extension is disabled, so it cannot be called at all")
@@ -594,4 +604,32 @@ func (p *Plugin) listDevices(ctx context.Context, args devicesArgs) (DevicesResu
 	acct.note(nil)
 	out.Customer = acct.name
 	return out, nil
+}
+
+// emergencyLocationName turns the id an extension carries into the name
+// somebody gave the place.
+//
+// The id alone says nothing to a reader, and whether emergency calls report
+// the right address is the sort of thing that is only ever checked after it
+// mattered. The id comes back unchanged when the lookup fails, which is worse
+// than a name and better than nothing.
+func (p *Plugin) emergencyLocationName(ctx context.Context, acct *account, id string) string {
+	if strings.TrimSpace(id) == "" {
+		return ""
+	}
+	type location struct {
+		ID           string `json:"Id"`
+		FriendlyName string `json:"FriendlyName"`
+	}
+	got, err := list[location](ctx, acct.client, "EmergencyGeoLocations",
+		url.Values{"$select": {"Id,FriendlyName"}}, 200)
+	if err != nil {
+		return id
+	}
+	for _, l := range got.Rows {
+		if l.ID == id {
+			return firstNonBlank(l.FriendlyName, id)
+		}
+	}
+	return id
 }

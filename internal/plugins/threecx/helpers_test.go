@@ -43,6 +43,11 @@ type fakePBX struct {
 	rejectToken atomic.Bool
 	// raw answers a path with bytes rather than JSON, for the bundle.
 	raw map[string]func(w http.ResponseWriter)
+	// absent are paths this phone system genuinely does not serve, answered
+	// 404 without failing the test. An unlisted path is still a mistake: the
+	// difference between "this build does not have it" and "a tool read
+	// something nobody meant it to" is the whole value of the fixture.
+	absent map[string]bool
 }
 
 func newFakePBX(t *testing.T, bodies map[string]string) (*fakePBX, *httptest.Server) {
@@ -90,6 +95,12 @@ func (f *fakePBX) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	body, ok := f.bodies[path]
 	if !ok {
+		if f.absent[path] {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":{"code":"","message":"this phone system does not offer that"}}`)
+			return
+		}
 		f.t.Errorf("unexpected read of %s", r.URL.RequestURI())
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -101,9 +112,13 @@ func (f *fakePBX) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // toolPlugin builds a plugin around a fake PBX serving one customer, Acme.
-func toolPlugin(t *testing.T, bodies map[string]string) (*Plugin, *fakePBX) {
+func toolPlugin(t *testing.T, bodies map[string]string, absent ...string) (*Plugin, *fakePBX) {
 	t.Helper()
 	f, srv := newFakePBX(t, bodies)
+	f.absent = map[string]bool{}
+	for _, path := range absent {
+		f.absent[path] = true
+	}
 	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
 	return p, f
 }

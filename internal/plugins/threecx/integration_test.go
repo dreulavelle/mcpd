@@ -117,6 +117,8 @@ func TestIntegration_EveryReadAnswers(t *testing.T) {
 		{"list_queues", func() error { _, err := p.listQueues(ctx, queuesArgs{}); return err }},
 		{"list_receptionists", func() error { _, err := p.listReceptionists(ctx, receptionistsArgs{}); return err }},
 		{"get_schedule", func() error { _, err := p.getSchedule(ctx, scheduleArgs{}); return err }},
+		{"list_blocked", func() error { _, err := p.listBlocked(ctx, blockedArgs{}); return err }},
+		{"list_sbcs", func() error { _, err := p.listSBCs(ctx, sbcArgs{}); return err }},
 		{"search_call_history", func() error {
 			_, err := p.searchCallHistory(ctx, callHistoryArgs{Since: "2020-01-01", Limit: 5})
 			return err
