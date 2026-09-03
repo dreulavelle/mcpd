@@ -18,10 +18,9 @@ import (
 // on it, so customers that must be kept apart go on separate instances.
 func Type() plugins.Type {
 	return plugins.Type{
-		Name:  "threecx",
-		Title: "3CX",
-		Description: "The 3CX v20 phone systems of one or more customers. Read-only; " +
-			"credentials the API would return are never requested.",
+		Name:        "threecx",
+		Title:       "3CX",
+		Description: "Your customers' 3CX phone systems, one row per business. Read-only.",
 		Settings: []settings.Field{
 			{
 				Key: "customers", Label: "Customers", Kind: settings.KindCollection,
