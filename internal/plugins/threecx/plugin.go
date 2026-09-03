@@ -147,21 +147,36 @@ func (p *Plugin) Start(ctx context.Context) error {
 		return nil
 	}
 
+	// Probed together rather than in turn: thirty customers at twenty seconds
+	// each is ten minutes of startup done one at a time, and none of them
+	// depends on another.
+	results := make([]string, len(p.accounts))
+	var wg sync.WaitGroup
+	for i, a := range p.accounts {
+		wg.Add(1)
+		go func(i int, a *account) {
+			defer wg.Done()
+			actx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
+			defer cancel()
+			info, err := a.client.Probe(actx)
+			a.note(err)
+			if err != nil {
+				results[i] = a.name + ": " + plugins.Explain(err).Error()
+				p.deps.Log.WarnContext(ctx, "3cx customer is not reachable", "customer", a.name, "error", err)
+				return
+			}
+			p.deps.Log.InfoContext(ctx, "3cx customer ready",
+				"customer", a.name, "reading", a.client.Describe(),
+				"fqdn", info.FQDN, "version", info.Version,
+				"extensions", info.ExtensionsTotal, "trunks", info.TrunksTotal)
+		}(i, a)
+	}
+	wg.Wait()
 	var failed []string
-	for _, a := range p.accounts {
-		actx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
-		info, err := a.client.Probe(actx)
-		cancel()
-		a.note(err)
-		if err != nil {
-			failed = append(failed, a.name+": "+plugins.Explain(err).Error())
-			p.deps.Log.WarnContext(ctx, "3cx customer is not reachable", "customer", a.name, "error", err)
-			continue
+	for _, r := range results {
+		if r != "" {
+			failed = append(failed, r)
 		}
-		p.deps.Log.InfoContext(ctx, "3cx customer ready",
-			"customer", a.name, "reading", a.client.Describe(),
-			"fqdn", info.FQDN, "version", info.Version,
-			"extensions", info.ExtensionsTotal, "trunks", info.TrunksTotal)
 	}
 	if len(failed) == len(p.accounts) {
 		return fmt.Errorf("3cx: no customer could be reached: %s", strings.Join(failed, "; "))
