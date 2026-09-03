@@ -79,7 +79,9 @@ var toolListBudget = map[string]int{
 	// handsets, its forwarding profiles and its key layout, and a status
 	// report carries the licence, the offline trunks and the stopped services
 	// -- and a flat row shape cannot say those without a nested array each.
-	"threecx": 28_000,
+	// Raised from 28,000 when the instance grew to serve several customers:
+	// every tool gained a customer argument and list_customers arrived.
+	"threecx": 32_000,
 }
 
 // budgetTotal bounds every plugin at once, which is what the aggregate
@@ -106,12 +108,12 @@ var toolListBudget = map[string]int{
 // six only for a host that mounted one of them, and nobody mounts one -- the
 // question "why is this number not receiving texts" crosses four.
 // Raised from 155,000 with the bandwidth expansion above and the arrival of
-// textable, and again to 210,000 when threecx arrived with sixteen tools.
+// textable, and again to 215,000 when threecx arrived with seventeen tools.
 // Nobody in practice mounts every integration -- a host with two is the
 // ordinary case -- so this bounds the worst arrangement rather than the
 // likely one, and it is the aggregate endpoint's cost for one credential scoped
 // to everything.
-const budgetTotal = 210_000
+const budgetTotal = 215_000
 
 func TestToolList_StaysWithinItsContextBudget(t *testing.T) {
 	h := allPluginsApp(t).Handler()
@@ -242,7 +244,8 @@ func allPluginsApp(t *testing.T) *App {
 		"textable": {Enabled: true, Settings: map[string]any{
 			"base_url": "https://textable.invalid", "api_key": "svc-token"}},
 		"threecx": {Enabled: true, Settings: map[string]any{
-			"host": "pbx.invalid", "extension": "100", "password": "p"}},
+			"customers": []any{map[string]any{
+				"name": "Acme", "host": "pbx.invalid", "extension": "100", "password": "p"}}}},
 	}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{
 		ID: "wildcard", SecretRef: "env:MCPD_TOKEN_WILDCARD",

@@ -54,9 +54,9 @@ type groupRecord struct {
 
 const groupFields = "Id,Name,Number,IsDefault,CurrentGroupHours,TimeZoneId,OverrideExpiresAt,Hours"
 
-func (p *Plugin) readGroups(ctx context.Context) ([]groupRecord, error) {
+func (p *Plugin) readGroups(ctx context.Context, acct *account) ([]groupRecord, error) {
 	q := url.Values{"$select": {groupFields}}
-	got, err := list[groupRecord](ctx, p.client, "Groups", q, p.cfg.MaxItems)
+	got, err := list[groupRecord](ctx, acct.client, "Groups", q, p.cfg.MaxItems)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +84,7 @@ func groupNames(groups []groupRecord) []string {
 }
 
 type scheduleArgs struct {
+	Customer   string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
 	Department string `json:"department,omitempty" jsonschema:"which department, by name or number; left out for the default one"`
 }
 
@@ -107,6 +108,9 @@ type HolidayRow struct {
 
 // Schedule is one department's hours and closures.
 type Schedule struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer   string `json:"customer"`
 	Department string `json:"department"`
 	Number     string `json:"number,omitempty"`
 	IsDefault  bool   `json:"is_default"`
@@ -127,12 +131,13 @@ type Schedule struct {
 }
 
 func (p *Plugin) getSchedule(ctx context.Context, args scheduleArgs) (Schedule, error) {
-	if err := p.ready(); err != nil {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return Schedule{}, err
 	}
-	groups, err := p.readGroups(ctx)
+	groups, err := p.readGroups(ctx, acct)
 	if err != nil {
-		return Schedule{}, p.call(err)
+		return Schedule{}, acct.call(err)
 	}
 	if len(groups) == 0 {
 		return Schedule{}, fmt.Errorf("this phone system reports no departments")
@@ -201,8 +206,8 @@ func (p *Plugin) getSchedule(ctx context.Context, args scheduleArgs) (Schedule, 
 		"$expand": {"OfficeHolidays($select=Id,Name,Day,Month,Year,DayEnd,MonthEnd,YearEnd," +
 			"TimeOfStartDate,TimeOfEndDate,IsRecurrent,HolidayPrompt)"},
 	}
-	if err := p.client.get(ctx, fmt.Sprintf("Groups(%d)", chosen.ID), hq, &g); err != nil {
-		return Schedule{}, p.call(err)
+	if err := acct.client.get(ctx, fmt.Sprintf("Groups(%d)", chosen.ID), hq, &g); err != nil {
+		return Schedule{}, acct.call(err)
 	}
 	for _, h := range g.OfficeHolidays {
 		row := HolidayRow{
@@ -222,8 +227,9 @@ func (p *Plugin) getSchedule(ctx context.Context, args scheduleArgs) (Schedule, 
 		return monthDay(out.Holidays[a].Starts) < monthDay(out.Holidays[b].Starts)
 	})
 
-	out.TimeZone = p.timeZoneName(ctx, chosen.TimeZoneID)
-	p.note(nil)
+	out.TimeZone = p.timeZoneName(ctx, acct, chosen.TimeZoneID)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
 
@@ -252,7 +258,7 @@ func forcedAs(mode string) string {
 // has heard of. 3CX keeps zones by number, which is meaningless on a screen
 // whose whole subject is what time things happen. The id comes back unchanged
 // when the lookup fails, which is worse than a name and better than nothing.
-func (p *Plugin) timeZoneName(ctx context.Context, id string) string {
+func (p *Plugin) timeZoneName(ctx context.Context, acct *account, id string) string {
 	if strings.TrimSpace(id) == "" {
 		return ""
 	}
@@ -262,7 +268,7 @@ func (p *Plugin) timeZoneName(ctx context.Context, id string) string {
 		IanaName string `json:"IanaName"`
 	}
 	q := url.Values{"$select": {"Id,Name,IanaName"}}
-	got, err := list[zone](ctx, p.client, "Defs/TimeZones", q, 500)
+	got, err := list[zone](ctx, acct.client, "Defs/TimeZones", q, 500)
 	if err != nil {
 		return id
 	}

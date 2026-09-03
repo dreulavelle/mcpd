@@ -43,15 +43,17 @@ type Client struct {
 	until time.Time
 }
 
-// NewClient builds a client. The credential is passed separately from the
-// config so that the Config the plugin retains can be free of it.
-func NewClient(hc *http.Client, cfg Config, extension, password string,
+// NewClient builds a client for one customer's phone system. The credential
+// is passed separately from the config so that the Config the plugin retains
+// can be free of it.
+func NewClient(hc *http.Client, cfg Config, host, extension, password string,
 	log *slog.Logger, now func() time.Time,
 	observe func(string, time.Duration)) *Client {
+	root := rootOf(host)
 	return &Client{
-		http:      readOnly(hc, cfg.root()),
+		http:      readOnly(hc, root),
 		cfg:       cfg,
-		root:      cfg.root(),
+		root:      root,
 		log:       log,
 		now:       now,
 		limiter:   rate.NewLimiter(rate.Limit(cfg.RequestsPerSecond), 1),

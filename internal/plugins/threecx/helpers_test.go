@@ -94,19 +94,30 @@ func (f *fakePBX) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, body)
 }
 
-// toolPlugin builds a plugin around a fake PBX.
+// toolPlugin builds a plugin around a fake PBX serving one customer, Acme.
 func toolPlugin(t *testing.T, bodies map[string]string) (*Plugin, *fakePBX) {
 	t.Helper()
 	f, srv := newFakePBX(t, bodies)
-	p, err := New(testDeps(), Config{Host: srv.URL, Extension: "100", Password: "right-password"})
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	return p, f
+}
+
+// pluginFor builds a plugin over the given customers, every one of them
+// reached through the fake server's own client so its certificate is trusted.
+func pluginFor(t *testing.T, hc *http.Client, customers ...Customer) *Plugin {
+	t.Helper()
+	p, err := New(testDeps(), Config{Customers: customers})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The fake server's own client trusts its certificate; the plugin's guard
-	// wraps whatever transport it is given.
-	p.client.http = readOnly(srv.Client(), p.cfg.root())
-	return p, f
+	for _, a := range p.accounts {
+		a.client.http = readOnly(hc, a.host)
+	}
+	return p
 }
+
+// firstClient is the one customer's client, for tests about the client itself.
+func firstClient(p *Plugin) *Client { return p.accounts[0].client }
 
 // collection wraps rows as an OData collection response, with a count.
 func collection(count int, rows ...string) string {

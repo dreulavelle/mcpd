@@ -72,7 +72,9 @@ func memberTexts(members []member) []string {
 
 // --- ring groups ---------------------------------------------------------------
 
-type ringGroupsArgs struct{}
+type ringGroupsArgs struct {
+	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+}
 
 // RingGroupRow is one ring group.
 type RingGroupRow struct {
@@ -87,13 +89,17 @@ type RingGroupRow struct {
 
 // RingGroupsResult is the ring group list.
 type RingGroupsResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer   string         `json:"customer"`
 	RingGroups []RingGroupRow `json:"ring_groups"`
 	Returned   int            `json:"returned"`
 	truncation
 }
 
-func (p *Plugin) listRingGroups(ctx context.Context, _ ringGroupsArgs) (RingGroupsResult, error) {
-	if err := p.ready(); err != nil {
+func (p *Plugin) listRingGroups(ctx context.Context, args ringGroupsArgs) (RingGroupsResult, error) {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return RingGroupsResult{}, err
 	}
 	type record struct {
@@ -110,9 +116,9 @@ func (p *Plugin) listRingGroups(ctx context.Context, _ ringGroupsArgs) (RingGrou
 		"$expand":  {"Members($select=Id,Number,Name)"},
 		"$orderby": {"Number"},
 	}
-	got, err := list[record](ctx, p.client, "RingGroups", q, p.cfg.MaxItems)
+	got, err := list[record](ctx, acct.client, "RingGroups", q, p.cfg.MaxItems)
 	if err != nil {
-		return RingGroupsResult{}, p.call(err)
+		return RingGroupsResult{}, acct.call(err)
 	}
 	out := RingGroupsResult{RingGroups: make([]RingGroupRow, 0, len(got.Rows))}
 	for _, g := range got.Rows {
@@ -123,13 +129,16 @@ func (p *Plugin) listRingGroups(ctx context.Context, _ ringGroupsArgs) (RingGrou
 	}
 	out.RingGroups, out.truncation = bound(out.RingGroups, got.Truncated)
 	out.Returned = len(out.RingGroups)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
 
 // --- queues ----------------------------------------------------------------------
 
-type queuesArgs struct{}
+type queuesArgs struct {
+	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+}
 
 // QueueRow is one call queue.
 type QueueRow struct {
@@ -148,13 +157,17 @@ type QueueRow struct {
 
 // QueuesResult is the queue list.
 type QueuesResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer string     `json:"customer"`
 	Queues   []QueueRow `json:"queues"`
 	Returned int        `json:"returned"`
 	truncation
 }
 
-func (p *Plugin) listQueues(ctx context.Context, _ queuesArgs) (QueuesResult, error) {
-	if err := p.ready(); err != nil {
+func (p *Plugin) listQueues(ctx context.Context, args queuesArgs) (QueuesResult, error) {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return QueuesResult{}, err
 	}
 	type record struct {
@@ -175,9 +188,9 @@ func (p *Plugin) listQueues(ctx context.Context, _ queuesArgs) (QueuesResult, er
 		"$expand":  {"Agents($select=Id,Number,Name,SkillGroup),Managers($select=Id,Number,Name)"},
 		"$orderby": {"Number"},
 	}
-	got, err := list[record](ctx, p.client, "Queues", q, p.cfg.MaxItems)
+	got, err := list[record](ctx, acct.client, "Queues", q, p.cfg.MaxItems)
 	if err != nil {
-		return QueuesResult{}, p.call(err)
+		return QueuesResult{}, acct.call(err)
 	}
 	out := QueuesResult{Queues: make([]QueueRow, 0, len(got.Rows))}
 	for _, qu := range got.Rows {
@@ -190,13 +203,16 @@ func (p *Plugin) listQueues(ctx context.Context, _ queuesArgs) (QueuesResult, er
 	}
 	out.Queues, out.truncation = bound(out.Queues, got.Truncated)
 	out.Returned = len(out.Queues)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
 
 // --- digital receptionists ------------------------------------------------------
 
-type receptionistsArgs struct{}
+type receptionistsArgs struct {
+	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+}
 
 // ReceptionistRow is one digital receptionist.
 type ReceptionistRow struct {
@@ -213,13 +229,17 @@ type ReceptionistRow struct {
 
 // ReceptionistsResult is the receptionist list.
 type ReceptionistsResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer      string            `json:"customer"`
 	Receptionists []ReceptionistRow `json:"receptionists"`
 	Returned      int               `json:"returned"`
 	truncation
 }
 
-func (p *Plugin) listReceptionists(ctx context.Context, _ receptionistsArgs) (ReceptionistsResult, error) {
-	if err := p.ready(); err != nil {
+func (p *Plugin) listReceptionists(ctx context.Context, args receptionistsArgs) (ReceptionistsResult, error) {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return ReceptionistsResult{}, err
 	}
 	type record struct {
@@ -242,9 +262,9 @@ func (p *Plugin) listReceptionists(ctx context.Context, _ receptionistsArgs) (Re
 		"$expand":  {"Forwards($select=Id,Input,ForwardType,ForwardDN)"},
 		"$orderby": {"Number"},
 	}
-	got, err := list[record](ctx, p.client, "Receptionists", q, p.cfg.MaxItems)
+	got, err := list[record](ctx, acct.client, "Receptionists", q, p.cfg.MaxItems)
 	if err != nil {
-		return ReceptionistsResult{}, p.call(err)
+		return ReceptionistsResult{}, acct.call(err)
 	}
 	out := ReceptionistsResult{Receptionists: make([]ReceptionistRow, 0, len(got.Rows))}
 	for _, r := range got.Rows {
@@ -260,7 +280,8 @@ func (p *Plugin) listReceptionists(ctx context.Context, _ receptionistsArgs) (Re
 	}
 	out.Receptionists, out.truncation = bound(out.Receptionists, got.Truncated)
 	out.Returned = len(out.Receptionists)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
 
