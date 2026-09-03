@@ -198,9 +198,9 @@ export function Shell({ badges, onSignOut, onSearch, version, children }: {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeDrawer = useCallback(() => setDrawerOpen(false), []);
   const { path } = useRouter();
-  // A settings page carries its own rail down the left, and a rail inside
-  // a centred column floats in the middle of a wide screen. Those pages
-  // take the whole width and cap the page themselves, beside the rail.
+  // A settings page carries its own rail down the left, so its column is
+  // wider than the others' to leave the page beside the rail the same room
+  // every other page has. Still centred: every page sits the same way.
   const wide = isSettingsTab(path);
 
   return (
@@ -267,7 +267,7 @@ export function Shell({ badges, onSignOut, onSearch, version, children }: {
         </header>
 
         <main id="content" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 outline-none lg:px-8 lg:py-8">
-          <div className={wide ? "max-w-none" : "mx-auto max-w-6xl"}>
+          <div className={wide ? "mx-auto max-w-[88rem]" : "mx-auto max-w-6xl"}>
             {/* Above the page rather than inside one, because the failure this
                 guards against is somebody opening a window and forgetting. */}
             <BypassBanner />
