@@ -97,7 +97,7 @@ the plugin's start.
 
 ## The tools
 
-Nineteen reads, in eight groups, split by the question a technician is asking:
+Twenty-one reads, in nine groups, split by the question a technician is asking:
 
 | | |
 |---|---|
@@ -108,6 +108,7 @@ Nineteen reads, in eight groups, split by the question a technician is asking:
 | `list_trunks`, `list_inbound_rules`, `list_outbound_rules`, `search_directory` | where numbers come in, where they ring, how calls go out, what a number is |
 | `list_ring_groups`, `list_queues`, `list_receptionists` | the things a call can land on that are not a person |
 | `get_schedule` | one department's office hours, holidays, time zone and whether somebody forced it open or closed |
+| `list_blocked`, `list_sbcs` | what the system is refusing, and whether a remote site is connected |
 | `search_call_history` | did the call happen, and what became of it |
 | `aggregate_support_bundle`, `get_support_bundle_report` | the support bundle, read into a digest; a last resort |
 
@@ -312,6 +313,45 @@ console calls is outside `/xapi/v1`. Offering "capture for three minutes"
 would mean finding that endpoint by watching the console, and it would be a
 write in the sense that matters -- it starts a process on the PBX -- so it
 belongs with the mutations when those come, not on the read side.
+
+## Two tickets that leave no other trace
+
+A handset away from the office stops registering, and nothing on the extension
+says why: 3CX's anti-hacking protection blacklisted the address it calls from
+after a burst of failed registrations, usually its own. A customer says one of
+their callers cannot reach them, and the call history shows nothing, because a
+call refused by the blocked-caller list is never recorded as having arrived.
+Neither is visible from the extension, the trunk or the history, which is why
+each of them costs somebody an afternoon.
+
+`list_blocked` answers both: the blocklist with who added each entry and why,
+allow entries after the blocks because they explain why one address is fine
+while its neighbour is not, and the blocked caller IDs. A phone system that
+will not serve the caller list still answers with the addresses, which are the
+half usually being looked for.
+
+`list_sbcs` is the same question one level up: whether a whole site is
+reachable rather than one extension. It reports SBCs and remote handsets with
+whether each is connected now; the entity carries a password and a
+provisioning link, and neither is asked for.
+
+`get_extension` reports the emergency location, resolved to the name somebody
+gave the place. An extension with none set carries nothing, which is the
+finding: its emergency call reports the site's default address wherever the
+person actually is.
+
+## What the API does not offer
+
+Worth writing down, because each looked available and is not. The **audit
+log** (`/AuditLog`) and the **activity log** (`/ActivityLog`) answer 404 on
+20.0.9, so "who changed this setting" is only reachable through the support
+bundle, which carries the audit table as CSV. The **update** functions
+(`GetUpdates`, `GetUpdateSettings`, `HasDebianUpgrade`) 404 too. Every
+**queue and agent report** entity set -- `QueuePerformanceOverview`,
+`AgentLoginHistory`, `ReportCallLogData` and the rest -- 404s whether called
+as a set or as the parameterised function the metadata describes, so queue
+statistics are not available over this API. `Firewall` answers, with nothing
+in it but two booleans and an HTML blob.
 
 ## What is cached, and what is never
 

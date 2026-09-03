@@ -57,6 +57,13 @@ type rule struct {
 //
 // Every entry is a GET. Grouped by the question a tool asks.
 var allowed = []rule{
+	// Who is shut out, and what is standing between a remote handset and the
+	// system.
+	{regexp.MustCompile(`^Blocklist$`), "listing blocked and allowed addresses", false},
+	{regexp.MustCompile(`^BlackListNumbers$`), "listing blocked caller IDs", false},
+	{regexp.MustCompile(`^Sbcs$`), "listing session border controllers", false},
+	{regexp.MustCompile(`^EmergencyGeoLocations$`), "naming an emergency location", false},
+
 	// What state the system is in.
 	{regexp.MustCompile(`^SystemStatus$`), "reading the system's status", false},
 	{regexp.MustCompile(`^LicenseStatus$`), "reading the licence", false},

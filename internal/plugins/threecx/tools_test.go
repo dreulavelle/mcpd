@@ -640,3 +640,126 @@ func TestHelpers_DestinationsAndDurations(t *testing.T) {
 		}
 	}
 }
+
+// The two things a phone system refuses without leaving any other trace: an
+// address its anti-hacking protection blacklisted, and a caller ID somebody
+// blocked. Blocks come before allow entries, and the counts are of everything
+// the system holds rather than of what a query returned.
+func TestListBlocked_AddressesAndCallers(t *testing.T) {
+	fx := acmeFixtures()
+	fx["Blocklist"] = collection(3,
+		`{"Id":1,"IPAddrMask":"203.0.113.10","BlockType":"Allow","AddedBy":"Manual","Description":"Created by PBX Express","ExpiresAt":"2046-08-16T20:58:16Z"}`,
+		`{"Id":2,"IPAddrMask":"198.51.100.0/24","BlockType":"Block","AddedBy":"AutoBlacklist","Description":"Blacklisted by 3CX","ExpiresAt":"2040-12-31T00:00:00Z"}`,
+		`{"Id":3,"IPAddrMask":"192.0.2.7","BlockType":"Block","AddedBy":"Manual","Description":"Noisy scanner","ExpiresAt":"2027-01-01T00:00:00Z"}`)
+	fx["BlackListNumbers"] = collection(1, `{"Id":"1","CallerId":"+15555550100","Description":"Persistent spam"}`)
+	p, _ := toolPlugin(t, fx)
+
+	res, err := p.listBlocked(context.Background(), blockedArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Customer != "Acme" || res.BlockedAddresses != 2 || res.AllowedAddresses != 1 || res.BlockedCallers != 1 {
+		t.Errorf("counts: %+v", res)
+	}
+	if len(res.Addresses) != 3 || !res.Addresses[0].Blocked || !res.Addresses[1].Blocked || res.Addresses[2].Blocked {
+		t.Errorf("blocks should come before allow entries: %+v", res.Addresses)
+	}
+	if res.Addresses[0].AddedBy != "AutoBlacklist" || res.Addresses[0].Reason != "Blacklisted by 3CX" {
+		t.Errorf("an auto-blacklisted address should say who added it and why: %+v", res.Addresses[0])
+	}
+	if len(res.Callers) != 1 || res.Callers[0].CallerID != "+15555550100" {
+		t.Errorf("callers: %+v", res.Callers)
+	}
+
+	// A query narrows what comes back and leaves the counts alone.
+	narrowed, err := p.listBlocked(context.Background(), blockedArgs{Query: "scanner"})
+	if err != nil || len(narrowed.Addresses) != 1 || narrowed.Addresses[0].Address != "192.0.2.7" {
+		t.Errorf("narrowing: %+v %v", narrowed.Addresses, err)
+	}
+	if narrowed.BlockedAddresses != 2 {
+		t.Errorf("the counts describe the system, not the query: %+v", narrowed)
+	}
+}
+
+// A phone system that will not serve the caller-ID list still answers with the
+// addresses, which are the half somebody is usually looking for.
+func TestListBlocked_SurvivesAMissingCallerList(t *testing.T) {
+	fx := acmeFixtures()
+	fx["Blocklist"] = collection(1, `{"Id":1,"IPAddrMask":"192.0.2.7","BlockType":"Block","AddedBy":"Manual","Description":"x"}`)
+	p, _ := toolPlugin(t, fx, "BlackListNumbers")
+	res, err := p.listBlocked(context.Background(), blockedArgs{})
+	if err != nil {
+		t.Fatalf("the addresses should still be answered: %v", err)
+	}
+	if len(res.Addresses) != 1 || len(res.Callers) != 0 || res.BlockedCallers != 0 {
+		t.Errorf("%+v", res)
+	}
+}
+
+// SBCs are named the way somebody named them, and the disconnected ones are
+// counted because that is the question being asked.
+func TestListSBCs_ReportsConnectivity(t *testing.T) {
+	fx := acmeFixtures()
+	fx["Sbcs"] = collection(2,
+		`{"Name":"sbc-aaaa1111","DisplayName":"Branch office SBC","HasConnection":true,"Version":"20.1","Group":"","PhoneMAC":"","Password":"`+sipPassword+`"}`,
+		`{"Name":"sbc-bbbb2222","DisplayName":"","HasConnection":false,"Group":"GRP0000","PhoneMAC":"805EC0AABBCD"}`)
+	p, f := toolPlugin(t, fx)
+	res, err := p.listSBCs(context.Background(), sbcArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustNotContain(t, res, credentialWords...)
+	if res.Returned != 2 || res.Disconnected != 1 {
+		t.Errorf("counts: %+v", res)
+	}
+	if res.SBCs[0].Name != "Branch office SBC" || !res.SBCs[0].Connected {
+		t.Errorf("an SBC should read by its display name: %+v", res.SBCs[0])
+	}
+	if res.SBCs[1].Name != "sbc-bbbb2222" || res.SBCs[1].MAC != "805EC0AABBCD" {
+		t.Errorf("an unnamed remote handset falls back to its identifier: %+v", res.SBCs[1])
+	}
+	last := f.seen[len(f.seen)-1]
+	if strings.Contains(strings.ToLower(last), "password") || strings.Contains(strings.ToLower(last), "provisionlink") {
+		t.Errorf("the request asked for a credential: %s", last)
+	}
+}
+
+// An extension's emergency location is resolved to the name somebody gave the
+// place, and an extension with none set says so by carrying nothing.
+func TestGetExtension_EmergencyLocation(t *testing.T) {
+	fx := acmeFixtures()
+	fx["Users"] = collection(1, userRecord("101", "Bob", true, 191,
+		`,"EmergencyLocationId":"loc-2","EmergencyAdditionalInfo":"Second floor, east wing"`))
+	fx["EmergencyGeoLocations"] = collection(2,
+		`{"Id":"loc-1","FriendlyName":"Head office"}`, `{"Id":"loc-2","FriendlyName":"Docklands site"}`)
+	p, _ := toolPlugin(t, fx)
+
+	e, err := p.getExtension(context.Background(), extensionArgs{Extension: "101"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.EmergencyLocation != "Docklands site" || e.EmergencyInfo != "Second floor, east wing" {
+		t.Errorf("emergency location: %q %q", e.EmergencyLocation, e.EmergencyInfo)
+	}
+
+	// An id the phone system will not name comes back as the id: worse than a
+	// name, better than nothing.
+	fx["EmergencyGeoLocations"] = collection(0)
+	p, _ = toolPlugin(t, fx)
+	if e, _ := p.getExtension(context.Background(), extensionArgs{Extension: "101"}); e.EmergencyLocation != "loc-2" {
+		t.Errorf("an unresolvable id should survive, got %q", e.EmergencyLocation)
+	}
+
+	// None set is the finding, and it costs no lookup.
+	fx["Users"] = collection(1, userRecord("102", "Carol", true, 191, ""))
+	p, f := toolPlugin(t, fx)
+	e, err = p.getExtension(context.Background(), extensionArgs{Extension: "102"})
+	if err != nil || e.EmergencyLocation != "" {
+		t.Errorf("no location set should read as nothing: %q %v", e.EmergencyLocation, err)
+	}
+	for _, seen := range f.seen {
+		if strings.Contains(seen, "EmergencyGeoLocations") {
+			t.Error("an extension with no location should not be looked up")
+		}
+	}
+}
