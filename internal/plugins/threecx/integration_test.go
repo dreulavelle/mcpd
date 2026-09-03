@@ -149,3 +149,49 @@ func TestIntegration_Schedule(t *testing.T) {
 		t.Error("an unknown department should be refused")
 	}
 }
+
+// The support bundle, end to end against the live system: started, polled to
+// completion, and read as a digest that names the system and carries no zip.
+func TestIntegration_SupportBundle(t *testing.T) {
+	p := integrationPlugin(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	st, err := p.startBundle(ctx, startBundleArgs{})
+	if err != nil {
+		t.Fatalf("aggregate_support_bundle: %v", err)
+	}
+	if st.State != "running" {
+		t.Fatalf("expected a running job, got %+v", st)
+	}
+	var r BundleReport
+	for {
+		r, err = p.bundleReport(ctx, bundleReportArgs{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.State != "running" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the capture did not finish in time")
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if r.State != "done" {
+		t.Fatalf("capture: %+v", r)
+	}
+	if r.System == nil || r.System.Version == "" {
+		t.Errorf("the digest should name the system version: %+v", r.System)
+	}
+	t.Logf("bundle: version %s, %d findings, %d health checks, %d event groups, %d edits",
+		r.System.Version, r.Counts.Findings, r.Counts.Health, r.Counts.Events, r.Counts.Changes)
+	for _, f := range r.Findings {
+		t.Logf("  [%s] %s", f.Severity, f.Title)
+	}
+	files, err := p.bundleReport(ctx, bundleReportArgs{Section: "files"})
+	if err != nil || len(files.Files) == 0 {
+		t.Errorf("the files section should list what was read: %+v %v", files.Files, err)
+	}
+}

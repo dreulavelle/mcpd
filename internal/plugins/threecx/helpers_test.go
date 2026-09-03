@@ -41,6 +41,8 @@ type fakePBX struct {
 	// rejectToken makes reads answer 401 until the next sign-in, to exercise
 	// the re-login path.
 	rejectToken atomic.Bool
+	// raw answers a path with bytes rather than JSON, for the bundle.
+	raw map[string]func(w http.ResponseWriter)
 }
 
 func newFakePBX(t *testing.T, bodies map[string]string) (*fakePBX, *httptest.Server) {
@@ -76,12 +78,16 @@ func (f *fakePBX) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
+	path := strings.TrimPrefix(r.URL.Path, apiPrefix)
+	if serve, ok := f.raw[path]; ok {
+		serve(w)
+		return
+	}
 	if r.URL.Query().Get("$select") == "" {
 		f.t.Errorf("a read reached the fake PBX with no $select: %s", r.URL.RequestURI())
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, apiPrefix)
 	body, ok := f.bodies[path]
 	if !ok {
 		f.t.Errorf("unexpected read of %s", r.URL.RequestURI())

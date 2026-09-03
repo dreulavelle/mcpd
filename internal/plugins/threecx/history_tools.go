@@ -22,12 +22,8 @@ func (p *Plugin) registerHistoryTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "search_call_history",
 		Title: "Search call records",
-		Description: "Call records, newest first: who rang, who it reached, " +
-			"whether it was answered and for how long. Filter by extension, by " +
-			"phone number (partial matches count), by time window, or to " +
-			"missed calls only. This is the tool for any question about " +
-			"whether a call happened or what became of it. A call that passed " +
-			"through several places appears once per leg.",
+		Description: "Call records, newest first, one row per leg: who rang, who " +
+			"answered, how long. Filter by extension, number, time window or missed only.",
 		Idempotent: true,
 	}, p.searchCallHistory)
 }

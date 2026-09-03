@@ -46,6 +46,10 @@ type rule struct {
 	// why is quoted back in a refusal, so a reader of the error learns what the
 	// path is for rather than only that it is not allowed.
 	why string
+	// raw marks the one endpoint that is a file rather than an entity: the
+	// support bundle zip. There is nothing to project, so $select is not
+	// required of it -- and nothing else may claim this exemption.
+	raw bool
 }
 
 // allowed is the complete set of OData reads this integration may make.
@@ -54,35 +58,40 @@ type rule struct {
 // Every entry is a GET. Grouped by the question a tool asks.
 var allowed = []rule{
 	// What state the system is in.
-	{regexp.MustCompile(`^SystemStatus$`), "reading the system's status"},
-	{regexp.MustCompile(`^LicenseStatus$`), "reading the licence"},
-	{regexp.MustCompile(`^Services$`), "listing the system's own services"},
-	{regexp.MustCompile(`^ActiveCalls$`), "listing calls in progress"},
-	{regexp.MustCompile(`^EventLogs$`), "searching the event log"},
+	{regexp.MustCompile(`^SystemStatus$`), "reading the system's status", false},
+	{regexp.MustCompile(`^LicenseStatus$`), "reading the licence", false},
+	{regexp.MustCompile(`^Services$`), "listing the system's own services", false},
+	{regexp.MustCompile(`^ActiveCalls$`), "listing calls in progress", false},
+	{regexp.MustCompile(`^EventLogs$`), "searching the event log", false},
 
 	// Extensions and the handsets on them.
-	{regexp.MustCompile(`^Users$`), "listing extensions"},
-	{regexp.MustCompile(`^Users\(\d+\)$`), "reading one extension"},
-	{regexp.MustCompile(`^DeviceInfos$`), "listing provisioned handsets"},
+	{regexp.MustCompile(`^Users$`), "listing extensions", false},
+	{regexp.MustCompile(`^Users\(\d+\)$`), "reading one extension", false},
+	{regexp.MustCompile(`^DeviceInfos$`), "listing provisioned handsets", false},
 
 	// Where calls come in and go out.
-	{regexp.MustCompile(`^Trunks$`), "listing trunks and their numbers"},
-	{regexp.MustCompile(`^InboundRules$`), "listing where each number rings"},
-	{regexp.MustCompile(`^OutboundRules$`), "listing outbound dialling rules"},
-	{regexp.MustCompile(`^Peers$`), "listing everything that has a number"},
+	{regexp.MustCompile(`^Trunks$`), "listing trunks and their numbers", false},
+	{regexp.MustCompile(`^InboundRules$`), "listing where each number rings", false},
+	{regexp.MustCompile(`^OutboundRules$`), "listing outbound dialling rules", false},
+	{regexp.MustCompile(`^Peers$`), "listing everything that has a number", false},
 
 	// The things a call can land on.
-	{regexp.MustCompile(`^RingGroups$`), "listing ring groups"},
-	{regexp.MustCompile(`^Queues$`), "listing call queues"},
-	{regexp.MustCompile(`^Receptionists$`), "listing digital receptionists"},
+	{regexp.MustCompile(`^RingGroups$`), "listing ring groups", false},
+	{regexp.MustCompile(`^Queues$`), "listing call queues", false},
+	{regexp.MustCompile(`^Receptionists$`), "listing digital receptionists", false},
 
 	// When the business is open.
-	{regexp.MustCompile(`^Groups$`), "listing departments"},
-	{regexp.MustCompile(`^Groups\(\d+\)$`), "reading one department's schedule"},
-	{regexp.MustCompile(`^Defs/TimeZones$`), "naming a time zone"},
+	{regexp.MustCompile(`^Groups$`), "listing departments", false},
+	{regexp.MustCompile(`^Groups\(\d+\)$`), "reading one department's schedule", false},
+	{regexp.MustCompile(`^Defs/TimeZones$`), "naming a time zone", false},
 
 	// What happened.
-	{regexp.MustCompile(`^CallHistoryView$`), "searching call records"},
+	{regexp.MustCompile(`^CallHistoryView$`), "searching call records", false},
+
+	// The support bundle: the same zip the console's "collect support info"
+	// button produces. A file, not an entity, so it is the one read that
+	// carries no $select; it is read into a digest and never returned whole.
+	{regexp.MustCompile(`^SupportInfo$`), "collecting a support bundle", true},
 }
 
 // refusedFields are property names that must never be requested, whatever
@@ -181,6 +190,9 @@ func (g guard) RoundTrip(req *http.Request) (*http.Response, error) {
 			"be added to it deliberately", path)
 	}
 
+	if matched.raw {
+		return g.roundTrip(req)
+	}
 	if err := checkProjection(req.URL.Query()); err != nil {
 		return nil, fmt.Errorf("3cx: refusing GET %s (%s): %w", path, matched.why, err)
 	}

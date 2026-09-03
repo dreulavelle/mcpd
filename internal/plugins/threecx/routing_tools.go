@@ -23,43 +23,32 @@ func (p *Plugin) registerRoutingTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_trunks",
 		Title: "List trunks",
-		Description: "The trunks the phone system carries calls on: provider, " +
-			"host, whether each is registered, the DID numbers it answers on, " +
-			"how many of those actually route somewhere, and any number that " +
-			"appears on more than one trunk. Use it to find which trunk a " +
-			"number belongs to, or whether calls can come in at all.",
+		Description: "Trunks: provider, host, registration, the DIDs on each, how " +
+			"many route somewhere, and any DID on more than one trunk.",
 		Idempotent: true,
 	}, p.listTrunks)
 
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_inbound_rules",
 		Title: "List inbound rules",
-		Description: "Where each DID number rings: the destination during office " +
-			"hours, out of hours and on holidays, per trunk. This is the tool " +
-			"for 'who gets calls to this number' and 'why does this number go " +
-			"to the wrong place'. Narrow to one number or one trunk.",
+		Description: "Where each DID rings in office hours, out of hours and on " +
+			"holidays, per trunk. Narrow to one number or trunk.",
 		Idempotent: true,
 	}, p.listInboundRules)
 
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_outbound_rules",
 		Title: "List outbound rules",
-		Description: "How dialled numbers leave the phone system: each rule's " +
-			"prefix and number-length match, which extensions and departments " +
-			"it applies to, and the trunks it tries in order with any digits " +
-			"stripped or prepended. This is the tool for 'why can't they dial " +
-			"out' and 'which trunk does this call use'.",
+		Description: "Outbound rules: prefix and length match, who may use each, " +
+			"and the trunks tried in order with digits stripped or prepended.",
 		Idempotent: true,
 	}, p.listOutboundRules)
 
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "search_directory",
 		Title: "Search everything that has a number",
-		Description: "Finds what a number or name is on this phone system: an " +
-			"extension, a queue, a ring group, a digital receptionist, a " +
-			"conference room, a parking spot. 3CX numbers all of them out of " +
-			"one plan, so this is how to tell what 800 is before reading it " +
-			"with the tool for that kind of thing.",
+		Description: "What a number or name is: extension, queue, ring group, " +
+			"receptionist, conference or parking spot.",
 		Idempotent: true,
 	}, p.searchDirectory)
 }

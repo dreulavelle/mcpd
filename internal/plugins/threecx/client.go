@@ -391,3 +391,65 @@ type systemInfo struct {
 	ExtensionsTotal int    `json:"ExtensionsTotal"`
 	TrunksTotal     int    `json:"TrunksTotal"`
 }
+
+// maxBundle is the largest support bundle that will be read. Real ones run
+// from a few megabytes to forty; a hundred leaves room for a big site without
+// letting one phone system spend all the memory this process has.
+const maxBundle = 100 << 20
+
+// fetchBundle downloads a support bundle.
+//
+// The PBX builds the zip on request, walking its logs first, which on a large
+// site takes minutes -- so this ignores the client's ordinary timeout and lets
+// the caller's context bound it. Held in memory rather than spooled to disk: a
+// zip needs random access to be read at all, and a temporary file of
+// somebody's logs is a thing to clean up and eventually fail to.
+func (c *Client) fetchBundle(ctx context.Context) ([]byte, error) {
+	token, err := c.bearer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.limiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("3cx: waiting to collect the bundle: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.root+apiPrefix+"SupportInfo", nil)
+	if err != nil {
+		return nil, fmt.Errorf("3cx: building the bundle request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/zip, application/octet-stream")
+
+	patient := *c.http
+	patient.Timeout = 0
+	started := c.now()
+	resp, err := patient.Do(req)
+	if err != nil {
+		c.observe("error", c.now().Sub(started))
+		return nil, fmt.Errorf("3cx: could not reach %s for the bundle: %w", c.root, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		c.observe("error", c.now().Sub(started))
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("3cx: this phone system does not offer a support bundle " +
+				"over the API (HTTP 404); it may be an older build than v20")
+		}
+		return nil, explainRequestFailure(resp.StatusCode, "SupportInfo", raw)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBundle+1))
+	elapsed := c.now().Sub(started)
+	if err != nil {
+		c.observe("error", elapsed)
+		return nil, fmt.Errorf("3cx: reading the bundle: %w", err)
+	}
+	if len(raw) > maxBundle {
+		c.observe("error", elapsed)
+		return nil, fmt.Errorf("3cx: the support bundle is larger than %d MB, which is more "+
+			"than this integration will hold in memory", maxBundle>>20)
+	}
+	c.observe("ok", elapsed)
+	c.log.DebugContext(ctx, "3cx support bundle collected", "bytes", len(raw), "took", elapsed)
+	return raw, nil
+}

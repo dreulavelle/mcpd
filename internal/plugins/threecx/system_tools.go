@@ -21,42 +21,30 @@ func (p *Plugin) registerSystemTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "get_system_status",
 		Title: "Get system status",
-		Description: "Whether the phone system is healthy: how many extensions " +
-			"and trunks are registered against how many exist, which trunks " +
-			"are offline, which services are not running, calls in progress, " +
-			"disk, backups, and the licence with its expiry. Use this first " +
-			"for any phone problem; most are a trunk or a handset that is not " +
-			"registered, and the concerns field says so in words.",
+		Description: "Registration counts, offline trunks, stopped services, disk, " +
+			"backups and licence, with the concerns said in words. Start here.",
 		Idempotent: true,
 	}, p.getSystemStatus)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "list_services",
-		Title: "List system services",
-		Description: "The phone system's own services and whether each is " +
-			"running. Reach for it when get_system_status reports a service " +
-			"not running, to see which.",
-		Idempotent: true,
+		Name:        "list_services",
+		Title:       "List system services",
+		Description: "The phone system's own services and whether each is running.",
+		Idempotent:  true,
 	}, p.listServices)
 
 	plugins.Tool(r, plugins.ToolSpec{
-		Name:  "list_active_calls",
-		Title: "List calls in progress",
-		Description: "Calls on the phone system right now: who is talking to " +
-			"whom and since when. Use it to answer whether anything is going " +
-			"through at this moment.",
-		Idempotent: true,
+		Name:        "list_active_calls",
+		Title:       "List calls in progress",
+		Description: "Calls in progress right now: who is talking to whom and since when.",
+		Idempotent:  true,
 	}, p.listActiveCalls)
 
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "search_events",
 		Title: "Search the event log",
-		Description: "The phone system's event log: failed registrations, trunk " +
-			"status changes, licence warnings, service problems. Newest first. " +
-			"Give a query to have the phone system search for lines mentioning " +
-			"an extension, a trunk or a phrase from an error; narrow by " +
-			"severity, source or time. Use it to find out when something " +
-			"started, or why.",
+		Description: "The event log, newest first: registrations, trunk status, " +
+			"licence and service problems. Query, severity, source and time narrow it.",
 		Idempotent: true,
 	}, p.searchEvents)
 }

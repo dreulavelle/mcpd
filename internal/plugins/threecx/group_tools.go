@@ -17,29 +17,24 @@ func (p *Plugin) registerGroupTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_ring_groups",
 		Title: "List ring groups",
-		Description: "The ring groups on the phone system: each one's number, " +
-			"name, how it rings (all at once, hunt, paging), for how long, " +
-			"who is in it, and where an unanswered call goes.",
+		Description: "Ring groups: number, name, strategy, ring time, members, " +
+			"and where an unanswered call goes.",
 		Idempotent: true,
 	}, p.listRingGroups)
 
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_queues",
 		Title: "List call queues",
-		Description: "The call queues: each one's number, name, polling " +
-			"strategy, ring and maximum wait times, the agents and managers " +
-			"in it, and where a call goes when nobody answers. Use it with " +
-			"get_extension's queue_status to find out why queue calls skip " +
-			"somebody.",
+		Description: "Call queues: number, name, strategy, ring and wait times, " +
+			"agents, managers, and where an unanswered call goes.",
 		Idempotent: true,
 	}, p.listQueues)
 
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_receptionists",
 		Title: "List digital receptionists",
-		Description: "The digital receptionists (auto attendants / IVRs): each " +
-			"one's number, name, prompt, what each key press does, and where " +
-			"a caller who presses nothing ends up.",
+		Description: "Digital receptionists (IVRs): number, name, prompt, what " +
+			"each key does, and where a caller who presses nothing ends up.",
 		Idempotent: true,
 	}, p.listReceptionists)
 }
