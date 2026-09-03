@@ -43,6 +43,17 @@ plugins:
 
 Rows in the dashboard win outright over the file when any exist.
 
+**A customer added while the host runs is answerable at once.** Saving a row
+reconciles the instance: the plugin is rebuilt from its stored rows and
+remounted, and the tunnel bound to it is restarted so a connector is not left
+serving the previous configuration. Nothing is restarted by hand. A connected
+client does not even need to reconnect, because the tool list does not change
+-- `customer` is a name rather than an enum of them, so adding a business
+changes no schema. A row that cannot be built into a working configuration --
+two customers sharing a host, say -- leaves the previous set serving and marks
+the instance unhealthy with the reason, rather than taking the working
+customers down with the bad row.
+
 **Resolution never guesses.** A tool's `customer` is matched against every
 name and alias, folding case. An exact match wins. Failing that, a fragment
 contained in exactly one customer's name or alias is taken -- "dental" for
