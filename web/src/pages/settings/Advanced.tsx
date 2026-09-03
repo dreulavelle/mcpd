@@ -14,7 +14,7 @@ export function Advanced() {
     <SettingsSection
       section="advanced"
       title="Advanced"
-      lede="How patient this host is, and what the database trades for speed. The defaults are right until something says otherwise."
+      lede="Timeouts and durability. The defaults are right until something says otherwise."
     />
   );
 }

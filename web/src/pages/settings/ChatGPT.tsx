@@ -4,7 +4,6 @@ import { useLoader, usePoll } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { SettingsForm } from "@/components/SettingsForm";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
-import { SettingsTabs } from "./SettingsTabs";
 import { SETTING_LINKS } from "./SettingsSection";
 import { EVERYTHING, GrantsPicker, grantsLabel } from "@/components/GrantsPicker";
 import { RolePicker } from "@/components/RolePicker";
@@ -61,10 +60,9 @@ export function ChatGPT() {
 
   return (
     <>
-      <SettingsTabs />
       <PageHeader
         title="ChatGPT"
-        lede="An account is one OpenAI organisation: its runtime key, the admin key that makes tunnels in it, and the identity its connectors act as in the history. A tunnel belongs to the organisation it was made in and runs under that account only. Add one per organisation that connects here."
+        lede="One account per OpenAI organisation: its keys, and the identity its connectors act as."
         actions={rows && <Button onClick={() => setAdding(true)}>Add account</Button>}
       />
 
@@ -90,11 +88,9 @@ export function ChatGPT() {
       {!rows ? <Loading rows={3} /> : rows.length === 0 ? (
         <Notice tone="neutral">
           No accounts yet, so no tunnel can connect. Add one with an OpenAI
-          runtime key whose role has Tunnels: Read and Use — that is the key a
-          tunnel carries traffic with. An admin key and organization ID are
-          optional and separate: they let tunnels be created from the Tunnels
-          page rather than pasted in by hand, and they need a role with
-          Tunnels: Manage.
+          key that has Tunnels: Read and Use. An admin key and organization
+          ID are optional; with them, tunnels can be made from the Tunnels
+          page.
         </Notice>
       ) : (
         <Card className="mt-4 overflow-hidden p-0">
@@ -104,7 +100,7 @@ export function ChatGPT() {
                 <TableRow>
                   <TableHead>Account</TableHead>
                   <TableHead>Identity</TableHead>
-                  <TableHead>Admin tools</TableHead>
+                  <TableHead>Role</TableHead>
                   <TableHead>Can reach</TableHead>
                   <TableHead>Rate limit</TableHead>
                   <TableHead className="w-px" />
@@ -409,10 +405,8 @@ function AccountDialog({ account, onClose, onSaved }: {
                 </div>
               )}
               <p className="text-xs text-muted-foreground">
-                Optional. Lets tunnels be created from the Tunnels page instead
-                of pasted in by hand. Made under Settings → Organization →
-                Admin keys, and only works if whoever created it has a role
-                including <span className="font-medium">Tunnels: Manage</span>.
+                Optional. Lets tunnels be made from the Tunnels page. Needs
+                Tunnels: Manage.
               </p>
             </div>
             <div className="space-y-1.5">
@@ -422,9 +416,7 @@ function AccountDialog({ account, onClose, onSaved }: {
                 onChange={(e) => setOrgID(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Required with an admin key — it cannot list anything alone.
-                Settings → Organization → General, starting{" "}
-                <span className="font-medium">org_</span>.
+                Goes with the admin key. Starts <span className="font-medium">org_</span>.
               </p>
             </div>
           </div>
@@ -436,10 +428,8 @@ function AccountDialog({ account, onClose, onSaved }: {
               onChange={(e) => setWorkspaces(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Learned from this account's tunnels on its own; nothing to type
-              unless ChatGPT Enterprise does not show a new tunnel, in which
-              case add the workspace's id here. A tunnel made under this
-              account is listed in every workspace it knows.
+              Learned from this account's tunnels. Add one by hand only if a
+              new tunnel does not show in ChatGPT.
             </p>
           </div>
 
@@ -457,8 +447,7 @@ function AccountDialog({ account, onClose, onSaved }: {
                 onChange={(e) => setRate(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Calls per second, shared by all this account's tunnels. 0 is no
-                limit, which is the usual answer.
+                Calls per second across its tunnels. 0 is no limit.
               </p>
             </div>
           </div>

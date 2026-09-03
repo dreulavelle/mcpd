@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState, type FormEvent } from "react";
-import { KeyRound } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { KeyRound, MoreHorizontal } from "lucide-react";
 import {
   api, ApiError, type ApiKey, type Grant, type Group, type Caller,
 } from "@/lib/api";
@@ -8,34 +8,39 @@ import { collect, describe } from "@/lib/permissions";
 import { Link } from "@/lib/router";
 import { useCan } from "@/lib/session";
 import { Copyable, EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
-import { SettingsTabs } from "./SettingsTabs";
+import { Avatar } from "@/components/Avatar";
 import { GrantsPicker, grantsLabel } from "@/components/GrantsPicker";
 import { RolePicker } from "@/components/RolePicker";
+import { Segmented } from "@/components/Segmented";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
-  DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useConfirm } from "@/components/confirm";
+import { SectionHead } from "./SectionHead";
 
 /**
- * The shapes a key usually takes, offered before the form so that the common
- * case is two clicks. Each is a role and a level; the systems are still
- * chosen. "Custom" leaves everything as it is.
+ * The shapes a key usually takes. Each is a role and a level; the systems
+ * are still chosen. Custom leaves both to the form.
  */
-const TEMPLATES: { id: string; label: string; hint: string; role: string; level: Grant["level"] }[] = [
-  { id: "readonly", label: "Read-only", hint: "Calls read tools, proposes nothing. A monitor, a report.", role: "role_reader", level: "read" },
-  { id: "operator", label: "Operator", hint: "Reads and proposes changes, decides within the inline ceiling. Claude Code, Codex.", role: "role_operator", level: "write" },
-  { id: "custom", label: "Custom", hint: "Pick the role and the level yourself.", role: "", level: "read" },
+type Shape = "readonly" | "operator" | "custom";
+const SHAPES: { value: Shape; label: string; title: string }[] = [
+  { value: "readonly", label: "Read-only", title: "Reads, proposes nothing. A monitor, a report." },
+  { value: "operator", label: "Operator", title: "Reads and proposes changes. Claude Code, Codex." },
+  { value: "custom", label: "Custom", title: "Choose the role and level yourself." },
 ];
 
 /** Ninety days, as the expiry a new key starts with. */
@@ -76,6 +81,11 @@ export function Keys() {
   }, []);
   usePoll(load, 30_000);
 
+  useEffect(() => {
+    if (editing && keys) setEditing(keys.find((k) => k.id === editing.id) ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keys]);
+
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q || !keys) return keys ?? [];
@@ -88,11 +98,15 @@ export function Keys() {
 
   return (
     <>
-      <SettingsTabs />
       <PageHeader
         title="API Keys"
-        lede="A key lets a script call this host. Each one acts as itself, so the history says which."
-        actions={keys && mayWrite && <Button onClick={() => setAdding(true)}>Add key</Button>}
+        lede="A key lets a script or an agent call this host as itself, so the history says which."
+      />
+      <SectionHead
+        title="Keys"
+        count={keys?.length}
+        search={keys && keys.length > 6 ? { value: query, onChange: setQuery, placeholder: "Find a key" } : undefined}
+        action={keys && mayWrite ? <Button onClick={() => setAdding(true)}>Add key</Button> : undefined}
       />
 
       {error && <Notice tone="problem">{error}</Notice>}
@@ -101,97 +115,59 @@ export function Keys() {
         <AddKey
           groups={groups}
           onClose={() => setAdding(false)}
-          onAdded={(name, value) => {
-            setAdding(false);
-            setSecret({ name, value });
-            load();
-          }}
+          onAdded={(name, value) => { setAdding(false); setSecret({ name, value }); load(); }}
         />
       )}
-
       {secret && (
-        <SecretOnce
-          name={secret.name} value={secret.value} rotated={secret.rotated}
-          onClose={() => setSecret(null)}
-        />
+        <SecretOnce name={secret.name} value={secret.value} rotated={secret.rotated} onClose={() => setSecret(null)} />
       )}
-
       {editing && (
-        <EditKey
-          apiKey={editing}
-          groups={groups}
-          onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); load(); notify("good", "Key saved."); }}
-        />
+        <EditKey apiKey={editing} groups={groups} onClose={() => setEditing(null)}
+                 onSaved={() => { load(); notify("good", "Key saved."); }} />
       )}
-
       {rotating && (
         <RotateKey
           apiKey={rotating}
           onClose={() => setRotating(null)}
-          onRotated={(value) => {
-            setRotating(null);
-            setSecret({ name: rotating.name, value, rotated: true });
-            load();
-          }}
+          onRotated={(value) => { setRotating(null); setSecret({ name: rotating.name, value, rotated: true }); load(); }}
         />
       )}
 
       {!keys ? <Loading rows={3} /> : keys.length === 0 ? (
         <EmptyState mark={<KeyRound />} title="No keys yet">
-          Tokens set in the configuration file keep working; a key made here
-          can be revoked, rotated and re-scoped without a restart.
+          Tokens in the configuration file keep working. A key made here can
+          be rotated, re-scoped and revoked without a restart.
         </EmptyState>
       ) : (
-        <>
-          {keys.length > 8 && (
-            <div className="mt-4">
-              <Input
-                aria-label="Find a key"
-                placeholder="Find by name, id, role or group…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                className="max-w-sm"
-              />
-            </div>
-          )}
-          <Card className="mt-4 overflow-hidden p-0">
-            <div className="scroll-x">
-              <Table>
-                <TableHeader>
+        <Card className="overflow-hidden p-0">
+          <div className="scroll-x">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Key</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Reaches</TableHead>
+                  <TableHead>Used</TableHead>
+                  <TableHead>Expires</TableHead>
+                  <TableHead className="w-px" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {shown.length === 0 ? (
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Can reach</TableHead>
-                    <TableHead>Has reached</TableHead>
-                    <TableHead>Last used</TableHead>
-                    <TableHead className="w-px" />
+                    <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">No key matches that.</TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {shown.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
-                        No key matches that.
-                      </TableCell>
-                    </TableRow>
-                  ) : shown.map((k) => (
-                    <KeyRow
-                      key={k.id}
-                      apiKey={k}
-                      activity={activity[`key:${k.id}`]}
-                      notify={notify}
-                      mayWrite={mayWrite}
-                      onChanged={load}
-                      onEdit={() => setEditing(k)}
-                      onRotate={() => setRotating(k)}
-                    />
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </Card>
-        </>
+                ) : shown.map((k) => (
+                  <KeyRow
+                    key={k.id} apiKey={k} activity={activity[`key:${k.id}`]} notify={notify}
+                    mayWrite={mayWrite} onChanged={load}
+                    onEdit={() => setEditing(k)} onRotate={() => setRotating(k)}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
       )}
     </>
   );
@@ -204,24 +180,23 @@ export function Keys() {
  * is the clearest candidate for revoking, so it says so rather than showing a
  * blank cell.
  */
-function Reached({ activity, principal }: { activity?: Caller; principal: string }) {
-  if (!activity) {
-    return <span className="text-xs">Nothing yet</span>;
-  }
+function Used({ activity, principal, lastUsed }: { activity?: Caller; principal: string; lastUsed?: string }) {
+  if (!activity) return <span className="text-muted-foreground">Never</span>;
   return (
-    <span className="text-xs">
-      {(activity.plugins ?? []).join(", ") || "Nothing yet"}
-      <span className="block text-muted-foreground">
-        <Link
-          to={`/activity?principal=${encodeURIComponent(principal)}&hours=720`}
-          className="hover:underline"
-          title="Every call this key made, on Activity"
-        >
-          {activity.calls} call{activity.calls === 1 ? "" : "s"}
-        </Link>
-        {activity.denied > 0 && `, ${activity.denied} refused`}
-      </span>
-    </span>
+    <div>
+      <Link
+        to={`/activity?principal=${encodeURIComponent(principal)}&hours=720`}
+        className="hover:underline"
+        title="Every call this key made, on Activity"
+      >
+        {activity.calls} call{activity.calls === 1 ? "" : "s"}
+      </Link>
+      {activity.denied > 0 && <span className="text-attention">, {activity.denied} refused</span>}
+      <div className="text-xs text-muted-foreground">
+        {(activity.plugins ?? []).join(", ")}
+        {lastUsed ? ` · ${new Date(lastUsed).toLocaleDateString()}` : ""}
+      </div>
+    </div>
   );
 }
 
@@ -235,15 +210,11 @@ function KeyRow({ apiKey, activity, notify, mayWrite, onChanged, onEdit, onRotat
   onRotate: () => void;
 }) {
   const confirm = useConfirm();
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const dead = apiKey.status !== "active";
 
   async function revoke() {
-    if (!(await confirm(
-      `Revoke ${apiKey.name}? Anything using it stops working on its next call.`,
-    ))) return;
-    setBusy(true);
+    if (!(await confirm({ title: `Revoke ${apiKey.name}?`, description: "Anything using it stops on its next call." }))) return;
     setError("");
     try {
       await api.revokeKey(apiKey.id);
@@ -251,70 +222,53 @@ function KeyRow({ apiKey, activity, notify, mayWrite, onChanged, onEdit, onRotat
       notify("good", "Key revoked.");
     } catch (e) {
       setError(e instanceof ApiError ? e.detail : "That didn't work.");
-    } finally {
-      setBusy(false);
     }
   }
-
-  const held = describe(collect(apiKey.permissions));
 
   return (
     <TableRow className={dead ? "opacity-55" : undefined}>
       <TableCell>
-        <span className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">{apiKey.name}</span>
-          {apiKey.status === "revoked" && <Chip tone="problem">revoked</Chip>}
-          {apiKey.status === "expired" && <Chip tone="attention">expired</Chip>}
-          {apiKey.previous_until && (
-            <span title={`The old secret works until ${new Date(apiKey.previous_until).toLocaleString()}`}>
-              <Chip tone="info">rotating</Chip>
-            </span>
-          )}
-          {apiKey.groups.map((g) => <Chip key={g.id}>{g.name}</Chip>)}
-        </span>
-        <div className="font-mono text-xs text-muted-foreground">{apiKey.id}</div>
-        {apiKey.expires_at && apiKey.status === "active" && (
-          <div className="text-xs text-muted-foreground">
-            Expires {new Date(apiKey.expires_at).toLocaleString()}
+        <div className="flex items-center gap-3">
+          <Avatar name={apiKey.name} kind="key" />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="font-medium">{apiKey.name}</span>
+              {apiKey.status === "revoked" && <Chip tone="problem">revoked</Chip>}
+              {apiKey.status === "expired" && <Chip tone="attention">expired</Chip>}
+              {apiKey.previous_until && (
+                <span title={`The old secret works until ${new Date(apiKey.previous_until).toLocaleString()}`}>
+                  <Chip tone="info">rotating</Chip>
+                </span>
+              )}
+              {apiKey.groups.map((g) => <Chip key={g.id}>{g.name}</Chip>)}
+            </div>
+            <div className="font-mono text-xs text-muted-foreground">{apiKey.id}</div>
+            {error && <div className="mt-1 text-xs text-problem">{error}</div>}
           </div>
-        )}
-        {error && <div className="mt-1 text-xs text-problem">{error}</div>}
+        </div>
       </TableCell>
-      <TableCell className="text-muted-foreground">
+      <TableCell>
         <div>{apiKey.role_name || apiKey.role}</div>
-        {/* The role's name is somebody's shorthand; what the key may do is
-            the union with its groups, in words the reader does not have to
-            look up. */}
-        <div className="text-xs">{held}</div>
+        <div className="text-xs text-muted-foreground">{describe(collect(apiKey.permissions))}</div>
       </TableCell>
-      <TableCell className="text-muted-foreground">
-        {grantsLabel(apiKey.reaches)}
-      </TableCell>
-      {/* What it is permitted to reach and what it has actually reached are
-          different facts, and the gap between them is the whole of a grant
-          review. A key permitted three integrations that has only ever touched
-          one is the case worth seeing. */}
-      <TableCell className="text-muted-foreground">
-        <Reached activity={activity} principal={`key:${apiKey.id}`} />
-      </TableCell>
+      <TableCell className="text-muted-foreground">{grantsLabel(apiKey.reaches)}</TableCell>
+      <TableCell><Used activity={activity} principal={`key:${apiKey.id}`} lastUsed={apiKey.last_used_at} /></TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">
-        {apiKey.last_used_at
-          ? new Date(apiKey.last_used_at).toLocaleString()
-          : "Never"}
+        {apiKey.expires_at ? new Date(apiKey.expires_at).toLocaleDateString() : "Never"}
       </TableCell>
-      <TableCell className="whitespace-nowrap">
-        {mayWrite && (
-          <>
-            <Button variant="ghost" size="sm" disabled={busy || dead} onClick={onEdit}>
-              Edit
-            </Button>
-            <Button variant="ghost" size="sm" disabled={busy || dead} onClick={onRotate}>
-              Rotate
-            </Button>
-            <Button variant="ghost" size="sm" disabled={busy || dead} onClick={revoke}>
-              Revoke
-            </Button>
-          </>
+      <TableCell>
+        {mayWrite && !dead && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${apiKey.name}`}><MoreHorizontal /></Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={onEdit}>Edit</DropdownMenuItem>
+              <DropdownMenuItem onSelect={onRotate}>Rotate secret</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onSelect={revoke}>Revoke</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </TableCell>
     </TableRow>
@@ -326,8 +280,7 @@ function KeyRow({ apiKey, activity, notify, mayWrite, onChanged, onEdit, onRotat
  *
  * It is rendered only while it is on screen — closing unmounts it, so it is
  * gone from the DOM rather than hidden in it — and it is never written to
- * storage of any kind. There is no endpoint that would return it again, which
- * is what the copy underneath says.
+ * storage of any kind. There is no endpoint that would return it again.
  */
 function SecretOnce({ name, value, rotated, onClose }: {
   name: string;
@@ -341,9 +294,7 @@ function SecretOnce({ name, value, rotated, onClose }: {
         <DialogHeader>
           <DialogTitle>Copy this key now</DialogTitle>
           <DialogDescription>
-            This is the only time {name}{rotated ? "'s new secret" : ""} will be
-            shown. Nothing here can show it again, and losing it means
-            {rotated ? " rotating again" : " making a new one"}.
+            {rotated ? `${name}'s new secret` : name} is shown once. It cannot be shown again.
           </DialogDescription>
         </DialogHeader>
         <Copyable value={value} label="key" />
@@ -357,18 +308,14 @@ function SecretOnce({ name, value, rotated, onClose }: {
 
 const GRACE: [number, string][] = [
   [0, "Right away"],
-  [3600, "An hour"],
-  [86_400, "A day"],
-  [7 * 86_400, "A week"],
+  [3600, "In an hour"],
+  [86_400, "In a day"],
+  [7 * 86_400, "In a week"],
 ];
 
 /**
- * A new secret for the same key.
- *
- * Nothing else about the key moves: its id, role, grants and groups stay, so
- * every rule and every audit entry naming it keeps meaning it. The old secret
- * keeps working for the grace chosen here, which is what lets a deployment be
- * told the new one and restarted without a window in which neither works.
+ * A new secret for the same key. Nothing else about the key moves, so every
+ * rule and every audit entry naming it keeps meaning it.
  */
 function RotateKey({ apiKey, onClose, onRotated }: {
   apiKey: ApiKey;
@@ -398,24 +345,16 @@ function RotateKey({ apiKey, onClose, onRotated }: {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Rotate {apiKey.name}</DialogTitle>
-          <DialogDescription>
-            A new secret for the same key. Everything else about it stays, and
-            the history goes on naming it.
-          </DialogDescription>
+          <DialogDescription>A new secret for the same key. Its role, reach and history stay.</DialogDescription>
         </DialogHeader>
         {error && <Notice tone="problem">{error}</Notice>}
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="rotate-grace">The old secret stops working</Label>
             <NativeSelect id="rotate-grace" value={String(grace)} onChange={(e) => setGrace(Number(e.target.value))}>
-              {GRACE.map(([seconds, label]) => (
-                <option key={seconds} value={seconds}>{label}</option>
-              ))}
+              {GRACE.map(([seconds, label]) => <option key={seconds} value={seconds}>{label}</option>)}
             </NativeSelect>
-            <p className="text-xs text-muted-foreground">
-              Long enough to put the new secret where the old one was. If the
-              old one has leaked, choose right away.
-            </p>
+            <p className="text-xs text-muted-foreground">Enough time to swap it in. If it has leaked, right away.</p>
           </div>
           <DialogFooter>
             <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
@@ -428,11 +367,8 @@ function RotateKey({ apiKey, onClose, onRotated }: {
 }
 
 /**
- * Re-scoping a key without reissuing it.
- *
- * Only what changed is sent, so an edit to the name does not also rewrite the
- * grant with whatever the page happened to hold. The secret is not here and
- * cannot be: nothing on the server can show it again.
+ * Re-scoping a key without reissuing it. Only what changed is sent. The
+ * secret is not here and cannot be: nothing on the server can show it again.
  */
 function EditKey({ apiKey, groups, onClose, onSaved }: {
   apiKey: ApiKey;
@@ -445,9 +381,7 @@ function EditKey({ apiKey, groups, onClose, onSaved }: {
   const [grants, setGrants] = useState<Grant[]>(apiKey.grants);
   const [joined, setJoined] = useState<string[]>(apiKey.groups.map((g) => g.id));
   // The date input wants a day; the stored value is an instant.
-  const [expires, setExpires] = useState(
-    apiKey.expires_at ? toDay(apiKey.expires_at) : "",
-  );
+  const [expires, setExpires] = useState(apiKey.expires_at ? toDay(apiKey.expires_at) : "");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -455,8 +389,7 @@ function EditKey({ apiKey, groups, onClose, onSaved }: {
   const wasGroups = apiKey.groups.map((g) => g.id);
   const changed =
     name.trim() !== apiKey.name || role !== apiKey.role ||
-    !sameGrants(grants, apiKey.grants) || !sameSet(joined, wasGroups) ||
-    expires !== wasExpiry;
+    !sameGrants(grants, apiKey.grants) || !sameSet(joined, wasGroups) || expires !== wasExpiry;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -481,77 +414,62 @@ function EditKey({ apiKey, groups, onClose, onSaved }: {
   }
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Edit {apiKey.name}</DialogTitle>
-          <DialogDescription>
-            Takes effect on the key's next call. The secret itself does not
-            change and is not shown; rotate it for a new one.
-          </DialogDescription>
-        </DialogHeader>
+    <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <SheetContent className="max-w-[30rem]">
+        <div className="flex items-center gap-3">
+          <Avatar name={apiKey.name} kind="key" className="size-10 text-sm" />
+          <div className="min-w-0">
+            <SheetTitle className="truncate">{apiKey.name}</SheetTitle>
+            <SheetDescription className="truncate font-mono text-xs">{apiKey.id}</SheetDescription>
+          </div>
+        </div>
         {error && <Notice tone="problem">{error}</Notice>}
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="space-y-5">
           <div className="space-y-1.5">
             <Label htmlFor="edit-key-name">Name</Label>
-            <Input
-              id="edit-key-name" value={name} autoComplete="off"
-              onChange={(e) => setName(e.target.value)}
-            />
+            <Input id="edit-key-name" value={name} autoComplete="off" onChange={(e) => setName(e.target.value)} />
           </div>
           <RolePicker id="edit-key-role" value={role} onChange={setRole} />
-          <GrantsPicker
-            id="edit-key-reach" value={grants} onChange={setGrants}
-            subject="this key"
-          />
-          <GroupBoxes groups={groups} joined={joined} onChange={setJoined} subject="A key" />
+          <GrantsPicker id="edit-key-reach" value={grants} onChange={setGrants} subject="this key" />
+          <GroupBoxes groups={groups} joined={joined} onChange={setJoined} />
           <div className="space-y-1.5">
-            <Label htmlFor="edit-key-expires">Stops working on</Label>
-            <Input
-              id="edit-key-expires" type="date" value={expires}
-              onChange={(e) => setExpires(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Clear it for a key that does not expire.
-            </p>
+            <Label htmlFor="edit-key-expires">Expires</Label>
+            <Input id="edit-key-expires" type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
+            <p className="text-xs text-muted-foreground">Clear it for a key that does not expire.</p>
           </div>
-          <DialogFooter>
-            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={busy || !changed || !name.trim()}>
-              {busy ? "Saving…" : changed ? "Save" : "Nothing to save"}
-            </Button>
-          </DialogFooter>
+          <div className="flex items-center gap-2">
+            <Button type="submit" disabled={busy || !changed || !name.trim()}>{busy ? "Saving…" : "Save"}</Button>
+            <span className="text-xs text-muted-foreground">Applies on its next call.</span>
+          </div>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }
 
-function GroupBoxes({ groups, joined, onChange, subject }: {
+function GroupBoxes({ groups, joined, onChange }: {
   groups: Group[];
   joined: string[];
   onChange: (next: string[]) => void;
-  subject: string;
 }) {
   if (groups.length === 0) return null;
   return (
     <fieldset className="space-y-1.5">
       <legend className="text-sm font-medium">Groups</legend>
-      <p className="text-xs text-muted-foreground">
-        {subject} also holds whatever its groups hold: their role and their reach.
-      </p>
-      {groups.map((g) => (
-        <label key={g.id} className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox" checked={joined.includes(g.id)}
-            onChange={() => onChange(joined.includes(g.id) ? joined.filter((id) => id !== g.id) : [...joined, g.id])}
-          />
-          <span>{g.name}</span>
-          <span className="text-muted-foreground">
-            — {[g.role_name, grantsLabel(g.grants)].filter(Boolean).join(", ")}
-          </span>
-        </label>
-      ))}
+      <div className="divide-y rounded-lg border">
+        {groups.map((g) => (
+          <label key={g.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+            <input
+              type="checkbox" checked={joined.includes(g.id)}
+              onChange={() => onChange(joined.includes(g.id) ? joined.filter((id) => id !== g.id) : [...joined, g.id])}
+            />
+            <span className="font-medium">{g.name}</span>
+            <span className="text-xs text-muted-foreground">
+              {[g.role_name, grantsLabel(g.grants)].filter((x) => x && x !== "Nothing").join(" · ")}
+            </span>
+          </label>
+        ))}
+      </div>
     </fieldset>
   );
 }
@@ -579,7 +497,7 @@ function AddKey({ groups, onClose, onAdded }: {
   onAdded: (name: string, secret: string) => void;
 }) {
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState("operator");
+  const [shape, setShape] = useState<Shape>("operator");
   const [role, setRole] = useState("role_operator");
   const [grants, setGrants] = useState<Grant[]>([]);
   const [joined, setJoined] = useState<string[]>([]);
@@ -587,14 +505,14 @@ function AddKey({ groups, onClose, onAdded }: {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  function chooseTemplate(id: string) {
-    setTemplate(id);
-    const t = TEMPLATES.find((x) => x.id === id);
-    if (!t || !t.role) return;
-    setRole(t.role);
-    // The level the template means, applied to whatever systems are chosen;
-    // a system chosen afterwards takes the level it is given.
-    setGrants((current) => current.map((g) => ({ ...g, level: t.level })));
+  function chooseShape(next: Shape) {
+    setShape(next);
+    if (next === "readonly") {
+      setRole("role_reader");
+      setGrants((g) => g.map((x) => ({ ...x, level: "read" })));
+    } else if (next === "operator") {
+      setRole("role_operator");
+    }
   }
 
   async function submit(e: FormEvent) {
@@ -603,14 +521,10 @@ function AddKey({ groups, onClose, onAdded }: {
     setError("");
     try {
       const { secret } = await api.createKey({
-        name: name.trim(),
-        role,
-        grants,
-        groups: joined,
+        name: name.trim(), role, grants, groups: joined,
         // A date input gives a day; the key dies at the start of it, in the
         // operator's own time zone, so that the row renders the day they
-        // picked. As UTC midnight it read as the evening before anywhere
-        // west of Greenwich.
+        // picked.
         ...(expires ? { expires_at: new Date(`${expires}T00:00:00`).toISOString() } : {}),
       });
       onAdded(name.trim(), secret);
@@ -622,76 +536,43 @@ function AddKey({ groups, onClose, onAdded }: {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Add a key</CardTitle>
-      </CardHeader>
-      <CardContent>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Add a key</DialogTitle>
+          <DialogDescription>The secret is shown once, after this.</DialogDescription>
+        </DialogHeader>
         {error && <Notice tone="problem">{error}</Notice>}
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="space-y-5">
           <div className="space-y-1.5">
             <Label htmlFor="key-name">Name</Label>
-            <Input
-              id="key-name" value={name} autoComplete="off"
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Nightly report script"
-            />
+            <Input id="key-name" value={name} autoComplete="off"
+                   onChange={(e) => setName(e.target.value)} placeholder="Nightly report" />
           </div>
-
-          <fieldset className="space-y-1.5">
-            <legend className="text-sm font-medium">Shape</legend>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {TEMPLATES.map((t) => (
-                <label
-                  key={t.id}
-                  className={`cursor-pointer rounded-md border p-2 text-sm ${template === t.id ? "border-primary bg-primary/5" : ""}`}
-                >
-                  <input
-                    type="radio" name="key-template" value={t.id} className="sr-only"
-                    checked={template === t.id} onChange={() => chooseTemplate(t.id)}
-                  />
-                  <div className="font-medium">{t.label}</div>
-                  <div className="text-xs text-muted-foreground">{t.hint}</div>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-
-          {template === "custom" && (
-            <RolePicker id="key-role" value={role} onChange={setRole} />
-          )}
-
-          <GrantsPicker
-            id="key-reach" value={grants}
-            onChange={(next) => {
-              const t = TEMPLATES.find((x) => x.id === template);
-              setGrants(t && t.role ? next.map((g) => ({ ...g, level: g.level === "write" && t.level === "read" ? "read" : g.level })) : next);
-            }}
-            subject="this key"
-          />
-
-          <GroupBoxes groups={groups} joined={joined} onChange={setJoined} subject="A key" />
-
           <div className="space-y-1.5">
-            <Label htmlFor="key-expires">Stops working on</Label>
-            <Input
-              id="key-expires" type="date" value={expires}
-              onChange={(e) => setExpires(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Ninety days to start with. Clear it for a key that does not
-              expire, which is a choice rather than a field left blank.
-            </p>
+            <Label>Shape</Label>
+            <div>
+              <Segmented<Shape> label="Shape" value={shape} options={SHAPES} onChange={chooseShape} size="md" />
+            </div>
+            <p className="text-xs text-muted-foreground">{SHAPES.find((s) => s.value === shape)?.title}</p>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Button type="submit" disabled={busy || !name.trim() || !role}>
-              {busy ? "Adding…" : "Add key"}
-            </Button>
+          {shape === "custom" && <RolePicker id="key-role" value={role} onChange={setRole} />}
+          <GrantsPicker
+            id="key-reach" value={grants} subject="this key"
+            onChange={(next) => setGrants(shape === "readonly" ? next.map((g) => ({ ...g, level: "read" })) : next)}
+          />
+          <GroupBoxes groups={groups} joined={joined} onChange={setJoined} />
+          <div className="space-y-1.5">
+            <Label htmlFor="key-expires">Expires</Label>
+            <Input id="key-expires" type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
+            <p className="text-xs text-muted-foreground">Ninety days to start. Clear it for a key that never expires.</p>
+          </div>
+          <DialogFooter>
             <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-          </div>
+            <Button type="submit" disabled={busy || !name.trim() || !role}>{busy ? "Adding…" : "Add key"}</Button>
+          </DialogFooter>
         </form>
-      </CardContent>
-    </Card>
+      </DialogContent>
+    </Dialog>
   );
 }

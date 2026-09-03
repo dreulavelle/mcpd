@@ -60,10 +60,13 @@ describe("what a key has actually reached", () => {
   // A key that has never called anything is the clearest candidate for
   // revoking, so an empty result is a statement rather than a blank cell.
   it("says plainly when a key has never been used", async () => {
-    stub([apiKey()], []);
+    stub([apiKey({ expires_at: "2026-12-01T00:00:00Z" })], []);
     renderWith(<Keys />);
 
-    expect(await screen.findByText("Nothing yet")).toBeInTheDocument();
+    await screen.findByText("reporting agent");
+    // "Never" as the key's own use, not its Expires column, which the fixture
+    // gives a real date so the two cannot be confused for one another.
+    expect(screen.getByText("Never")).toBeInTheDocument();
   });
 
   it("counts refusals, which are the interesting ones", async () => {
@@ -80,12 +83,14 @@ describe("what a key has actually reached", () => {
   // A host not keeping a record answers 501, and the column must degrade to
   // the truthful thing rather than breaking the page.
   it("still lists keys when nothing is being recorded", async () => {
-    vi.spyOn(api, "keys").mockResolvedValue({ keys: [apiKey()], count: 1 });
+    vi.spyOn(api, "keys").mockResolvedValue({
+      keys: [apiKey({ expires_at: "2026-12-01T00:00:00Z" })], count: 1,
+    });
     vi.spyOn(api, "groups").mockResolvedValue({ groups: [], count: 0 });
     vi.spyOn(api, "callers").mockRejectedValue(new Error("not configured"));
     renderWith(<Keys />);
 
     expect(await screen.findByText("reporting agent")).toBeInTheDocument();
-    expect(screen.getByText("Nothing yet")).toBeInTheDocument();
+    expect(screen.getByText("Never")).toBeInTheDocument();
   });
 });

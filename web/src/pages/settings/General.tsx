@@ -21,7 +21,7 @@ export function General() {
     <SettingsSection
       section="settings"
       title="Settings"
-      lede="Where this host is reachable, and what it keeps. Changes apply straight away unless a field says otherwise."
+      lede="Addresses and housekeeping. Changes apply at once unless a field says otherwise."
     >
       {data && <StartupFile values={data.bootstrap} />}
     </SettingsSection>

@@ -36,8 +36,7 @@ describe("the users page", () => {
   // "Why can they decide approvals" is the question this page exists to
   // answer, and the role column alone says "Reader" of somebody a group has
   // added Operator to. The union is computed server-side and carried on
-  // `permissions`; the page only has to render it and say where the extra
-  // came from.
+  // `permissions`; the page only has to render the sentence it makes.
   it("says what an account may actually do, after its groups have added to it", async () => {
     stub(
       [user({
@@ -52,7 +51,6 @@ describe("the users page", () => {
     renderWith(<Users />);
     const row = (await screen.findByText("alice@example.com")).closest("tr")!;
     expect(within(row).getByText("Decides approvals; reads the rest")).toBeInTheDocument();
-    expect(within(row).getByText("via groups")).toBeInTheDocument();
   });
 
   it("says an unrestricted administrator may do everything", async () => {
@@ -65,12 +63,12 @@ describe("the users page", () => {
     // Shows in both the "Can do" and "Can reach" columns for an unrestricted
     // administrator, which is the point: neither column narrows the other.
     expect(within(row).getAllByText("Everything").length).toBe(2);
-    expect(within(row).queryByText("via groups")).not.toBeInTheDocument();
   });
 
   // A group that hands out the same role the account already holds adds
-  // nothing worth calling out -- the chip is for a group that changed the
-  // answer, not for every membership.
+  // nothing new, and the sentence says just what the role itself carries --
+  // it is a union with the account's own permissions, not a mention of every
+  // membership.
   it("does not mark an account whose groups add nothing new", async () => {
     stub(
       [user({
@@ -82,7 +80,7 @@ describe("the users page", () => {
     );
     renderWith(<Users />);
     const row = (await screen.findByText("alice@example.com")).closest("tr")!;
-    expect(within(row).queryByText("via groups")).not.toBeInTheDocument();
+    expect(within(row).getByText("Decides approvals; reads the rest")).toBeInTheDocument();
   });
 
   it("says a pending account holds nothing yet", async () => {

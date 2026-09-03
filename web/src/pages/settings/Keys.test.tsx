@@ -87,7 +87,7 @@ describe("the keys page", () => {
     expect(dialog).toHaveTextContent(SECRET);
     // The warning has to be on the dialog, not in a tooltip somebody has to
     // find: "I will copy it later" is the mistake this exists to prevent.
-    expect(dialog).toHaveTextContent(/only time/i);
+    expect(dialog).toHaveTextContent(/shown once/i);
     expect(screen.getByRole("button", { name: /copy/i })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "I have copied it" }));
@@ -101,14 +101,16 @@ describe("the keys page", () => {
   });
 
   // Revoking is not deleting: the row stays so the history can still say which
-  // key acted, and the page shows what happened to it.
+  // key acted, and the page shows what happened to it. Nothing further can be
+  // done to a dead key, so it offers no actions at all rather than a disabled
+  // "Revoke" someone could puzzle over.
   it("marks a revoked key rather than dropping it", async () => {
     stub({ keys: [keyView({ status: "revoked", revoked_at: "2026-08-10T09:00:00Z" })] });
     renderWith(<Keys />);
 
     await screen.findByText("Nightly report");
     expect(screen.getByText("revoked")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Revoke" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Actions for Nightly report" })).not.toBeInTheDocument();
   });
 
   // Expired and revoked are different facts, and an operator chasing a
@@ -139,7 +141,9 @@ describe("the keys page", () => {
     const update = vi.spyOn(api, "updateKey").mockResolvedValue(keyView({ name: "Weekly" }));
     renderWith(<Keys />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await screen.findByText("Nightly report");
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Nightly report" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
     const name = await screen.findByLabelText("Name");
     await userEvent.clear(name);
     await userEvent.type(name, "Weekly report");
@@ -151,8 +155,10 @@ describe("the keys page", () => {
   it("offers nothing to save until something changes", async () => {
     stub({ keys: [keyView()] });
     renderWith(<Keys />);
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    expect(await screen.findByRole("button", { name: "Nothing to save" })).toBeDisabled();
+    await screen.findByText("Nightly report");
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Nightly report" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    expect(await screen.findByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it("narrows a long list by name, id or group", async () => {

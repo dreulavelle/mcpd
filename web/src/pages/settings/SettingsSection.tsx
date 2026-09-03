@@ -6,7 +6,7 @@ import { useCan } from "@/lib/session";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
 import { SettingsForm } from "@/components/SettingsForm";
 import { Input } from "@/components/ui/input";
-import { SettingsTabs, tabForSection } from "./SettingsTabs";
+import { tabForSection } from "./SettingsTabs";
 
 const OPENAI_API_KEYS = "https://platform.openai.com/settings/organization/api-keys";
 const OPENAI_ADMIN_KEYS = "https://platform.openai.com/settings/organization/admin-keys";
@@ -78,7 +78,6 @@ export function SettingsSection({ section, title, lede, children }: {
 
   return (
     <>
-      <SettingsTabs />
       <PageHeader
         title={title}
         lede={mayWrite ? lede : "Changing this takes an administrator."}

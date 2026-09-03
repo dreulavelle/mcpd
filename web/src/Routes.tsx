@@ -23,6 +23,7 @@ import { General } from "@/pages/settings/General";
 
 import { Keys } from "@/pages/settings/Keys";
 import { Roles } from "@/pages/settings/Roles";
+import { isSettingsTab, SettingsLayout } from "@/pages/settings/SettingsTabs";
 import { Activity } from "@/pages/activity/Activity";
 import { BackupRestore } from "@/pages/settings/BackupRestore";
 import { UsersAndGroups } from "@/pages/settings/UsersAndGroups";
@@ -127,7 +128,10 @@ export function Routes() {
 
   const body = page();
   if (body === null) return <NotFound />;
-  return <Gate path={path}>{body}</Gate>;
+  // The settings rail belongs to the router rather than to each page, so a
+  // page renders only what is its own and the rail is drawn exactly once.
+  const framed = isSettingsTab(path) ? <SettingsLayout>{body}</SettingsLayout> : body;
+  return <Gate path={path}>{framed}</Gate>;
 }
 
 function Gate({ path, children }: { path: string; children: ReactNode }) {

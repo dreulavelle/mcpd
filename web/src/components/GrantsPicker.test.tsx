@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type Grant, type Plugin } from "@/lib/api";
 import { GrantsPicker } from "./GrantsPicker";
@@ -24,6 +24,16 @@ function mount(value: Grant[] = []) {
   return onChange;
 }
 
+/** The radio group for one row, found by its accessible name. */
+function group(name: RegExp | string) {
+  return screen.findByRole("radiogroup", { name });
+}
+
+async function choose(name: RegExp | string, option: string) {
+  const g = await group(name);
+  await userEvent.click(within(g).getByRole("radio", { name: option }));
+}
+
 beforeEach(() => { vi.restoreAllMocks(); });
 
 /**
@@ -40,8 +50,8 @@ describe("choosing what a grant reaches", () => {
     stub([plugin("cnmaestro", "Cambium cnMaestro"), plugin("echo")]);
     mount();
 
-    expect(await screen.findByLabelText(/Cambium cnMaestro access/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/echo access/)).toBeInTheDocument();
+    expect(await group(/Cambium cnMaestro access/)).toBeInTheDocument();
+    expect(await group(/echo access/)).toBeInTheDocument();
     // The name as well as the title: the name is what the grant stores and
     // what an audit record will say.
     expect(screen.getByText("cnmaestro")).toBeInTheDocument();
@@ -51,7 +61,7 @@ describe("choosing what a grant reaches", () => {
     stub([plugin("cnmaestro", "Cambium cnMaestro")]);
     const onChange = mount();
 
-    await userEvent.selectOptions(await screen.findByLabelText(/Cambium cnMaestro access/), "write");
+    await choose(/Cambium cnMaestro access/, "Write");
     expect(onChange).toHaveBeenCalledWith([{ plugin: "cnmaestro", level: "write" }]);
   });
 
@@ -59,7 +69,7 @@ describe("choosing what a grant reaches", () => {
     stub([plugin("cnmaestro"), plugin("echo")]);
     const onChange = mount([{ plugin: "echo", level: "write" }]);
 
-    await userEvent.selectOptions(await screen.findByLabelText(/cnmaestro access/), "read");
+    await choose(/cnmaestro access/, "Read");
     expect(onChange).toHaveBeenCalledWith([
       { plugin: "echo", level: "write" },
       { plugin: "cnmaestro", level: "read" },
@@ -70,7 +80,7 @@ describe("choosing what a grant reaches", () => {
     stub([plugin("echo")]);
     const onChange = mount();
 
-    await userEvent.selectOptions(screen.getByLabelText("Can reach"), "write");
+    await choose(/Every system this key can reach/, "Write");
     expect(onChange).toHaveBeenCalledWith([{ plugin: "*", level: "write" }]);
   });
 
@@ -78,17 +88,17 @@ describe("choosing what a grant reaches", () => {
     stub([plugin("echo")]);
     const onChange = mount();
 
-    await userEvent.selectOptions(screen.getByLabelText("Can reach"), "read");
+    await choose(/Every system this key can reach/, "Read");
     expect(onChange).toHaveBeenCalledWith([{ plugin: "*", level: "read" }]);
   });
 
   // Otherwise a grant would claim to be both "everything" and "these two",
   // and which one the server honoured would be a question about its parser.
-  it("drops the wildcard once systems are chosen by hand again", async () => {
+  it("drops the wildcard when it is set back to none", async () => {
     stub([plugin("echo")]);
     const onChange = mount([{ plugin: "*", level: "write" }]);
 
-    await userEvent.selectOptions(screen.getByLabelText("Can reach"), "some");
+    await choose(/Every system this key can reach/, "None");
     expect(onChange).toHaveBeenLastCalledWith([]);
   });
 
@@ -98,20 +108,20 @@ describe("choosing what a grant reaches", () => {
       { plugin: "echo", level: "write" }, { plugin: "cnmaestro", level: "write" },
     ]);
 
-    await userEvent.selectOptions(await screen.findByLabelText(/echo access/), "");
+    await choose(/echo access/, "None");
     expect(onChange).toHaveBeenCalledWith([{ plugin: "cnmaestro", level: "write" }]);
   });
 
-  // An empty box would read as a host with no systems, which is a different
+  // An empty list would read as a host with no systems, which is a different
   // and much more alarming fact than a grant nobody has narrowed yet.
   it("says why there is nothing to choose", async () => {
     stub([]);
     mount();
 
-    expect(await screen.findByText(/no systems to grant yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No systems yet\. Add one under Plugins/i)).toBeInTheDocument();
   });
 
-  it("shows nothing to choose rather than a wall of selects while it asks", () => {
+  it("shows nothing to choose rather than a wall of controls while it asks", () => {
     vi.spyOn(api, "plugins").mockReturnValue(new Promise(() => {}));
     mount();
 
