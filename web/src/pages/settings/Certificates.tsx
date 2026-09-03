@@ -2,7 +2,6 @@ import { useCallback, useRef, useState, type FormEvent } from "react";
 import { api, ApiError, type Certificate } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
-import { SettingsTabs } from "./SettingsTabs";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -41,10 +40,9 @@ export function Certificates() {
 
   return (
     <>
-      <SettingsTabs />
       <PageHeader
         title="Certificates"
-        lede="For an upstream behind your own authority. Anything here is trusted by every integration, on top of the authorities this host already ships with."
+        lede="Authorities every integration trusts, on top of the public ones."
         actions={rows && <Button onClick={() => setAdding(true)}>Add certificate</Button>}
       />
 

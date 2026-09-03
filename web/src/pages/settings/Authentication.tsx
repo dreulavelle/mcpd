@@ -4,7 +4,6 @@ import {
 } from "@/lib/api";
 import { useLoader, usePoll } from "@/lib/hooks";
 import { Loading, Notice, Out, PageHeader } from "@/components/chrome";
-import { SettingsTabs } from "./SettingsTabs";
 import { SettingsForm } from "@/components/SettingsForm";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
@@ -58,10 +57,9 @@ export function Authentication() {
 
   return (
     <>
-      <SettingsTabs />
       <PageHeader
-        title="Authentication"
-        lede="How people sign in, and who is allowed to."
+        title="Sign-in"
+        lede="How people sign in, and who is let in."
       />
 
       {error && <Notice tone="problem">{error}</Notice>}

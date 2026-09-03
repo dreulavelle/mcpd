@@ -12,7 +12,7 @@ export function Diagnostics() {
       <SettingsSection
         section="diagnostics"
         title="Diagnostics"
-        lede="How much this host writes down, whether it tells you when something happens, and whether a crash report leaves the machine. Both are off until you set a destination."
+        lede="Logging, notifications and crash reports. Nothing leaves this machine until you set a destination."
       />
       <TestNotification />
     </>

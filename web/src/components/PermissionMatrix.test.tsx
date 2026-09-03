@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PermissionSet } from "@/lib/permissions";
 import { PermissionMatrix } from "./PermissionMatrix";
@@ -11,29 +11,40 @@ function mount(value: PermissionSet = {}, extra: { disabled?: boolean; readOnly?
   return onChange;
 }
 
+/** The radio group for one area's row, found by its "<Area> level" label. */
+function group(areaLabel: string) {
+  return screen.getByRole("radiogroup", { name: `${areaLabel} level` });
+}
+
+/** The option currently checked within an area's row. */
+function held(areaLabel: string): string {
+  return within(group(areaLabel)).getByRole("radio", { checked: true }).textContent ?? "";
+}
+
 /**
  * Eight rows, each a level in one area -- the vocabulary the server actually
  * enforces, so a typo here is a refused save rather than a stored permission
- * nobody holds.
+ * nobody holds. Each row is a radiogroup of None / Read / Write (Decide, for
+ * approvals) rather than a native select.
  */
 describe("editing a permission set", () => {
   it("starts every area at none when the set holds nothing", () => {
     mount();
-    expect(screen.getByLabelText("Settings level")).toHaveValue("none");
-    expect(screen.getByLabelText("Access level")).toHaveValue("none");
+    expect(held("Settings")).toBe("None");
+    expect(held("Access")).toBe("None");
   });
 
   it("shows what the set already holds", () => {
     mount({ settings: "write", history: "read" });
-    expect(screen.getByLabelText("Settings level")).toHaveValue("write");
-    expect(screen.getByLabelText("History level")).toHaveValue("read");
-    expect(screen.getByLabelText("Access level")).toHaveValue("none");
+    expect(held("Settings")).toBe("Write");
+    expect(held("History")).toBe("Read");
+    expect(held("Access")).toBe("None");
   });
 
   it("raises one area's level without touching the others", async () => {
     const onChange = mount({ history: "read" });
 
-    await userEvent.selectOptions(screen.getByLabelText("Settings level"), "write");
+    await userEvent.click(within(group("Settings")).getByRole("radio", { name: "Write" }));
     expect(onChange).toHaveBeenCalledWith({ history: "read", settings: "write" });
   });
 
@@ -43,7 +54,7 @@ describe("editing a permission set", () => {
   it("drops the area from the set when it is put back to none", async () => {
     const onChange = mount({ settings: "write", history: "read" });
 
-    await userEvent.selectOptions(screen.getByLabelText("Settings level"), "none");
+    await userEvent.click(within(group("Settings")).getByRole("radio", { name: "None" }));
     expect(onChange).toHaveBeenCalledWith({ history: "read" });
   });
 
@@ -51,22 +62,20 @@ describe("editing a permission set", () => {
   // never "write", because the server has no such level for that area.
   it("offers approvals read-or-decide rather than read-or-write", () => {
     mount();
-    const select = screen.getByLabelText("Approvals level");
-    const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
-    expect(options).toEqual(["None", "Read", "Read and decide"]);
+    const options = within(group("Approvals")).getAllByRole("radio").map((o) => o.textContent);
+    expect(options).toEqual(["None", "Read", "Decide"]);
   });
 
   it("offers every other area read-or-write", () => {
     mount();
-    const select = screen.getByLabelText("Settings level");
-    const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
-    expect(options).toEqual(["None", "Read", "Read and write"]);
+    const options = within(group("Settings")).getAllByRole("radio").map((o) => o.textContent);
+    expect(options).toEqual(["None", "Read", "Write"]);
   });
 
   it("sets approvals to decide, not write", async () => {
     const onChange = mount();
 
-    await userEvent.selectOptions(screen.getByLabelText("Approvals level"), "decide");
+    await userEvent.click(within(group("Approvals")).getByRole("radio", { name: "Decide" }));
     expect(onChange).toHaveBeenCalledWith({ approvals: "decide" });
   });
 
@@ -87,19 +96,22 @@ describe("editing a permission set", () => {
 /**
  * A built-in role's matrix, or one shown to somebody who may read roles but
  * not write them, draws the same eight rows as a description rather than a
- * form -- no select to operate, no `onChange` it could ever call.
+ * form -- disabled radios rather than a select, and nothing that could ever
+ * call `onChange`.
  */
 describe("showing a permission set read-only", () => {
   it("draws a chip rather than a select for every area", () => {
     mount({ settings: "write" }, { readOnly: true });
-    expect(screen.queryByLabelText("Settings level")).not.toBeInTheDocument();
-    expect(screen.getByText("Write")).toBeInTheDocument();
+    // No select anywhere, and no radio a pointer could act on.
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    for (const radio of screen.getAllByRole("radio")) expect(radio).toBeDisabled();
+    expect(held("Settings")).toBe("Write");
     // Every other area is held at none, and says so rather than sitting blank.
-    expect(screen.getAllByText("None").length).toBeGreaterThan(0);
+    expect(held("Access")).toBe("None");
   });
 
   it("still names approvals' held level as decide, not write", () => {
     mount({ approvals: "decide" }, { readOnly: true });
-    expect(screen.getByText("Decide")).toBeInTheDocument();
+    expect(held("Approvals")).toBe("Decide");
   });
 });

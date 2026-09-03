@@ -35,12 +35,13 @@ describe("the groups page", () => {
 
   // A new group grants nothing, and the page has to say so rather than leaving
   // the column blank -- blank reads as "not loaded", and this is a decision.
+  // "—" is that decision, not a chip: nothing to hold up beside a real grant.
   it("says a group with no systems reaches nothing", async () => {
-    stub({ groups: [group()] });
+    stub({ groups: [group({ role: "role_operator", role_name: "Operator" })] });
     renderWith(<Groups />);
 
-    await screen.findByText("Field engineers");
-    expect(screen.getByText("Nothing")).toBeInTheDocument();
+    const row = (await screen.findByText("Field engineers")).closest("tr")!;
+    expect(within(row).getByText("—")).toBeInTheDocument();
   });
 
   it("shows what a group hands out", async () => {
@@ -52,19 +53,19 @@ describe("the groups page", () => {
     });
     renderWith(<Groups />);
 
-    await screen.findByText("Field engineers");
-    expect(screen.getByText("cnmaestro, netbox")).toBeInTheDocument();
-    expect(screen.getByText("2 members")).toBeInTheDocument();
+    const row = (await screen.findByText("Field engineers")).closest("tr")!;
+    expect(within(row).getByText("cnmaestro, netbox")).toBeInTheDocument();
+    expect(within(row).getByText("2")).toBeInTheDocument();
   });
 
   // A group with no role still shows one, so "no role" is not confused with
   // "not loaded yet".
-  it("shows a chip rather than a blank when a group adds no role", async () => {
-    stub({ groups: [group()] });
+  it("shows a dash rather than a blank when a group adds no role", async () => {
+    stub({ groups: [group({ grants: [{ plugin: "echo", level: "write" }] })] });
     renderWith(<Groups />);
 
-    await screen.findByText("Field engineers");
-    expect(screen.getByText("none")).toBeInTheDocument();
+    const row = (await screen.findByText("Field engineers")).closest("tr")!;
+    expect(within(row).getByText("—")).toBeInTheDocument();
   });
 
   it("shows the role a group adds", async () => {
@@ -84,7 +85,8 @@ describe("the groups page", () => {
     renderWith(<Groups />);
 
     await screen.findByText("Field engineers");
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Field engineers" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
 
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog.textContent).toContain("3 members");
@@ -99,7 +101,7 @@ describe("the groups page", () => {
     stub();
     renderWith(<Groups />);
 
-    expect(await screen.findByText(/the systems it should reach/i))
+    expect(await screen.findByText(/the same access/i))
       .toBeInTheDocument();
   });
 
@@ -124,7 +126,7 @@ describe("the groups page", () => {
 
     expect(await screen.findByText("alice@example.com")).toBeInTheDocument();
     expect(screen.getByText("Nightly report")).toBeInTheDocument();
-    expect(screen.getByText("person")).toBeInTheDocument();
+    expect(screen.getByText("user")).toBeInTheDocument();
     expect(screen.getByText("key")).toBeInTheDocument();
   });
 });

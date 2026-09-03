@@ -148,7 +148,7 @@ export const NAV: NavGroup[] = [
         // spend a permanent line on each.
         path: "/settings",
         label: "Settings",
-        lede: "How this host is configured.",
+        lede: "This host, its connections, and who may use it.",
         icon: Cog,
         capability: "settings:read",
       },

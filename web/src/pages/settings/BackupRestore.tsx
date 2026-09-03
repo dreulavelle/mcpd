@@ -5,7 +5,6 @@ import {
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
-import { SettingsTabs } from "./SettingsTabs";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,10 +42,9 @@ export function BackupRestore() {
 
   return (
     <>
-      <SettingsTabs />
       <PageHeader
         title="Backup & Restore"
-        lede="Take a copy of this instance, or put one back."
+        lede="A copy of this host, and putting one back."
       />
 
       {error && <Notice tone="problem">{error}</Notice>}
