@@ -119,8 +119,10 @@ type App struct {
 	// per-account rate limiters built from them. A store rather than settings
 	// keys because an account is a privilege grant with a credential attached
 	// and there can be any number of them; see migration 0018.
-	chatgpt  *sqlite.ChatGPTAccountStore
-	limiters *accountLimiters
+	chatgpt *sqlite.ChatGPTAccountStore
+	// pluginRows holds the rows of every plugin's table settings.
+	pluginRows *sqlite.PluginRowStore
+	limiters   *accountLimiters
 
 	// pluginOverrides is what the dashboard has said about the plugins the
 	// configuration file declares: removed, or switched on or off. It is a
@@ -317,8 +319,10 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	// would get past the store's own guard and panic at the first credential.
 	if cipher != nil {
 		a.chatgpt = sqlite.NewChatGPTAccountStore(db, cipher, time.Now)
+		a.pluginRows = sqlite.NewPluginRowStore(db, cipher, time.Now)
 	} else {
 		a.chatgpt = sqlite.NewChatGPTAccountStore(db, nil, time.Now)
+		a.pluginRows = sqlite.NewPluginRowStore(db, nil, time.Now)
 	}
 	a.limiters = newAccountLimiters()
 
@@ -645,6 +649,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			SSO:                a.sso,
 			RegistrationPolicy: a.registrationPolicy,
 			Catalog:            a.settingsCatalog,
+			PluginRows:         a.pluginRows,
+			PluginRowsChanged:  func(instance string) { a.reconcileDetached(instance) },
 			PluginType: func(instance string) string {
 				for _, inst := range a.instances(context.Background()) {
 					if inst.Name == instance {

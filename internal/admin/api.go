@@ -140,6 +140,11 @@ type Options struct {
 	// while the host runs, so a value captured at construction would describe
 	// the host as it started rather than as it is.
 	Catalog func() *settings.Catalog
+	// PluginRows holds the rows of every plugin's table settings, and
+	// PluginRowsChanged is told which instance to rebuild after one moves. Nil
+	// leaves those endpoints answering that the feature is unavailable.
+	PluginRows        PluginRows
+	PluginRowsChanged func(instance string)
 
 	// Accounts backs the sign-in form and the Users page. It is separate from
 	// Verifier because the two authenticate different callers: a person with a
@@ -475,6 +480,12 @@ func (s *Server) routes() {
 	// against the principal who made it.
 	api("PUT /api/settings", s.handlePutSettings, auth.PermSettingsWrite)
 	api("GET /api/settings/history", s.handleSettingsHistory, auth.PermSettingsRead)
+	// The rows of a plugin's table settings, edited one at a time. Gated like
+	// the settings they are part of.
+	api("GET /api/settings/rows/{key}", s.handleListPluginRows, auth.PermSettingsRead)
+	api("POST /api/settings/rows/{key}", s.handleAddPluginRow, auth.PermSettingsWrite)
+	api("PATCH /api/settings/rows/{key}/{id}", s.handleUpdatePluginRow, auth.PermSettingsWrite)
+	api("DELETE /api/settings/rows/{key}/{id}", s.handleRemovePluginRow, auth.PermSettingsWrite)
 	// The standing rules that decide which changes are authorised without
 	// asking anybody. Reading is an operator's business -- "why was I not
 	// asked" is a question they have to be able to answer -- while writing

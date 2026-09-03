@@ -178,6 +178,13 @@ func ValidatePluginField(f Field) error {
 	if !f.Kind.Valid() {
 		return fmt.Errorf("settings: plugin field %q has unknown kind %q", f.Key, f.Kind)
 	}
+	if f.Kind == KindCollection {
+		if err := validateColumns(f); err != nil {
+			return err
+		}
+	} else if len(f.Columns) > 0 {
+		return fmt.Errorf("settings: plugin field %q declares columns but is not a collection", f.Key)
+	}
 	// A label for a value that is not an option renders as nothing at all --
 	// the dropdown falls back to showing the raw value, so a typo here looks
 	// like a label that was never written rather than one that missed.
@@ -197,3 +204,38 @@ func ValidatePluginField(f Field) error {
 }
 
 var bareFieldPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// validateColumns checks the shape of a collection's rows.
+//
+// The first column is the identity: what the dashboard lists a row by, what a
+// plugin resolves a caller's name against, and what the row table keeps unique
+// per instance. It has to be a required string, because a row nobody can name
+// is a row nobody can edit or remove. Nesting is refused because a table
+// inside a table is a form nobody can draw.
+func validateColumns(f Field) error {
+	if len(f.Columns) == 0 {
+		return fmt.Errorf("settings: plugin field %q is a collection with no columns", f.Key)
+	}
+	seen := map[string]bool{}
+	for i, c := range f.Columns {
+		if c.Kind == KindCollection {
+			return fmt.Errorf("settings: plugin field %q nests a collection in column %q", f.Key, c.Key)
+		}
+		if c.ShowWhen != nil {
+			return fmt.Errorf("settings: plugin field %q column %q has a visibility rule; "+
+				"a row's form shows every column", f.Key, c.Key)
+		}
+		if err := ValidatePluginField(c); err != nil {
+			return fmt.Errorf("settings: plugin field %q: %w", f.Key, err)
+		}
+		if seen[c.Key] {
+			return fmt.Errorf("settings: plugin field %q declares column %q twice", f.Key, c.Key)
+		}
+		seen[c.Key] = true
+		if i == 0 && (c.Kind != KindString || !c.Required) {
+			return fmt.Errorf("settings: plugin field %q: the first column %q names each "+
+				"row, so it must be a required string", f.Key, c.Key)
+		}
+	}
+	return nil
+}

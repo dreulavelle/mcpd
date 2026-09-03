@@ -80,8 +80,16 @@ func (a *App) fieldsFor(ctx context.Context, inst Instance) ([]settings.Field, e
 }
 
 func isEmpty(v any) bool {
-	s, ok := v.(string)
-	return ok && strings.TrimSpace(s) == ""
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t) == ""
+	case []map[string]any:
+		// A required table with no rows is a setting nobody has filled in.
+		return len(t) == 0
+	case []any:
+		return len(t) == 0
+	}
+	return false
 }
 
 // noteReconcile records why an instance is not serving, or clears the note
