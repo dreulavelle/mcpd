@@ -607,8 +607,8 @@ func TestTools_RefuseWhenUnconfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = p.listExtensions(context.Background(), extensionsArgs{})
-	if err == nil || !strings.Contains(err.Error(), "not configured") {
-		t.Errorf("want a not-configured message, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no customers yet") {
+		t.Errorf("want a message saying where to add one, got %v", err)
 	}
 	if h := p.Check(context.Background()); h.State != "degraded" || !strings.Contains(h.Message, "not configured") {
 		t.Errorf("health should say it is unconfigured: %+v", h)

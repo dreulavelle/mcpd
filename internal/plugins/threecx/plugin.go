@@ -200,16 +200,17 @@ func (a *account) call(err error) error {
 func (p *Plugin) resolve(asked string) (*account, error) {
 	asked = strings.TrimSpace(asked)
 	if len(p.accounts) == 0 {
-		return nil, fmt.Errorf("3cx: not configured yet — add a customer with its address, " +
-			"a system owner extension and its password on the Plugins page")
+		return nil, fmt.Errorf("this 3CX plugin (%s) has no customers yet. Somebody has to "+
+			"add one on the mcpd Plugins page, under %s, Customers -- with the phone "+
+			"system's address, a system owner extension and its password -- before "+
+			"anything here can be read", p.instance(), p.instance())
 	}
 	if asked == "" {
 		if len(p.accounts) == 1 {
 			return p.accounts[0], nil
 		}
 		return nil, fmt.Errorf("this instance serves %d customers, so say which one with "+
-			"customer: %s. list_customers has each one's aliases", len(p.accounts),
-			strings.Join(p.customerNames(), ", "))
+			"customer: %s. list_customers has each one's aliases", len(p.accounts), p.knownCustomers())
 	}
 
 	folded := strings.ToLower(asked)
@@ -241,9 +242,16 @@ func (p *Plugin) resolve(asked string) (*account, error) {
 	case len(partial) > 1:
 		return nil, ambiguous(asked, partial)
 	}
-	return nil, fmt.Errorf("no customer here is called %q. This instance serves: %s. "+
-		"Ask the person which they mean if none of those is obviously it",
-		asked, strings.Join(p.customerNames(), ", "))
+	// Nothing here can be read for a business mcpd has never been given, so
+	// the answer has to be where that is fixed. It names the instance because
+	// a deployment may have several, and it says not to guess: settling for
+	// the nearest of the configured customers would answer confidently about
+	// somebody else's phone system.
+	return nil, fmt.Errorf("no customer here is called %q. This instance (%s) serves %s. "+
+		"If %s should be here, somebody has to add it on the mcpd Plugins page, "+
+		"under %s, Customers -- with the phone system's address and a system owner "+
+		"extension. Tell the person that rather than reading one of the others",
+		asked, p.instance(), p.knownCustomers(), asked, p.instance())
 }
 
 // ambiguous is the refusal for a name that fits more than one customer. It
@@ -266,6 +274,32 @@ func (p *Plugin) customerNames() []string {
 		out = append(out, a.name)
 	}
 	return out
+}
+
+// namesInAMessage bounds how many customers an error spells out. A deployment
+// with sixty of them would otherwise put all sixty in front of a model on
+// every mistyped name, which costs more context than the answer is worth and
+// buries the sentence saying what to do.
+const namesInAMessage = 10
+
+// knownCustomers renders the configured customers for a message, bounded.
+func (p *Plugin) knownCustomers() string {
+	names := p.customerNames()
+	if len(names) <= namesInAMessage {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more (list_customers has them all)",
+		strings.Join(names[:namesInAMessage], ", "), len(names)-namesInAMessage)
+}
+
+// instance is what this plugin is configured under, which is what somebody
+// looks for on the Plugins page. It is the host's name for it rather than the
+// integration's, because a deployment may serve several.
+func (p *Plugin) instance() string {
+	if name := strings.TrimSpace(p.deps.Instance); name != "" {
+		return name
+	}
+	return "3CX"
 }
 
 // limitOf resolves a caller's requested ceiling against the instance's.

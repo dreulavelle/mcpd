@@ -74,6 +74,16 @@ customer and is refused with the list when it has several. Two rows may not
 share a name or alias, or a host, because either would be a call that could
 only be resolved by guessing; `Config.Validate` refuses them.
 
+**A customer nobody has configured is answered with where to add it.** There
+is nothing here to read for a business mcpd has never been given, so the
+answer says so, names the instance to open, and points at the Customers table
+on the Plugins page. It also tells the model not to settle for the nearest
+configured customer: answering confidently about somebody else's phone system
+is the failure that wording exists to prevent. An instance with no customers
+at all gets the same treatment rather than reporting its tools as broken. The
+configured names are listed to ten, after which the count stands in for the
+rest, because sixty of them would bury the sentence that says what to do.
+
 **Access is per instance.** Anyone who can reach the instance -- a key, a
 tunnel, a ChatGPT workspace -- can ask about every customer on it. If some
 people should see only some customers, those customers go on a second
