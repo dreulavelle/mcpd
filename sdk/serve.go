@@ -113,16 +113,17 @@ type promptArgument struct {
 }
 
 type settingDescriptor struct {
-	Key         string   `json:"key"`
-	Label       string   `json:"label"`
-	Help        string   `json:"help,omitempty"`
-	Kind        string   `json:"kind"`
-	Default     any      `json:"default,omitempty"`
-	Options     []string `json:"options,omitempty"`
-	Min         *int     `json:"min,omitempty"`
-	Max         *int     `json:"max,omitempty"`
-	Required    bool     `json:"required,omitempty"`
-	Placeholder string   `json:"placeholder,omitempty"`
+	Key         string              `json:"key"`
+	Label       string              `json:"label"`
+	Help        string              `json:"help,omitempty"`
+	Kind        string              `json:"kind"`
+	Default     any                 `json:"default,omitempty"`
+	Options     []string            `json:"options,omitempty"`
+	Min         *int                `json:"min,omitempty"`
+	Max         *int                `json:"max,omitempty"`
+	Required    bool                `json:"required,omitempty"`
+	Placeholder string              `json:"placeholder,omitempty"`
+	Columns     []settingDescriptor `json:"columns,omitempty"`
 }
 
 type readResourceParams struct {
@@ -177,7 +178,10 @@ type callToolParams struct {
 type mutationParams struct {
 	Action string          `json:"action"`
 	Params json.RawMessage `json:"params"`
-	Plan   json.RawMessage `json:"plan,omitempty"`
+	// Plan is the opaque state alone, from a host built against the first
+	// protocol; PlanFull is the whole plan, from a current one.
+	Plan     json.RawMessage `json:"plan,omitempty"`
+	PlanFull *wirePlan       `json:"plan_full,omitempty"`
 }
 
 // Serve runs the plugin until the host closes its input.
@@ -202,8 +206,10 @@ func (p *Plugin) validate() error {
 	defer p.mu.RUnlock()
 
 	errs := append([]error(nil), p.errs...)
-	if len(p.tools) == 0 && len(p.mutations) == 0 {
-		errs = append(errs, errors.New("plugin registers no tools or mutations"))
+	if len(p.tools) == 0 && len(p.mutations) == 0 && len(p.resources) == 0 && len(p.prompts) == 0 {
+		// The same rule the host applies: something has to be served. A
+		// plugin of resources or prompts alone is something.
+		errs = append(errs, errors.New("plugin registers no tools, mutations, resources or prompts"))
 	}
 	if len(errs) == 0 {
 		return nil
@@ -350,7 +356,7 @@ func (p *Plugin) handle(ctx context.Context, req request) (json.RawMessage, erro
 		// The host hands over resolved settings before anything is called, so
 		// a plugin reads values rather than references and never has to know
 		// where one came from.
-		var cfg map[string]string
+		var cfg map[string]json.RawMessage
 		if err := json.Unmarshal(req.Params, &cfg); err != nil {
 			return nil, invalidParams("could not decode configure params: %v", err)
 		}
@@ -392,7 +398,7 @@ func (p *Plugin) handle(ctx context.Context, req request) (json.RawMessage, erro
 			}
 			return json.Marshal(plan)
 		case "apply":
-			result, err := mutation.apply(ctx, params.Params, params.Plan)
+			result, err := mutation.apply(ctx, params.Params, params.Plan, params.PlanFull)
 			if err != nil {
 				return nil, err
 			}
@@ -482,11 +488,19 @@ func (p *Plugin) describe() describeResult {
 		})
 	}
 	for _, f := range p.settings {
-		out.Settings = append(out.Settings, settingDescriptor{
-			Key: f.Key, Label: f.Label, Help: f.Help, Kind: f.Kind,
-			Default: f.Default, Options: f.Options, Min: f.Min, Max: f.Max,
-			Required: f.Required, Placeholder: f.Placeholder,
-		})
+		out.Settings = append(out.Settings, describeSetting(f))
 	}
 	return out
+}
+
+func describeSetting(f SettingField) settingDescriptor {
+	d := settingDescriptor{
+		Key: f.Key, Label: f.Label, Help: f.Help, Kind: f.Kind,
+		Default: f.Default, Options: f.Options, Min: f.Min, Max: f.Max,
+		Required: f.Required, Placeholder: f.Placeholder,
+	}
+	for _, c := range f.Columns {
+		d.Columns = append(d.Columns, describeSetting(c))
+	}
+	return d
 }

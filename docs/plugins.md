@@ -25,9 +25,26 @@ go build -o /var/lib/mcpd/plugins/weather/weather ./cmd/weather
 echo '{"name":"weather","exec":"weather"}' > /var/lib/mcpd/plugins/weather/plugin.json
 ```
 
-mcpd mounts it at `/mcp/weather`. See [`examples/echo`](examples/echo) for a
-complete plugin including an approval-gated mutation, and the [`sdk`](sdk)
-package docs for the mutation contract.
+mcpd starts it once to learn what it is, registers it as a **type**, and mounts
+an instance of it named `weather` at `/mcp/weather`. From then on it is
+configured like a compiled-in integration: its settings appear on the Plugins
+page, an instance with a required setting blank waits rather than mounting, a
+saved setting rebuilds the instance without a restart, and a second instance of
+the same plugin can be added under another name. `Configured` and
+`ConfiguredJSON` in the plugin read what was saved; a setting may be a table
+(`sdk.KindCollection`). The manifest's `env` block still works for a plugin
+that would rather be configured that way, and is resolved by the host.
+
+The SDK refuses at registration what the host would refuse at mount -- a tool
+name outside the verb vocabulary, an unknown capability, a negative rate limit,
+a resource without a name -- so the mistake is found at the author's desk
+rather than by the whole plugin being skipped. `sdk.ResultBudget` is the
+result ceiling, and an error a plugin returns is rewritten by the host the way
+an in-tree plugin's is.
+
+See [`examples/echo`](examples/echo) for a complete plugin including an
+approval-gated mutation, and the [`sdk`](sdk) package docs for the mutation
+contract.
 
 ## Naming tools
 
@@ -79,7 +96,8 @@ stored rules matching, and a rule that quietly stops matching is an
 
 **It is enforced.** `plugins.checkToolName` refuses a name outside the
 vocabulary at registration — startup for a compiled-in plugin, mount time for
-one built with this SDK. The verbs live in `toolVerbs` in
+one built with this SDK, and the SDK itself refuses it when the plugin starts,
+so an author sees it first. The verbs live in `toolVerbs` in
 `internal/plugins/mutation.go`; if you genuinely need a fifth, add it there, in
 front of the comment explaining why the set is closed.
 

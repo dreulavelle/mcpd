@@ -1023,8 +1023,11 @@ expired proposal un-retryable forever.
 
 In-process plugins register in `registerPlugins`; the switch is the complete
 list a binary can serve. Out-of-process plugins are ordinary programs speaking
-the `sdk` protocol over stdio, mounted from the plugins directory. A third
-kind is a remote MCP server, described below.
+the `sdk` protocol over stdio, found in the plugins directory: each is started
+once to describe itself, becomes a type in the same catalog, and is then
+configured and mounted through the same instance machinery -- settings form,
+readiness, rebuild on change -- as a compiled-in one. A third kind is a remote
+MCP server, described below.
 
 **A subprocess's stdio is multiplexed, and a caller's deadline is its own.**
 One goroutine owns the pipe's read side for the process's whole life and hands
@@ -2031,9 +2034,13 @@ without them: a host that will not start is a dashboard nobody can open to
 enter them. Structure is validated at construction, credentials at `Start`, so
 an unconfigured instance mounts, shows its form, and reports what is missing.
 
-**Instances come from two places.** The configuration file, and the settings
-store where the dashboard writes them. The store layers over the file, and an
-instance knows which it came from, because the two are removed differently.
+**Instances come from three places.** The plugins directory, where an
+out-of-process plugin is a type and an implicit instance of itself; the
+configuration file; and the settings store where the dashboard writes them.
+Each layers over the one before, and an instance knows which it came from,
+because they are removed differently: a store record is deleted, while a file
+or directory declaration is overridden, since it is still there on the next
+start.
 
 **The dashboard can remove a file-declared plugin, and mcpd never touches the
 file.** There is no code anywhere that writes `config.yaml`, and under systemd

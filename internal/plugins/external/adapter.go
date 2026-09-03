@@ -14,6 +14,9 @@ import (
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
+// ensure the adapter keeps reporting health without a round trip.
+var _ plugins.HealthReporter = (*Plugin)(nil)
+
 // Plugin adapts a subprocess to the host's plugin contract.
 //
 // It is a second implementation of the same interface an in-tree plugin
@@ -27,6 +30,7 @@ type Plugin struct {
 	mu       sync.RWMutex
 	proc     *Process
 	describe DescribeResult
+	health   plugins.Health
 }
 
 // NewPlugin builds an adapter. The subprocess starts in Start, not here, so a
@@ -39,8 +43,14 @@ func NewPlugin(dir string, m Manifest, deps plugins.Deps) *Plugin {
 func (p *Plugin) Descriptor() plugins.Descriptor {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	// The instance name when the host gave one: two configured instances of
+	// one plugin are two endpoints, and the manifest name is the type.
+	name := p.manifest.Name
+	if p.deps.Instance != "" {
+		name = p.deps.Instance
+	}
 	return plugins.Descriptor{
-		Name:        p.manifest.Name,
+		Name:        name,
 		Version:     orDefault(p.describe.Version, "0.0.0"),
 		Title:       orDefault(p.describe.Title, p.manifest.Name),
 		Description: p.describe.Description,
@@ -57,7 +67,12 @@ func (p *Plugin) Handshake(ctx context.Context) error {
 		return err
 	}
 
-	proc, err := Spawn(ctx, p.dir, p.manifest, env, p.deps.Log)
+	// The process outlives the handshake. Its lifetime is the instance's, ended
+	// by Shutdown, not by whatever deadline the caller put on the handshake --
+	// a bounded context here used to take the process with it the moment the
+	// handshake returned, leaving an instance that had described itself
+	// perfectly and could answer nothing.
+	proc, err := Spawn(context.WithoutCancel(ctx), p.dir, p.manifest, env, p.deps.Log)
 	if err != nil {
 		return err
 	}
@@ -76,6 +91,7 @@ func (p *Plugin) Handshake(ctx context.Context) error {
 	p.mu.Lock()
 	p.proc = proc
 	p.describe = describe
+	p.health = plugins.Healthy()
 	p.mu.Unlock()
 
 	p.deps.Log.Info("external plugin handshake complete",
@@ -164,7 +180,11 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 		plugins.Tool(r, spec, func(ctx context.Context, args json.RawMessage) (any, error) {
 			raw, err := p.callTool(ctx, name, args)
 			if err != nil {
-				return nil, err
+				// The same rewriting an in-tree plugin's errors get: a TLS or
+				// DNS failure inside the plugin's process arrives here as Go's
+				// stock wording, and the operator-facing sentence is built
+				// once, on this side, rather than in every plugin.
+				return nil, plugins.Explain(err)
 			}
 			return decodeResult(raw), nil
 		})
@@ -259,6 +279,14 @@ func (p *Plugin) Shutdown(ctx context.Context) error {
 
 // Check implements plugins.Checker.
 func (p *Plugin) Check(ctx context.Context) plugins.Health {
+	h := p.check(ctx)
+	p.mu.Lock()
+	p.health = h
+	p.mu.Unlock()
+	return h
+}
+
+func (p *Plugin) check(ctx context.Context) plugins.Health {
 	proc, err := p.process()
 	if err != nil {
 		return plugins.Unhealthy("plugin process is not running")
@@ -275,6 +303,19 @@ func (p *Plugin) Check(ctx context.Context) plugins.Health {
 	default:
 		return plugins.Unhealthy(result.Message)
 	}
+}
+
+// Health implements plugins.HealthReporter: what the last check found, or the
+// handshake's own verdict before any check has run. Without it the host had
+// no answer at startup and assumed healthy, whatever the plugin would have
+// said.
+func (p *Plugin) Health() plugins.Health {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.health.State == "" {
+		return plugins.Unhealthy("plugin has not completed its handshake")
+	}
+	return p.health
 }
 
 // mutationBridge routes the three mutation phases to the subprocess.
@@ -380,9 +421,10 @@ func (b *mutationBridge) Apply(ctx context.Context, params json.RawMessage, plan
 
 	var result ApplyResult
 	err = proc.Call(ctx, MethodApply, MutationParams{
-		Action: b.action,
-		Params: params,
-		Plan:   state,
+		Action:   b.action,
+		Params:   params,
+		Plan:     state,
+		PlanFull: planResultOf(plan, state),
 	}, &result)
 
 	if err != nil {
@@ -410,6 +452,29 @@ func (b *mutationBridge) Observe(ctx context.Context, params json.RawMessage) (j
 		return nil, err
 	}
 	return result, nil
+}
+
+// planResultOf turns the plan the host holds back into wire form, so apply is
+// handed everything plan produced and not only the opaque state.
+func planResultOf(plan plugins.Plan[json.RawMessage], state json.RawMessage) *PlanResult {
+	out := &PlanResult{Before: plan.Before, Desired: plan.Desired, Impact: plan.Impact, State: state}
+	if plan.Rollback != nil {
+		if raw, err := json.Marshal(plan.Rollback); err == nil {
+			out.Rollback = raw
+		}
+	}
+	if len(plan.Preconditions) > 0 {
+		if raw, err := json.Marshal(plan.Preconditions); err == nil {
+			out.Preconditions = raw
+		}
+	}
+	for _, c := range plan.Changes {
+		out.Changes = append(out.Changes, WireChange{Field: c.Field, From: c.From, To: c.To})
+	}
+	if plan.RiskOverride != nil {
+		out.RiskOverride = string(*plan.RiskOverride)
+	}
+	return out
 }
 
 // planState recovers the opaque state this bridge put on the plan.
@@ -545,17 +610,25 @@ func orDefault(v, fallback string) string {
 // Configure hands resolved settings to the plugin process.
 //
 // Best-effort by design: a plugin written before settings existed does not
-// implement the method, and failing the handshake over that would break every
-// plugin that was working yesterday.
-func (p *Plugin) Configure(ctx context.Context, cfg map[string]string) {
+// implement the method, and failing the build over that would break every
+// plugin that was working yesterday. A plugin that declared settings and then
+// refuses them is a different matter, and is reported.
+func (p *Plugin) Configure(ctx context.Context, cfg map[string]any) error {
 	if len(cfg) == 0 {
-		return
+		return nil
+	}
+	proc, err := p.process()
+	if err != nil {
+		return err
 	}
 	var ack map[string]bool
-	if err := p.proc.Call(ctx, MethodConfigure, cfg, &ack); err != nil {
-		p.deps.Log.Debug("plugin does not accept settings; continuing without them",
-			"error", err)
+	if err := proc.Call(ctx, MethodConfigure, cfg, &ack); err != nil {
+		if len(p.SettingFields()) > 0 {
+			return fmt.Errorf("external: plugin %s declares settings but refused them: %w", p.manifest.Name, err)
+		}
+		p.deps.Log.Debug("plugin does not accept settings; continuing without them", "error", err)
 	}
+	return nil
 }
 
 // SettingFields returns what this plugin says it needs configured.

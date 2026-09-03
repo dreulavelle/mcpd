@@ -31,6 +31,7 @@ import (
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/plugins/external"
 	"github.com/spoked/mcpd/internal/registry"
 	"github.com/spoked/mcpd/internal/servertls"
 	"github.com/spoked/mcpd/internal/settings"
@@ -122,7 +123,11 @@ type App struct {
 	chatgpt *sqlite.ChatGPTAccountStore
 	// pluginRows holds the rows of every plugin's table settings.
 	pluginRows *sqlite.PluginRowStore
-	limiters   *accountLimiters
+	// externalManifests are the plugins found in the plugins directory, by
+	// name. Each is a type in the catalog and an implicit instance of itself
+	// unless the dashboard or the file says otherwise.
+	externalManifests map[string]external.Manifest
+	limiters          *accountLimiters
 
 	// pluginOverrides is what the dashboard has said about the plugins the
 	// configuration file declares: removed, or switched on or off. It is a

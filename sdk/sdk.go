@@ -22,11 +22,21 @@
 // Drop the compiled binary and a plugin.json into the plugins directory and
 // mcpd mounts it at /mcp/weather. Nothing about the host needs to change.
 //
+// # Naming tools
+//
+// A tool is named verb_resource, and the verb is one of list, get, search or
+// aggregate. The host prefixes the plugin's instance name, so "search" would
+// reach a model as "weather_search" -- a service and a verb, saying nothing
+// about what is searched. Registration refuses a name outside the vocabulary
+// here, at the author's desk, rather than at mount time where the whole
+// plugin would be skipped.
+//
 // # Settings
 //
-// A plugin declares what it needs configured and the host does the rest:
-// renders the form, validates what is typed, encrypts the secrets, and hands
-// back resolved values.
+// A plugin declares what it needs configured and the host does the rest: it
+// shows the plugin on the Plugins page as a type, renders the form for each
+// instance, validates what is typed, encrypts the secrets, and hands back
+// resolved values before any tool is called.
 //
 //	sdk.Settings(p,
 //		sdk.SettingField{Key: "api_token", Label: "API token", Kind: sdk.KindSecret, Required: true},
@@ -35,9 +45,21 @@
 //
 //	token, ok := p.Configured("api_token")
 //
-// A plugin never reads a file, an environment variable, or a credential
-// reference. What it receives is the value, whichever of those it came from,
-// which is one fewer thing every plugin has to get right.
+// A setting may be a table -- Kind sdk.KindCollection with Columns -- for the
+// thing whose size nobody knows in advance, such as the customers one
+// instance serves. It arrives as a list of records, read with ConfiguredJSON.
+//
+// A plugin configured this way never reads a file, an environment variable,
+// or a credential reference. What it receives is the value, whichever of
+// those it came from. The manifest's env block still works for a plugin that
+// prefers it, and is resolved by the host the same way.
+//
+// # What one call may return
+//
+// A tool result enters a model's context, and clients cut a response past
+// their own ceiling mid-JSON with nothing saying what went missing. Bound
+// what you build to ResultBudget and say so in the result; see MaxResultBytes
+// for the arithmetic.
 //
 // # Resources and prompts
 //
@@ -100,6 +122,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -112,6 +135,45 @@ var (
 	actionPattern     = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 	pluginNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 )
+
+// toolVerbs is the vocabulary a tool name may begin with. It mirrors the
+// host's closed set -- see internal/plugins/mutation.go -- and the two must
+// agree, because the host enforces it too, at mount time, by skipping the
+// whole plugin.
+var toolVerbs = []string{"aggregate_", "get_", "list_", "search_"}
+
+// Capabilities a caller may be required to hold. Empty means read.
+const (
+	CapRead    = "read"
+	CapPropose = "propose"
+	CapApprove = "approve"
+	CapAdmin   = "admin"
+)
+
+func validCapability(c string) bool {
+	switch c {
+	case "", CapRead, CapPropose, CapApprove, CapAdmin:
+		return true
+	}
+	return false
+}
+
+// MaxResultBytes is how much JSON one tool result may carry: 25,000 tokens
+// at roughly 3.5 characters each, halved because a result reaches an older
+// client twice, rounded down for the envelope. It is the host's number, kept
+// in step by hand.
+const MaxResultBytes = 40_000
+
+// ResultBudget returns the byte ceiling for one tool result carrying the
+// given number of independent collections: a composite answer is one result,
+// and three collections each bounded at the whole budget is a result three
+// times past it.
+func ResultBudget(collections int) int {
+	if collections < 1 {
+		collections = 1
+	}
+	return MaxResultBytes / collections
+}
 
 // Risk classifies the blast radius of a mutation. The host may raise it by
 // policy; nothing lowers it.
@@ -206,8 +268,9 @@ type ToolSpec struct {
 	Description string
 	// Idempotent marks a tool whose repeated invocation has no extra effect.
 	Idempotent bool
-	// Capability is what a caller must hold to invoke this tool. Empty means
-	// read, which is what a tool is unless it says otherwise.
+	// Capability is what a caller must hold to invoke this tool: one of
+	// CapRead, CapPropose, CapApprove or CapAdmin. Empty means read, which is
+	// what a tool is unless it says otherwise.
 	//
 	// For the read that is not merely a read: a credential dump, a billing
 	// figure, anything where seeing it is itself the privilege.
@@ -278,10 +341,10 @@ type Plugin struct {
 	promptOrder []string
 
 	// settings is what this plugin needs configured; config is what the host
-	// resolved and handed back. A plugin declares the first and reads the
-	// second, and never has to know where a value came from.
+	// resolved and handed back, as JSON per key. A plugin declares the first
+	// and reads the second, and never has to know where a value came from.
 	settings []SettingField
-	config   map[string]string
+	config   map[string]json.RawMessage
 
 	healthFn   func(context.Context) Health
 	shutdownFn func(context.Context) error
@@ -331,7 +394,7 @@ type registeredMutation struct {
 	spec        MutationSpec
 	inputSchema json.RawMessage
 	plan        func(context.Context, json.RawMessage) (wirePlan, error)
-	apply       func(context.Context, json.RawMessage, json.RawMessage) (ApplyResult, error)
+	apply       func(context.Context, json.RawMessage, json.RawMessage, *wirePlan) (ApplyResult, error)
 	observe     func(context.Context, json.RawMessage) (json.RawMessage, error)
 }
 
@@ -356,9 +419,22 @@ func Tool[In, Out any](p *Plugin, spec ToolSpec, fn func(context.Context, In) (O
 		p.addErr(fmt.Errorf("tool name %q must match %s", spec.Name, toolNamePattern))
 		return
 	}
+	if err := checkToolVerb(spec.Name); err != nil {
+		p.addErr(err)
+		return
+	}
 	if spec.Description == "" {
 		p.addErr(fmt.Errorf("tool %q requires a description; the model relies on it "+
 			"to choose correctly", spec.Name))
+		return
+	}
+	if !validCapability(spec.Capability) {
+		p.addErr(fmt.Errorf("tool %q has unknown capability %q; it is one of read, propose, approve or admin",
+			spec.Name, spec.Capability))
+		return
+	}
+	if spec.RateLimit < 0 {
+		p.addErr(fmt.Errorf("tool %q declares a negative rate limit; leave it zero for none", spec.Name))
 		return
 	}
 
@@ -452,17 +528,14 @@ func RegisterMutation[P, S any](p *Plugin, spec MutationSpec, m Mutation[P, S]) 
 			return erase(plan)
 		},
 
-		apply: func(ctx context.Context, raw, state json.RawMessage) (ApplyResult, error) {
+		apply: func(ctx context.Context, raw, state json.RawMessage, full *wirePlan) (ApplyResult, error) {
 			params, err := decode(raw)
 			if err != nil {
 				return ApplyResult{}, err
 			}
-			// Apply receives the plan's opaque state back. The typed portions
-			// are re-derived from parameters, which the host guarantees are
-			// byte-identical to what was approved.
-			var plan Plan[S]
-			if len(state) > 0 {
-				_ = json.Unmarshal(state, &plan.State)
+			plan, err := restore[S](state, full)
+			if err != nil {
+				return ApplyResult{}, err
 			}
 			return m.Apply(ctx, params, plan)
 		},
@@ -509,6 +582,63 @@ func erase[S any](p Plan[S]) (wirePlan, error) {
 		out.RiskOverride = string(p.RiskOverride)
 	}
 	return out, nil
+}
+
+// restore rebuilds the typed plan Apply is handed from what the host sent.
+//
+// A host built against the first protocol sends the opaque state alone; a
+// current one also sends the whole plan, so Apply sees what Plan produced --
+// before, desired, the diff, the impact -- rather than a plan with everything
+// but State zero. A field that will not decode into S is reported rather than
+// silently zeroed, because a plan Apply cannot read is a plan it must not act
+// on.
+func restore[S any](state json.RawMessage, full *wirePlan) (Plan[S], error) {
+	var plan Plan[S]
+	if full == nil {
+		if len(state) > 0 {
+			if err := json.Unmarshal(state, &plan.State); err != nil {
+				return plan, fmt.Errorf("the plan state the host sent could not be read: %w", err)
+			}
+		}
+		return plan, nil
+	}
+	plan.Changes = full.Changes
+	plan.Impact = full.Impact
+	plan.RiskOverride = Risk(full.RiskOverride)
+	for _, part := range []struct {
+		name string
+		raw  json.RawMessage
+		into any
+	}{
+		{"before", full.Before, &plan.Before},
+		{"desired", full.Desired, &plan.Desired},
+		{"preconditions", full.Preconditions, &plan.Preconditions},
+		{"rollback", full.Rollback, &plan.Rollback},
+		{"state", full.State, &plan.State},
+	} {
+		if len(part.raw) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(part.raw, part.into); err != nil {
+			return plan, fmt.Errorf("the plan's %s could not be read back: %w", part.name, err)
+		}
+	}
+	return plan, nil
+}
+
+// checkToolVerb holds a tool name to the vocabulary.
+func checkToolVerb(name string) error {
+	for _, verb := range toolVerbs {
+		if name == strings.TrimSuffix(verb, "_") {
+			return fmt.Errorf("tool name %q is a bare verb; name what it acts on, as in %sthing", name, verb)
+		}
+		if strings.HasPrefix(name, verb) && len(name) > len(verb) {
+			return nil
+		}
+	}
+	return fmt.Errorf("tool name %q names no verb; it must begin with one of list_, get_, "+
+		"search_ or aggregate_ and say what it acts on -- the host prefixes the plugin "+
+		"name, so %q would reach a model as a service and a noun", name, name)
 }
 
 func validRisk(r Risk) bool {
