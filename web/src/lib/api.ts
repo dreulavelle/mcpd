@@ -684,6 +684,10 @@ export interface Endpoints {
   aggregate: string;
   /** The shape of a single-system address. */
   per_plugin_example: string;
+  /** False when no public address is set and the two above are bare paths. */
+  advertised: boolean;
+  /** The MCP listener's port, for filling a bare path in from this page's host. */
+  port: string;
 }
 
 /* -- the approval policy --------------------------------------------------- */

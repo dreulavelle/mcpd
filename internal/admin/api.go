@@ -8,6 +8,7 @@
 package admin
 
 import (
+	"net"
 	"context"
 	"encoding/json"
 	"errors"
@@ -201,6 +202,9 @@ type Options struct {
 	// PublicURL is the address clients reach, used to render a connect URL an
 	// operator can copy rather than assemble.
 	PublicURL func(ctx context.Context) string
+	// ListenAddr is where the MCP listener binds, for the port a client
+	// would use when no public address has been set.
+	ListenAddr string
 	// FrontendPublicURL is how a browser reaches this dashboard, when something
 	// in front of this process terminates TLS. Empty means the connection
 	// decides. It is deliberately not PublicURL: that is the MCP endpoint, a
@@ -780,6 +784,12 @@ type endpointsResponse struct {
 	Aggregate string `json:"aggregate"`
 	// PerPlugin is the address style that serves exactly one integration.
 	PerPlugin string `json:"per_plugin_example"`
+	// Advertised reports whether the addresses above carry a host. When
+	// they do not -- no public address is set -- they are bare paths, and
+	// the page fills in the host it was itself reached on, with Port.
+	Advertised bool `json:"advertised"`
+	// Port is the MCP listener's port, for that fallback.
+	Port string `json:"port"`
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
@@ -807,8 +817,14 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 
 // handleEndpoints reports the addresses a client can connect to.
 func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
+	port := "8080"
+	if _, p, err := net.SplitHostPort(s.opts.ListenAddr); err == nil && p != "" {
+		port = p
+	}
 	s.writeJSON(w, r, http.StatusOK, endpointsResponse{
-		Aggregate: s.connectURL(r.Context(), "/mcp"),
+		Advertised: s.publicURL(r.Context()) != "",
+		Port:       port,
+		Aggregate:  s.connectURL(r.Context(), "/mcp"),
 		// {plugin} rather than {name}: the placeholder is shown to an operator
 		// beside the route that serves it, and internal/mcp/host.go registers
 		// that route as /mcp/{plugin}. Two spellings of one path read as two

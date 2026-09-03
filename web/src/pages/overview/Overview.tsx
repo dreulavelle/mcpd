@@ -247,7 +247,12 @@ function ConnectingDirectly({ endpoints }: { endpoints: Endpoints | null | undef
               still be serving it — this card is the only thing that failed.
             </Notice>
           ) : (
-            <Copyable value={endpoints.aggregate} label="address" />
+            <Copyable
+              value={endpoints.advertised
+                ? endpoints.aggregate
+                : `http://${window.location.hostname}:${endpoints.port}${endpoints.aggregate}`}
+              label="address"
+            />
           )}
           <CodeBlock>{"Authorization: Bearer YOUR_KEY"}</CodeBlock>
           <p className="text-xs text-muted-foreground">

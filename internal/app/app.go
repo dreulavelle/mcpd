@@ -630,6 +630,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			BypassOpened:      a.notifyBypassOpened,
 			NotifyTest:        a.sendTestNotification,
 			PublicURL:         a.publicURL,
+			ListenAddr:        cfg.Server.Listen,
 			FrontendPublicURL: a.frontendPublicURL,
 			Accounts:          a.accounts,
 			Identities:        a.accounts,

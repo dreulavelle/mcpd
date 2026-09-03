@@ -16,6 +16,7 @@ function plugin(name: string): Plugin {
 function stub(aggregate = "https://mcp.example.net/mcp") {
   vi.spyOn(api, "endpoints").mockResolvedValue({
     aggregate, per_plugin_example: `${aggregate}/{plugin}`,
+    advertised: aggregate.startsWith("http"), port: "8080",
   });
   vi.spyOn(api, "plugins").mockResolvedValue({
     plugins: [plugin("graylog"), plugin("echo")], count: 2,
@@ -59,8 +60,8 @@ describe("the clients page", () => {
   it("says when the address is only a path, and names the setting", async () => {
     stub("/mcp");
     renderWith(<Clients />, { path: "/clients" });
-    expect(await screen.findByText(/has not been told its own address/)).toBeInTheDocument();
-    expect(screen.getAllByText(/YOUR-HOST/).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/A guess from this page's host/)).toBeInTheDocument();
+    expect(screen.getAllByText(/localhost:8080\/mcp/).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: "Settings › General" }).length).toBeGreaterThan(0);
   });
 
