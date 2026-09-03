@@ -11,9 +11,9 @@ import (
 func twoCustomers(t *testing.T) (*Plugin, *fakePBX, *fakePBX) {
 	t.Helper()
 	acme, acmeSrv := newFakePBX(t, map[string]string{
-		"SystemStatus": `{"FQDN":"acme.example","Version":"20.0.1"}`, "LicenseStatus": `{}`, "Trunks": collection(0)})
+		"SystemStatus": `{"FQDN":"acme.example","Version":"20.0.1"}`, "LicenseStatus": `{}`, "Trunks": collection(0), "Users": collection(0)})
 	globex, globexSrv := newFakePBX(t, map[string]string{
-		"SystemStatus": `{"FQDN":"globex.example","Version":"20.0.2"}`, "LicenseStatus": `{}`, "Trunks": collection(0)})
+		"SystemStatus": `{"FQDN":"globex.example","Version":"20.0.2"}`, "LicenseStatus": `{}`, "Trunks": collection(0), "Users": collection(0)})
 	// Both fakes are httptest servers on loopback; the guard checks the
 	// configured host, so each client is built over its own server's client.
 	p, err := New(testDeps(), Config{Customers: []Customer{
@@ -145,5 +145,39 @@ func TestTools_ReachTheNamedCustomer(t *testing.T) {
 	}
 	if strings.Join(list.Customers[1].Aliases, ",") != "globex" {
 		t.Errorf("aliases: %v", list.Customers[1].Aliases)
+	}
+}
+
+// Starting reaches no phone system; a check on demand reaches every one, and
+// names the customer whose sign-in fails while the others stay reachable.
+func TestStart_ReachesNothingUntilAsked(t *testing.T) {
+	p, acme, globex := twoCustomers(t)
+	ctx := context.Background()
+	if err := p.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if acme.logins.Load()+globex.logins.Load() != 0 {
+		t.Error("start must not sign in to any customer")
+	}
+	if h := p.Check(ctx); h.State != "healthy" {
+		t.Errorf("customers nobody has asked about are not a problem: %+v", h)
+	}
+
+	globex.loginOK = false
+	list, err := p.listCustomers(ctx, customersArgs{Check: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acme.logins.Load() != 1 || globex.logins.Load() != 1 {
+		t.Errorf("check should sign in to each customer once: %d %d", acme.logins.Load(), globex.logins.Load())
+	}
+	if r := list.Customers[0].Reachable; r == nil || !*r {
+		t.Errorf("acme should be reachable: %+v", list.Customers[0])
+	}
+	if r := list.Customers[1].Reachable; r == nil || *r || !strings.Contains(list.Customers[1].LastError, "extension and password") {
+		t.Errorf("globex should report its refused sign-in: %+v", list.Customers[1])
+	}
+	if h := p.Check(ctx); h.State != "degraded" || !strings.Contains(h.Message, "Globex Roofing") {
+		t.Errorf("health should name the failing customer: %+v", h)
 	}
 }

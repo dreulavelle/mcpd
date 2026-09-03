@@ -48,8 +48,13 @@ func TestIntegration_Starts(t *testing.T) {
 	if err := p.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	// Start reaches nothing; the check on demand is what signs in.
+	list, err := p.listCustomers(ctx, customersArgs{Check: true})
+	if err != nil || list.Count != 1 || list.Customers[0].Reachable == nil || !*list.Customers[0].Reachable {
+		t.Fatalf("list_customers with check should reach the PBX: %+v %v", list, err)
+	}
 	if h := p.Check(ctx); h.State != plugins.HealthyState {
-		t.Errorf("Check after a successful start: %+v", h)
+		t.Errorf("Check after a successful probe: %+v", h)
 	}
 }
 

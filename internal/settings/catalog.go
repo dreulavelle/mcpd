@@ -152,13 +152,8 @@ func purposeField() Field {
 	return Field{
 		Key: PluginPurposeKey, Label: "What this one covers", Kind: KindString,
 		Placeholder: "the Springfield branch network",
-		Help: "Shown to an assistant beside this instance's tools, so it can " +
-			"tell two of the same integration apart — which Observium is the " +
-			"Springfield one. A short phrase rather than a sentence: it is " +
-			"repeated on every tool this instance serves, so “the Springfield " +
-			"branch network” costs less than “This MCP handles communications " +
-			"to Springfield” and says the same thing. Leave it empty if you " +
-			"only have one.",
+		Help: "A short phrase that tells the assistant which one this is when " +
+			"you run more than one of the same integration.",
 	}
 }
 

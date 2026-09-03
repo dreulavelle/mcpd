@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -442,7 +444,8 @@ func (p *Plugin) bundleReport(_ context.Context, args bundleReportArgs) (BundleR
 					break
 				}
 				out.Changes = append(out.Changes, EditRow{
-					At: when(e.At), User: e.User, IP: e.IP, Object: e.Object, Before: e.Before, After: e.After,
+					At: when(e.At), User: e.User, IP: e.IP, Object: e.Object,
+					Before: scrubSecrets(e.Before), After: scrubSecrets(e.After),
 				})
 			}
 			for _, c := range snap.Changes.Signins {
@@ -574,3 +577,51 @@ func when(t time.Time) string {
 	}
 	return t.UTC().Format(time.RFC3339)
 }
+
+// scrubSecrets removes credential values from a configuration edit before it
+// can reach an answer.
+//
+// The audit log records what a setting was and what it became as the raw JSON
+// of the object, and an edit to an extension's SIP password or a trunk's
+// registration password is exactly the kind of change somebody looks up. The
+// same names the transport refuses to fetch are refused here on the way out:
+// a key that names a credential keeps its place and loses its value, so the
+// edit is still visible as an edit.
+func scrubSecrets(text string) string {
+	if text == "" {
+		return text
+	}
+	var v any
+	if err := json.Unmarshal([]byte(text), &v); err == nil {
+		out, err := json.Marshal(scrubValue(v))
+		if err == nil {
+			return string(out)
+		}
+	}
+	// Not JSON, or JSON that will not round-trip: redact by shape instead.
+	return credentialPair.ReplaceAllString(text, `$1[redacted]$3`)
+}
+
+func scrubValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if refusedField(k) {
+				t[k] = "[redacted]"
+				continue
+			}
+			t[k] = scrubValue(val)
+		}
+		return t
+	case []any:
+		for i := range t {
+			t[i] = scrubValue(t[i])
+		}
+		return t
+	}
+	return v
+}
+
+// credentialPair matches key: "value" where the key names a credential, for
+// text that is not well-formed JSON.
+var credentialPair = regexp.MustCompile(`(?i)("?[a-z0-9_]*(?:password|passwd|secret|token|pin|authid|sipid|licensekey)[a-z0-9_]*"?\s*[:=]\s*")([^"]*)(")`)
