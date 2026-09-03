@@ -60,7 +60,7 @@ func TestMigrate0015_UpgradeGrantsNothing(t *testing.T) {
 func TestMigrate0015_AMembershipNamesExactlyOneSubject(t *testing.T) {
 	ctx := context.Background()
 	db := migrated(t, "members15.db")
-	seedUser(t, db, "usr_1", "a@example.com")
+	seedUserAtHead(t, db, "usr_1", "a@example.com")
 	seedGroup(t, db, "grp_1", "Field")
 	seedKey(t, db, "key_1", "connector")
 
@@ -99,9 +99,9 @@ func TestMigrate0015_ASecretBelongsToOneKey(t *testing.T) {
 
 	insert := func(id, hash string) error {
 		_, err := db.Writer().ExecContext(ctx, `
-			INSERT INTO api_keys (id, name, secret_hash, role, plugins_json,
+			INSERT INTO api_keys (id, name, secret_hash, role_id, grants_json,
 			                      created_by, created_at, updated_at)
-			VALUES (?,?,?,'user','[]','test',0,0)`, id, id, hash)
+			VALUES (?,?,?,'role_operator','[]','test',0,0)`, id, id, hash)
 		return err
 	}
 	if err := insert("key_1", "digest-a"); err != nil {
@@ -115,21 +115,6 @@ func TestMigrate0015_ASecretBelongsToOneKey(t *testing.T) {
 	}
 }
 
-// A role this build does not know cannot reach the table, for the same reason
-// an unknown account status cannot: the map from roles to capabilities is the
-// only thing that knows what a role means, and a value outside it would be a
-// row nothing could interpret.
-func TestMigrate0015_KeyRolesAreConstrained(t *testing.T) {
-	ctx := context.Background()
-	db := migrated(t, "roles15.db")
-	if _, err := db.Writer().ExecContext(ctx, `
-		INSERT INTO api_keys (id, name, secret_hash, role, plugins_json,
-		                      created_by, created_at, updated_at)
-		VALUES ('key_1','k','digest','superuser','[]','test',0,0)`); err == nil {
-		t.Error("a role outside the set was accepted")
-	}
-}
-
 // Group names are unique case-insensitively: two groups called "Field" and
 // "field" are one group as far as anybody reading the list is concerned.
 func TestMigrate0015_GroupNamesAreUniqueRegardlessOfCase(t *testing.T) {
@@ -137,8 +122,8 @@ func TestMigrate0015_GroupNamesAreUniqueRegardlessOfCase(t *testing.T) {
 	db := migrated(t, "names15.db")
 	seedGroup(t, db, "grp_1", "Field")
 	if _, err := db.Writer().ExecContext(ctx, `
-		INSERT INTO groups (id, name, description, plugins_json, created_by, created_at, updated_at)
-		VALUES ('grp_2','field','','[]','test',0,0)`); err == nil {
+		INSERT INTO groups (id, name, description, role_id, grants_json, created_by, created_at, updated_at)
+		VALUES ('grp_2','field','','','[]','test',0,0)`); err == nil {
 		t.Error("two groups whose names differ only in case were accepted")
 	}
 }
@@ -155,8 +140,8 @@ func migrated(t *testing.T, name string) *DB {
 func seedGroup(t *testing.T, db *DB, id, name string) {
 	t.Helper()
 	if _, err := db.Writer().ExecContext(context.Background(), `
-		INSERT INTO groups (id, name, description, plugins_json, created_by, created_at, updated_at)
-		VALUES (?,?,'','[]','test',0,0)`, id, name); err != nil {
+		INSERT INTO groups (id, name, description, role_id, grants_json, created_by, created_at, updated_at)
+		VALUES (?,?,'','','[]','test',0,0)`, id, name); err != nil {
 		t.Fatalf("seed group: %v", err)
 	}
 }
@@ -164,9 +149,9 @@ func seedGroup(t *testing.T, db *DB, id, name string) {
 func seedKey(t *testing.T, db *DB, id, name string) {
 	t.Helper()
 	if _, err := db.Writer().ExecContext(context.Background(), `
-		INSERT INTO api_keys (id, name, secret_hash, role, plugins_json,
+		INSERT INTO api_keys (id, name, secret_hash, role_id, grants_json,
 		                      created_by, created_at, updated_at)
-		VALUES (?,?,?,'user','[]','test',0,0)`, id, name, "digest-"+id); err != nil {
+		VALUES (?,?,?,'role_operator','[]','test',0,0)`, id, name, "digest-"+id); err != nil {
 		t.Fatalf("seed key: %v", err)
 	}
 }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import { api, type ApiKey, type Caller } from "@/lib/api";
+import { builtinPermissions } from "@/lib/permissions";
 import { renderWith } from "@/test/render";
 import { Keys } from "./Keys";
 
@@ -8,16 +9,21 @@ function apiKey(overrides: Partial<ApiKey> = {}): ApiKey {
   return {
     id: "key_abc",
     name: "reporting agent",
-    role: "user",
-    plugins: ["graylog", "observium", "echo"],
-    reaches: ["graylog", "observium", "echo"],
+    role: "role_operator",
+    role_name: "Operator",
+    grants: [{ plugin: "*", level: "write" }],
+    reaches: [
+      { plugin: "graylog", level: "write" },
+      { plugin: "observium", level: "write" },
+      { plugin: "echo", level: "write" },
+    ],
+    permissions: builtinPermissions("role_operator"),
     groups: [],
     status: "active",
     created_by: "user:admin",
     created_at: "2026-08-01T09:00:00Z",
-    updated_at: "2026-08-01T09:00:00Z",
     ...overrides,
-  } as ApiKey;
+  };
 }
 
 function stub(keys: ApiKey[], callers: Caller[]) {

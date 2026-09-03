@@ -159,7 +159,7 @@ func TestMigrate0011_TheDatabaseRefusesAnOverlongName(t *testing.T) {
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	seedAccount(t, db, "usr_1", "alice@example.com", "Alice")
+	seedAccountAtHead(t, db, "usr_1", "alice@example.com", "Alice")
 
 	_, err := db.Writer().ExecContext(ctx,
 		`UPDATE users SET display_name = ? WHERE id = 'usr_1'`,
@@ -178,6 +178,22 @@ func seedAccount(t *testing.T, db *DB, id, email, displayName string) {
 		INSERT INTO users (id, email, password_hash, display_name, role,
 		                   plugins_json, disabled, created_at, updated_at)
 		VALUES (?,?,'hash',?,'admin','["*"]',0,0,0)`,
+		id, email, displayName); err != nil {
+		t.Fatalf("seed account: %v", err)
+	}
+}
+
+// seedAccountAtHead inserts a user against the schema this build ships --
+// role_id and grants_json, from 0025 -- for a test that seeds after Migrate
+// has already brought the database all the way there. seedAccount matches the
+// schema as it stood before 0025 renamed these columns, for a test seeding an
+// upgrade still in progress.
+func seedAccountAtHead(t *testing.T, db *DB, id, email, displayName string) {
+	t.Helper()
+	if _, err := db.Writer().ExecContext(context.Background(), `
+		INSERT INTO users (id, email, password_hash, display_name, role_id,
+		                   grants_json, disabled, created_at, updated_at)
+		VALUES (?,?,'hash',?,'role_administrator','[{"plugin":"*","level":"write"}]',0,0,0)`,
 		id, email, displayName); err != nil {
 		t.Fatalf("seed account: %v", err)
 	}

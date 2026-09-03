@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type Meta, type Session } from "@/lib/api";
+import { builtinPermissions } from "@/lib/permissions";
 import { consumeSSOOutcome, resetSSOOutcome } from "@/lib/sso";
 import App from "@/App";
 import { AwaitingApproval, SignIn } from "./SignedOut";
@@ -12,13 +13,15 @@ const SESSION: Session = {
   email: "newcomer@example.com",
   name: "newcomer@example.com",
   display_name: "",
-  role: "user",
+  role: "role_operator",
+  role_name: "Operator",
   plugins: ["*"],
+  grants: [{ plugin: "*", level: "write" }],
   csrf_token: "test-csrf",
   expires_at: "2026-08-24T00:00:00Z",
   status: "active",
   has_password: true,
-  capabilities: ["read", "propose", "approve"],
+  permissions: builtinPermissions("role_operator"),
 };
 
 /**

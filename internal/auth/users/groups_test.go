@@ -3,7 +3,6 @@ package users
 import (
 	"context"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,21 +34,24 @@ func newStoreWithGroups(t *testing.T) (*Store, *groups.Store, *sqlite.DB) {
 
 const adminActor = "user:owner@example.com"
 
-// The union is one function, and an account reaches it through the account
-// store without a second implementation appearing here.
-func TestEffectiveGrants_IsTheUnion(t *testing.T) {
+// The union is one function in the groups package; the account store reaches
+// it through Store.Resolve without a second implementation appearing here.
+// Nothing subtracts, so an account's own grant and its group's grant both
+// count -- the higher level for a plugin wins, replacing a rule that used to
+// let a subject's own grant be the whole answer.
+func TestResolve_IsTheUnion(t *testing.T) {
 	s, gs, _ := newStoreWithGroups(t)
 	ctx := context.Background()
 
 	u, err := s.Create(ctx, CreateRequest{
 		Email: "alice@example.com", Password: "a-sufficiently-long-passphrase",
-		Role: auth.RoleUser, Plugins: []string{"netbox"},
+		RoleID: auth.RoleOperator, Grants: auth.GrantsAt([]string{"netbox"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	g, err := gs.Create(ctx, adminActor, groups.CreateRequest{
-		Name: "Field", Plugins: []string{"cnmaestro"},
+		Name: "Field", Grants: auth.GrantsAt([]string{"cnmaestro"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create group: %v", err)
@@ -58,18 +60,18 @@ func TestEffectiveGrants_IsTheUnion(t *testing.T) {
 		t.Fatalf("add: %v", err)
 	}
 
-	granted, err := s.EffectiveGrants(ctx, u.ID)
+	access, err := s.Resolve(ctx, u.ID)
 	if err != nil {
-		t.Fatalf("effective grants: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	// The user's own grant is the answer; the group cannot add to it.
-	want := []string{"netbox"}
-	if !slices.Equal(granted, want) {
-		t.Fatalf("granted = %v, want %v", granted, want)
+	want := auth.GrantsAt([]string{"cnmaestro", "netbox"}, auth.LevelWrite)
+	if !access.Grants.Equal(want) {
+		t.Fatalf("granted = %v, want %v; the union includes both the account's own "+
+			"grant and its group's", access.Grants, want)
 	}
-	p := u.Principal("ses", granted, nil)
-	if p.CanAccessPlugin("cnmaestro") {
-		t.Error("a group must not widen a user's own grant")
+	p := u.Principal("ses", access)
+	if !p.CanAccessPlugin("cnmaestro") {
+		t.Error("the group's grant did not reach the principal")
 	}
 	if !p.CanAccessPlugin("netbox") {
 		t.Error("the principal does not reach what the union says it does")
@@ -86,7 +88,7 @@ func TestCreate_JoinsGroupsInTheSameWrite(t *testing.T) {
 	s, gs, _ := newStoreWithGroups(t)
 	ctx := context.Background()
 	g, err := gs.Create(ctx, adminActor, groups.CreateRequest{
-		Name: "Field", Plugins: []string{"cnmaestro"},
+		Name: "Field", Grants: auth.GrantsAt([]string{"cnmaestro"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create group: %v", err)
@@ -94,17 +96,17 @@ func TestCreate_JoinsGroupsInTheSameWrite(t *testing.T) {
 
 	u, err := s.Create(ctx, CreateRequest{
 		Email: "alice@example.com", Password: "a-sufficiently-long-passphrase",
-		Role: auth.RoleUser, Groups: []string{g.ID}, Actor: adminActor,
+		RoleID: auth.RoleOperator, Groups: []string{g.ID}, Actor: adminActor,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	granted, err := s.EffectiveGrants(ctx, u.ID)
+	access, err := s.Resolve(ctx, u.ID)
 	if err != nil {
-		t.Fatalf("effective grants: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	if !slices.Equal(granted, []string{"cnmaestro"}) {
-		t.Errorf("granted = %v, want [cnmaestro]", granted)
+	if !access.Grants.Equal(auth.GrantsAt([]string{"cnmaestro"}, auth.LevelWrite)) {
+		t.Errorf("granted = %v, want [cnmaestro]", access.Grants)
 	}
 }
 
@@ -117,7 +119,7 @@ func TestRegister_JoinsTheDefaultGroup(t *testing.T) {
 	claimInstance(t, s)
 
 	if _, err := gs.Create(ctx, adminActor, groups.CreateRequest{
-		Name: "Read only", Plugins: []string{"echo"},
+		Name: "Read only", Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 	}); err != nil {
 		t.Fatalf("create group: %v", err)
 	}
@@ -134,29 +136,29 @@ func TestRegister_JoinsTheDefaultGroup(t *testing.T) {
 	}
 	// Pending holds no capability whatever it is a member of, which is what
 	// makes joining now safe.
-	granted, err := s.EffectiveGrants(ctx, u.ID)
+	access, err := s.Resolve(ctx, u.ID)
 	if err != nil {
-		t.Fatalf("effective grants: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	if !slices.Equal(granted, []string{"echo"}) {
-		t.Fatalf("granted = %v, want [echo]", granted)
+	if !access.Grants.Equal(auth.GrantsAt([]string{"echo"}, auth.LevelWrite)) {
+		t.Fatalf("granted = %v, want [echo]", access.Grants)
 	}
-	if u.Principal("ses", granted, nil).Can(auth.CapRead) {
-		t.Error("a pending account holds a capability")
+	if u.Principal("ses", access).Can(auth.PermSettingsRead) {
+		t.Error("a pending account holds a permission")
 	}
 
 	approved, err := s.ApproveRegistration(ctx, adminActor, u.ID, nil)
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	granted, err = s.EffectiveGrants(ctx, approved.ID)
+	access, err = s.Resolve(ctx, approved.ID)
 	if err != nil {
-		t.Fatalf("effective grants: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	p := approved.Principal("ses", granted, nil)
-	if !p.Can(auth.CapRead) || !p.CanAccessPlugin("echo") {
-		t.Errorf("an approved account in the default group reaches %v and holds read=%v; "+
-			"approving was supposed to be one decision", granted, p.Can(auth.CapRead))
+	p := approved.Principal("ses", access)
+	if !p.Can(auth.PermSettingsRead) || !p.CanAccessPlugin("echo") {
+		t.Errorf("an approved account in the default group reaches %v; "+
+			"approving was supposed to be one decision", access.Grants)
 	}
 }
 
@@ -175,12 +177,12 @@ func TestRegister_ADefaultGroupThatIsNotThereGrantsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	granted, err := s.EffectiveGrants(ctx, u.ID)
+	access, err := s.Resolve(ctx, u.ID)
 	if err != nil {
-		t.Fatalf("effective grants: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	if len(granted) != 0 {
-		t.Errorf("granted = %v; a default group that does not exist grants nothing", granted)
+	if len(access.Grants) != 0 {
+		t.Errorf("granted = %v; a default group that does not exist grants nothing", access.Grants)
 	}
 }
 
@@ -199,15 +201,15 @@ func TestRegister_WithoutADefaultGroupReachesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if len(u.Plugins) != 0 {
-		t.Errorf("direct grants = %v, want none", u.Plugins)
+	if len(u.Grants) != 0 {
+		t.Errorf("direct grants = %v, want none", u.Grants)
 	}
-	granted, err := s.EffectiveGrants(ctx, u.ID)
+	access, err := s.Resolve(ctx, u.ID)
 	if err != nil {
-		t.Fatalf("effective grants: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	if len(granted) != 0 {
-		t.Errorf("granted = %v; a self-registered account reaches nothing", granted)
+	if len(access.Grants) != 0 {
+		t.Errorf("granted = %v; a self-registered account reaches nothing", access.Grants)
 	}
 }
 
@@ -220,7 +222,7 @@ func TestApproveRegistration_AssignsGroupsAndAuditsThem(t *testing.T) {
 	claimInstance(t, s)
 
 	g, err := gs.Create(ctx, adminActor, groups.CreateRequest{
-		Name: "Field", Plugins: []string{"cnmaestro"},
+		Name: "Field", Grants: auth.GrantsAt([]string{"cnmaestro"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create group: %v", err)
@@ -237,12 +239,12 @@ func TestApproveRegistration_AssignsGroupsAndAuditsThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	granted, err := s.EffectiveGrants(ctx, approved.ID)
+	access, err := s.Resolve(ctx, approved.ID)
 	if err != nil {
-		t.Fatalf("effective grants: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	if !slices.Equal(granted, []string{"cnmaestro"}) {
-		t.Fatalf("granted = %v, want [cnmaestro]", granted)
+	if !access.Grants.Equal(auth.GrantsAt([]string{"cnmaestro"}, auth.LevelWrite)) {
+		t.Fatalf("granted = %v, want [cnmaestro]", access.Grants)
 	}
 
 	records, err := sqlite.NewAuditStore(db).Recent(ctx, 20)
@@ -278,7 +280,7 @@ func TestDelete_TakesMembershipsWithIt(t *testing.T) {
 	}
 	u, err := s.Create(ctx, CreateRequest{
 		Email: "alice@example.com", Password: "a-sufficiently-long-passphrase",
-		Role: auth.RoleUser,
+		RoleID: auth.RoleOperator,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -349,7 +351,7 @@ func TestCreate_AuditsTheGroupsAnAccountIsCreatedInto(t *testing.T) {
 	var ids []string
 	for _, name := range []string{"Field", "NOC"} {
 		g, err := gs.Create(ctx, adminActor, groups.CreateRequest{
-			Name: name, Plugins: []string{"echo"},
+			Name: name, Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 		})
 		if err != nil {
 			t.Fatalf("create group: %v", err)
@@ -359,7 +361,7 @@ func TestCreate_AuditsTheGroupsAnAccountIsCreatedInto(t *testing.T) {
 
 	u, err := s.Create(ctx, CreateRequest{
 		Email: "alice@example.com", Password: "a-sufficiently-long-passphrase",
-		Role: auth.RoleUser, Groups: ids, Actor: adminActor,
+		RoleID: auth.RoleOperator, Groups: ids, Actor: adminActor,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -396,7 +398,7 @@ func TestRegister_RecordsTheDefaultGroupAgainstTheSetting(t *testing.T) {
 	ctx := context.Background()
 	claimInstance(t, s)
 	if _, err := gs.Create(ctx, adminActor, groups.CreateRequest{
-		Name: "Read only", Plugins: []string{"echo"},
+		Name: "Read only", Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 	}); err != nil {
 		t.Fatalf("create group: %v", err)
 	}
@@ -436,7 +438,7 @@ func TestApproveRegistration_AuditsTheMembershipItCreates(t *testing.T) {
 	claimInstance(t, s)
 
 	g, err := gs.Create(ctx, adminActor, groups.CreateRequest{
-		Name: "Field", Plugins: []string{"cnmaestro"},
+		Name: "Field", Grants: auth.GrantsAt([]string{"cnmaestro"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create group: %v", err)

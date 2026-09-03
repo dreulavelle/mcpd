@@ -64,7 +64,8 @@ func pipelineApp(t *testing.T, cp *fakeControlPlane) (*App, tunnel.Account) {
 	}
 	acct, err := a.chatgpt.Create(ctx, "user:test", tunnel.Account{
 		Name: "Work", APIKey: "sk-runtime", AdminKey: "sk-admin-test", OrgID: "org_test",
-		Role: auth.RoleUser, Plugins: []string{auth.Wildcard}, Enabled: true,
+		RoleID: auth.RoleOperator,
+		Grants: auth.Grants{{Plugin: auth.Wildcard, Level: auth.LevelWrite}}, Enabled: true,
 		Workspaces: []string{"ws_own"},
 	})
 	if err != nil {

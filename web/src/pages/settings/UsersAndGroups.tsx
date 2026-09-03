@@ -16,10 +16,9 @@ import { Users } from "./Users";
  * dozen accounts and half a dozen groups is the ordinary case, and two short
  * tables on one page beat two pages holding one each.
  *
- * Roles are deliberately not a third section. There are exactly two, they are
- * fixed in internal/auth, and the map from a role to what it may do is the one
- * place that knows the difference -- see the capabilities rule in CLAUDE.md. A
- * page listing two rows nobody can change would suggest otherwise.
+ * Roles are a tab of their own rather than a third section here. A role is
+ * composed once and handed out many times, and the matrix that composes one
+ * is a page's worth on its own.
  */
 export function UsersAndGroups() {
   return (

@@ -1,85 +1,85 @@
-import { CAPABILITIES, CAPABILITY_LABELS, type Capability } from "@/lib/api";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import {
+  AREA_HINTS, AREA_LABELS, AREAS, LEVEL_LABELS, levelsOf,
+  type Area, type Level, type PermissionSet,
+} from "@/lib/permissions";
+import { NativeSelect } from "@/components/ui/native-select";
+import { cn } from "@/lib/utils";
 
 /**
- * What a group permits its members to do.
+ * What a role permits, one level per area.
  *
- * A role grants capabilities and a group can only take them away, so this is a
- * *ceiling* rather than a grant, and the wording throughout says so. Presenting
- * it as though ticking a box hands somebody a right would be a lie: an ordinary
- * user in a group permitting "admin" is still not an administrator.
+ * Eight rows, each a dropdown of none, read and write (decide, for
+ * approvals). Write includes read, and the row says so rather than offering
+ * a "write but not read" nobody has ever meant. The vocabulary comes from
+ * lib/permissions, which mirrors the server's; the server refuses anything
+ * outside it, so a typo here is a refused save rather than a stored
+ * permission nobody holds.
  *
- * `value === null` means the group imposes no ceiling — the ordinary case, and
- * what every group created before this feature means. That is a genuinely
- * different state from a group permitting nothing, so it gets its own control
- * rather than being represented as "all boxes ticked", which would silently
- * turn the first into the second the moment somebody untick one.
+ * `readOnly` draws the same table as a description rather than a form, for
+ * a built-in role and for anybody who may read roles but not write them.
  */
-export function PermissionMatrix({
-  id,
-  value,
-  onChange,
-  disabled,
-}: {
+export function PermissionMatrix({ id, value, onChange, disabled, readOnly }: {
   id: string;
-  value: Capability[] | null;
-  onChange: (next: Capability[] | null) => void;
+  value: PermissionSet;
+  onChange?: (next: PermissionSet) => void;
   disabled?: boolean;
+  readOnly?: boolean;
 }) {
-  const restricted = value !== null;
-
-  function toggle(cap: Capability, on: boolean) {
-    const current = value ?? [];
-    onChange(on ? [...current, cap] : current.filter((c) => c !== cap));
+  function set(area: Area, level: Level | "") {
+    const next: PermissionSet = { ...value };
+    if (level === "" || level === "none") delete next[area];
+    else next[area] = level;
+    onChange?.(next);
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-start gap-3">
-        <Switch
-          id={`${id}-restrict`}
-          checked={restricted}
-          disabled={disabled}
-          onCheckedChange={(on) => onChange(on ? [] : null)}
-        />
-        <div className="space-y-0.5">
-          <Label htmlFor={`${id}-restrict`}>Restrict what this group may do</Label>
-          <p className="text-sm text-muted-foreground">
-            {restricted
-              ? "Members may only do the things ticked below, even where their role allows more."
-              : "Members do whatever their own role allows. Turn this on to take things away."}
-          </p>
-        </div>
-      </div>
-
-      {restricted && (
-        <div className="space-y-2 rounded-md border p-3">
-          {CAPABILITIES.map((cap) => (
-            <div key={cap} className="flex items-center gap-3">
-              <Switch
-                id={`${id}-${cap}`}
-                checked={(value ?? []).includes(cap)}
-                disabled={disabled}
-                onCheckedChange={(on) => toggle(cap, on)}
-              />
-              <Label htmlFor={`${id}-${cap}`} className="font-normal">
-                {CAPABILITY_LABELS[cap]}
-              </Label>
-            </div>
-          ))}
-          {(value ?? []).length === 0 && (
-            <p className="pt-1 text-sm text-muted-foreground">
-              Nothing is ticked, so members of this group may do nothing at all.
-              That is a way to suspend people without removing them.
-            </p>
-          )}
-          <p className="pt-1 text-sm text-muted-foreground">
-            This can only take rights away. Ticking something a member's role
-            does not already allow does not give it to them.
-          </p>
-        </div>
-      )}
+    <div className="overflow-hidden rounded-md border">
+      <table className="w-full text-sm">
+        <tbody>
+          {AREAS.map((area) => {
+            const held = value[area] ?? "none";
+            return (
+              <tr key={area} className="border-b last:border-b-0">
+                <td className="w-44 px-3 py-2 align-top">
+                  <div className="font-medium">{AREA_LABELS[area]}</div>
+                  <div className="text-xs text-muted-foreground">{AREA_HINTS[area]}</div>
+                </td>
+                <td className="px-3 py-2 align-top">
+                  {readOnly ? (
+                    <span className={cn(
+                      "inline-block rounded-full border px-2 py-0.5 text-xs font-medium",
+                      held === "none" ? "text-muted-foreground" : "border-primary/30 bg-primary/10 text-primary",
+                    )}>
+                      {LEVEL_LABELS[held]}
+                    </span>
+                  ) : (
+                    <NativeSelect
+                      id={`${id}-${area}`}
+                      aria-label={`${AREA_LABELS[area]} level`}
+                      value={held}
+                      disabled={disabled}
+                      className="w-40"
+                      onChange={(e) => set(area, e.target.value as Level)}
+                    >
+                      <option value="none">None</option>
+                      {levelsOf(area).map((l) => (
+                        <option key={l} value={l}>
+                          {l === "read" ? "Read" : l === "decide" ? "Read and decide" : "Read and write"}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  )}
+                  {area === "access" && held !== "none" && held !== "read" && (
+                    <p className="mt-1 text-xs text-attention">
+                      Access at write can hand out any role, including Administrator.
+                    </p>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

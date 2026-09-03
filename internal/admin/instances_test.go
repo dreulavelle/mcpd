@@ -18,7 +18,7 @@ type instanceCalls struct {
 	restored     string
 }
 
-func newInstanceDashboard(t *testing.T, role auth.Role, calls *instanceCalls) *Server {
+func newInstanceDashboard(t *testing.T, role string, calls *instanceCalls) *Server {
 	t.Helper()
 	return NewServer(Options{
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -74,7 +74,7 @@ func TestInstanceRoutes_CapabilityGating(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			var calls instanceCalls
-			asUser := request(t, newInstanceDashboard(t, auth.RoleUser, &calls),
+			asUser := request(t, newInstanceDashboard(t, auth.RoleOperator, &calls),
 				tc.method, tc.path, tc.body)
 			if tc.adminOnly && asUser.Code != http.StatusForbidden {
 				t.Fatalf("as a user: %d, want 403", asUser.Code)
@@ -82,7 +82,7 @@ func TestInstanceRoutes_CapabilityGating(t *testing.T) {
 			if !tc.adminOnly && asUser.Code != http.StatusOK {
 				t.Fatalf("as a user: %d, want 200", asUser.Code)
 			}
-			asAdmin := request(t, newInstanceDashboard(t, auth.RoleAdmin, &calls),
+			asAdmin := request(t, newInstanceDashboard(t, auth.RoleAdministrator, &calls),
 				tc.method, tc.path, tc.body)
 			if asAdmin.Code != http.StatusOK {
 				t.Fatalf("as an admin: %d (%s)", asAdmin.Code, asAdmin.Body.String())
@@ -95,7 +95,7 @@ func TestInstanceRoutes_CapabilityGating(t *testing.T) {
 // marks the plugin required. It has to reach the layer that enforces it.
 func TestRemoveInstance_PassesTheAcknowledgement(t *testing.T) {
 	var calls instanceCalls
-	s := newInstanceDashboard(t, auth.RoleAdmin, &calls)
+	s := newInstanceDashboard(t, auth.RoleAdministrator, &calls)
 
 	if w := request(t, s, http.MethodDelete, "/api/instances/echo", nil); w.Code != http.StatusOK {
 		t.Fatalf("code = %d", w.Code)
@@ -116,7 +116,7 @@ func TestRemoveInstance_PassesTheAcknowledgement(t *testing.T) {
 
 func TestRestoreInstance_Route(t *testing.T) {
 	var calls instanceCalls
-	s := newInstanceDashboard(t, auth.RoleAdmin, &calls)
+	s := newInstanceDashboard(t, auth.RoleAdministrator, &calls)
 
 	w := request(t, s, http.MethodPost, "/api/instances/echo/restore", nil)
 	if w.Code != http.StatusOK {
@@ -132,7 +132,7 @@ func TestRestoreInstance_Route(t *testing.T) {
 // remove is reported separately rather than being invisible.
 func TestInstances_ReportsRemovalsAndTheFilesDeclaration(t *testing.T) {
 	var calls instanceCalls
-	w := request(t, newInstanceDashboard(t, auth.RoleAdmin, &calls),
+	w := request(t, newInstanceDashboard(t, auth.RoleAdministrator, &calls),
 		http.MethodGet, "/api/instances", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d", w.Code)

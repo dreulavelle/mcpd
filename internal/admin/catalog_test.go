@@ -15,7 +15,7 @@ import (
 	"github.com/spoked/mcpd/internal/registry"
 )
 
-func newCatalogDashboard(t *testing.T, role auth.Role, api CatalogAPI) *Server {
+func newCatalogDashboard(t *testing.T, role string, api CatalogAPI) *Server {
 	t.Helper()
 	return NewServer(Options{
 		Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -55,11 +55,11 @@ func okCatalog() CatalogAPI {
 func TestCatalogRoutes_NeedAdministrator(t *testing.T) {
 	for _, path := range []string{"/api/catalog", "/api/catalog/io.example/weather"} {
 		t.Run(path, func(t *testing.T) {
-			user := newCatalogDashboard(t, auth.RoleUser, okCatalog())
+			user := newCatalogDashboard(t, auth.RoleOperator, okCatalog())
 			if got := request(t, user, http.MethodGet, path, nil).Code; got != http.StatusForbidden {
 				t.Errorf("as a user: status = %d, want 403", got)
 			}
-			admin := newCatalogDashboard(t, auth.RoleAdmin, okCatalog())
+			admin := newCatalogDashboard(t, auth.RoleAdministrator, okCatalog())
 			if got := request(t, admin, http.MethodGet, path, nil).Code; got != http.StatusOK {
 				t.Errorf("as an administrator: status = %d, want 200", got)
 			}
@@ -76,7 +76,7 @@ func TestCatalogEntry_NameCarriesASlash(t *testing.T) {
 		asked = name
 		return inner(ctx, name)
 	}
-	s := newCatalogDashboard(t, auth.RoleAdmin, api)
+	s := newCatalogDashboard(t, auth.RoleAdministrator, api)
 
 	w := request(t, s, http.MethodGet, "/api/catalog/io.example/weather", nil)
 	if w.Code != http.StatusOK {
@@ -108,7 +108,7 @@ func TestCatalogEntry_NameCarriesASlash(t *testing.T) {
 // for exactly that reason -- relaying the same text here would put it back.
 func TestCatalog_UpstreamFailureIsABadGateway(t *testing.T) {
 	const leak = "418 I am a teapot at https://attacker.example/"
-	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+	s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{
 		Source: func() string { return "registry.modelcontextprotocol.io" },
 		List: func(context.Context, registry.Query) (registry.Page, error) {
 			return registry.Page{}, errors.New(leak)
@@ -139,7 +139,7 @@ func TestCatalog_UpstreamFailureIsABadGateway(t *testing.T) {
 // Without a Source the refusal still reads as a sentence rather than as an
 // empty string with a suffix.
 func TestCatalog_UpstreamFailureWithoutASourceName(t *testing.T) {
-	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+	s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{
 		List: func(context.Context, registry.Query) (registry.Page, error) {
 			return registry.Page{}, errors.New("boom")
 		},
@@ -159,7 +159,7 @@ func TestCatalog_UpstreamFailureWithoutASourceName(t *testing.T) {
 // that says "this is what we last saw".
 func TestCatalog_StalenessIsReportedRatherThanHidden(t *testing.T) {
 	fetched := time.Date(2026, 8, 22, 9, 0, 0, 0, time.UTC)
-	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+	s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{
 		List: func(context.Context, registry.Query) (registry.Page, error) {
 			return registry.Page{
 				Source: "fake", Entries: []registry.Entry{{Name: "io.example/weather"}},
@@ -194,7 +194,7 @@ func TestCatalog_StalenessIsReportedRatherThanHidden(t *testing.T) {
 // An empty list is [] and not null. A page mapping over null renders nothing
 // and reports it in a console nobody has open.
 func TestCatalog_EmptyListIsAnArray(t *testing.T) {
-	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+	s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{
 		List: func(context.Context, registry.Query) (registry.Page, error) {
 			return registry.Page{Source: "fake"}, nil
 		},
@@ -210,7 +210,7 @@ func TestCatalog_EmptyListIsAnArray(t *testing.T) {
 }
 
 func TestCatalogEntry_UnknownNameIsNotFound(t *testing.T) {
-	s := newCatalogDashboard(t, auth.RoleAdmin, okCatalog())
+	s := newCatalogDashboard(t, auth.RoleAdministrator, okCatalog())
 	if got := request(t, s, http.MethodGet, "/api/catalog/io.example/nothing", nil).Code; got != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", got)
 	}
@@ -219,7 +219,7 @@ func TestCatalogEntry_UnknownNameIsNotFound(t *testing.T) {
 // The query reaches the client rather than being dropped on the way.
 func TestCatalog_PassesTheSearchAndCursorThrough(t *testing.T) {
 	var got registry.Query
-	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+	s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{
 		List: func(_ context.Context, q registry.Query) (registry.Page, error) {
 			got = q
 			return registry.Page{Source: "fake"}, nil
@@ -243,7 +243,7 @@ func TestCatalog_PassesTheSearchAndCursorThrough(t *testing.T) {
 // next request can be a correct one.
 func TestCatalog_AnOrderThisHostDoesNotHaveIsRefused(t *testing.T) {
 	asked := false
-	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+	s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{
 		List: func(context.Context, registry.Query) (registry.Page, error) {
 			asked = true
 			return registry.Page{Source: "fake"}, nil
@@ -277,7 +277,7 @@ func TestCatalog_AQuestionThisHostCannotAnswerIsNotACatalogueBeingDown(t *testin
 		{"no ranked catalogue", "?sort=most-used", registry.ErrSortUnavailable, "how often"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+			s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{
 				List: func(context.Context, registry.Query) (registry.Page, error) {
 					return registry.Page{}, tc.err
 				},
@@ -297,7 +297,7 @@ func TestCatalog_AQuestionThisHostCannotAnswerIsNotACatalogueBeingDown(t *testin
 // A host built without a catalogue says so rather than panicking on a nil
 // function.
 func TestCatalog_UnconfiguredIsRefusedNotFatal(t *testing.T) {
-	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{})
+	s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{})
 	for _, path := range []string{"/api/catalog", "/api/catalog/io.example/weather"} {
 		if got := request(t, s, http.MethodGet, path, nil).Code; got != http.StatusServiceUnavailable {
 			t.Errorf("%s: status = %d, want 503", path, got)
@@ -324,7 +324,7 @@ func TestCatalog_AnOperatorCanAskAgain(t *testing.T) {
 		asked = append(asked, registry.RefreshRequested(ctx))
 		return get(ctx, name)
 	}
-	s := newCatalogDashboard(t, auth.RoleAdmin, api)
+	s := newCatalogDashboard(t, auth.RoleAdministrator, api)
 
 	for _, path := range []string{
 		"/api/catalog",
@@ -354,7 +354,7 @@ func TestCatalog_AnOperatorCanAskAgain(t *testing.T) {
 // rather than merely short, and a page rendering `sources.map` over null is a
 // blank screen with an error in a console nobody has open.
 func TestCatalog_SourcesIsNeverNull(t *testing.T) {
-	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+	s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{
 		List: func(context.Context, registry.Query) (registry.Page, error) {
 			return registry.Page{Source: "fake"}, nil
 		},
@@ -378,7 +378,7 @@ func TestCatalog_SourcesIsNeverNull(t *testing.T) {
 // for anyone who came looking for one server in particular.
 func TestCatalog_UnaddableEntriesAreLeftOutUnlessAskedFor(t *testing.T) {
 	var got registry.Query
-	s := newCatalogDashboard(t, auth.RoleAdmin, CatalogAPI{
+	s := newCatalogDashboard(t, auth.RoleAdministrator, CatalogAPI{
 		List: func(_ context.Context, q registry.Query) (registry.Page, error) {
 			got = q
 			return registry.Page{Source: "fake"}, nil

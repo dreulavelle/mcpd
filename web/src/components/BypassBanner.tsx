@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 export function BypassBanner() {
   const [status, setStatus] = useState<BypassStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const admin = useCan("admin");
+  const admin = useCan("policies:write");
 
   const load = useCallback(() => {
     api.bypassStatus()

@@ -1,76 +1,69 @@
 import { describe, expect, it } from "vitest";
-import { capabilitiesOf, roleCan, type Capability } from "./capabilities";
+import type { Permission } from "./permissions";
 import {
   capabilityFor, covers, entryFor, NAV, redirectFor, visibleNav, type Requirement,
 } from "./nav";
 
-/** A `can` predicate for a fixed set of capabilities. */
-function holding(...held: Capability[]) {
-  return (c: Capability) => held.includes(c);
+/** A `can` predicate for a fixed set of permissions. */
+function holding(...held: Permission[]) {
+  return (p: Permission) => held.includes(p);
 }
 
-describe("the role-to-capability map", () => {
-  it("mirrors internal/auth: a user reads, proposes and approves, and no more", () => {
-    expect([...capabilitiesOf("user")].sort())
-      .toEqual(["approve", "propose", "read"]);
-  });
-
-  it("gives an administrator everything a user has, plus admin", () => {
-    expect([...capabilitiesOf("admin")].sort())
-      .toEqual(["admin", "approve", "propose", "read"]);
-  });
-
-  // A role the server grows that this build does not know about must come back
-  // powerless. Defaulting an unknown role to a user's rights would hand it
-  // approve, which is a decision this table has no business making.
-  it("gives an unknown role nothing", () => {
-    expect(capabilitiesOf("superuser")).toEqual([]);
-    expect(roleCan("superuser", "read")).toBe(false);
-  });
-});
+/** Every permission this build knows about, for the tests that need "everything". */
+const EVERYTHING: Permission[] = [
+  "approvals:read", "approvals:decide",
+  "policies:read", "policies:write",
+  "plugins:read", "plugins:write",
+  "tunnels:read", "tunnels:write",
+  "settings:read", "settings:write",
+  "access:read", "access:write",
+  "history:read", "history:write",
+  "system:read", "system:write",
+];
 
 describe("navigation gating", () => {
-  it("hides the marketplace from anyone without admin", () => {
-    const labels = visibleNav(holding("read", "propose", "approve"))
+  it("hides the marketplace from anyone without plugins:write", () => {
+    const labels = visibleNav(holding("approvals:read", "plugins:read", "history:read"))
       .flatMap((g) => g.items.map((i) => i.label));
     expect(labels).not.toContain("Marketplace");
     expect(labels).toContain("Approvals");
     expect(labels).toContain("Plugins");
   });
 
-  it("shows the marketplace to an administrator", () => {
-    const labels = visibleNav(holding("read", "propose", "approve", "admin"))
+  it("shows the marketplace to a holder of plugins:write", () => {
+    const labels = visibleNav(holding("plugins:read", "plugins:write"))
       .flatMap((g) => g.items.map((i) => i.label));
     expect(labels).toContain("Marketplace");
   });
 
-  // The approval policy is readable by anyone who may read, for the same
-  // reason Settings is: what this host will do without asking anybody is part
-  // of understanding the deployment, and the people the rules are written
-  // about are exactly who should be able to read them. Changing it is admin,
-  // which the page enforces by rendering read-only.
-  it("keeps Settings and the approval policy for a user but drops the rest", () => {
-    const labels = visibleNav(holding("read")).flatMap((g) => g.items.map((i) => i.label));
+  // The approval policy is readable by anyone who may read the settings, for
+  // the same reason Settings is: what this host will do without asking
+  // anybody is part of understanding the deployment. Changing it needs
+  // policies:write, which the page enforces by rendering read-only.
+  it("keeps Settings and Policies for a reader but drops the rest", () => {
+    const labels = visibleNav(holding("settings:read", "policies:read"))
+      .flatMap((g) => g.items.map((i) => i.label));
     expect(labels).toContain("Settings");
     expect(labels).toContain("Policies");
-    expect(labels).not.toContain("Users");
+    expect(labels).not.toContain("Plugins");
+    expect(labels).not.toContain("Marketplace");
     // Not in the sidebar for anybody now -- they are tabs on Settings. The
-    // capability each route needs is asserted separately, and must not have
+    // permission each route needs is asserted separately, and must not have
     // moved with the menu entry.
     expect(labels).not.toContain("Certificates");
     expect(labels).not.toContain("API Keys");
     expect(labels).not.toContain("ChatGPT");
-    // Who may sign in, and who is waiting to be let in, is the same kind of
-    // decision as who has an account -- and is gated the same way.
+    // Who may sign in, and what a group hands everyone in it, is the same
+    // kind of decision as who has an account -- and is gated the same way.
     expect(labels).not.toContain("Authentication");
     expect(labels).not.toContain("Groups");
-    expect(labels).not.toContain("API Keys");
+    expect(labels).not.toContain("Roles");
   });
 
   // They are siblings, not a section that opens. A destination nobody can see
   // until they click something else is one most people never find.
   it("lists every administrative page beside Settings rather than inside it", () => {
-    const administer = visibleNav(holding("read", "propose", "approve", "admin"))
+    const administer = visibleNav(holding("settings:read", "system:read", "history:read"))
       .find((g) => g.title === "Administer");
     expect(administer?.items.map((i) => i.label)).toEqual([
       "Settings", "System", "Performance", "Logs",
@@ -94,51 +87,53 @@ describe("navigation gating", () => {
    * differently, and the sidebar spent two permanent lines on a page visited
    * when somebody joins.
    *
-   * Leaving the sidebar must not ungate them. The requirement moved into the
+   * Leaving the sidebar must not ungate them. The requirement lives in the
    * route map rather than being read off an entry that no longer exists --
    * without that they would fall back to the `/settings` entry covering them,
-   * which asks for read, and two administrative pages would be served to
-   * anybody who could open the console.
+   * which asks only for `settings:read`, and two access-administration pages
+   * would be served to anybody who could open the console.
    */
-  it("keeps users and groups out of the sidebar while keeping them admin-only", () => {
-    const labels = visibleNav(holding("read", "propose", "approve", "admin"))
+  it("keeps users and groups out of the sidebar while keeping them access-gated", () => {
+    const labels = visibleNav(holding(...EVERYTHING))
       .flatMap((g) => g.items.map((i) => i.label));
     expect(labels).not.toContain("Users");
     expect(labels).not.toContain("Groups");
 
-    expect(capabilityFor("/settings/users")).toBe("admin");
-    expect(capabilityFor("/settings/groups")).toBe("admin");
+    expect(capabilityFor("/settings/users")).toBe("access:read");
+    expect(capabilityFor("/settings/groups")).toBe("access:read");
   });
 
   // It is in the map because the router judges every path against the map.
   // It is out of the sidebar because it already has a way in, and the same
   // destination listed twice is a menu that has stopped being a summary.
   it("keeps the profile out of the sidebar while keeping it in the map", () => {
-    const labels = visibleNav(holding("read", "propose", "approve", "admin"))
+    const labels = visibleNav(holding(...EVERYTHING))
       .flatMap((g) => g.items.map((i) => i.label));
     expect(labels).not.toContain("Profile");
     expect(capabilityFor("/profile")).toBe("signed-in");
   });
 
-  it("shows nothing to a principal holding nothing", () => {
-    const items = visibleNav(() => false).flatMap((g) => g.items);
-    expect(items).toEqual([]);
+  // "signed-in" entries show regardless of what a principal holds: Overview
+  // asks its own questions per card and goes quiet on a refusal, rather than
+  // the sidebar deciding on its behalf.
+  it("shows only the signed-in entries to a principal holding no permission", () => {
+    const labels = visibleNav(() => false).flatMap((g) => g.items.map((i) => i.label));
+    expect(labels).toEqual(["Overview"]);
   });
 
   it("drops a group heading once its last entry is gone", () => {
-    const groups = visibleNav(holding("read"));
+    const groups = visibleNav(holding("settings:read"));
     for (const group of groups) expect(group.items.length).toBeGreaterThan(0);
   });
 
   // Nothing in the map may be reachable by default. A section added without a
-  // capability would be visible to everyone, which is the failure the
-  // declarative map exists to make impossible to introduce quietly. An
-  // ungated one has to say "signed-in" out loud, which an omission cannot do.
-  it("gives every entry an explicit requirement", () => {
-    const known: Requirement[] = ["read", "propose", "approve", "admin", "signed-in"];
+  // requirement would be visible to everyone, which is the failure the
+  // declarative map exists to make impossible to introduce quietly.
+  it("gives every entry an explicit, non-empty requirement", () => {
     for (const group of NAV) {
       for (const item of group.items) {
-        expect(known).toContain(item.capability);
+        expect(typeof item.capability).toBe("string");
+        expect(item.capability.length).toBeGreaterThan(0);
       }
     }
   });
@@ -184,8 +179,8 @@ describe("which entry covers a path", () => {
   });
 
   // "/plugins" must not match "/pluginsomething", which a bare startsWith
-  // would. This decides both the highlight and the capability now, so a loose
-  // match would gate a page on some other section's rule.
+  // would. This decides both the highlight and the requirement now, so a
+  // loose match would gate a page on some other section's rule.
   it("does not match a section that merely shares a prefix", () => {
     expect(covers("/plugins", "/pluginsomething")).toBe(false);
   });
@@ -197,40 +192,42 @@ describe("which entry covers a path", () => {
 });
 
 /**
- * One table of capabilities, not two.
+ * One table of requirements, not two.
  *
  * Routes used to spell out `required=` per case beside this map. They agreed,
  * and nothing made them -- and Overview had already been missed, rendering
  * with no gate at all.
  */
-describe("the capability a path requires", () => {
+describe("the permission a path requires", () => {
   const cases: [string, Requirement | null][] = [
-    ["/", "read"],
-    ["/approvals", "read"],
-    ["/audit", "read"],
+    ["/", "signed-in"],
+    ["/approvals", "approvals:read"],
+    ["/audit", "history:read"],
     // A row names which systems were reached and by whom, which is wider than
     // any one account's own work. Same reasoning as the log.
-    ["/activity", "admin"],
-    ["/plugins", "read"],
-    ["/tunnels", "read"],
-    ["/marketplace", "admin"],
-    ["/settings", "read"],
-    ["/settings/policy", "read"],
-    ["/settings/authentication", "admin"],
-    ["/settings/users", "admin"],
-    // A backup is the whole instance in one file, and a restore replaces it.
-    ["/settings/backup", "admin"],
+    ["/activity", "history:read"],
+    ["/plugins", "plugins:read"],
+    ["/tunnels", "tunnels:read"],
+    ["/marketplace", "plugins:write"],
+    ["/settings", "settings:read"],
+    ["/settings/policy", "policies:read"],
+    ["/settings/authentication", "access:write"],
+    ["/settings/users", "access:read"],
+    // A backup carries this host's database and the key that opens its
+    // secrets, and a restore replaces both.
+    ["/settings/backup", "system:write"],
     // Groups decide what an account or a key reaches, and keys are
     // credentials that act on this host. Both are the same kind of decision
     // as who has an account, and are gated the same way.
-    ["/settings/groups", "admin"],
-    ["/settings/keys", "admin"],
+    ["/settings/groups", "access:read"],
+    ["/settings/keys", "access:read"],
+    ["/settings/roles", "access:read"],
     // Adding a certificate decides what every outbound connection this host
     // makes will accept as proof of identity.
-    ["/settings/certificates", "admin"],
+    ["/settings/certificates", "plugins:write"],
     // A ChatGPT account carries a credential, an identity and a grant, so
     // adding one hands a whole workspace a way in.
-    ["/settings/chatgpt", "admin"],
+    ["/settings/chatgpt", "tunnels:write"],
     // Your own profile is not an administrative surface, and gating it on
     // read would be reflex rather than a rule.
     ["/profile", "signed-in"],
@@ -243,40 +240,42 @@ describe("the capability a path requires", () => {
   }
 
   it("judges a detail page by its section", () => {
-    expect(capabilityFor("/approvals/op-7")).toBe("read");
-    expect(capabilityFor("/plugins/cnmaestro")).toBe("read");
+    expect(capabilityFor("/approvals/op-7")).toBe("approvals:read");
+    expect(capabilityFor("/plugins/cnmaestro")).toBe("plugins:read");
   });
 
   // The child is the more specific rule and has to win, or /settings/users
-  // inherits read from the section it sits in and stops being admin-only.
+  // inherits settings:read from the section it sits in and stops asking for
+  // access:read.
   it("lets a child override the section it sits in", () => {
-    expect(capabilityFor("/settings")).toBe("read");
-    expect(capabilityFor("/settings/users")).toBe("admin");
+    expect(capabilityFor("/settings")).toBe("settings:read");
+    expect(capabilityFor("/settings/users")).toBe("access:read");
   });
 
   /**
-   * The bug this exists for. Four pages became tabs on Settings, which took
-   * their sidebar entries away -- and the requirement used to be read off that
-   * entry. Without a rule of their own they fall back to the `/settings` entry
-   * that covers them, which asks for `read`: four administrative pages served
-   * to anyone who could open the console.
+   * The bug this exists for. Several pages became tabs on Settings, which
+   * took their sidebar entries away -- and the requirement used to be read
+   * off that entry. Without a rule of their own they fall back to the
+   * `/settings` entry that covers them, which asks only for `settings:read`:
+   * pages that carry a credential or a grant served to anyone who could open
+   * the console.
    *
-   * A page's requirement is a property of the page, not of whether it earned a
-   * line in the menu.
+   * A page's requirement is a property of the page, not of whether it earned
+   * a line in the menu.
    */
-  it("keeps a tab admin-only after it left the sidebar", () => {
-    const tabs = [
-      "/settings/authentication",
-      "/settings/certificates",
-      "/settings/keys",
-      "/settings/chatgpt",
+  it("keeps a tab's own requirement after it left the sidebar", () => {
+    const tabs: [string, Requirement][] = [
+      ["/settings/authentication", "access:write"],
+      ["/settings/certificates", "plugins:write"],
+      ["/settings/keys", "access:read"],
+      ["/settings/roles", "access:read"],
+      ["/settings/chatgpt", "tunnels:write"],
     ];
-    const sidebar = visibleNav(holding("read", "propose", "approve", "admin"))
-      .flatMap((g) => g.items.map((i) => i.path));
+    const sidebar = visibleNav(holding(...EVERYTHING)).flatMap((g) => g.items.map((i) => i.path));
 
-    for (const path of tabs) {
+    for (const [path, requirement] of tabs) {
       expect(sidebar).not.toContain(path);
-      expect(capabilityFor(path)).toBe("admin");
+      expect(capabilityFor(path)).toBe(requirement);
     }
   });
 

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/cachestore"
@@ -149,10 +150,8 @@ type Options struct {
 	// different questions; see Registrations.
 	Identities Registrations
 
-	// Groups grant plugin access. They are the second half of the one
-	// authorization model: a role says what a caller may do, a group says what
-	// it may reach, and both an account and an API key draw their reach the
-	// same way.
+	// Groups hand a role and grants to every member. An account and an API
+	// key draw their access the same way, through groups.Resolve.
 	Groups Groups
 
 	// Keys are the bearer credentials this host issued itself. Nil leaves the
@@ -170,11 +169,15 @@ type Options struct {
 	// the confusion the page exists to remove.
 	TrustChanged func(ctx context.Context)
 
-	// KeyGrants resolves what a key reaches, through the same union an account
-	// goes through. A function rather than a method on Keys, because the union
-	// belongs to the groups package and nothing here should be able to compute
-	// a second answer.
-	KeyGrants func(ctx context.Context, keyID string) ([]string, error)
+	// KeyAccess resolves what a key may do and reach, through the same union
+	// an account goes through. A function rather than a method on Keys,
+	// because the union belongs to the groups package and nothing here should
+	// be able to compute a second answer.
+	KeyAccess func(ctx context.Context, keyID string) (groups.Resolved, error)
+
+	// Roles are the named permission sets a subject can hold. Nil leaves the
+	// routes answering "not configured".
+	Roles Roles
 
 	// SSO runs the provider flows, or is nil when this build was wired
 	// without them. Nil is a refusal rather than a panic: the sign-in page
@@ -388,7 +391,7 @@ func NewServer(opts Options) *Server {
 }
 
 func (s *Server) routes() {
-	api := func(path string, h http.HandlerFunc, required auth.Capability) {
+	api := func(path string, h http.HandlerFunc, required auth.Permission) {
 		s.mux.Handle(path, s.authenticate(required, h))
 	}
 
@@ -452,55 +455,55 @@ func (s *Server) routes() {
 	case s.opts.MetricsPublic:
 		s.mux.Handle("GET /metrics", s.opts.Metrics)
 	default:
-		s.mux.Handle("GET /metrics", s.authenticate(auth.CapRead, s.opts.Metrics.ServeHTTP))
+		s.mux.Handle("GET /metrics", s.authenticate(auth.PermHistoryRead, s.opts.Metrics.ServeHTTP))
 	}
 
-	api("GET /api/operations", s.handleListOperations, auth.CapRead)
-	api("GET /api/operations/{id}", s.handleGetOperation, auth.CapRead)
-	api("POST /api/operations/{id}/approve", s.handleApprove, auth.CapApprove)
-	api("POST /api/operations/{id}/reject", s.handleReject, auth.CapApprove)
-	api("POST /api/operations/{id}/cancel", s.handleCancel, auth.CapPropose)
-	api("GET /api/plugins", s.handleListPlugins, auth.CapRead)
-	api("GET /api/endpoints", s.handleEndpoints, auth.CapRead)
-	api("GET /api/tunnel", s.handleTunnelStatus, auth.CapRead)
-	api("GET /api/settings", s.handleGetSettings, auth.CapRead)
+	api("GET /api/operations", s.handleListOperations, auth.PermApprovalsRead)
+	api("GET /api/operations/{id}", s.handleGetOperation, auth.PermApprovalsRead)
+	api("POST /api/operations/{id}/approve", s.handleApprove, auth.PermApprovalsDecide)
+	api("POST /api/operations/{id}/reject", s.handleReject, auth.PermApprovalsDecide)
+	api("POST /api/operations/{id}/cancel", s.handleCancel, auth.PermApprovalsRead)
+	api("GET /api/plugins", s.handleListPlugins, auth.PermPluginsRead)
+	api("GET /api/endpoints", s.handleEndpoints, auth.PermPluginsRead)
+	api("GET /api/tunnel", s.handleTunnelStatus, auth.PermTunnelsRead)
+	api("GET /api/settings", s.handleGetSettings, auth.PermSettingsRead)
 	// Changing configuration is an administrative act, and it is recorded
 	// against the principal who made it.
-	api("PUT /api/settings", s.handlePutSettings, auth.CapAdmin)
-	api("GET /api/settings/history", s.handleSettingsHistory, auth.CapAdmin)
+	api("PUT /api/settings", s.handlePutSettings, auth.PermSettingsWrite)
+	api("GET /api/settings/history", s.handleSettingsHistory, auth.PermSettingsRead)
 	// The standing rules that decide which changes are authorised without
 	// asking anybody. Reading is an operator's business -- "why was I not
 	// asked" is a question they have to be able to answer -- while writing
 	// decides when the gate is skipped, which is administrative.
-	api("GET /api/approval-policy", s.handleGetApprovalPolicy, auth.CapRead)
-	api("PUT /api/approval-policy", s.handlePutApprovalPolicy, auth.CapAdmin)
+	api("GET /api/approval-policy", s.handleGetApprovalPolicy, auth.PermPoliciesRead)
+	api("PUT /api/approval-policy", s.handlePutApprovalPolicy, auth.PermPoliciesWrite)
 	// Answering "which rule would apply" computes over configuration and
 	// changes nothing, so it needs no more than reading the rules does.
-	api("POST /api/approval-policy/evaluate", s.handleEvaluateApprovalPolicy, auth.CapRead)
+	api("POST /api/approval-policy/evaluate", s.handleEvaluateApprovalPolicy, auth.PermPoliciesRead)
 	// Whether anything is unsupervised right now is readable by anyone who can
 	// see the approval queue: a window nobody can see is worse than no window.
 	// Opening or closing one decides when the gate is skipped, which is the
 	// same right as editing the rules.
-	api("GET /api/approval-policy/bypass", s.handleBypassStatus, auth.CapRead)
-	api("POST /api/approval-policy/bypass", s.handleOpenBypass, auth.CapAdmin)
-	api("DELETE /api/approval-policy/bypass", s.handleRevokeBypasses, auth.CapAdmin)
+	api("GET /api/approval-policy/bypass", s.handleBypassStatus, auth.PermPoliciesRead)
+	api("POST /api/approval-policy/bypass", s.handleOpenBypass, auth.PermPoliciesWrite)
+	api("DELETE /api/approval-policy/bypass", s.handleRevokeBypasses, auth.PermPoliciesWrite)
 
 	// Sending a test reaches an outside service with this host's own address
 	// in hand, which is an administrator's act even though what it sends
 	// carries nothing privileged.
-	api("POST /api/notifications/test", s.handleTestNotification, auth.CapAdmin)
+	api("POST /api/notifications/test", s.handleTestNotification, auth.PermSettingsWrite)
 	// Starting and stopping a tunnel changes what an external service can
 	// reach, so it takes administrator rights rather than read.
 	// Version, resources and releases are readable by anyone who may read.
 	// None of it is sensitive and all of it is the first thing asked when
 	// something looks wrong.
-	api("GET /api/resources", s.handleResources, auth.CapRead)
-	api("GET /api/performance", s.handlePerformance, auth.CapRead)
-	api("GET /api/updates", s.handleUpdates, auth.CapRead)
+	api("GET /api/resources", s.handleResources, auth.PermSystemRead)
+	api("GET /api/performance", s.handlePerformance, auth.PermHistoryRead)
+	api("GET /api/updates", s.handleUpdates, auth.PermSystemRead)
 	// Forcing a check reaches an external service, so it is an admin action
 	// even though what it returns is not privileged.
-	api("POST /api/updates/check", s.handleCheckUpdates, auth.CapAdmin)
-	api("POST /api/restart", s.handleRestart, auth.CapAdmin)
+	api("POST /api/updates/check", s.handleCheckUpdates, auth.PermSystemWrite)
+	api("POST /api/restart", s.handleRestart, auth.PermSystemWrite)
 
 	// A backup is the whole instance in one file: every account, every group's
 	// reach, every stored credential. Reading what one *would* hold is already
@@ -509,74 +512,74 @@ func (s *Server) routes() {
 	// Who called what. Administrator for the same reason the log is: a row
 	// names which systems were reached and by whom, which is a wider view than
 	// any one account's own work.
-	api("GET /api/calls", s.handleListCalls, auth.CapAdmin)
-	api("GET /api/calls/callers", s.handleListCallers, auth.CapAdmin)
+	api("GET /api/calls", s.handleListCalls, auth.PermHistoryRead)
+	api("GET /api/calls/callers", s.handleListCallers, auth.PermHistoryRead)
 
-	api("GET /api/backup", s.handleBackupStatus, auth.CapAdmin)
-	api("POST /api/backup", s.handleCreateBackup, auth.CapAdmin)
-	api("POST /api/backup/restore", s.handleStageRestore, auth.CapAdmin)
-	api("DELETE /api/backup/restore", s.handleCancelRestore, auth.CapAdmin)
+	api("GET /api/backup", s.handleBackupStatus, auth.PermSystemWrite)
+	api("POST /api/backup", s.handleCreateBackup, auth.PermSystemWrite)
+	api("POST /api/backup/restore", s.handleStageRestore, auth.PermSystemWrite)
+	api("DELETE /api/backup/restore", s.handleCancelRestore, auth.PermSystemWrite)
 
 	// The ChatGPT accounts tunnels connect with. Reading the list is an
 	// operator's business -- it holds no credential, only whether one is set --
 	// while adding or editing one hands a whole ChatGPT workspace an identity
 	// and a grant on this host, which is an administrator's decision and is
 	// written into the hash-chained trail.
-	api("GET /api/chatgpt/accounts", s.handleListChatGPTAccounts, auth.CapRead)
-	api("POST /api/chatgpt/accounts", s.handleAddChatGPTAccount, auth.CapAdmin)
-	api("PATCH /api/chatgpt/accounts/{id}", s.handleUpdateChatGPTAccount, auth.CapAdmin)
-	api("DELETE /api/chatgpt/accounts/{id}", s.handleRemoveChatGPTAccount, auth.CapAdmin)
-	api("POST /api/chatgpt/accounts/{id}/check", s.handleCheckChatGPTAccount, auth.CapAdmin)
+	api("GET /api/chatgpt/accounts", s.handleListChatGPTAccounts, auth.PermTunnelsRead)
+	api("POST /api/chatgpt/accounts", s.handleAddChatGPTAccount, auth.PermTunnelsWrite)
+	api("PATCH /api/chatgpt/accounts/{id}", s.handleUpdateChatGPTAccount, auth.PermTunnelsWrite)
+	api("DELETE /api/chatgpt/accounts/{id}", s.handleRemoveChatGPTAccount, auth.PermTunnelsWrite)
+	api("POST /api/chatgpt/accounts/{id}/check", s.handleCheckChatGPTAccount, auth.PermTunnelsWrite)
 
-	api("POST /api/tunnel/start", s.handleTunnelStart, auth.CapAdmin)
-	api("POST /api/tunnel/stop", s.handleTunnelStop, auth.CapAdmin)
+	api("POST /api/tunnel/start", s.handleTunnelStart, auth.PermTunnelsWrite)
+	api("POST /api/tunnel/stop", s.handleTunnelStop, auth.PermTunnelsWrite)
 	// Managing tunnels reaches outside this deployment: creating one changes
 	// the OpenAI organisation, and deleting one breaks every connector using
 	// it, wherever those connectors are.
-	api("POST /api/tunnels", s.handleCreateTunnel, auth.CapAdmin)
-	api("POST /api/tunnels/{id}/assign", s.handleAssignTunnel, auth.CapAdmin)
-	api("POST /api/tunnels/{id}/restart", s.handleRestartTunnel, auth.CapAdmin)
-	api("DELETE /api/tunnels/{id}", s.handleDeleteTunnel, auth.CapAdmin)
+	api("POST /api/tunnels", s.handleCreateTunnel, auth.PermTunnelsWrite)
+	api("POST /api/tunnels/{id}/assign", s.handleAssignTunnel, auth.PermTunnelsWrite)
+	api("POST /api/tunnels/{id}/restart", s.handleRestartTunnel, auth.PermTunnelsWrite)
+	api("DELETE /api/tunnels/{id}", s.handleDeleteTunnel, auth.PermTunnelsWrite)
 	// Admin, not read: the log carries every request this host served, which
 	// systems were called and by whom. That is a wider view than any one
 	// account's own work, and it is the same right that reads the audit
 	// trail's verification.
-	api("GET /api/logs/stream", s.handleLogStream, auth.CapAdmin)
-	api("GET /api/audit", s.handleAudit, auth.CapRead)
-	api("GET /api/audit/verify", s.handleVerifyAudit, auth.CapAdmin)
+	api("GET /api/logs/stream", s.handleLogStream, auth.PermHistoryRead)
+	api("GET /api/audit", s.handleAudit, auth.PermHistoryRead)
+	api("GET /api/audit/verify", s.handleVerifyAudit, auth.PermHistoryRead)
 	// Clearing the record is administrative, and is itself recorded.
-	api("DELETE /api/audit", s.handleClearAudit, auth.CapAdmin)
-	api("GET /api/health", s.handleHealth, auth.CapRead)
+	api("DELETE /api/audit", s.handleClearAudit, auth.PermHistoryWrite)
+	api("GET /api/health", s.handleHealth, auth.PermSystemRead)
 	// Integrations this build has, and the instances configured from them.
-	api("GET /api/plugin-types", s.handlePluginTypes, auth.CapRead)
-	api("GET /api/instances", s.handleInstances, auth.CapRead)
+	api("GET /api/plugin-types", s.handlePluginTypes, auth.PermPluginsRead)
+	api("GET /api/instances", s.handleInstances, auth.PermPluginsRead)
 	// Adding an integration decides what an assistant can reach, so it is
 	// administrative rather than operational.
-	api("POST /api/instances", s.handleAddInstance, auth.CapAdmin)
-	api("PATCH /api/instances/{name}", s.handleSetInstanceEnabled, auth.CapAdmin)
-	api("DELETE /api/instances/{name}", s.handleRemoveInstance, auth.CapAdmin)
+	api("POST /api/instances", s.handleAddInstance, auth.PermPluginsWrite)
+	api("PATCH /api/instances/{name}", s.handleSetInstanceEnabled, auth.PermPluginsWrite)
+	api("DELETE /api/instances/{name}", s.handleRemoveInstance, auth.PermPluginsWrite)
 	// Undoing a removal that overrode the configuration file. Same capability
 	// as the removal: putting an integration back in front of an assistant is
 	// the same kind of decision as taking it away.
-	api("POST /api/instances/{name}/restore", s.handleRestoreInstance, auth.CapAdmin)
+	api("POST /api/instances/{name}/restore", s.handleRestoreInstance, auth.PermPluginsWrite)
 	// Remote MCP servers. Reading what is imported and what each offers is an
 	// operator's business; importing one, connecting to it, and deciding which
 	// of its tools an assistant may reach decides what leaves this deployment,
 	// so those are an administrator's.
-	api("GET /api/mcp-servers", s.handleListMCPServers, auth.CapRead)
-	api("GET /api/mcp-servers/schema", s.handleMCPSchema, auth.CapRead)
-	api("POST /api/mcp-servers", s.handleImportMCPServer, auth.CapAdmin)
-	api("PATCH /api/mcp-servers/{name}", s.handleSetMCPServerEnabled, auth.CapAdmin)
-	api("DELETE /api/mcp-servers/{name}", s.handleRemoveMCPServer, auth.CapAdmin)
-	api("GET /api/mcp-servers/{name}/tools", s.handleMCPServerTools, auth.CapRead)
+	api("GET /api/mcp-servers", s.handleListMCPServers, auth.PermPluginsRead)
+	api("GET /api/mcp-servers/schema", s.handleMCPSchema, auth.PermPluginsRead)
+	api("POST /api/mcp-servers", s.handleImportMCPServer, auth.PermPluginsWrite)
+	api("PATCH /api/mcp-servers/{name}", s.handleSetMCPServerEnabled, auth.PermPluginsWrite)
+	api("DELETE /api/mcp-servers/{name}", s.handleRemoveMCPServer, auth.PermPluginsWrite)
+	api("GET /api/mcp-servers/{name}/tools", s.handleMCPServerTools, auth.PermPluginsRead)
 	// Discovery reaches out to a third party with this deployment's
 	// credentials, which is not a read of local state.
-	api("POST /api/mcp-servers/{name}/discover", s.handleDiscoverMCPServer, auth.CapAdmin)
-	api("PATCH /api/mcp-servers/{name}/tools/{tool}", s.handleClassifyMCPTool, auth.CapAdmin)
+	api("POST /api/mcp-servers/{name}/discover", s.handleDiscoverMCPServer, auth.PermPluginsWrite)
+	api("PATCH /api/mcp-servers/{name}/tools/{tool}", s.handleClassifyMCPTool, auth.PermPluginsWrite)
 	// Declaring a header decides what credential this host sends to a third
 	// party, so it is an admin capability like the import that preceded it.
-	api("POST /api/mcp-servers/{name}/headers", s.handleAddMCPServerHeader, auth.CapAdmin)
-	api("DELETE /api/mcp-servers/{name}/headers/{header}", s.handleRemoveMCPServerHeader, auth.CapAdmin)
+	api("POST /api/mcp-servers/{name}/headers", s.handleAddMCPServerHeader, auth.PermPluginsWrite)
+	api("DELETE /api/mcp-servers/{name}/headers/{header}", s.handleRemoveMCPServerHeader, auth.PermPluginsWrite)
 	// The public catalogue. Administrator rather than operator because
 	// browsing it makes this host reach a third party, which is a request an
 	// operator should not be able to cause; what comes back is public.
@@ -584,26 +587,26 @@ func (s *Server) routes() {
 	// The entry route takes a wildcard because a registry name carries a
 	// slash -- "io.github.example/weather" -- which a single path segment
 	// cannot hold.
-	api("GET /api/catalog", s.handleListCatalog, auth.CapAdmin)
-	api("GET /api/catalog/{name...}", s.handleGetCatalogEntry, auth.CapAdmin)
+	api("GET /api/catalog", s.handleListCatalog, auth.PermPluginsWrite)
+	api("GET /api/catalog/{name...}", s.handleGetCatalogEntry, auth.PermPluginsWrite)
 	// Accounts decide who can reach anything else here, so administering them
 	// is an administrator's right.
-	api("GET /api/users", s.handleListUsers, auth.CapAdmin)
-	api("POST /api/users", s.handleCreateUser, auth.CapAdmin)
-	api("PATCH /api/users/{id}", s.handleUpdateUser, auth.CapAdmin)
+	api("GET /api/users", s.handleListUsers, auth.PermAccessRead)
+	api("POST /api/users", s.handleCreateUser, auth.PermAccessWrite)
+	api("PATCH /api/users/{id}", s.handleUpdateUser, auth.PermAccessWrite)
 	// Naming yourself is not administering the host. Every principal that
 	// can reach the dashboard holds read, and this route can only ever edit
 	// the account the request authenticated as -- there is no identifier in
 	// it to point somewhere else -- so the capability it needs is the one
 	// that gets you through the door. Naming somebody else is above.
-	api("PATCH /api/account", s.handleUpdateAccount, auth.CapRead)
-	api("DELETE /api/users/{id}", s.handleDeleteUser, auth.CapAdmin)
+	api("PATCH /api/account", s.handleUpdateAccount, auth.PermSignedIn)
+	api("DELETE /api/users/{id}", s.handleDeleteUser, auth.PermAccessWrite)
 	// Attaching a provider to your own account, and detaching one. Read for
 	// the same reason PATCH /api/account is: neither route carries an
 	// identifier, so neither can address anybody else's account.
-	api("GET /api/account/identities", s.handleAccountIdentities, auth.CapRead)
-	api("POST /api/account/identities/{provider}/start", s.handleIdentityLinkStart, auth.CapRead)
-	api("DELETE /api/account/identities/{provider}", s.handleUnlinkIdentity, auth.CapRead)
+	api("GET /api/account/identities", s.handleAccountIdentities, auth.PermSignedIn)
+	api("POST /api/account/identities/{provider}/start", s.handleIdentityLinkStart, auth.PermSignedIn)
+	api("DELETE /api/account/identities/{provider}", s.handleUnlinkIdentity, auth.PermSignedIn)
 	// Deciding who gets an account. Approving one is a privilege grant -- it
 	// is the moment somebody gains the ability to do anything here -- so it
 	// takes an administrator and is written into the hash-chained trail
@@ -611,32 +614,44 @@ func (s *Server) routes() {
 	// The exact addresses to paste into a provider's console. Administrator
 	// because it is part of setting one up, and because it names how this
 	// deployment is reached.
-	api("GET /api/auth/redirect-uris", s.handleAuthRedirectURIs, auth.CapAdmin)
+	api("GET /api/auth/redirect-uris", s.handleAuthRedirectURIs, auth.PermAccessWrite)
 	// Groups. Reading one tells you what an account or a key can reach, and
 	// writing one changes it for every member at once, so both are an
 	// administrator's -- the same right that lists accounts, for the same
 	// reason.
-	api("GET /api/groups", s.handleListGroups, auth.CapAdmin)
-	api("POST /api/groups", s.handleCreateGroup, auth.CapAdmin)
-	api("GET /api/groups/{id}", s.handleGetGroup, auth.CapAdmin)
-	api("PATCH /api/groups/{id}", s.handleUpdateGroup, auth.CapAdmin)
-	api("DELETE /api/groups/{id}", s.handleDeleteGroup, auth.CapAdmin)
+	api("GET /api/groups", s.handleListGroups, auth.PermAccessRead)
+	api("POST /api/groups", s.handleCreateGroup, auth.PermAccessWrite)
+	api("GET /api/groups/{id}", s.handleGetGroup, auth.PermAccessRead)
+	api("PATCH /api/groups/{id}", s.handleUpdateGroup, auth.PermAccessWrite)
+	api("DELETE /api/groups/{id}", s.handleDeleteGroup, auth.PermAccessWrite)
 	// Membership is the grant itself: adding somebody to a group is the moment
 	// they gain whatever it reaches.
-	api("POST /api/groups/{id}/members", s.handleAddGroupMember, auth.CapAdmin)
-	api("DELETE /api/groups/{id}/members/{kind}/{member}", s.handleRemoveGroupMember, auth.CapAdmin)
+	api("POST /api/groups/{id}/members", s.handleAddGroupMember, auth.PermAccessWrite)
+	api("DELETE /api/groups/{id}/members/{kind}/{member}", s.handleRemoveGroupMember, auth.PermAccessWrite)
 	// API keys. Only an administrator may create one, which is the owner's
 	// rule and the right one: a key is a credential that acts on this host
 	// with a role and a reach, and issuing one is handing out both.
 	//
 	// There is no route that reads a secret back. The only response that has
 	// ever carried one is the reply to the request that created it.
-	api("GET /api/keys", s.handleListKeys, auth.CapAdmin)
-	api("POST /api/keys", s.handleCreateKey, auth.CapAdmin)
-	api("PATCH /api/keys/{id}", s.handleUpdateKey, auth.CapAdmin)
+	api("GET /api/keys", s.handleListKeys, auth.PermAccessRead)
+	api("POST /api/keys", s.handleCreateKey, auth.PermAccessWrite)
+	api("PATCH /api/keys/{id}", s.handleUpdateKey, auth.PermAccessWrite)
 	// Revoked rather than deleted: an audit entry naming an identifier that
 	// resolves to nothing would not answer "which agent did this".
-	api("POST /api/keys/{id}/revoke", s.handleRevokeKey, auth.CapAdmin)
+	api("POST /api/keys/{id}/revoke", s.handleRevokeKey, auth.PermAccessWrite)
+	// A new secret for the same key. The identity, role, grants and groups
+	// stay, so every rule and every audit entry naming the key keeps meaning
+	// it; only the secret moves, with a grace the caller chooses.
+	api("POST /api/keys/{id}/rotate", s.handleRotateKey, auth.PermAccessWrite)
+	// Roles. Reading them is part of understanding who may do what, and the
+	// forms that assign one need the list; composing or changing one decides
+	// what everything holding it may do, which is the same right that issues
+	// a key.
+	api("GET /api/roles", s.handleListRoles, auth.PermAccessRead)
+	api("POST /api/roles", s.handleCreateRole, auth.PermAccessWrite)
+	api("PATCH /api/roles/{id}", s.handleUpdateRole, auth.PermAccessWrite)
+	api("DELETE /api/roles/{id}", s.handleDeleteRole, auth.PermAccessWrite)
 	// Certificates this host trusts on top of the system roots. An
 	// administrator's, because adding one decides what every outbound
 	// connection this host makes will accept as proof of identity.
@@ -644,12 +659,12 @@ func (s *Server) routes() {
 	// There is no PATCH. A certificate is the bytes it is; changing them under
 	// a name somebody already recognises is how a trust decision gets made
 	// twice and reviewed once.
-	api("GET /api/certificates", s.handleListCertificates, auth.CapAdmin)
-	api("POST /api/certificates", s.handleAddCertificate, auth.CapAdmin)
-	api("DELETE /api/certificates/{id}", s.handleDeleteCertificate, auth.CapAdmin)
-	api("GET /api/registrations", s.handleListRegistrations, auth.CapAdmin)
-	api("POST /api/registrations/{id}/approve", s.handleApproveRegistration, auth.CapAdmin)
-	api("POST /api/registrations/{id}/reject", s.handleRejectRegistration, auth.CapAdmin)
+	api("GET /api/certificates", s.handleListCertificates, auth.PermPluginsRead)
+	api("POST /api/certificates", s.handleAddCertificate, auth.PermPluginsWrite)
+	api("DELETE /api/certificates/{id}", s.handleDeleteCertificate, auth.PermPluginsWrite)
+	api("GET /api/registrations", s.handleListRegistrations, auth.PermAccessRead)
+	api("POST /api/registrations/{id}/approve", s.handleApproveRegistration, auth.PermAccessWrite)
+	api("POST /api/registrations/{id}/reject", s.handleRejectRegistration, auth.PermAccessWrite)
 
 	// Everything else is the single-page application.
 	s.mux.Handle("/", s.staticHandler())
@@ -715,13 +730,13 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// authenticate resolves the request's credential and checks one capability.
+// authenticate resolves the request's credential and checks one permission.
 //
 // Two credentials are accepted because two kinds of caller exist: a person in
 // a browser holding a session cookie, and a script holding a bearer token.
 // principalFor decides between them and writes its own refusal, including the
 // CSRF check that only applies to the cookie.
-func (s *Server) authenticate(required auth.Capability, next http.HandlerFunc) http.Handler {
+func (s *Server) authenticate(required auth.Permission, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := s.principalFor(w, r)
 		if !ok {

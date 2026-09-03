@@ -26,15 +26,19 @@ func TestAudit_RecordsTheStableIdentifierNotTheDisplayName(t *testing.T) {
 		Email:       "alice@example.com",
 		Password:    "a-sufficiently-long-passphrase",
 		DisplayName: "Alice",
-		Role:        auth.RoleAdmin,
-		Plugins:     []string{auth.Wildcard},
+		RoleID:      auth.RoleAdministrator,
+		Grants:      auth.Grants{{Plugin: auth.Wildcard, Level: auth.LevelWrite}},
 	})
 	if err != nil {
 		t.Fatalf("create account: %v", err)
 	}
 
 	// The actor is exactly what the dashboard passes: the principal's id.
-	actor := alice.Principal("ses_1", alice.Plugins, nil).ID
+	access, err := a.accounts.Resolve(ctx, alice.ID)
+	if err != nil {
+		t.Fatalf("resolve access: %v", err)
+	}
+	actor := alice.Principal("ses_1", access).ID
 	if actor != "user:alice@example.com" {
 		t.Fatalf("principal id = %q, want it built from the address", actor)
 	}
@@ -97,7 +101,7 @@ func TestDisplayName_RenamingDoesNotMoveTheIdentity(t *testing.T) {
 
 	alice, err := a.accounts.Create(ctx, users.CreateRequest{
 		Email: "alice@example.com", Password: "a-sufficiently-long-passphrase",
-		Role: auth.RoleUser, Plugins: []string{auth.Wildcard},
+		RoleID: auth.RoleOperator, Grants: auth.Grants{{Plugin: auth.Wildcard, Level: auth.LevelWrite}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,10 +117,14 @@ func TestDisplayName_RenamingDoesNotMoveTheIdentity(t *testing.T) {
 	if after.Email != "alice@example.com" {
 		t.Errorf("email = %q, want it unchanged", after.Email)
 	}
-	if got := after.Principal("ses_1", after.Plugins, nil).ID; got != "user:alice@example.com" {
+	access, err := a.accounts.Resolve(ctx, after.ID)
+	if err != nil {
+		t.Fatalf("resolve access: %v", err)
+	}
+	if got := after.Principal("ses_1", access).ID; got != "user:alice@example.com" {
 		t.Errorf("principal id = %q, want it unchanged by a rename", got)
 	}
-	if got := after.Principal("ses_1", after.Plugins, nil).DisplayName; got != "Alice" {
+	if got := after.Principal("ses_1", access).DisplayName; got != "Alice" {
 		t.Errorf("principal display name = %q, want the new name", got)
 	}
 }

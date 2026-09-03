@@ -1,9 +1,8 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { LogOut, Menu, Search, X } from "lucide-react";
-import type { Capability } from "@/lib/capabilities";
 import { entryFor, visibleNav, type NavItem } from "@/lib/nav";
 import { Link, useRouter } from "@/lib/router";
-import { signedInAs, useCan, useSession } from "@/lib/session";
+import { signedInAs, useCanFn, useSession } from "@/lib/session";
 import { isMac } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -50,15 +49,8 @@ function Sidebar({ badges, onNavigate }: {
   badges: Record<string, number>;
   onNavigate?: () => void;
 }) {
-  // Up front, not inside the filter: `useCan` is a hook and the predicate may
-  // not run.
-  const held: Record<Capability, boolean> = {
-    read: useCan("read"),
-    propose: useCan("propose"),
-    approve: useCan("approve"),
-    admin: useCan("admin"),
-  };
-  const groups = visibleNav((c) => held[c]);
+  const can = useCanFn();
+  const groups = visibleNav(can);
 
   // `min-h-0` is load-bearing: without it a flex child refuses to shrink below
   // its content and `overflow-y-auto` never engages.

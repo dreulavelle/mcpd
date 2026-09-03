@@ -99,7 +99,7 @@ function Steps({ endpoints, plugins, chosen, onReach, client, onClient }: {
   // An address that is only a path means nothing has been advertised: the
   // server returns the route bare rather than inventing a host from a header.
   const advertised = /^https?:\/\//.test(address);
-  const canIssue = useCan("admin");
+  const canIssue = useCan("access:write");
 
   const snippet = useMemo(
     () => CLIENTS.find((c) => c.id === client)!.render({

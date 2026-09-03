@@ -20,14 +20,23 @@ import (
 func TestEachTunnelGetsItsOwnServer(t *testing.T) {
 	a := newSettingsApp(t)
 
+	operator, ok := auth.BuiltinRole(auth.RoleOperator)
+	if !ok {
+		t.Fatal("role_operator must be a built-in role")
+	}
+
 	first, err := a.tunnelFactory(&auth.Principal{
-		ID: "svc:one", Role: auth.RoleUser, Plugins: []string{"echo"},
+		ID: "svc:one", RoleID: operator.ID, RoleName: operator.Name,
+		Permissions: operator.Permissions,
+		Grants:      auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("building the first server: %v", err)
 	}
 	second, err := a.tunnelFactory(&auth.Principal{
-		ID: "svc:two", Role: auth.RoleUser, Plugins: []string{"echo"},
+		ID: "svc:two", RoleID: operator.ID, RoleName: operator.Name,
+		Permissions: operator.Permissions,
+		Grants:      auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("building the second server: %v", err)
@@ -81,21 +90,56 @@ func TestChangingTheRoleReachesTheTunnel(t *testing.T) {
 	// A connector that cannot approve cannot apply anything: approval happens
 	// in the conversation and this is what carries the answer back.
 	principal := configs[0].Principal
-	if principal.Role != auth.RoleUser {
-		t.Fatalf("role = %q, want the account's", principal.Role)
+	if principal.RoleID != auth.RoleOperator {
+		t.Fatalf("role = %q, want the account's", principal.RoleID)
 	}
-	if !principal.Can(auth.CapApprove) {
+	if !principal.Can(auth.PermApprovalsDecide) {
 		t.Fatal("the connector must be able to record an approval")
 	}
 
 	// And changing it on the account reaches the tunnel, which is the whole
 	// reason the account is read at build time rather than at startup.
-	admin := auth.RoleAdmin
+	admin := auth.RoleAdministrator
 	if _, err := a.chatgpt.Update(ctx, "user:test", acct.ID,
-		tunnel.AccountUpdate{Role: &admin}); err != nil {
+		tunnel.AccountUpdate{RoleID: &admin}); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.tunnelConfigs(ctx)[0].Principal.Role; got != auth.RoleAdmin {
+	if got := a.tunnelConfigs(ctx)[0].Principal.RoleID; got != auth.RoleAdministrator {
 		t.Fatalf("role = %q after the account changed, want admin", got)
+	}
+}
+
+// Narrowing a per-plugin tunnel to the one system it serves keeps the
+// account's level for that system -- write stays write. Demoting it to read
+// merely because a tunnel names one plugin would leave a connector granted
+// write on its account unable to propose anything through the tunnel meant
+// to carry exactly that.
+func TestPerPluginNarrowingKeepsTheAccountsLevelForThatPlugin(t *testing.T) {
+	a := newSettingsApp(t)
+	ctx := context.Background()
+
+	if _, err := a.chatgpt.Create(ctx, "user:test", tunnel.Account{
+		Name:    "Mixed",
+		APIKey:  "sk-runtime-key-mixed",
+		Grants:  auth.Grants{{Plugin: "echo", Level: auth.LevelWrite}},
+		Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: settings.KeyTunnelEnabled, Value: "true"},
+		{Key: settings.TunnelPluginKey("tunnel_1123456789abcdef0123456789abcdef"),
+			Value: `"echo"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	configs := a.tunnelConfigs(ctx)
+	if len(configs) != 1 {
+		t.Fatalf("got %d tunnels, want the one for echo", len(configs))
+	}
+	if lvl := configs[0].Principal.Grants.LevelFor("echo"); lvl != auth.LevelWrite {
+		t.Fatalf("level for echo = %q, want write -- narrowing to one plugin "+
+			"must keep the account's level for it", lvl)
 	}
 }

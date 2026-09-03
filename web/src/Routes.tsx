@@ -22,6 +22,7 @@ import { ChatGPT } from "@/pages/settings/ChatGPT";
 import { General } from "@/pages/settings/General";
 
 import { Keys } from "@/pages/settings/Keys";
+import { Roles } from "@/pages/settings/Roles";
 import { Activity } from "@/pages/activity/Activity";
 import { BackupRestore } from "@/pages/settings/BackupRestore";
 import { UsersAndGroups } from "@/pages/settings/UsersAndGroups";
@@ -107,6 +108,7 @@ export function Routes() {
           case "users": return <UsersAndGroups />;
           case "groups": return <UsersAndGroups />;
           case "keys": return <Keys />;
+          case "roles": return <Roles />;
           case "certificates": return <Certificates />;
           case "advanced": return <Advanced />;
           case "diagnostics": return <Diagnostics />;
@@ -130,10 +132,10 @@ export function Routes() {
 
 function Gate({ path, children }: { path: string; children: ReactNode }) {
   const required = capabilityFor(path);
-  // Asked unconditionally, because it is a hook. "read" stands in for the two
-  // answers that are not a capability; neither uses the reply.
+  // Asked unconditionally, because it is a hook. "" is anybody signed in,
+  // which is what both answers that are not a permission need.
   const holds = useCan(
-    required === null || required === "signed-in" ? "read" : required,
+    required === null || required === "signed-in" ? "" : required,
   );
 
   // A path the map does not cover is not one this console serves, whatever the
@@ -146,8 +148,8 @@ function Gate({ path, children }: { path: string; children: ReactNode }) {
       <PageHeader title="Not for this account" />
       <Notice tone="problem">
         This part of the console needs the <code className="font-mono">{required}</code>{" "}
-        capability, which your account does not carry. Ask an administrator if
-        you need it.
+        permission, which your account does not hold. Ask whoever manages
+        access here if you need it.
       </Notice>
     </>
   );

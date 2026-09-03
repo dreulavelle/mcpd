@@ -3,13 +3,14 @@ import {
   ListChecks, Plug, ShieldCheck, Store, Terminal, UserRound, Waypoints,
   type LucideIcon,
 } from "lucide-react";
-import type { Capability } from "./capabilities";
+import type { Permission } from "./permissions";
 
 /**
- * What it takes to reach a destination. `"signed-in"` has to be typed out, so
- * an entry cannot become ungated by leaving the field off.
+ * What it takes to reach a destination: a permission, or `"signed-in"` for
+ * anybody with an account. The second has to be typed out, so an entry cannot
+ * become ungated by leaving the field off.
  */
-export type Requirement = Capability | "signed-in";
+export type Requirement = Permission | "signed-in";
 
 /** One destination in the console. */
 export interface NavItem {
@@ -41,7 +42,9 @@ export const NAV: NavGroup[] = [
         label: "Overview",
         lede: "What this host is doing, and what is waiting on somebody.",
         icon: Gauge,
-        capability: "read",
+        // Anybody signed in. Each card asks its own question and goes quiet
+        // when the answer is a refusal.
+        capability: "signed-in",
       },
     ],
   },
@@ -53,7 +56,7 @@ export const NAV: NavGroup[] = [
         label: "Approvals",
         lede: "Changes an assistant has proposed, and what happened to them.",
         icon: ClipboardCheck,
-        capability: "read",
+        capability: "approvals:read",
       },
       {
         // The rules that decide the queue above, beside it. It sat under
@@ -67,7 +70,7 @@ export const NAV: NavGroup[] = [
         label: "Policies",
         lede: "Which changes can run without asking anyone.",
         icon: ShieldCheck,
-        capability: "read",
+        capability: "policies:read",
       },
       {
         // Beside Approvals and Audit because the three answer one question
@@ -78,14 +81,14 @@ export const NAV: NavGroup[] = [
         label: "Activity",
         lede: "Every tool call this host served, and who made it.",
         icon: ListChecks,
-        capability: "admin",
+        capability: "history:read",
       },
       {
         path: "/audit",
         label: "Audit",
         lede: "Append-only, and hash-chained. mcpd notices if anything is altered.",
         icon: ScrollText,
-        capability: "read",
+        capability: "history:read",
       },
     ],
   },
@@ -97,21 +100,21 @@ export const NAV: NavGroup[] = [
         label: "Plugins",
         lede: "Everything mcpd serves, built in or somebody else's, and how each one is doing.",
         icon: Boxes,
-        capability: "read",
+        capability: "plugins:read",
       },
       {
         path: "/marketplace",
         label: "Marketplace",
         lede: "Remote MCP servers you could add. Adding one makes it a plugin.",
         icon: Store,
-        capability: "admin",
+        capability: "plugins:write",
       },
       {
         path: "/tunnels",
         label: "Tunnels",
         lede: "One tunnel is one connector in ChatGPT.",
         icon: Waypoints,
-        capability: "read",
+        capability: "tunnels:read",
       },
       {
         // The other way in. Tunnels and ChatGPT each had a page and every
@@ -123,7 +126,7 @@ export const NAV: NavGroup[] = [
         label: "Clients",
         lede: "Reach this host from Claude Code, Codex, VS Code, or anything else that speaks MCP over HTTP.",
         icon: Plug,
-        capability: "read",
+        capability: "plugins:read",
       },
     ],
   },
@@ -147,21 +150,21 @@ export const NAV: NavGroup[] = [
         label: "Settings",
         lede: "How this host is configured.",
         icon: Cog,
-        capability: "read",
+        capability: "settings:read",
       },
       {
         path: "/system",
         label: "System",
         lede: "What this host is running, what it is using, and how to restart it.",
         icon: Activity,
-        capability: "read",
+        capability: "system:read",
       },
       {
         path: "/performance",
         label: "Performance",
         lede: "How long this host's tools take, and how much they send back.",
         icon: ChartColumn,
-        capability: "read",
+        capability: "history:read",
       },
       {
         // Not read: the log carries every request this host served, which
@@ -171,7 +174,7 @@ export const NAV: NavGroup[] = [
         label: "Logs",
         lede: "What this host is doing, as it does it.",
         icon: Terminal,
-        capability: "admin",
+        capability: "history:read",
       },
     ],
   },
@@ -207,7 +210,7 @@ export function redirectFor(path: string): string | null {
  * heading nothing.
  */
 export function visibleNav(
-  can: (capability: Capability) => boolean,
+  can: (permission: Permission) => boolean,
 ): NavGroup[] {
   const keep = (item: NavItem): boolean => {
     if (item.inSidebar === false) return false;
@@ -243,28 +246,31 @@ export function covers(entryPath: string, path: string): boolean {
  * it earned a line in the menu.
  */
 const ROUTE_CAPABILITIES: Record<string, Requirement> = {
-  "/settings/authentication": "admin",
-  "/settings/certificates": "admin",
-  "/settings/keys": "admin",
+  "/settings/authentication": "access:write",
+  "/settings/certificates": "plugins:write",
+  "/settings/keys": "access:read",
+  // What each role means. Read to see, write to compose; the page renders
+  // read-only without the second.
+  "/settings/roles": "access:read",
   // Who may sign in, and what a group hands everyone in it. These were two
   // sidebar entries beside Settings while also being one tab on it, so the
   // same page had two ways in that highlighted differently. The tab is the
   // way in; both paths stay routed because links and bookmarks point at them.
-  "/settings/users": "admin",
-  "/settings/groups": "admin",
+  "/settings/users": "access:read",
+  "/settings/groups": "access:read",
   // A backup carries this host's database and the key that opens its secrets,
   // and a restore replaces both. Nothing on this page is less than admin.
-  "/settings/backup": "admin",
+  "/settings/backup": "system:write",
   // An account carries a credential, an identity and a grant, so adding one
   // hands a whole ChatGPT workspace a way in. Administrator, for the same
   // reason users and groups are.
-  "/settings/chatgpt": "admin",
+  "/settings/chatgpt": "tunnels:write",
   // Both are tabs rather than sidebar entries, so neither has an entry to
   // read a requirement from. Advanced changes how patient the listeners are
   // and what the database trades for speed; Diagnostics decides what leaves
   // this machine.
-  "/settings/advanced": "admin",
-  "/settings/diagnostics": "admin",
+  "/settings/advanced": "settings:write",
+  "/settings/diagnostics": "settings:write",
 };
 
 export function capabilityFor(path: string): Requirement | null {

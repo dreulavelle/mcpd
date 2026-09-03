@@ -6,7 +6,7 @@ import {
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
-import { useCan } from "@/lib/session";
+import { useCanFn } from "@/lib/session";
 import { Section } from "./chrome";
 import { StatusDot, type Tone } from "./status";
 import { Card, CardContent } from "@/components/ui/card";
@@ -166,7 +166,11 @@ export function Attention({ plugins, instances, tunnels }: {
   instances: PluginInstance[];
   tunnels: TunnelStatus[];
 }) {
-  const admin = useCan("admin");
+  const can = useCanFn();
+  const access = can("access:read");
+  const pluginsWrite = can("plugins:read");
+  const history = can("history:read");
+  const admin = access;
   const [unknown, setUnknown] = useState<Operation[]>([]);
   const [registrations, setRegistrations] = useState<PendingRegistration[]>([]);
   const [servers, setServers] = useState<MCPServer[]>([]);
@@ -175,14 +179,20 @@ export function Attention({ plugins, instances, tunnels }: {
   const [chainBrokenAt, setChainBrokenAt] = useState<number | null>(null);
 
   const load = useCallback(() => {
-    api.operations("indeterminate", 50).then((r) => setUnknown(r.operations ?? [])).catch(() => undefined);
-    api.mcpServers().then((r) => setServers(r.servers ?? [])).catch(() => undefined);
-    api.updates().then(setUpdates).catch(() => undefined);
-    if (!admin) return;
-    api.registrations().then((r) => setRegistrations(r.registrations ?? [])).catch(() => undefined);
-    api.certificates().then((r) => setCertificates(r.certificates ?? [])).catch(() => undefined);
-    api.verifyAudit().then((c) => setChainBrokenAt(c.intact ? null : c.broken_at)).catch(() => undefined);
-  }, [admin]);
+    // Each question only where the answer would be given. A refusal is
+    // swallowed either way, but a page that asks for what it cannot see is
+    // a page that logs a 403 on every visit.
+    if (can("approvals:read")) {
+      api.operations("indeterminate", 50).then((r) => setUnknown(r.operations ?? [])).catch(() => undefined);
+    }
+    if (pluginsWrite) {
+      api.mcpServers().then((r) => setServers(r.servers ?? [])).catch(() => undefined);
+      api.certificates().then((r) => setCertificates(r.certificates ?? [])).catch(() => undefined);
+    }
+    if (can("system:read")) api.updates().then(setUpdates).catch(() => undefined);
+    if (access) api.registrations().then((r) => setRegistrations(r.registrations ?? [])).catch(() => undefined);
+    if (history) api.verifyAudit().then((c) => setChainBrokenAt(c.intact ? null : c.broken_at)).catch(() => undefined);
+  }, [can, access, pluginsWrite, history]);
   usePoll(load, 30_000);
 
   const items = attention({

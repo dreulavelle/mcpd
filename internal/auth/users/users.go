@@ -27,6 +27,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 )
 
 // Errors returned by this package. They are coarse on purpose: a caller learns
@@ -43,6 +44,8 @@ var (
 	// ErrLastAdmin reports an edit that would leave no one able to administer
 	// the host.
 	ErrLastAdmin = errors.New("users: cannot remove the last administrator")
+	// ErrNoSuchRole reports a role id that names nothing.
+	ErrNoSuchRole = errors.New("users: no such role")
 	// ErrAlreadyClaimed reports registration attempted on an instance that
 	// already has an account. Registration exists to claim an unclaimed
 	// instance; once claimed, accounts are made by an administrator.
@@ -135,9 +138,11 @@ type User struct {
 	Email        string
 	PasswordHash string
 	DisplayName  string
-	Role         auth.Role
-	Plugins      []string
-	Disabled     bool
+	// RoleID is the role this account holds directly. What it may actually
+	// do is resolved with its groups; see Store.Resolve.
+	RoleID   string
+	Grants   auth.Grants
+	Disabled bool
 	// Status is active, or pending when a registration is waiting for an
 	// administrator. Not the same axis as Disabled; see Status.
 	Status      Status
@@ -198,24 +203,23 @@ func (u *User) Name() string {
 // record, every guard and every grant is keyed on the address, and the name is
 // carried alongside for a human to read.
 //
-// `granted` and `ceiling` are passed in rather than read off the row, and that
-// is the point of the parameters. Since groups exist, what an account may reach is its own
-// grants unioned with every group it belongs to -- a question about other
-// rows, which a method on this struct cannot answer. Store.EffectiveGrants is
-// the one place that computes it, and requiring the value here is what stops a
+// `access` is passed in rather than read off the row, and that is the point
+// of the parameter. What an account may do and reach is its own role and
+// grants merged with every group it belongs to -- a question about other
+// rows, which a method on this struct cannot answer. Store.Resolve is the one
+// place that computes it, and requiring the value here is what stops a
 // second, staler answer being assembled somewhere else.
-func (u *User) Principal(sessionID string, granted []string, ceiling []auth.Capability) *auth.Principal {
+func (u *User) Principal(sessionID string, access groups.Resolved) *auth.Principal {
 	return &auth.Principal{
 		ID:          "user:" + u.Email,
 		DisplayName: u.Name(),
-		Role:        u.Role,
-		Plugins:     append([]string(nil), granted...),
-		// The ceiling arrives the same way and for the same reason: what an
-		// account's groups permit it to do is a question about other rows.
-		Ceiling: ceiling,
-		TokenID: sessionID,
+		RoleID:      u.RoleID,
+		RoleName:    access.RoleName,
+		Permissions: access.Permissions,
+		Grants:      access.Grants,
+		TokenID:     sessionID,
 		// Carried onto the principal rather than checked by whoever holds the
-		// user, so that every capability check in the process refuses a
+		// user, so that every permission check in the process refuses a
 		// pending account without having been told that pending accounts
 		// exist.
 		Pending: u.Pending(),

@@ -39,8 +39,8 @@ func sampleAccount(name string) tunnel.Account {
 	return tunnel.Account{
 		Name:    name,
 		APIKey:  "sk-runtime-" + name,
-		Role:    auth.RoleUser,
-		Plugins: []string{auth.Wildcard},
+		RoleID:  auth.RoleOperator,
+		Grants:  auth.Grants{{Plugin: auth.Wildcard, Level: auth.LevelWrite}},
 		Enabled: true,
 	}
 }
@@ -170,7 +170,7 @@ func TestAccountValidationRefusesWhatItCannotName(t *testing.T) {
 		{"no name", func(a *tunnel.Account) { a.Name = "" }},
 		{"no key", func(a *tunnel.Account) { a.APIKey = "" }},
 		{"a name with punctuation", func(a *tunnel.Account) { a.Name = "work/prod" }},
-		{"an unknown role", func(a *tunnel.Account) { a.Role = auth.Role("superuser") }},
+		{"an unknown role", func(a *tunnel.Account) { a.RoleID = "role_superuser" }},
 		{"a negative rate", func(a *tunnel.Account) { a.RatePerSec = -1 }},
 	} {
 		t.Run(tc.why, func(t *testing.T) {
@@ -270,7 +270,8 @@ func TestChatGPTAccount_WorkspacesRoundTrip(t *testing.T) {
 	s := newAccountStore(t)
 	ctx := context.Background()
 	created, err := s.Create(ctx, "user:test", tunnel.Account{
-		Name: "Work", APIKey: "sk-runtime", Role: auth.RoleUser, Plugins: []string{"*"},
+		Name: "Work", APIKey: "sk-runtime", RoleID: auth.RoleOperator,
+		Grants:  auth.Grants{{Plugin: auth.Wildcard, Level: auth.LevelWrite}},
 		Enabled: true, Workspaces: []string{" ws_b", "ws_a", "ws_a", ""},
 	})
 	if err != nil {

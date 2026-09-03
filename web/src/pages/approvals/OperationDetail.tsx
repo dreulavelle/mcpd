@@ -376,8 +376,8 @@ function Decide({ operation: op, onChanged }: {
   operation: Operation;
   onChanged: () => void;
 }) {
-  const mayApprove = useCan("approve");
-  const mayPropose = useCan("propose");
+  const mayApprove = useCan("approvals:decide");
+  const mayPropose = useCan("approvals:read");
   const notify = useNotify();
   const { navigate } = useRouter();
   const [reason, setReason] = useState("");

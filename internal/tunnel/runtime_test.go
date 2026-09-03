@@ -15,13 +15,16 @@ func testServer() *mcp.Server {
 }
 
 func testConfig() Config {
+	operator, _ := auth.BuiltinRole(auth.RoleOperator)
 	return Config{
 		Enabled:  true,
 		TunnelID: "tunnel_0123456789abcdef0123456789abcdef",
 		APIKey:   "sk-runtime-not-a-real-key",
 		Principal: auth.Principal{
-			ID: "svc:chatgpt", Role: auth.RoleUser,
-			Plugins: []string{auth.Wildcard}, TokenID: "tunnel",
+			ID: "svc:chatgpt", RoleID: operator.ID, RoleName: operator.Name,
+			Permissions: operator.Permissions,
+			Grants:      auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite),
+			TokenID:     "tunnel",
 		},
 	}
 }

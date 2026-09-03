@@ -22,28 +22,42 @@ const (
 	tokenB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
+func operator() Permissions {
+	r, _ := BuiltinRole(RoleOperator)
+	return r.Permissions
+}
+
+func reads(plugins ...string) Grants { return GrantsAt(plugins, LevelRead) }
+
 // The headline requirement: an agent handed one plugin must not reach another.
-func TestCanAccessPlugin_ScopingIsolatesAgents(t *testing.T) {
+func TestReaches_ScopingIsolatesAgents(t *testing.T) {
 	tests := []struct {
 		name    string
-		grants  []string
+		grants  Grants
 		probe   string
+		level   Level
 		allowed bool
 	}{
-		{"exact grant", []string{"cnmaestro"}, "cnmaestro", true},
-		{"other plugin denied", []string{"cnmaestro"}, "proxmox", false},
-		{"multiple grants", []string{"cnmaestro", "netbox"}, "netbox", true},
-		{"wildcard grants all", []string{Wildcard}, "anything", true},
-		{"empty grants deny all", nil, "cnmaestro", false},
-		{"empty name denied", []string{Wildcard}, "", false},
-		{"no partial prefix match", []string{"cnmaestro"}, "cnmaestro-staging", false},
+		{"exact grant", reads("cnmaestro"), "cnmaestro", LevelRead, true},
+		{"other plugin denied", reads("cnmaestro"), "proxmox", LevelRead, false},
+		{"multiple grants", reads("cnmaestro", "netbox"), "netbox", LevelRead, true},
+		{"wildcard grants all", reads(Wildcard), "anything", LevelRead, true},
+		{"empty grants deny all", nil, "cnmaestro", LevelRead, false},
+		{"empty name denied", reads(Wildcard), "", LevelRead, false},
+		{"no partial prefix match", reads("cnmaestro"), "cnmaestro-staging", LevelRead, false},
+		{"read does not reach write", reads("cnmaestro"), "cnmaestro", LevelWrite, false},
+		{"write includes read", GrantsAt([]string{"cnmaestro"}, LevelWrite), "cnmaestro", LevelRead, true},
+		{"a wildcard at read does not write a named plugin",
+			Grants{{Wildcard, LevelRead}, {"graylog", LevelWrite}}, "cnmaestro", LevelWrite, false},
+		{"and the named plugin is written",
+			Grants{{Wildcard, LevelRead}, {"graylog", LevelWrite}}, "graylog", LevelWrite, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &Principal{ID: "svc:agent", Role: RoleUser, Plugins: tc.grants}
-			if got := p.CanAccessPlugin(tc.probe); got != tc.allowed {
-				t.Fatalf("CanAccessPlugin(%q) with grants %v = %v, want %v",
-					tc.probe, tc.grants, got, tc.allowed)
+			p := &Principal{ID: "svc:agent", Permissions: operator(), Grants: tc.grants}
+			if got := p.Reaches(tc.probe, tc.level); got != tc.allowed {
+				t.Fatalf("Reaches(%q, %s) with grants %v = %v, want %v",
+					tc.probe, tc.level, tc.grants, got, tc.allowed)
 			}
 		})
 	}
@@ -52,77 +66,84 @@ func TestCanAccessPlugin_ScopingIsolatesAgents(t *testing.T) {
 // A principal with no plugins listed must be denied everything. Treating an
 // empty list as "all" would turn an incomplete config into a full grant.
 func TestValidate_RefusesPrincipalWithNoPluginGrants(t *testing.T) {
-	p := &Principal{ID: "svc:agent", Role: RoleUser}
+	p := &Principal{ID: "svc:agent", Permissions: operator()}
 	if err := p.Validate(); err == nil {
 		t.Fatal("a principal granting no plugins must be refused at load time")
 	}
 }
 
-func TestRoleCapabilities(t *testing.T) {
+// The three built-in roles are the whole of what a fresh host offers, so
+// what each one holds is pinned here rather than left to the table.
+func TestBuiltinRoles(t *testing.T) {
 	tests := []struct {
-		role   Role
-		can    []Capability
-		cannot []Capability
+		id     string
+		can    []Permission
+		cannot []Permission
 	}{
-		// The whole of the model: the line is administering the host, not
-		// operating it.
-		{RoleUser, []Capability{CapRead, CapPropose, CapApprove}, []Capability{CapAdmin}},
-		{RoleAdmin, []Capability{CapRead, CapPropose, CapApprove, CapAdmin}, nil},
+		{RoleReader,
+			[]Permission{PermApprovalsRead, PermSettingsRead, PermHistoryRead, PermSystemRead},
+			[]Permission{PermApprovalsDecide, PermSettingsWrite, PermAccessRead, PermAccessWrite}},
+		{RoleOperator,
+			[]Permission{PermApprovalsRead, PermApprovalsDecide, PermSettingsRead, PermPluginsRead},
+			[]Permission{PermSettingsWrite, PermPluginsWrite, PermAccessRead, PermTunnelsWrite}},
+		{RoleAdministrator,
+			[]Permission{PermApprovalsDecide, PermSettingsWrite, PermAccessWrite, PermHistoryWrite, PermSystemWrite},
+			nil},
 	}
 	for _, tc := range tests {
-		t.Run(tc.role.String(), func(t *testing.T) {
-			p := &Principal{ID: "u", Role: tc.role, Plugins: []string{Wildcard}}
-			for _, c := range tc.can {
-				if !p.Can(c) {
-					t.Errorf("%s should hold %s", tc.role, c)
+		t.Run(tc.id, func(t *testing.T) {
+			r, ok := BuiltinRole(tc.id)
+			if !ok {
+				t.Fatalf("no built-in role %s", tc.id)
+			}
+			p := &Principal{ID: "u", Permissions: r.Permissions, Grants: reads(Wildcard)}
+			for _, perm := range tc.can {
+				if !p.Can(perm) {
+					t.Errorf("%s should hold %s", r.Name, perm)
 				}
 			}
-			for _, c := range tc.cannot {
-				if p.Can(c) {
-					t.Errorf("%s must not hold %s", tc.role, c)
+			for _, perm := range tc.cannot {
+				if p.Can(perm) {
+					t.Errorf("%s must not hold %s", r.Name, perm)
 				}
 			}
 		})
 	}
 }
 
-// Capabilities has to agree with Can, because the dashboard draws its
-// controls from the list and the server refuses from the check. A group
-// ceiling is the case that used to split them: the role said approve, the
-// ceiling said no, and the page showed a button that always failed.
-func TestCapabilities_AgreesWithCan(t *testing.T) {
+// PermissionList has to agree with Can, because the dashboard draws its
+// controls from the list and the server refuses from the check.
+func TestPermissionList_AgreesWithCan(t *testing.T) {
 	cases := []struct {
 		name string
 		p    *Principal
-		want []Capability
 	}{
-		{"nil holds nothing", nil, []Capability{}},
-		{"admin without a ceiling", &Principal{Role: RoleAdmin},
-			[]Capability{CapRead, CapPropose, CapApprove, CapAdmin}},
-		{"user without a ceiling", &Principal{Role: RoleUser},
-			[]Capability{CapRead, CapPropose, CapApprove}},
-		{"a ceiling only removes", &Principal{Role: RoleUser, Ceiling: []Capability{CapRead, CapAdmin}},
-			[]Capability{CapRead}},
-		{"an empty ceiling suspends", &Principal{Role: RoleAdmin, Ceiling: []Capability{}},
-			[]Capability{}},
-		{"pending holds nothing", &Principal{Role: RoleAdmin, Pending: true},
-			[]Capability{}},
+		{"nil holds nothing", nil},
+		{"operator", &Principal{Permissions: operator()}},
+		{"a custom role", &Principal{Permissions: Permissions{AreaTunnels: LevelWrite, AreaHistory: LevelRead}}},
+		{"pending holds nothing", &Principal{Permissions: operator(), Pending: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.p.Capabilities()
+			got := tc.p.PermissionList()
 			if got == nil {
-				t.Fatal("Capabilities() returned nil; an empty list is the answer, not the absence of one")
+				t.Fatal("PermissionList() returned nil; an empty list is the answer, not the absence of one")
 			}
-			if len(got) != len(tc.want) {
-				t.Fatalf("Capabilities() = %v, want %v", got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Fatalf("Capabilities() = %v, want %v", got, tc.want)
+			for _, perm := range got {
+				if !tc.p.Can(perm) {
+					t.Errorf("PermissionList() lists %s but Can refuses it", perm)
 				}
-				if !tc.p.Can(got[i]) {
-					t.Errorf("Capabilities() lists %s but Can refuses it", got[i])
+			}
+			for _, a := range Areas {
+				for _, l := range a.Levels() {
+					perm := Perm(a, l)
+					listed := false
+					for _, g := range got {
+						listed = listed || g == perm
+					}
+					if tc.p.Can(perm) != listed {
+						t.Errorf("Can(%s) = %v but listed = %v", perm, tc.p.Can(perm), listed)
+					}
 				}
 			}
 		})
@@ -131,9 +152,9 @@ func TestCapabilities_AgreesWithCan(t *testing.T) {
 
 func TestAnonymousHoldsNothing(t *testing.T) {
 	p := Anonymous()
-	for _, c := range []Capability{CapRead, CapPropose, CapApprove, CapAdmin} {
-		if p.Can(c) {
-			t.Errorf("anonymous must not hold %s", c)
+	for _, a := range Areas {
+		if p.Can(Perm(a, LevelRead)) {
+			t.Errorf("anonymous must not hold %s", a)
 		}
 	}
 	if p.CanAccessPlugin("cnmaestro") {
@@ -144,9 +165,9 @@ func TestAnonymousHoldsNothing(t *testing.T) {
 func TestStaticVerifier(t *testing.T) {
 	v, err := NewStaticVerifier(
 		mustToken(t, "agent-a", tokenA, Principal{
-			ID: "svc:agent-a", Role: RoleUser, Plugins: []string{"cnmaestro"}}),
+			ID: "svc:agent-a", Permissions: operator(), Grants: reads("cnmaestro")}),
 		mustToken(t, "agent-b", tokenB, Principal{
-			ID: "svc:agent-b", Role: RoleUser, Plugins: []string{"netbox"}}),
+			ID: "svc:agent-b", Permissions: operator(), Grants: reads("netbox")}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +191,7 @@ func TestStaticVerifier(t *testing.T) {
 
 func TestStaticToken_RejectsWeakSecrets(t *testing.T) {
 	if _, err := NewStaticToken("weak", "short", Principal{
-		ID: "u", Role: RoleUser, Plugins: []string{Wildcard}}); err == nil {
+		ID: "u", Permissions: operator(), Grants: reads(Wildcard)}); err == nil {
 		t.Fatal("a short token must be refused")
 	}
 }
@@ -206,7 +227,7 @@ func TestFromContext_DefaultsToAnonymous(t *testing.T) {
 	if p := FromContext(context.Background()); p == nil || p.ID != "anonymous" {
 		t.Fatal("an unauthenticated context must yield the anonymous principal, never nil")
 	}
-	p := &Principal{ID: "u", Role: RoleAdmin, Plugins: []string{Wildcard}}
+	p := &Principal{ID: "u", Permissions: operator(), Grants: reads(Wildcard)}
 	if got := FromContext(WithPrincipal(context.Background(), p)); got.ID != "u" {
 		t.Fatal("principal did not round-trip through context")
 	}
@@ -216,7 +237,7 @@ func TestFromContext_DefaultsToAnonymous(t *testing.T) {
 
 func TestAuthorizeEndpoint(t *testing.T) {
 	a := NewAuthorizer()
-	scoped := &Principal{ID: "svc:a", Role: RoleUser, Plugins: []string{"cnmaestro"}}
+	scoped := &Principal{ID: "svc:a", Permissions: operator(), Grants: reads("cnmaestro")}
 
 	if d := a.AuthorizeEndpoint(scoped, "cnmaestro"); !d.Allowed {
 		t.Fatalf("granted plugin refused: %s", d.Reason)
@@ -229,9 +250,41 @@ func TestAuthorizeEndpoint(t *testing.T) {
 	}
 }
 
+// The one translation from a tool's vocabulary into the host's. Each
+// capability maps to exactly one requirement, and the table says which.
+func TestAuthorizeTool_TranslatesCapabilities(t *testing.T) {
+	a := NewAuthorizer()
+	reader, _ := BuiltinRole(RoleReader)
+	admin, _ := BuiltinRole(RoleAdministrator)
+	cases := []struct {
+		name    string
+		p       *Principal
+		cap     Capability
+		allowed bool
+	}{
+		{"read needs the plugin at read", &Principal{Permissions: reader.Permissions, Grants: reads("x")}, CapRead, true},
+		{"propose needs write", &Principal{Permissions: operator(), Grants: reads("x")}, CapPropose, false},
+		{"propose with write", &Principal{Permissions: operator(), Grants: GrantsAt([]string{"x"}, LevelWrite)}, CapPropose, true},
+		{"approve needs decide", &Principal{Permissions: reader.Permissions, Grants: reads("x")}, CapApprove, false},
+		{"approve with decide", &Principal{Permissions: operator(), Grants: reads("x")}, CapApprove, true},
+		{"admin needs plugins:write", &Principal{Permissions: operator(), Grants: GrantsAt([]string{"x"}, LevelWrite)}, CapAdmin, false},
+		{"admin with plugins:write", &Principal{Permissions: admin.Permissions, Grants: reads("x")}, CapAdmin, true},
+		{"nothing without reach", &Principal{Permissions: admin.Permissions, Grants: reads("y")}, CapRead, false},
+		{"unknown capability refused", &Principal{Permissions: admin.Permissions, Grants: reads("x")}, Capability("sudo"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.p.ID = "u"
+			if d := a.AuthorizeTool(tc.p, "x", tc.cap); d.Allowed != tc.allowed {
+				t.Fatalf("AuthorizeTool(%s) = %v (%s), want %v", tc.cap, d.Allowed, d.Reason, tc.allowed)
+			}
+		})
+	}
+}
+
 func TestVisiblePlugins_HidesUngrantedPlugins(t *testing.T) {
 	a := NewAuthorizer()
-	p := &Principal{ID: "svc:a", Role: RoleUser, Plugins: []string{"cnmaestro"}}
+	p := &Principal{ID: "svc:a", Permissions: operator(), Grants: reads("cnmaestro")}
 
 	got := a.VisiblePlugins(p, []string{"cnmaestro", "proxmox", "netbox"})
 	if len(got) != 1 || got[0] != "cnmaestro" {
@@ -266,27 +319,25 @@ func TestFingerprint_IsNotReversibleAndIsStable(t *testing.T) {
 	}
 }
 
-// A ceiling is part of what a principal grants, so two principals that differ
-// only in one are not equal. A tunnel restarts when its principal changes;
-// one whose ceiling changed and whose Equal said nothing had would keep
-// serving with rights that had been taken away.
-func TestEqual_SeesTheCeiling(t *testing.T) {
-	base := Principal{ID: "user:a", Role: RoleAdmin, Plugins: []string{"*"}}
-	none := base
-	empty := base
-	empty.Ceiling = []Capability{}
-	read := base
-	read.Ceiling = []Capability{CapRead}
-	readAgain := base
-	readAgain.Ceiling = []Capability{CapRead}
+// A tunnel restarts when its principal changes, so Equal has to see every
+// part of what a principal grants and ignore the order it was listed in.
+func TestEqual_SeesPermissionsAndGrants(t *testing.T) {
+	base := Principal{ID: "user:a", RoleID: RoleOperator, Permissions: operator(),
+		Grants: Grants{{"a", LevelRead}, {"b", LevelWrite}}}
+	same := base
+	same.Grants = Grants{{"b", LevelWrite}, {"a", LevelRead}}
+	wider := base
+	wider.Grants = Grants{{"a", LevelWrite}, {"b", LevelWrite}}
+	stronger := base
+	stronger.Permissions = base.Permissions.Merge(Permissions{AreaSettings: LevelWrite})
 
-	if !none.Equal(base) || !read.Equal(readAgain) {
-		t.Error("principals with the same ceiling are equal")
+	if !base.Equal(same) {
+		t.Error("the same grants in a different order are equal")
 	}
-	if none.Equal(empty) {
-		t.Error("no ceiling and a ceiling permitting nothing are different grants")
+	if base.Equal(wider) {
+		t.Error("a grant at a higher level makes the principals differ")
 	}
-	if none.Equal(read) || empty.Equal(read) {
-		t.Error("a ceiling that differs makes the principals differ")
+	if base.Equal(stronger) {
+		t.Error("a permission more makes the principals differ")
 	}
 }

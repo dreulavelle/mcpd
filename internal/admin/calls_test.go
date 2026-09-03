@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
@@ -42,18 +43,19 @@ func newCallsServer(t *testing.T, accounts Accounts, ledger CallLedger) *Server 
 		Calls:    ledger,
 		Version:  "test",
 		Health:   observability.NewHealthRegistry(time.Second),
-		KeyGrants: func(context.Context, string) ([]string, error) {
-			return []string{}, nil
+		KeyAccess: func(context.Context, string) (groups.Resolved, error) {
+			return groups.Resolved{Permissions: auth.Permissions{}, Grants: auth.Grants{}}, nil
 		},
 	})
 }
 
-// A row names which systems were reached and by whom, which is a wider view
-// than any one account's own work. Same reasoning as the log.
-func TestCallsNeedAdmin(t *testing.T) {
+// A row names which systems were reached and by whom, gated by history:read
+// like the log -- which every built-in role except a subject holding nothing
+// at all carries, so the refusal has to come from a principal with no
+// permissions rather than from the "operator" name.
+func TestCallsNeedHistoryRead(t *testing.T) {
 	accounts := newFakeAccounts()
-	accounts.user.Role = auth.RoleUser
-	accounts.user.Plugins = []string{"echo"}
+	accounts.resolved = &groups.Resolved{Permissions: auth.Permissions{}, Grants: auth.Grants{}}
 	s := newCallsServer(t, accounts, &fakeCalls{})
 
 	for _, path := range []string{"/api/calls", "/api/calls/callers"} {

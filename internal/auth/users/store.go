@@ -3,7 +3,6 @@ package users
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/groups"
+	"github.com/spoked/mcpd/internal/auth/roles"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
 
@@ -31,28 +31,18 @@ func NewStore(db *sqlite.DB, now func() time.Time) *Store {
 	return &Store{db: db, groups: groups.NewStore(db, now), now: now}
 }
 
-// EffectiveGrants returns every plugin an account may reach.
+// Resolve returns everything an account may do and reach.
 //
 // A thin pass-through, and deliberately not an implementation. The union lives
 // in one function in one package; this exists so that the dashboard's Accounts
 // interface can ask for it without depending on the groups package, and so
-// that there is a single obvious answer to "where do an account's grants come
-// from" beside the account store.
-func (s *Store) EffectiveGrants(ctx context.Context, userID string) ([]string, error) {
-	return s.groups.Effective(ctx, groups.User(userID))
+// that there is a single obvious answer to "where does an account's access
+// come from" beside the account store.
+func (s *Store) Resolve(ctx context.Context, userID string) (groups.Resolved, error) {
+	return s.groups.Resolve(ctx, groups.User(userID))
 }
 
-// EffectiveCeiling returns what an account's groups permit it to do.
-//
-// A thin pass-through for the same reason as EffectiveGrants: the rule lives in
-// one function in one package, and this exists so the dashboard can ask without
-// depending on the groups package. nil means no group imposed a ceiling and the
-// account's role stands.
-func (s *Store) EffectiveCeiling(ctx context.Context, userID string) ([]auth.Capability, error) {
-	return s.groups.CeilingFor(ctx, groups.User(userID))
-}
-
-const userColumns = `id, email, password_hash, display_name, role, plugins_json,
+const userColumns = `id, email, password_hash, display_name, role_id, grants_json,
 	                 disabled, status, created_at, updated_at, last_login_at`
 
 // --- accounts --------------------------------------------------------------
@@ -62,8 +52,8 @@ type CreateRequest struct {
 	Email       string
 	Password    string
 	DisplayName string
-	Role        auth.Role
-	Plugins     []string
+	RoleID      string
+	Grants      auth.Grants
 	// Groups the account joins, in the same transaction as it is created. An
 	// account created into a group and an account granted plugins directly are
 	// the same act from the administrator's side, so they are one write.
@@ -78,8 +68,12 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !req.Role.Valid() {
-		return nil, fmt.Errorf("users: role %q is not one of viewer, operator, approver, admin", req.Role)
+	roleID := strings.TrimSpace(req.RoleID)
+	if roleID == "" {
+		return nil, fmt.Errorf("users: a role is required")
+	}
+	if err := req.Grants.Validate(); err != nil {
+		return nil, err
 	}
 	// An empty direct grant used to be refused, on the grounds that it was
 	// almost never what somebody meant to type. That was true while a direct
@@ -110,16 +104,20 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 		Email:        email,
 		PasswordHash: hash,
 		DisplayName:  displayName,
-		Role:         req.Role,
-		Plugins:      groups.NormalizeGrants(req.Plugins),
-	}
-	plugins, err := json.Marshal(u.Plugins)
-	if err != nil {
-		return nil, fmt.Errorf("users: encode plugin grants: %w", err)
+		RoleID:       roleID,
+		Grants:       req.Grants.Normalize(),
 	}
 
 	now := s.now().UnixMilli()
 	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
+		// The role has to exist, and the check is inside the transaction so
+		// that a role deleted between the form and the write is a refusal
+		// with a sentence rather than an account holding nothing.
+		if ok, err := roles.Exists(tx, roleID); err != nil {
+			return err
+		} else if !ok {
+			return ErrNoSuchRole
+		}
 		// Both directions of the same rule: the new address must not already
 		// be somebody's display name, and the new display name must not be
 		// somebody's address. The two are rendered in the same places, and a
@@ -130,8 +128,8 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 		// administrators adding accounts at once would each read a table
 		// without the other's row and both proceed.
 		affected, err := tx.ExecAffected(`
-			INSERT INTO users (id, email, password_hash, display_name, role,
-			                   plugins_json, disabled, created_at, updated_at)
+			INSERT INTO users (id, email, password_hash, display_name, role_id,
+			                   grants_json, disabled, created_at, updated_at)
 			SELECT ?,?,?,?,?,?,0,?,?
 			WHERE NOT EXISTS (
 				SELECT 1 FROM users WHERE lower(display_name) = ?
@@ -139,8 +137,8 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 			AND (? = '' OR NOT EXISTS (
 				SELECT 1 FROM users WHERE email = lower(?)
 			))`,
-			u.ID, u.Email, u.PasswordHash, u.DisplayName, string(u.Role),
-			string(plugins), now, now,
+			u.ID, u.Email, u.PasswordHash, u.DisplayName, u.RoleID,
+			auth.EncodeGrants(u.Grants), now, now,
 			u.Email, u.DisplayName, u.DisplayName)
 		if err != nil {
 			return err
@@ -221,12 +219,8 @@ func (s *Store) CreateFirst(ctx context.Context, email, password, displayName st
 		Email:        normalized,
 		PasswordHash: hash,
 		DisplayName:  name,
-		Role:         auth.RoleAdmin,
-		Plugins:      []string{auth.Wildcard},
-	}
-	plugins, err := json.Marshal(u.Plugins)
-	if err != nil {
-		return nil, fmt.Errorf("users: encode plugin grants: %w", err)
+		RoleID:       auth.RoleAdministrator,
+		Grants:       auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite),
 	}
 
 	now := s.now().UnixMilli()
@@ -239,11 +233,11 @@ func (s *Store) CreateFirst(ctx context.Context, email, password, displayName st
 			return ErrAlreadyClaimed
 		}
 		return tx.Exec(`
-			INSERT INTO users (id, email, password_hash, display_name, role,
-			                   plugins_json, disabled, created_at, updated_at)
+			INSERT INTO users (id, email, password_hash, display_name, role_id,
+			                   grants_json, disabled, created_at, updated_at)
 			VALUES (?,?,?,?,?,?,0,?,?)`,
-			u.ID, u.Email, u.PasswordHash, u.DisplayName, string(u.Role),
-			string(plugins), now, now)
+			u.ID, u.Email, u.PasswordHash, u.DisplayName, u.RoleID,
+			auth.EncodeGrants(u.Grants), now, now)
 	})
 	if err != nil {
 		return nil, err
@@ -304,8 +298,8 @@ func (s *Store) Count(ctx context.Context) (int, error) {
 // lets the dashboard send only what changed.
 type UpdateRequest struct {
 	DisplayName *string
-	Role        *auth.Role
-	Plugins     *[]string
+	RoleID      *string
+	Grants      *auth.Grants
 	Disabled    *bool
 }
 
@@ -315,8 +309,13 @@ type UpdateRequest struct {
 // first and writing after would let two concurrent edits each observe the
 // other's administrator and both proceed, leaving a host no one can administer.
 func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User, error) {
-	if req.Role != nil && !req.Role.Valid() {
-		return nil, fmt.Errorf("users: role %q is not one of viewer, operator, approver, admin", *req.Role)
+	if req.RoleID != nil && strings.TrimSpace(*req.RoleID) == "" {
+		return nil, fmt.Errorf("users: a role is required")
+	}
+	if req.Grants != nil {
+		if err := req.Grants.Validate(); err != nil {
+			return nil, err
+		}
 	}
 	// An empty direct grant is legitimate; see Create. It denies everything on
 	// its own, and a group is how such an account reaches anything.
@@ -331,37 +330,26 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 
 	now := s.now().UnixMilli()
 	err := s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		var role, status string
-		var disabled int
-		if err := tx.QueryRow(
-			`SELECT role, disabled, status FROM users WHERE id = ?`, id).
-			Scan(&role, &disabled, &status); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNotFound
-			}
+		var exists int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE id = ?`, id).Scan(&exists); err != nil {
 			return err
 		}
-
-		// Losing administrator rights, whether by role change or by being
-		// switched off, is the same event as far as the guard is concerned.
-		//
-		// A pending account was never an administrator to lose it, whatever
-		// its role column says: it holds no capability at all. Counting one
-		// here would mean promoting a pending registration registered as the
-		// host gaining an administrator, and the last real one could then edit
-		// themselves out.
-		wasAdmin := auth.Role(role) == auth.RoleAdmin && disabled == 0 &&
-			Status(status) != StatusPending
-		stillAdmin := wasAdmin
-		if req.Role != nil {
-			stillAdmin = *req.Role == auth.RoleAdmin && stillAdmin
+		if exists == 0 {
+			return ErrNotFound
 		}
-		if req.Disabled != nil && *req.Disabled {
-			stillAdmin = false
+		// Whether this edit strands the host is judged by comparing who can
+		// manage access before the write with who can after, inside the
+		// transaction, so that two concurrent edits cannot each observe the
+		// other's administrator and both proceed.
+		adminsBefore, err := roles.CountAdministrators(tx)
+		if err != nil {
+			return err
 		}
-		if wasAdmin && !stillAdmin {
-			if err := guardLastAdmin(tx, id); err != nil {
+		if req.RoleID != nil {
+			if ok, err := roles.Exists(tx, strings.TrimSpace(*req.RoleID)); err != nil {
 				return err
+			} else if !ok {
+				return ErrNoSuchRole
 			}
 		}
 
@@ -384,17 +372,13 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 				guardArgs = append(guardArgs, id, displayName)
 			}
 		}
-		if req.Role != nil {
-			sets = append(sets, "role = ?")
-			args = append(args, string(*req.Role))
+		if req.RoleID != nil {
+			sets = append(sets, "role_id = ?")
+			args = append(args, strings.TrimSpace(*req.RoleID))
 		}
-		if req.Plugins != nil {
-			encoded, err := json.Marshal(*req.Plugins)
-			if err != nil {
-				return fmt.Errorf("users: encode plugin grants: %w", err)
-			}
-			sets = append(sets, "plugins_json = ?")
-			args = append(args, string(encoded))
+		if req.Grants != nil {
+			sets = append(sets, "grants_json = ?")
+			args = append(args, auth.EncodeGrants(*req.Grants))
 		}
 		if req.Disabled != nil {
 			sets = append(sets, "disabled = ?")
@@ -412,6 +396,9 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 			// -- so the only condition that can have failed is the guard.
 			return ErrNameCollides
 		}
+		if err := roles.GuardAdminRemains(tx, adminsBefore); err != nil {
+			return ErrLastAdmin
+		}
 
 		// A disabled account must not keep browsing on a session it already
 		// holds, and a demoted one must not keep the rights its old session
@@ -419,7 +406,7 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 		// are re-resolved per request -- so only the disable case strictly
 		// needs this, but dropping them on any privilege change keeps the rule
 		// simple: an edit takes effect immediately, everywhere.
-		if req.Disabled != nil || req.Role != nil || req.Plugins != nil {
+		if req.Disabled != nil || req.RoleID != nil || req.Grants != nil {
 			return tx.Exec(`DELETE FROM user_sessions WHERE user_id = ?`, id)
 		}
 		return nil
@@ -459,23 +446,16 @@ func (s *Store) SetPassword(ctx context.Context, id, password string) error {
 func (s *Store) Delete(ctx context.Context, id string) error {
 	now := s.now().UnixMilli()
 	return s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		var role, status string
-		var disabled int
-		if err := tx.QueryRow(
-			`SELECT role, disabled, status FROM users WHERE id = ?`, id).
-			Scan(&role, &disabled, &status); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNotFound
-			}
+		var exists int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE id = ?`, id).Scan(&exists); err != nil {
 			return err
 		}
-		// Same reading as Update's: an account nobody has approved was never
-		// an administrator, so deleting one takes nothing away.
-		if auth.Role(role) == auth.RoleAdmin && disabled == 0 &&
-			Status(status) != StatusPending {
-			if err := guardLastAdmin(tx, id); err != nil {
-				return err
-			}
+		if exists == 0 {
+			return ErrNotFound
+		}
+		adminsBefore, err := roles.CountAdministrators(tx)
+		if err != nil {
+			return err
 		}
 		// Sessions and linked providers cascade on the foreign key, but saying
 		// so here keeps the behaviour true of a database restored without
@@ -495,33 +475,16 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		if err := tx.Exec(`DELETE FROM group_members WHERE user_id = ?`, id); err != nil {
 			return err
 		}
-		return tx.Exec(`DELETE FROM users WHERE id = ?`, id)
+		if err := tx.Exec(`DELETE FROM users WHERE id = ?`, id); err != nil {
+			return err
+		}
+		// Judged after the delete, so the question is asked of the state it
+		// would leave, and a refusal rolls it back.
+		if err := roles.GuardAdminRemains(tx, adminsBefore); err != nil {
+			return ErrLastAdmin
+		}
+		return nil
 	})
-}
-
-// guardLastAdmin refuses an edit that would leave no enabled administrator.
-//
-// "Administrator" here means one who can actually administer: the role, not
-// disabled, and not waiting for approval. The status clause is the one that is
-// easy to leave out, and leaving it out is not a cosmetic miscount. A pending
-// account holds no capability whatever its row says its role is, so a pending
-// administrator counted here would let the last real one demote, disable or
-// delete themselves -- leaving a host with nobody holding admin, and nobody
-// able to approve the pending account the guard counted. There is no way back
-// from that from inside the dashboard.
-func guardLastAdmin(tx *sqlite.UnitOfWork, excludingID string) error {
-	var others int
-	if err := tx.QueryRow(`
-		SELECT COUNT(*) FROM users
-		WHERE role = 'admin' AND disabled = 0 AND status <> ? AND id <> ?`,
-		string(StatusPending), excludingID).
-		Scan(&others); err != nil {
-		return err
-	}
-	if others == 0 {
-		return ErrLastAdmin
-	}
-	return nil
 }
 
 // Authenticate verifies an email and password.
@@ -576,27 +539,23 @@ type rowScanner interface{ Scan(...any) error }
 
 func (s *Store) scanUser(row rowScanner) (*User, error) {
 	var (
-		u           User
-		role        string
-		pluginsJSON string
-		disabled    int
-		status      string
-		created     int64
-		updated     int64
-		lastLogin   sql.NullInt64
+		u          User
+		grantsJSON string
+		disabled   int
+		status     string
+		created    int64
+		updated    int64
+		lastLogin  sql.NullInt64
 	)
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &role,
-		&pluginsJSON, &disabled, &status, &created, &updated, &lastLogin)
+	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.RoleID,
+		&grantsJSON, &disabled, &status, &created, &updated, &lastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal([]byte(pluginsJSON), &u.Plugins); err != nil {
-		return nil, fmt.Errorf("users: decode plugin grants for %s: %w", u.Email, err)
-	}
-	u.Role = auth.Role(role)
+	u.Grants = auth.DecodeGrants(grantsJSON)
 	u.Disabled = disabled != 0
 	// An unrecognised status reads as pending rather than active. A row whose
 	// status this build does not understand is one nobody here has decided

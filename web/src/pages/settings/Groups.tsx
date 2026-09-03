@@ -1,11 +1,12 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { api, ApiError, type Capability, type Group, type GroupMember } from "@/lib/api";
+import { api, ApiError, type Grant, type Group, type GroupMember } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { useCan } from "@/lib/session";
 import { UsersRound } from "lucide-react";
 import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
 import { SettingsTabs } from "./SettingsTabs";
-import { ReachPicker } from "@/components/ReachPicker";
-import { PermissionMatrix } from "@/components/PermissionMatrix";
+import { GrantsPicker, grantsLabel } from "@/components/GrantsPicker";
+import { RolePicker } from "@/components/RolePicker";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -17,17 +18,17 @@ import {
 } from "@/components/ui/table";
 import { useConfirm } from "@/components/confirm";
 
-/** Renders a grant the way every other list of systems here is rendered. */
-export function reachLabel(plugins: string[]): string {
-  if (plugins.includes("*")) return "Everything";
-  return plugins.join(", ") || "Nothing";
+/** Renders reach the way every other list of systems here is rendered. */
+export function reachLabel(grants: Grant[]): string {
+  return grantsLabel(grants);
 }
 
-/** A group hands its systems to everyone in it. */
 /**
+ * A group hands its role and its reach to everyone in it.
+ *
  * `embedded` renders this as one section of a larger page rather than as a
  * page of its own. Users and groups are one subject -- who is here, and what
- * each of them can reach -- and a host with a dozen of each does not need two
+ * each of them holds -- and a host with a dozen of each does not need two
  * destinations to say so.
  */
 export function Groups({ embedded = false }: { embedded?: boolean } = {}) {
@@ -35,6 +36,7 @@ export function Groups({ embedded = false }: { embedded?: boolean } = {}) {
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const mayWrite = useCan("access:write");
   const notify = useNotify();
 
   const load = useCallback(() => {
@@ -44,22 +46,24 @@ export function Groups({ embedded = false }: { embedded?: boolean } = {}) {
   }, []);
   usePoll(load, 30_000);
 
+  const lede = "Everyone in a group holds its role and reaches the systems it grants, on top of their own.";
+
   return (
     <>
       {!embedded && <SettingsTabs />}
       {embedded ? (
         <Section
           title="Groups"
-          description="Everyone in a group can reach the systems it lists."
-          actions={groups && <Button onClick={() => setAdding(true)}>Add group</Button>}
+          description={lede}
+          actions={groups && mayWrite && <Button onClick={() => setAdding(true)}>Add group</Button>}
         >
           <></>
         </Section>
       ) : (
         <PageHeader
           title="Groups"
-          lede="Everyone in a group can reach the systems it lists."
-          actions={groups && <Button onClick={() => setAdding(true)}>Add group</Button>}
+          lede={lede}
+          actions={groups && mayWrite && <Button onClick={() => setAdding(true)}>Add group</Button>}
         />
       )}
 
@@ -74,8 +78,8 @@ export function Groups({ embedded = false }: { embedded?: boolean } = {}) {
 
       {!groups ? <Loading rows={3} /> : groups.length === 0 ? (
         <EmptyState mark={<UsersRound />} title="No groups yet">
-          Add one, list the systems it should reach, then put people and keys
-          in it.
+          Add one, give it a role and the systems it should reach, then put
+          people and keys in it.
         </EmptyState>
       ) : (
         <Card className="mt-4 overflow-hidden p-0">
@@ -84,7 +88,8 @@ export function Groups({ embedded = false }: { embedded?: boolean } = {}) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
-                  <TableHead>Can reach</TableHead>
+                  <TableHead>Adds role</TableHead>
+                  <TableHead>Adds reach</TableHead>
                   <TableHead>In it</TableHead>
                   <TableHead className="w-px" />
                 </TableRow>
@@ -93,6 +98,7 @@ export function Groups({ embedded = false }: { embedded?: boolean } = {}) {
                 {groups.map((g) => (
                   <GroupRow
                     key={g.id} group={g} notify={notify} onChanged={load}
+                    mayWrite={mayWrite}
                     open={open === g.id}
                     onToggle={() => setOpen(open === g.id ? null : g.id)}
                   />
@@ -106,10 +112,11 @@ export function Groups({ embedded = false }: { embedded?: boolean } = {}) {
   );
 }
 
-function GroupRow({ group, notify, onChanged, open, onToggle }: {
+function GroupRow({ group, notify, onChanged, mayWrite, open, onToggle }: {
   group: Group;
   notify: Notify;
   onChanged: () => void;
+  mayWrite: boolean;
   open: boolean;
   onToggle: () => void;
 }) {
@@ -142,48 +149,39 @@ function GroupRow({ group, notify, onChanged, open, onToggle }: {
           {error && <div className="mt-1 text-xs text-problem">{error}</div>}
         </TableCell>
         <TableCell className="text-muted-foreground">
-          {group.plugins.length === 0
-            ? <Chip>Nothing</Chip>
-            : reachLabel(group.plugins)}
-          {/* A ceiling is the one thing about a group that takes away rather
-              than gives, so it is said on the row and not only inside the
-              editor. */}
-          {group.capabilities !== null && (
-            <div className="mt-1">
-              <Chip tone={group.capabilities.length === 0 ? "attention" : "info"}>
-                {group.capabilities.length === 0
-                  ? "members may do nothing"
-                  : `members may only ${group.capabilities.join(", ")}`}
-              </Chip>
-            </div>
-          )}
+          {group.role ? group.role_name || group.role : <Chip>none</Chip>}
+        </TableCell>
+        <TableCell className="text-muted-foreground">
+          {group.grants.length === 0 ? <Chip>Nothing</Chip> : grantsLabel(group.grants)}
         </TableCell>
         <TableCell className="whitespace-nowrap text-muted-foreground">
           {group.members === 1 ? "1 member" : `${group.members} members`}
         </TableCell>
         <TableCell className="whitespace-nowrap">
           <Button variant="ghost" size="sm" onClick={onToggle}>
-            {open ? "Done" : "Edit"}
+            {open ? "Done" : mayWrite ? "Edit" : "Show"}
           </Button>
-          <Button
-            variant="ghost" size="sm" disabled={busy}
-            onClick={async () => {
-              const who = group.members === 1 ? "1 member" : `${group.members} members`;
-              if (!(await confirm({
-                title: `Delete ${group.name}?`,
-                description: `${who} will stop reaching what it lists. Nothing else about them changes.`,
-              }))) return;
-              run("Group deleted.", () => api.deleteGroup(group.id));
-            }}
-          >
-            Delete
-          </Button>
+          {mayWrite && (
+            <Button
+              variant="ghost" size="sm" disabled={busy}
+              onClick={async () => {
+                const who = group.members === 1 ? "1 member" : `${group.members} members`;
+                if (!(await confirm({
+                  title: `Delete ${group.name}?`,
+                  description: `${who} will lose what it hands out. Nothing else about them changes.`,
+                }))) return;
+                run("Group deleted.", () => api.deleteGroup(group.id));
+              }}
+            >
+              Delete
+            </Button>
+          )}
         </TableCell>
       </TableRow>
       {open && (
         <TableRow>
-          <TableCell colSpan={4} className="bg-muted/30">
-            <GroupDetail group={group} notify={notify} onChanged={onChanged} />
+          <TableCell colSpan={5} className="bg-muted/30">
+            <GroupDetail group={group} notify={notify} onChanged={onChanged} mayWrite={mayWrite} />
           </TableCell>
         </TableRow>
       )}
@@ -191,14 +189,15 @@ function GroupRow({ group, notify, onChanged, open, onToggle }: {
   );
 }
 
-function GroupDetail({ group, notify, onChanged }: {
+function GroupDetail({ group, notify, onChanged, mayWrite }: {
   group: Group;
   notify: Notify;
   onChanged: () => void;
+  mayWrite: boolean;
 }) {
   const [members, setMembers] = useState<GroupMember[] | null>(null);
-  const [reach, setReach] = useState<string[]>(group.plugins);
-  const [caps, setCaps] = useState<Capability[] | null>(group.capabilities);
+  const [role, setRole] = useState(group.role);
+  const [grants, setGrants] = useState<Grant[]>(group.grants);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -216,7 +215,7 @@ function GroupDetail({ group, notify, onChanged }: {
       // Both sent together: they are one decision about this group, and
       // saving them separately would leave a window where the reach had moved
       // and what may be done with it had not.
-      await api.updateGroup(group.id, { plugins: reach, capabilities: caps });
+      await api.updateGroup(group.id, { role, grants });
       onChanged();
       notify("good", "Saved.");
     } catch (e) {
@@ -245,20 +244,25 @@ function GroupDetail({ group, notify, onChanged }: {
     <div className="space-y-4 py-2">
       {error && <Notice tone="problem">{error}</Notice>}
 
-      <div className="space-y-1.5">
-        <ReachPicker
-          id={`reach-${group.id}`} value={reach} onChange={setReach}
-          subject="everyone in this group"
-        />
-        <div className="pt-3">
-          <PermissionMatrix
-            id={`caps-${group.id}`} value={caps} onChange={setCaps} disabled={busy}
+      {mayWrite && (
+        <div className="max-w-xl space-y-3">
+          <RolePicker
+            id={`role-${group.id}`} value={role} onChange={setRole} disabled={busy}
+            allowNone label="Adds the role"
           />
+          <GrantsPicker
+            id={`reach-${group.id}`} value={grants} onChange={setGrants} disabled={busy}
+            subject="everyone in this group"
+          />
+          <p className="text-xs text-muted-foreground">
+            A group only adds. Members keep their own role and grants, and
+            gain these on top.
+          </p>
+          <div className="pt-1">
+            <Button size="sm" disabled={busy} onClick={saveGroup}>Save</Button>
+          </div>
         </div>
-        <div className="pt-1">
-          <Button size="sm" disabled={busy} onClick={saveGroup}>Save</Button>
-        </div>
-      </div>
+      )}
 
       <div className="space-y-1.5">
         <div className="text-sm font-medium">In this group</div>
@@ -274,9 +278,11 @@ function GroupDetail({ group, notify, onChanged }: {
                   {m.kind === "key" ? "key" : "person"}
                 </Chip>
                 <span className="min-w-0 flex-1 truncate">{m.label}</span>
-                <Button variant="ghost" size="sm" disabled={busy} onClick={() => remove(m)}>
-                  Remove
-                </Button>
+                {mayWrite && (
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={() => remove(m)}>
+                    Remove
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
@@ -292,7 +298,8 @@ function AddGroup({ onClose, onAdded }: {
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [reach, setReach] = useState<string[]>([]);
+  const [role, setRole] = useState("");
+  const [grants, setGrants] = useState<Grant[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -304,7 +311,8 @@ function AddGroup({ onClose, onAdded }: {
       await api.createGroup({
         name: name.trim(),
         description: description.trim(),
-        plugins: reach,
+        role,
+        grants,
       });
       onAdded(name.trim());
     } catch (err) {
@@ -339,8 +347,10 @@ function AddGroup({ onClose, onAdded }: {
             />
           </div>
 
-          <ReachPicker
-            id="group-reach" value={reach} onChange={setReach}
+          <RolePicker id="group-role" value={role} onChange={setRole} allowNone label="Adds the role" />
+
+          <GrantsPicker
+            id="group-reach" value={grants} onChange={setGrants}
             subject="everyone in this group"
           />
 

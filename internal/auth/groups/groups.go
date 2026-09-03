@@ -1,17 +1,20 @@
-// Package groups holds the one thing that decides what a caller may reach.
+// Package groups holds the one place a subject's effective access is
+// computed.
 //
-// A group is a name and a set of plugins. Accounts and API keys belong to
-// groups, and a subject's effective grants are its own grants unioned with
-// every group it belongs to -- computed by Effective, which is the only place
-// in the process that computes it. That is the same arrangement Principal.Can
-// has for capabilities: one function every decision goes through, so a rule
-// applied there is applied everywhere.
+// A group is a name, a role and a set of grants. Accounts and API keys belong
+// to groups, and a subject's effective access is the union of its own role
+// and grants with those of every group it belongs to -- computed by Resolve,
+// which is the only function in the process that computes it. That is the
+// same arrangement Principal.Can has for a single permission: one function
+// every decision goes through, so a rule applied there is applied everywhere.
 //
-// Groups deliberately carry no capabilities. Roles decide what a caller may
-// *do* and groups decide what it may *reach*, and keeping the two axes apart
-// is what makes either explainable -- "why can this person approve" is
-// answered by their role and nothing else. A second bundle-of-rights mechanism
-// beside a two-role map would be a cost with no question behind it.
+// Grants add up and nothing subtracts. Adding a subject to a group gives it
+// what the group has; taking it out takes that away and leaves everything
+// else. There used to be a ceiling a group could impose on its members, and
+// a rule that a subject's own grant beat its groups'. Both went in the same
+// change, because each was a second answer to a question the other already
+// answered, and "why can this person approve" had to be read twice to be
+// answered once.
 package groups
 
 import (
@@ -19,16 +22,13 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/roles"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
 
@@ -36,23 +36,23 @@ import (
 var (
 	// ErrNotFound reports an unknown group.
 	ErrNotFound = errors.New("groups: no such group")
-	// ErrLastAdmin reports a change that would leave nobody able to
-	// administer this host: a ceiling without admin on a group holding the
-	// only administrator, or the only administrator joining such a group.
-	// It is the same refusal the account store makes for a role change, and
-	// for the same reason -- there is no dashboard path back from it, since
-	// editing the group needs the capability the change just took away.
-	ErrLastAdmin = errors.New("groups: this would leave no administrator")
+	// ErrLastAdmin reports a change that would leave nobody able to manage
+	// access to this host: taking away the role of a group through which the
+	// only administrator holds it, or removing that administrator from it.
+	// There is no dashboard path back from it, since undoing the change
+	// needs the permission it just took away.
+	ErrLastAdmin = errors.New("groups: this would leave nobody able to manage access")
 	// ErrDuplicateName reports a name another group already uses.
 	ErrDuplicateName = errors.New("groups: a group with that name already exists")
 	// ErrNoSuchMember reports a membership that is not there.
 	ErrNoSuchMember = errors.New("groups: that account or key is not in this group")
+	// ErrNoSuchRole reports a role id that names nothing.
+	ErrNoSuchRole = errors.New("groups: no such role")
 )
 
-// MaxNameRunes bounds a group name, in runes rather than bytes so that a name
-// in a script whose characters cost three bytes each is not a third as long as
-// one in ASCII. The schema enforces the same bound in the same units.
-const MaxNameRunes = 64
+// MaxNameRunes bounds a group name. The schema enforces the same bound in
+// the same units.
+const MaxNameRunes = auth.MaxLabelRunes
 
 // Kind says what a membership is for.
 //
@@ -71,7 +71,7 @@ const (
 // Valid reports whether k is a recognised kind.
 func (k Kind) Valid() bool { return k == KindUser || k == KindKey }
 
-// Subject is whatever grants are resolved for.
+// Subject is whatever access is resolved for.
 type Subject struct {
 	Kind Kind
 	ID   string
@@ -83,26 +83,21 @@ func User(id string) Subject { return Subject{Kind: KindUser, ID: id} }
 // Key names an API key as a subject.
 func Key(id string) Subject { return Subject{Kind: KindKey, ID: id} }
 
-// Group is a named set of plugin grants.
+// Group is a named role and set of grants, handed to every member.
 type Group struct {
 	ID          string
 	Name        string
 	Description string
-	// Plugins is the grant. Empty grants nothing; the single element
-	// auth.Wildcard grants every plugin.
-	Plugins []string
-	// Capabilities is what this group permits its members to do, and it can
-	// only ever be narrower than their role already allows -- a group takes
-	// away, it never gives.
-	//
-	// nil means this group imposes no ceiling, which is what every group
-	// created before this existed means. An empty non-nil slice is the
-	// opposite and is a real setting: a group that permits nothing, which
-	// suspends its members without deleting them. The two must not collapse.
-	Capabilities []auth.Capability
-	CreatedBy    string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// RoleID is the role every member holds through this group, or empty
+	// for a group that only hands out reach. RoleName is for rendering.
+	RoleID   string
+	RoleName string
+	// Grants is the reach every member holds through this group. Empty
+	// grants nothing.
+	Grants    auth.Grants
+	CreatedBy string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 	// Members counts the accounts and keys in the group. Populated by List
 	// and ByID, because "delete this group" is a question about who is in it.
 	Members int
@@ -133,130 +128,106 @@ func NewStore(db *sqlite.DB, now func() time.Time) *Store {
 	return &Store{db: db, now: now}
 }
 
-// --- effective grants ------------------------------------------------------
+// --- effective access ------------------------------------------------------
 
-// Effective returns every plugin a subject may reach.
+// Resolved is everything a subject holds, once its groups have been read.
+type Resolved struct {
+	// RoleID and RoleName are the subject's own role, for rendering. The
+	// permissions below already include it.
+	RoleID   string
+	RoleName string
+	// Permissions is the union of the subject's role and every group's.
+	Permissions auth.Permissions
+	// Grants is the union of the subject's grants and every group's, at the
+	// highest level named for each plugin.
+	Grants auth.Grants
+}
+
+// Resolve returns everything a subject may do and reach.
 //
-// This is the one place the union is computed, and it is one statement so that
-// there is nothing to keep in step. A subject's own grants and the grants of
-// every group it belongs to arrive as rows; Union folds them.
+// This is the one place the union is computed, and it is one statement so
+// that there is nothing to keep in step. The subject's own row and the row of
+// every group it belongs to arrive together, each joined to its role; the
+// permissions merge and the grants union.
 //
 // Everything about "default none" falls out of it rather than being asserted.
-// A subject with no row and no membership produces no rows and reaches
-// nothing; a group whose grant is empty contributes nothing; and a membership
+// A subject with no row and no membership produces no rows and holds nothing;
+// a group with no role and no grants contributes nothing; and a membership
 // removed between two requests stops contributing on the second, because this
 // runs per request rather than being frozen when a session or a key was
-// issued.
-func (s *Store) Effective(ctx context.Context, subject Subject) ([]string, error) {
+// issued. A role that no longer exists reads as no permissions -- failing
+// closed -- rather than as an error, because a subject can be looked at
+// even when it has been left holding nothing.
+func (s *Store) Resolve(ctx context.Context, subject Subject) (Resolved, error) {
+	out := Resolved{Permissions: auth.Permissions{}, Grants: auth.Grants{}}
 	if !subject.Kind.Valid() || strings.TrimSpace(subject.ID) == "" {
-		return []string{}, nil
+		return out, nil
 	}
-	rows, err := s.db.Reader().QueryContext(ctx, effectiveQuery,
-		string(subject.Kind), subject.ID)
+	rows, err := s.db.Reader().QueryContext(ctx, resolveQuery, string(subject.Kind), subject.ID)
 	if err != nil {
-		return nil, fmt.Errorf("groups: resolve grants for %s: %w", subject.ID, err)
+		return out, fmt.Errorf("groups: resolve access for %s: %w", subject.ID, err)
 	}
 	defer rows.Close()
 
-	var own, fromGroups [][]string
+	var grants []auth.Grants
 	for rows.Next() {
 		var isGroup int
-		var encoded string
-		if err := rows.Scan(&isGroup, &encoded); err != nil {
-			return nil, err
+		var roleID string
+		var roleName, perms sql.NullString
+		var encodedGrants string
+		if err := rows.Scan(&isGroup, &roleID, &roleName, &perms, &encodedGrants); err != nil {
+			return out, err
 		}
-		var list []string
-		if err := json.Unmarshal([]byte(encoded), &list); err != nil {
-			// One malformed row must not hand the subject somebody else's
-			// reach, and it must not silently widen this one either. Refusing
-			// is the safe direction: the caller turns it into a 500 and
-			// nothing is granted.
-			return nil, fmt.Errorf("groups: decode a grant for %s: %w", subject.ID, err)
+		if isGroup == 0 {
+			out.RoleID = roleID
+			out.RoleName = roleName.String
 		}
-		if isGroup == 1 {
-			fromGroups = append(fromGroups, list)
-			continue
+		if perms.Valid {
+			var ps auth.Permissions
+			if err := ps.UnmarshalJSON([]byte(perms.String)); err != nil {
+				// One unreadable role must not hand the subject somebody
+				// else's rights, and it must not silently widen this one
+				// either. Refusing is the safe direction: the caller turns
+				// it into a 500 and nothing is granted.
+				return out, fmt.Errorf("groups: decode permissions of role %s: %w", roleID, err)
+			}
+			out.Permissions = out.Permissions.Merge(ps)
 		}
-		own = append(own, list)
+		grants = append(grants, auth.DecodeGrants(encodedGrants))
 	}
 	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	out.Grants = auth.UnionGrants(grants...)
+	return out, nil
+}
+
+// Effective returns every grant a subject holds, for the places that only
+// ask about reach.
+func (s *Store) Effective(ctx context.Context, subject Subject) (auth.Grants, error) {
+	r, err := s.Resolve(ctx, subject)
+	if err != nil {
 		return nil, err
 	}
-
-	// A grant the subject carries itself is the whole answer, and groups apply
-	// only when it carries none.
-	//
-	// These used to be unioned together, and a wildcard group then made every
-	// per-key restriction unenforceable: a key saved as ["bandwidth"], shown in
-	// the dashboard as ["bandwidth"], and belonging to a group granting ["*"],
-	// reached every plugin on the host. Found by an audit against a live
-	// instance, where a key scoped to one integration successfully read
-	// Graylog and Textable through their stored credentials.
-	//
-	// Union was the wrong operation for a reason worth stating: it makes group
-	// membership able to *widen* a subject, so a narrowing written on the
-	// subject itself can never be relied upon. This host already settles the
-	// same question the other way where a tunnel meets a ChatGPT account --
-	// the narrower wins, and assignment can only ever reduce reach.
-	//
-	// Own-grant-wins rather than intersection, because intersection has the
-	// same defect pointing the other way: a key showing ["bandwidth"] whose
-	// groups do not mention bandwidth would reach nothing, and the displayed
-	// scope would be a lie again. What is displayed is now what is reached.
-	if list := Union(own...); len(list) > 0 {
-		return list, nil
-	}
-	return Union(fromGroups...), nil
+	return r.Grants, nil
 }
 
-// effectiveQuery is deliberately one statement covering both subject kinds and
-// both sources of a grant. Two statements would be two places for the rule to
+// resolveQuery is deliberately one statement covering both subject kinds and
+// both sources of access. Two statements would be two places for the rule to
 // live even inside one function.
-const effectiveQuery = `
-	SELECT 0 AS is_group, plugins_json FROM users
-	 WHERE ?1 = 'user' AND id = ?2
+const resolveQuery = `
+	SELECT 0 AS is_group, s.role_id, r.name, r.permissions_json, s.grants_json
+	  FROM (SELECT role_id, grants_json FROM users    WHERE ?1 = 'user' AND id = ?2
+	        UNION ALL
+	        SELECT role_id, grants_json FROM api_keys WHERE ?1 = 'key'  AND id = ?2) s
+	  LEFT JOIN roles r ON r.id = s.role_id
 	UNION ALL
-	SELECT 0 AS is_group, plugins_json FROM api_keys
-	 WHERE ?1 = 'key' AND id = ?2
-	UNION ALL
-	SELECT 1 AS is_group, g.plugins_json
+	SELECT 1 AS is_group, g.role_id, r.name, r.permissions_json, g.grants_json
 	  FROM groups g
 	  JOIN group_members m ON m.group_id = g.id
+	  LEFT JOIN roles r ON r.id = g.role_id
 	 WHERE (?1 = 'user' AND m.user_id = ?2)
 	    OR (?1 = 'key'  AND m.key_id  = ?2)`
-
-// Union folds grant lists into one set.
-//
-// It combines lists from the same source -- several groups, say -- and is no
-// longer what decides a subject's reach on its own; see Effective, where a
-// subject's own grant takes precedence over its groups rather than being
-// unioned with them.
-//
-// The wildcard absorbs: a subject in two groups, one granting everything,
-// reaches everything, and listing the named plugins beside it would be the same
-// set rendered as though it were smaller. The result is sorted so that two equal
-// unions compare equal -- Principal.Equal already sorts before comparing, and
-// a stable order keeps a tunnel from restarting because a group was read in a
-// different order.
-func Union(lists ...[]string) []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, list := range lists {
-		for _, name := range list {
-			name = strings.TrimSpace(name)
-			if name == auth.Wildcard {
-				return []string{auth.Wildcard}
-			}
-			if name == "" || seen[name] {
-				continue
-			}
-			seen[name] = true
-			out = append(out, name)
-		}
-	}
-	slices.Sort(out)
-	return out
-}
 
 // --- groups ----------------------------------------------------------------
 
@@ -264,12 +235,11 @@ func Union(lists ...[]string) []string {
 type CreateRequest struct {
 	Name        string
 	Description string
-	// Plugins may be empty, and empty is the default. A new group grants
+	// RoleID may be empty: a group that hands out reach and no role.
+	RoleID string
+	// Grants may be empty, and empty is the default. A new group grants
 	// nothing until somebody says what it is for.
-	Plugins []string
-	// Capabilities is the ceiling this group imposes on its members. Nil
-	// imposes none.
-	Capabilities []auth.Capability
+	Grants auth.Grants
 }
 
 // Create makes a group.
@@ -285,11 +255,11 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*G
 	if err != nil {
 		return nil, err
 	}
-	plugins := NormalizeGrants(req.Plugins)
-	encoded, err := json.Marshal(plugins)
-	if err != nil {
-		return nil, fmt.Errorf("groups: encode plugin grants: %w", err)
+	if err := req.Grants.Validate(); err != nil {
+		return nil, err
 	}
+	grants := req.Grants.Normalize()
+	roleID := strings.TrimSpace(req.RoleID)
 	id, err := newID()
 	if err != nil {
 		return nil, err
@@ -297,16 +267,22 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*G
 
 	now := s.now().UnixMilli()
 	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
+		if roleID != "" {
+			if ok, err := roles.Exists(tx, roleID); err != nil {
+				return err
+			} else if !ok {
+				return ErrNoSuchRole
+			}
+		}
 		// The condition is in the statement rather than a read before it: two
 		// administrators adding the same name at once would each read a table
 		// without the other's row and both proceed.
 		affected, err := tx.ExecAffected(`
-			INSERT INTO groups (id, name, description, plugins_json,
-			                    capabilities_json, created_by, created_at, updated_at)
+			INSERT INTO groups (id, name, description, role_id, grants_json,
+			                    created_by, created_at, updated_at)
 			SELECT ?,?,?,?,?,?,?,?
 			 WHERE NOT EXISTS (SELECT 1 FROM groups WHERE lower(name) = lower(?))`,
-			id, name, description, string(encoded),
-			encodeCapabilities(req.Capabilities), actor, now, now, name)
+			id, name, description, roleID, auth.EncodeGrants(grants), actor, now, now, name)
 		if err != nil {
 			return err
 		}
@@ -318,7 +294,7 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*G
 			Actor:   actor,
 			Subject: name,
 			Action:  "create",
-			Detail:  map[string]any{"group": id, "plugins": plugins},
+			Detail:  map[string]any{"group": id, "role": roleID, "grants": grants},
 		})
 	})
 	if isUniqueViolation(err) {
@@ -327,22 +303,19 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*G
 	if err != nil {
 		return nil, err
 	}
-	return &Group{
-		ID: id, Name: name, Description: description, Plugins: plugins,
-		CreatedBy: actor,
-		CreatedAt: time.UnixMilli(now).UTC(),
-		UpdatedAt: time.UnixMilli(now).UTC(),
-	}, nil
+	return s.ByID(ctx, id)
 }
 
-const groupColumns = `g.id, g.name, g.description, g.plugins_json,
-	g.capabilities_json, g.created_by, g.created_at, g.updated_at,
+const groupColumns = `g.id, g.name, g.description, g.role_id, COALESCE(r.name, ''),
+	g.grants_json, g.created_by, g.created_at, g.updated_at,
 	(SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id)`
+
+const groupFrom = ` FROM groups g LEFT JOIN roles r ON r.id = g.role_id`
 
 // List returns every group, ordered by name.
 func (s *Store) List(ctx context.Context) ([]*Group, error) {
 	rows, err := s.db.Reader().QueryContext(ctx,
-		`SELECT `+groupColumns+` FROM groups g ORDER BY lower(g.name)`)
+		`SELECT `+groupColumns+groupFrom+` ORDER BY lower(g.name)`)
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +335,7 @@ func (s *Store) List(ctx context.Context) ([]*Group, error) {
 // ByID loads one group.
 func (s *Store) ByID(ctx context.Context, id string) (*Group, error) {
 	return scanGroup(s.db.Reader().QueryRowContext(ctx,
-		`SELECT `+groupColumns+` FROM groups g WHERE g.id = ?`, id))
+		`SELECT `+groupColumns+groupFrom+` WHERE g.id = ?`, id))
 }
 
 // ByName loads one group by name, case-insensitively.
@@ -377,37 +350,35 @@ func (s *Store) ByName(ctx context.Context, name string) (*Group, error) {
 		return nil, ErrNotFound
 	}
 	return scanGroup(s.db.Reader().QueryRowContext(ctx,
-		`SELECT `+groupColumns+` FROM groups g WHERE lower(g.name) = lower(?)`, trimmed))
+		`SELECT `+groupColumns+groupFrom+` WHERE lower(g.name) = lower(?)`, trimmed))
 }
 
 // UpdateRequest describes an edit. Nil fields are left alone.
 type UpdateRequest struct {
 	Name        *string
 	Description *string
-	Plugins     *[]string
-	// Capabilities sets the ceiling. A nil pointer leaves it alone; a pointer
-	// to a nil slice removes the ceiling entirely, and a pointer to an empty
-	// slice sets a ceiling that permits nothing. Those are three different
-	// requests and the pointer is what keeps them apart.
-	Capabilities *[]auth.Capability
+	// RoleID sets the group's role; a pointer to "" removes it.
+	RoleID *string
+	Grants *auth.Grants
 }
 
 // Update edits a group.
 //
-// Re-scoping a group changes what every one of its members can reach, so it is
-// a privilege change and is audited as one, in the same transaction, naming
-// the administrator who made it and both the old and the new grant. An entry
-// carrying only the new one would leave "what did this widen" unanswerable.
+// Changing a group's role or grants changes what every one of its members
+// holds, so it is a privilege change and is audited as one, in the same
+// transaction, naming the administrator who made it and both the old and the
+// new value. An entry carrying only the new one would leave "what did this
+// widen" unanswerable. The last-administrator guard runs after the write and
+// inside it, for the case where the only person managing access held it
+// through this group's role.
 func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest) (*Group, error) {
 	// An edit that changes nothing writes nothing, and that includes the
 	// updated_at stamp: a group whose modification time moved without anything
 	// about it changing is a row that lies about when it was last decided on.
-	if req.Name == nil && req.Description == nil && req.Plugins == nil &&
-		req.Capabilities == nil {
+	if req.Name == nil && req.Description == nil && req.RoleID == nil && req.Grants == nil {
 		return s.ByID(ctx, id)
 	}
 	var name, description string
-	var plugins []string
 	var err error
 	if req.Name != nil {
 		if name, err = ValidateName(*req.Name); err != nil {
@@ -419,34 +390,28 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			return nil, err
 		}
 	}
-	if req.Plugins != nil {
-		plugins = NormalizeGrants(*req.Plugins)
+	var grants auth.Grants
+	if req.Grants != nil {
+		if err := req.Grants.Validate(); err != nil {
+			return nil, err
+		}
+		grants = req.Grants.Normalize()
 	}
 
 	now := s.now().UnixMilli()
 	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		var wasName, wasPlugins string
-		var wasCaps sql.NullString
+		var wasName, wasRole, wasGrants string
 		if err := tx.QueryRow(
-			`SELECT name, plugins_json, capabilities_json FROM groups WHERE id = ?`, id).
-			Scan(&wasName, &wasPlugins, &wasCaps); err != nil {
+			`SELECT name, role_id, grants_json FROM groups WHERE id = ?`, id).
+			Scan(&wasName, &wasRole, &wasGrants); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
 			return err
 		}
-
-		// Whether the ceiling could strand the host is judged by comparing
-		// who holds admin before the write with who holds it after: a
-		// refusal only where somebody had it and nobody would, so a host
-		// with no administrators yet is not refused every restriction.
-		restricting := req.Capabilities != nil && *req.Capabilities != nil &&
-			!slices.Contains(*req.Capabilities, auth.CapAdmin)
-		adminsBefore := 0
-		if restricting {
-			if adminsBefore, err = adminsHoldingAdmin(tx); err != nil {
-				return err
-			}
+		adminsBefore, err := roles.CountAdministrators(tx)
+		if err != nil {
+			return err
 		}
 
 		sets := []string{"updated_at = ?"}
@@ -469,29 +434,25 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			sets = append(sets, "description = ?")
 			args = append(args, description)
 		}
-		if req.Capabilities != nil {
-			sets = append(sets, "capabilities_json = ?")
-			args = append(args, encodeCapabilities(*req.Capabilities))
-			// Audited like a re-scoping, and for the same reason: it changes
-			// what every member of the group may do. The old value is recorded
-			// beside the new one, because "what did this widen" is
-			// unanswerable from the new one alone.
-			was := "none"
-			if wasCaps.Valid {
-				was = wasCaps.String
+		if req.RoleID != nil {
+			roleID := strings.TrimSpace(*req.RoleID)
+			if roleID != "" {
+				if ok, err := roles.Exists(tx, roleID); err != nil {
+					return err
+				} else if !ok {
+					return ErrNoSuchRole
+				}
 			}
-			detail["capabilities_before"] = was
-			detail["capabilities_after"] = encodeCapabilities(*req.Capabilities)
+			sets = append(sets, "role_id = ?")
+			args = append(args, roleID)
+			detail["role"] = roleID
+			detail["role_before"] = wasRole
 		}
-		if req.Plugins != nil {
-			encoded, err := json.Marshal(plugins)
-			if err != nil {
-				return fmt.Errorf("groups: encode plugin grants: %w", err)
-			}
-			sets = append(sets, "plugins_json = ?")
-			args = append(args, string(encoded))
-			detail["plugins"] = plugins
-			detail["plugins_before"] = decodeGrants(wasPlugins)
+		if req.Grants != nil {
+			sets = append(sets, "grants_json = ?")
+			args = append(args, auth.EncodeGrants(grants))
+			detail["grants"] = grants
+			detail["grants_before"] = auth.DecodeGrants(wasGrants)
 		}
 		args = append(args, id)
 		args = append(args, guardArgs...)
@@ -509,10 +470,8 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 		// Checked after the write and inside the transaction, so the question
 		// is asked of the state this change would leave rather than of a
 		// guess about it, and a refusal rolls the write back.
-		if restricting {
-			if err := guardAdminRemains(tx, adminsBefore); err != nil {
-				return err
-			}
+		if err := roles.GuardAdminRemains(tx, adminsBefore); err != nil {
+			return ErrLastAdmin
 		}
 		return tx.AppendAudit(sqlite.AdminAct{
 			Kind:    "group.updated",
@@ -533,24 +492,22 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 
 // Delete removes a group.
 //
-// The rule, and it is the one worth stating: deleting a group takes its grant
-// away from everyone in it and gives nobody anything. Memberships go with it,
-// members keep their own direct grants and every other group they are in, and
-// nothing is stranded -- an account with no groups left is an account that
-// reaches whatever it was granted directly, which is the state every account
-// starts in.
+// The rule, and it is the one worth stating: deleting a group takes its role
+// and grants away from everyone in it and gives nobody anything. Memberships
+// go with it, members keep their own role and grants and every other group
+// they are in, and nothing is stranded -- except the one case the guard
+// covers, where the only person managing access held it through this group.
 //
-// It is allowed rather than refused while members remain, because narrowing is
-// the safe direction and a group that cannot be deleted until it is emptied is
-// a group an operator empties in a hurry with no record of what it held. The
-// entry names how many members lost the grant and what the grant was, so the
-// question the deletion raises is answerable afterwards.
+// It is allowed rather than refused while members remain, because narrowing
+// is the safe direction and a group that cannot be deleted until it is
+// emptied is a group an operator empties in a hurry with no record of what it
+// held. The entry names how many members lost the grant and what it was.
 func (s *Store) Delete(ctx context.Context, actor, id string) error {
 	now := s.now().UnixMilli()
 	return s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		var name, plugins string
-		if err := tx.QueryRow(`SELECT name, plugins_json FROM groups WHERE id = ?`, id).
-			Scan(&name, &plugins); err != nil {
+		var name, roleID, grants string
+		if err := tx.QueryRow(`SELECT name, role_id, grants_json FROM groups WHERE id = ?`, id).
+			Scan(&name, &roleID, &grants); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -560,6 +517,10 @@ func (s *Store) Delete(ctx context.Context, actor, id string) error {
 		if err := tx.QueryRow(
 			`SELECT COUNT(*) FROM group_members WHERE group_id = ?`, id).
 			Scan(&members); err != nil {
+			return err
+		}
+		adminsBefore, err := roles.CountAdministrators(tx)
+		if err != nil {
 			return err
 		}
 		// Memberships cascade on the foreign key. Saying so here keeps the
@@ -575,6 +536,9 @@ func (s *Store) Delete(ctx context.Context, actor, id string) error {
 		if affected == 0 {
 			return ErrNotFound
 		}
+		if err := roles.GuardAdminRemains(tx, adminsBefore); err != nil {
+			return ErrLastAdmin
+		}
 		return tx.AppendAudit(sqlite.AdminAct{
 			Kind:    "group.deleted",
 			Actor:   actor,
@@ -582,7 +546,8 @@ func (s *Store) Delete(ctx context.Context, actor, id string) error {
 			Action:  "delete",
 			Detail: map[string]any{
 				"group":   id,
-				"plugins": decodeGrants(plugins),
+				"role":    roleID,
+				"grants":  auth.DecodeGrants(grants),
 				"members": members,
 			},
 		})
@@ -629,8 +594,7 @@ func (s *Store) Of(ctx context.Context, subject Subject) ([]*Group, error) {
 		return []*Group{}, nil
 	}
 	rows, err := s.db.Reader().QueryContext(ctx, `
-		SELECT `+groupColumns+`
-		  FROM groups g
+		SELECT `+groupColumns+groupFrom+`
 		  JOIN group_members m ON m.group_id = g.id
 		 WHERE (?1 = 'user' AND m.user_id = ?2)
 		    OR (?1 = 'key'  AND m.key_id  = ?2)
@@ -654,7 +618,7 @@ func (s *Store) Of(ctx context.Context, subject Subject) ([]*Group, error) {
 // AddMember puts an account or a key into a group.
 //
 // A privilege grant: it is the moment a subject gains whatever the group
-// reaches, so it is audited in the same transaction, naming the administrator
+// holds, so it is audited in the same transaction, naming the administrator
 // who decided. Adding somebody who is already a member writes nothing and is
 // not an error -- a trail that records non-events is one nobody reads
 // carefully -- while a group or a subject that does not exist is refused.
@@ -679,10 +643,6 @@ func (s *Store) AddMember(ctx context.Context, actor, groupID string, subject Su
 // every membership, and a second path that inserted one without recording it
 // would leave exactly the gap the record exists to close -- reach changed, and
 // nothing says how.
-//
-// One entry kind for one fact, so a membership reads the same however it
-// arose. The act that caused it names its groups in its own entry too, which
-// is context rather than a second answer.
 func AddMemberAudited(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject, now int64) error {
 	name, err := groupName(tx, groupID)
 	if err != nil {
@@ -738,14 +698,6 @@ func AddMemberTx(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject, 
 	if subject.Kind == KindKey {
 		other = "user_id"
 	}
-	// A key is not counted: it cannot sign in to put things right either way.
-	adminsBefore := 0
-	if subject.Kind == KindUser {
-		var err error
-		if adminsBefore, err = adminsHoldingAdmin(tx); err != nil {
-			return false, err
-		}
-	}
 	affected, err := tx.ExecAffected(`
 		INSERT INTO group_members (group_id, `+column+`, `+other+`, added_by, added_at)
 		SELECT ?,?,NULL,?,?
@@ -759,14 +711,6 @@ func AddMemberTx(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject, 
 		return false, err
 	}
 	if affected > 0 {
-		// An account has just gained whatever ceiling this group imposes.
-		// If that took admin away from the last person who held it, the
-		// membership is refused and rolled back.
-		if subject.Kind == KindUser {
-			if err := guardAdminRemains(tx, adminsBefore); err != nil {
-				return false, err
-			}
-		}
 		return true, nil
 	}
 	// Nothing was written, and three conditions could account for it. Which
@@ -787,10 +731,51 @@ func AddMemberTx(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject, 
 	return false, ErrNoSuchMember
 }
 
+// RemoveMemberAudited deletes a membership and records it, inside a
+// transaction somebody else owns. The counterpart of AddMemberAudited, for
+// the same reason: a key whose edit form sets its groups removes some in the
+// same write that adds others, and the trail has to hold both. Removing a
+// membership that is not there writes nothing and is not an error.
+func RemoveMemberAudited(tx *sqlite.UnitOfWork, actor, groupID string, subject Subject) error {
+	if !subject.Kind.Valid() {
+		return ErrNoSuchMember
+	}
+	column := "user_id"
+	if subject.Kind == KindKey {
+		column = "key_id"
+	}
+	name, err := groupName(tx, groupID)
+	if err != nil {
+		return err
+	}
+	affected, err := tx.ExecAffected(
+		`DELETE FROM group_members WHERE group_id = ? AND `+column+` = ?`,
+		groupID, subject.ID)
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return nil
+	}
+	return tx.AppendAudit(sqlite.AdminAct{
+		Kind:    "group.member_removed",
+		Actor:   actor,
+		Subject: name,
+		Action:  "remove_member",
+		Detail: map[string]any{
+			"group": groupID,
+			"kind":  string(subject.Kind),
+			"id":    subject.ID,
+		},
+	})
+}
+
 // RemoveMember takes an account or a key out of a group.
 //
-// It takes effect on the subject's next request, because grants are resolved
-// per request rather than frozen when a session or a key was issued.
+// It takes effect on the subject's next request, because access is resolved
+// per request rather than frozen when a session or a key was issued. Refused
+// where the person being removed is the only one managing access and holds
+// that through this group.
 func (s *Store) RemoveMember(ctx context.Context, actor, groupID string, subject Subject) error {
 	if !subject.Kind.Valid() {
 		return ErrNoSuchMember
@@ -805,6 +790,10 @@ func (s *Store) RemoveMember(ctx context.Context, actor, groupID string, subject
 		if err != nil {
 			return err
 		}
+		adminsBefore, err := roles.CountAdministrators(tx)
+		if err != nil {
+			return err
+		}
 		affected, err := tx.ExecAffected(
 			`DELETE FROM group_members WHERE group_id = ? AND `+column+` = ?`,
 			groupID, subject.ID)
@@ -813,6 +802,9 @@ func (s *Store) RemoveMember(ctx context.Context, actor, groupID string, subject
 		}
 		if affected == 0 {
 			return ErrNoSuchMember
+		}
+		if err := roles.GuardAdminRemains(tx, adminsBefore); err != nil {
+			return ErrLastAdmin
 		}
 		return tx.AppendAudit(sqlite.AdminAct{
 			Kind:    "group.member_removed",
@@ -831,73 +823,24 @@ func (s *Store) RemoveMember(ctx context.Context, actor, groupID string, subject
 // --- validation ------------------------------------------------------------
 
 // ValidateName checks and normalises a group name.
-//
-// The same three rules a display name is held to, for the same reasons: it is
-// rendered in a list somebody reads, it appears in the audit trail, and a
-// bidirectional override or a newline in it makes it read as something it is
-// not. It is deliberately not a slug -- an operator names a group after the
-// team it is for, and refusing spaces or capitals would mean asking them to
-// spell it in a way nobody says out loud.
 func ValidateName(raw string) (string, error) {
-	return ValidateLabel("groups", "group name", raw)
+	return auth.ValidateLabel("groups", "group name", raw)
 }
 
-// ValidateLabel is ValidateName with the noun supplied, so that a key's name
-// is held to the same rules without a second copy of them and without an error
-// message sending somebody to the wrong page.
+// ValidateLabel is kept for the packages that validated their names through
+// this one before the rule moved to auth.
 func ValidateLabel(pkg, noun, raw string) (string, error) {
-	name := strings.TrimSpace(raw)
-	if name == "" {
-		return "", fmt.Errorf("%s: a %s is required", pkg, noun)
-	}
-	if !utf8.ValidString(name) {
-		return "", fmt.Errorf("%s: a %s must be valid UTF-8", pkg, noun)
-	}
-	for _, r := range name {
-		switch {
-		case unicode.IsControl(r):
-			return "", fmt.Errorf("%s: a %s cannot contain control characters", pkg, noun)
-		case unicode.Is(unicode.Cf, r):
-			return "", fmt.Errorf("%s: a %s cannot contain invisible formatting characters", pkg, noun)
-		}
-	}
-	if utf8.RuneCountInString(name) > MaxNameRunes {
-		return "", fmt.Errorf("%s: a %s must be at most %d characters", pkg, noun, MaxNameRunes)
-	}
-	return name, nil
+	return auth.ValidateLabel(pkg, noun, raw)
 }
 
 // maxDescriptionRunes bounds the line under a group's name.
 const maxDescriptionRunes = 200
 
 func validateDescription(raw string) (string, error) {
-	text := strings.TrimSpace(raw)
-	if text == "" {
+	if strings.TrimSpace(raw) == "" {
 		return "", nil
 	}
-	if !utf8.ValidString(text) {
-		return "", fmt.Errorf("groups: a description must be valid UTF-8")
-	}
-	for _, r := range text {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return "", fmt.Errorf("groups: a description cannot contain control or invisible formatting characters")
-		}
-	}
-	if utf8.RuneCountInString(text) > maxDescriptionRunes {
-		return "", fmt.Errorf("groups: a description must be at most %d characters",
-			maxDescriptionRunes)
-	}
-	return text, nil
-}
-
-// NormalizeGrants cleans a grant list before it is stored.
-//
-// Empty in, empty out: a group that grants nothing is the default and must
-// survive a round trip through a form that sent an empty array. A wildcard
-// absorbs everything beside it, so a list is never stored in a form that
-// renders as smaller than what it means.
-func NormalizeGrants(list []string) []string {
-	return Union(list)
+	return auth.ValidateText("groups", "description", raw, maxDescriptionRunes)
 }
 
 // --- plumbing --------------------------------------------------------------
@@ -907,14 +850,13 @@ type rowScanner interface{ Scan(...any) error }
 func scanGroup(row rowScanner) (*Group, error) {
 	var (
 		g        Group
-		plugins  string
-		caps     sql.NullString
+		grants   string
 		created  int64
 		updated  int64
 		members  int
 		describe string
 	)
-	err := row.Scan(&g.ID, &g.Name, &describe, &plugins, &caps,
+	err := row.Scan(&g.ID, &g.Name, &describe, &g.RoleID, &g.RoleName, &grants,
 		&g.CreatedBy, &created, &updated, &members)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -923,31 +865,11 @@ func scanGroup(row rowScanner) (*Group, error) {
 		return nil, err
 	}
 	g.Description = describe
-	g.Plugins = decodeGrants(plugins)
-	// NULL is "no ceiling", an empty array is "permits nothing". Decoding both
-	// to the same nil would quietly turn the second into the first and hand a
-	// suspended group back its rights.
-	if caps.Valid {
-		g.Capabilities = decodeCapabilities(caps.String)
-	}
+	g.Grants = auth.DecodeGrants(grants)
 	g.CreatedAt = time.UnixMilli(created).UTC()
 	g.UpdatedAt = time.UnixMilli(updated).UTC()
 	g.Members = members
 	return &g, nil
-}
-
-// decodeGrants reads a stored grant list. A value this build cannot parse
-// reads as no grants, which is the safe direction: a group nobody can decode
-// hands out nothing rather than everything.
-func decodeGrants(encoded string) []string {
-	var list []string
-	if err := json.Unmarshal([]byte(encoded), &list); err != nil {
-		return []string{}
-	}
-	if list == nil {
-		return []string{}
-	}
-	return list
 }
 
 func groupName(tx *sqlite.UnitOfWork, id string) (string, error) {
@@ -981,162 +903,4 @@ func newID() (string, error) {
 		return "", fmt.Errorf("groups: system entropy unavailable: %w", err)
 	}
 	return "grp_" + hex.EncodeToString(b), nil
-}
-
-// decodeCapabilities reads a stored ceiling, dropping anything unrecognised.
-//
-// An unknown capability is dropped rather than refused: the column is written
-// by this host and read by a possibly older one after a rollback, and a name a
-// previous version does not understand must not deny a group its whole ceiling
-// -- which would silently widen its members, since a nil ceiling imposes
-// nothing. Dropping narrows instead, which is the safe direction.
-func decodeCapabilities(encoded string) []auth.Capability {
-	var raw []string
-	if err := json.Unmarshal([]byte(encoded), &raw); err != nil {
-		// Unreadable is not "no ceiling". An empty non-nil slice permits
-		// nothing, which fails closed.
-		return []auth.Capability{}
-	}
-	out := make([]auth.Capability, 0, len(raw))
-	for _, name := range raw {
-		c := auth.Capability(strings.TrimSpace(name))
-		if c.Valid() {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// encodeCapabilities renders a ceiling for storage. Nil becomes SQL NULL, which
-// is how "this group imposes no ceiling" is spelled.
-func encodeCapabilities(caps []auth.Capability) any {
-	if caps == nil {
-		return nil
-	}
-	seen := map[auth.Capability]bool{}
-	out := make([]string, 0, len(caps))
-	for _, c := range caps {
-		if !c.Valid() || seen[c] {
-			continue
-		}
-		seen[c] = true
-		out = append(out, string(c))
-	}
-	slices.Sort(out)
-	encoded, err := json.Marshal(out)
-	if err != nil {
-		// Cannot happen for a slice of strings; failing closed rather than
-		// asserting, because the alternative is writing NULL and removing the
-		// ceiling somebody just set.
-		return "[]"
-	}
-	return string(encoded)
-}
-
-// CeilingFor resolves the capability ceiling a subject's groups impose.
-//
-// nil means no group imposed one and the subject's role stands. Otherwise it is
-// the union of the ceilings of the groups that declare one: being added to a
-// second, more permissive group must not take away what the first allowed,
-// because a group is how people are organised and organising somebody twice
-// should not punish them. No group can widen past the role, which Principal.Can
-// enforces by intersecting this with the role's own set.
-//
-// Groups that declare no ceiling are ignored rather than treated as permitting
-// everything. A subject in a restrictive group and an unrestricted one is
-// restricted -- otherwise every ceiling would be undone by ordinary membership
-// of a general group, which is exactly the shape of the grant bug this replaced.
-func (s *Store) CeilingFor(ctx context.Context, subject Subject) ([]auth.Capability, error) {
-	if !subject.Kind.Valid() || strings.TrimSpace(subject.ID) == "" {
-		return nil, nil
-	}
-	rows, err := s.db.Reader().QueryContext(ctx, ceilingQuery,
-		string(subject.Kind), subject.ID)
-	if err != nil {
-		return nil, fmt.Errorf("groups: resolve capabilities for %s: %w", subject.ID, err)
-	}
-	defer rows.Close()
-
-	var declared [][]auth.Capability
-	for rows.Next() {
-		var encoded sql.NullString
-		if err := rows.Scan(&encoded); err != nil {
-			return nil, err
-		}
-		if !encoded.Valid {
-			continue
-		}
-		declared = append(declared, decodeCapabilities(encoded.String))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(declared) == 0 {
-		return nil, nil
-	}
-	seen := map[auth.Capability]bool{}
-	out := []auth.Capability{}
-	for _, list := range declared {
-		for _, c := range list {
-			if seen[c] {
-				continue
-			}
-			seen[c] = true
-			out = append(out, c)
-		}
-	}
-	slices.Sort(out)
-	return out, nil
-}
-
-const ceilingQuery = `
-	SELECT g.capabilities_json
-	  FROM groups g
-	  JOIN group_members m ON m.group_id = g.id
-	 WHERE (?1 = 'user' AND m.user_id = ?2)
-	    OR (?1 = 'key'  AND m.key_id  = ?2)`
-
-// guardAdminRemains refuses the enclosing transaction if somebody held the
-// admin capability before the write and, as things now stand in it, nobody
-// does. Run after the write, so that the state judged is the one the change
-// would leave, and a refusal rolls it back.
-//
-// The comparison rather than a bare "at least one" is what lets a host that
-// has no administrator yet -- a fresh database, a test fixture -- restrict
-// its groups freely: nothing was taken away, because nobody had it.
-func guardAdminRemains(tx *sqlite.UnitOfWork, before int) error {
-	if before == 0 {
-		return nil
-	}
-	after, err := adminsHoldingAdmin(tx)
-	if err != nil {
-		return err
-	}
-	if after == 0 {
-		return ErrLastAdmin
-	}
-	return nil
-}
-
-// adminsHoldingAdmin counts the enabled, active administrators who hold the
-// admin capability once their groups have had their say.
-//
-// It evaluates the same rule CeilingFor does, in SQL: an account keeps its
-// role's capabilities when none of its groups declares a ceiling, and
-// otherwise holds what the union of the declared ceilings permits.
-func adminsHoldingAdmin(tx *sqlite.UnitOfWork) (int, error) {
-	var holding int
-	err := tx.QueryRow(`
-		SELECT COUNT(*) FROM users u
-		 WHERE u.role = 'admin' AND u.disabled = 0 AND u.status <> 'pending'
-		   AND (
-		     NOT EXISTS (
-		       SELECT 1 FROM group_members m JOIN groups g ON g.id = m.group_id
-		        WHERE m.user_id = u.id AND g.capabilities_json IS NOT NULL)
-		     OR EXISTS (
-		       SELECT 1 FROM group_members m JOIN groups g ON g.id = m.group_id,
-		            json_each(g.capabilities_json) c
-		        WHERE m.user_id = u.id AND c.value = 'admin')
-		   )`).Scan(&holding)
-	return holding, err
 }

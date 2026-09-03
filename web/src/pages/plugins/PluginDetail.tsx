@@ -87,9 +87,9 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
   tunnels: TunnelInfo | null;
   onChanged: () => void;
 }) {
-  const mayAdminister = useCan("admin");
-  // Activity is an administrator's page, so the link to it is too.
-  const mayRead = useCan("admin");
+  const mayAdminister = useCan("plugins:write");
+  // Activity needs history, so the link to it does too.
+  const mayRead = useCan("history:read");
   const running = plugin !== null && plugin.endpoint !== "";
   const runtime = instance?.runtime ?? "builtin";
   const [toolQuery, setToolQuery] = useState("");
@@ -352,7 +352,7 @@ function EnabledControl({ name, instance, runtime, onChanged }: {
   runtime: "builtin" | "mcp";
   onChanged: () => void;
 }) {
-  const mayManage = useCan("admin");
+  const mayManage = useCan("plugins:write");
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
 
@@ -408,7 +408,7 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
   onChanged: () => void;
 }) {
   const confirm = useConfirm();
-  const mayRemove = useCan("admin");
+  const mayRemove = useCan("plugins:write");
   const notify = useNotify();
   const { navigate } = useRouter();
   const [busy, setBusy] = useState(false);
@@ -535,7 +535,7 @@ function TunnelControl({ plugin, tunnels, tunnel, onChanged }: {
   onChanged: () => void;
 }) {
   const confirm = useConfirm();
-  const mayManage = useCan("admin");
+  const mayManage = useCan("plugins:write");
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
   const [refused, setRefused] = useState<{ reason: OpenAIReason; detail: string } | null>(null);

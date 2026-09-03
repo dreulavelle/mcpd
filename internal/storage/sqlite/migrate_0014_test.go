@@ -62,7 +62,7 @@ func TestMigrate0014_StatusIsConstrained(t *testing.T) {
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	seedUser(t, db, "usr_1", "a@example.com")
+	seedUserAtHead(t, db, "usr_1", "a@example.com")
 
 	if _, err := db.Writer().ExecContext(ctx,
 		`UPDATE users SET status = 'whatever' WHERE id = ?`, "usr_1"); err == nil {
@@ -79,8 +79,8 @@ func TestMigrate0014_IdentitiesAreUniqueBothWays(t *testing.T) {
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	seedUser(t, db, "usr_1", "a@example.com")
-	seedUser(t, db, "usr_2", "b@example.com")
+	seedUserAtHead(t, db, "usr_1", "a@example.com")
+	seedUserAtHead(t, db, "usr_2", "b@example.com")
 
 	insert := func(provider, subject, user string) error {
 		_, err := db.Writer().ExecContext(ctx, `
@@ -108,13 +108,28 @@ func TestMigrate0014_IdentitiesAreUniqueBothWays(t *testing.T) {
 
 // seedUser writes an account directly, so a migration test does not depend on
 // the account store -- which is a layer above this one and would drag its
-// validation into a test about the schema.
+// validation into a test about the schema. It matches the schema as it stood
+// before 0025 renamed role/plugins_json to role_id/grants_json, for a test
+// seeding an upgrade still in progress; seedUserAtHead is its counterpart for
+// a test seeding after Migrate has already run everything.
 func seedUser(t *testing.T, db *DB, id, email string) {
 	t.Helper()
 	if _, err := db.Writer().ExecContext(context.Background(), `
 		INSERT INTO users (id, email, password_hash, display_name, role,
 		                   plugins_json, disabled, created_at, updated_at)
 		VALUES (?,?,'$2a$12$fake','','admin','["*"]',0,0,0)`, id, email); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+}
+
+// seedUserAtHead inserts a user against the schema this build ships.
+func seedUserAtHead(t *testing.T, db *DB, id, email string) {
+	t.Helper()
+	if _, err := db.Writer().ExecContext(context.Background(), `
+		INSERT INTO users (id, email, password_hash, display_name, role_id,
+		                   grants_json, disabled, created_at, updated_at)
+		VALUES (?,?,'$2a$12$fake','','role_administrator','[{"plugin":"*","level":"write"}]',0,0,0)`,
+		id, email); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 }

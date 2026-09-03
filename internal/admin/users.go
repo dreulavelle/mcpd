@@ -28,15 +28,19 @@ type userView struct {
 	Email       string `json:"email"`
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
-	Role        string `json:"role"`
-	// Plugins is the account's own grant, exactly as stored, so an edit form
-	// can round-trip it. Reaches is what the account actually reaches once its
-	// groups are unioned in, and is what a page should render -- the same
-	// distinction DisplayName and Name draw, for the same reason.
-	Plugins  []string       `json:"plugins"`
-	Reaches  []string       `json:"reaches"`
-	Groups   []groupRefView `json:"groups"`
-	Disabled bool           `json:"disabled"`
+	// Role is the account's own role, by id; RoleName is for reading.
+	Role     string `json:"role"`
+	RoleName string `json:"role_name"`
+	// Grants is the account's own reach, exactly as stored, so an edit form
+	// can round-trip it. Reaches is what the account actually reaches once
+	// its groups are unioned in, and Permissions what it may do; both are
+	// what a page should render -- the same distinction DisplayName and Name
+	// draw, for the same reason.
+	Grants      []auth.Grant   `json:"grants"`
+	Reaches     []auth.Grant   `json:"reaches"`
+	Permissions []string       `json:"permissions"`
+	Groups      []groupRefView `json:"groups"`
+	Disabled    bool           `json:"disabled"`
 	// Status is "active" or "pending", and is a different fact from Disabled.
 	// An administrator switched a disabled account off; a pending one is a
 	// registration nobody has decided about.
@@ -52,7 +56,7 @@ type userView struct {
 	Self bool `json:"self"`
 }
 
-func viewOfUser(u *users.User, self bool, reaches []string, memberOf []groupRefView) userView {
+func viewOfUser(u *users.User, self bool, access groups.Resolved, memberOf []groupRefView) userView {
 	if memberOf == nil {
 		memberOf = []groupRefView{}
 	}
@@ -61,9 +65,11 @@ func viewOfUser(u *users.User, self bool, reaches []string, memberOf []groupRefV
 		Email:       u.Email,
 		Name:        u.Name(),
 		DisplayName: u.DisplayName,
-		Role:        string(u.Role),
-		Plugins:     nonNil(u.Plugins),
-		Reaches:     nonNil(reaches),
+		Role:        u.RoleID,
+		RoleName:    access.RoleName,
+		Grants:      nonNilGrants(u.Grants),
+		Reaches:     nonNilGrants(access.Grants),
+		Permissions: permissionNames(u.Principal("", access).PermissionList()),
 		Groups:      memberOf,
 		Disabled:    u.Disabled,
 		Status:      statusOf(u),
@@ -94,7 +100,7 @@ func (s *Server) viewUser(r *http.Request, u *users.User, self bool) userView {
 			memberOf = viewOfGroupRefs(list)
 		}
 	}
-	return viewOfUser(u, self, s.grantsFor(r, u), memberOf)
+	return viewOfUser(u, self, s.accessFor(r, u), memberOf)
 }
 
 // currentAccountID returns the signed-in account's identifier.
@@ -133,11 +139,11 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 type createUserRequest struct {
-	Email       string   `json:"email"`
-	Password    string   `json:"password"`
-	DisplayName string   `json:"display_name"`
-	Role        string   `json:"role"`
-	Plugins     []string `json:"plugins"`
+	Email       string       `json:"email"`
+	Password    string       `json:"password"`
+	DisplayName string       `json:"display_name"`
+	Role        string       `json:"role"`
+	Grants      []auth.Grant `json:"grants"`
 	// Groups the account joins as it is created. An empty list is the default
 	// and reaches nothing, which is what an account with no direct grants and
 	// no group has always been.
@@ -157,8 +163,8 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Email:       req.Email,
 		Password:    req.Password,
 		DisplayName: req.DisplayName,
-		Role:        auth.Role(req.Role),
-		Plugins:     req.Plugins,
+		RoleID:      req.Role,
+		Grants:      req.Grants,
 		Groups:      req.Groups,
 		Actor:       auth.FromContext(r.Context()).ID,
 	})
@@ -170,6 +176,9 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusConflict,
 			"another account already uses that address as its display name")
 		return
+	case errors.Is(err, users.ErrNoSuchRole):
+		s.writeError(w, r, http.StatusBadRequest, "that role does not exist")
+		return
 	case err != nil:
 		// Create's failures are all statements about the request -- a
 		// malformed address, an unknown role, a short password, an empty
@@ -179,16 +188,16 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.opts.Log.Info("account created", "email", user.Email,
-		"role", user.Role, "by", auth.FromContext(r.Context()).ID)
+		"role", user.RoleID, "by", auth.FromContext(r.Context()).ID)
 	s.writeJSON(w, r, http.StatusCreated, s.viewUser(r, user, false))
 }
 
 type updateUserRequest struct {
-	DisplayName *string   `json:"display_name,omitempty"`
-	Role        *string   `json:"role,omitempty"`
-	Plugins     *[]string `json:"plugins,omitempty"`
-	Disabled    *bool     `json:"disabled,omitempty"`
-	Password    *string   `json:"password,omitempty"`
+	DisplayName *string       `json:"display_name,omitempty"`
+	Role        *string       `json:"role,omitempty"`
+	Grants      *[]auth.Grant `json:"grants,omitempty"`
+	Disabled    *bool         `json:"disabled,omitempty"`
+	Password    *string       `json:"password,omitempty"`
 }
 
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -217,24 +226,26 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			"account", id, "by", auth.FromContext(r.Context()).ID)
 	}
 
-	var role *auth.Role
-	if req.Role != nil {
-		r := auth.Role(*req.Role)
-		role = &r
-	}
-	user, err := s.opts.Accounts.Update(r.Context(), id, users.UpdateRequest{
+	update := users.UpdateRequest{
 		DisplayName: req.DisplayName,
-		Role:        role,
-		Plugins:     req.Plugins,
+		RoleID:      req.Role,
 		Disabled:    req.Disabled,
-	})
+	}
+	if req.Grants != nil {
+		gs := auth.Grants(*req.Grants)
+		update.Grants = &gs
+	}
+	user, err := s.opts.Accounts.Update(r.Context(), id, update)
 	switch {
 	case errors.Is(err, users.ErrNotFound):
 		s.writeError(w, r, http.StatusNotFound, "no such account")
 		return
+	case errors.Is(err, users.ErrNoSuchRole):
+		s.writeError(w, r, http.StatusBadRequest, "that role does not exist")
+		return
 	case errors.Is(err, users.ErrLastAdmin):
 		s.writeError(w, r, http.StatusConflict,
-			"this is the last administrator; promote someone else first")
+			"this is the last account that can manage access; give someone else that first")
 		return
 	case errors.Is(err, users.ErrNameCollides):
 		s.writeError(w, r, http.StatusConflict,
@@ -272,7 +283,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, users.ErrLastAdmin):
 		s.writeError(w, r, http.StatusConflict,
-			"this is the last administrator; promote someone else first")
+			"this is the last account that can manage access; give someone else that first")
 		return
 	case err != nil:
 		s.opts.Log.Error("could not delete an account", "account", id, "error", err)

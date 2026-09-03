@@ -1,5 +1,5 @@
 import { api } from "./api";
-import type { Capability } from "./capabilities";
+import type { Permission } from "./permissions";
 
 /**
  * The first things to do on a new host, and how each one is answered.
@@ -38,7 +38,7 @@ export interface Step {
   /** The page that completes it. A probe may name a more specific one. */
   to: string;
   /** What the action takes, not what reading its state takes. */
-  capability: Capability;
+  permission: Permission;
   probe: () => Promise<Outcome>;
 }
 
@@ -53,7 +53,7 @@ export const STEPS: readonly Step[] = [
     label: "Add an MCP server",
     detail: "Browse the public catalogues, or paste a server.json of your own.",
     to: "/marketplace",
-    capability: "admin",
+    permission: "plugins:write",
     probe: async () => {
       const { instances } = await api.instances();
       // A removed instance is an override of the configuration file rather than
@@ -67,7 +67,7 @@ export const STEPS: readonly Step[] = [
     label: "Approve its tools",
     detail: "Nothing a remote server offers is served until you have read it and said yes.",
     to: "/plugins",
-    capability: "admin",
+    permission: "plugins:write",
     probe: async () => {
       const { servers } = await api.mcpServers();
       const imported = servers ?? [];
@@ -88,7 +88,7 @@ export const STEPS: readonly Step[] = [
     label: "Connect ChatGPT",
     detail: "A tunnel dials out from here, so this host needs no inbound port.",
     to: "/tunnels",
-    capability: "admin",
+    permission: "plugins:write",
     probe: async () => {
       const info = await api.tunnel();
       const up = (info.tunnels ?? []).some((t) => t.state === "connected");
@@ -100,7 +100,7 @@ export const STEPS: readonly Step[] = [
     label: "Let routine changes run",
     detail: "A standing rule authorises a class of change, so you are asked about the rest.",
     to: "/settings/policy",
-    capability: "admin",
+    permission: "plugins:write",
     probe: async () => {
       const policy = await api.approvalPolicy();
       return (policy.rules ?? []).length > 0 ? { kind: "done" } : { kind: "todo" };
@@ -111,7 +111,7 @@ export const STEPS: readonly Step[] = [
     label: "Invite someone",
     detail: "A second account, with a role of its own and the plugins it may reach.",
     to: "/settings/users",
-    capability: "admin",
+    permission: "plugins:write",
     probe: async () => {
       const { users, count } = await api.users();
       return (count ?? (users ?? []).length) > 1

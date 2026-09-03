@@ -33,18 +33,31 @@ func newStore(t *testing.T) (*Store, func(time.Time)) {
 	return NewStore(db, func() time.Time { return clock }), func(at time.Time) { clock = at }
 }
 
-func mustCreate(t *testing.T, s *Store, email string, role auth.Role) *User {
+func mustCreate(t *testing.T, s *Store, email, roleID string) *User {
 	t.Helper()
 	u, err := s.Create(context.Background(), CreateRequest{
 		Email:    email,
 		Password: "a-sufficiently-long-passphrase",
-		Role:     role,
-		Plugins:  []string{auth.Wildcard},
+		RoleID:   roleID,
+		Grants:   auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite),
 	})
 	if err != nil {
 		t.Fatalf("create %s: %v", email, err)
 	}
 	return u
+}
+
+// principalOf resolves an account's access through its store and builds the
+// principal a request would see, the way every caller of Principal has to:
+// access is a question about other rows, so it is never read off the User
+// struct alone.
+func principalOf(t *testing.T, s *Store, u *User, sessionID string) *auth.Principal {
+	t.Helper()
+	access, err := s.Resolve(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", u.ID, err)
+	}
+	return u.Principal(sessionID, access)
 }
 
 func TestNormalizeEmail(t *testing.T) {
@@ -81,14 +94,14 @@ func TestCreate_EmailIsNormalisedAndUnique(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
 
-	u := mustCreate(t, s, "  Alice@Example.COM ", auth.RoleAdmin)
+	u := mustCreate(t, s, "  Alice@Example.COM ", auth.RoleAdministrator)
 	if u.Email != "alice@example.com" {
 		t.Fatalf("stored email %q, want alice@example.com", u.Email)
 	}
 
 	_, err := s.Create(ctx, CreateRequest{
 		Email: "ALICE@example.com", Password: "another-long-passphrase",
-		Role: auth.RoleUser, Plugins: []string{"echo"},
+		RoleID: auth.RoleOperator, Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 	})
 	if !errors.Is(err, ErrDuplicateEmail) {
 		t.Fatalf("second registration of the same address: %v, want ErrDuplicateEmail", err)
@@ -107,19 +120,19 @@ func TestCreate_AllowsAnEmptyGrantAndItReachesNothing(t *testing.T) {
 	ctx := context.Background()
 	u, err := s.Create(ctx, CreateRequest{
 		Email: "b@example.com", Password: "a-sufficiently-long-passphrase",
-		Role: auth.RoleUser,
+		RoleID: auth.RoleOperator,
 	})
 	if err != nil {
 		t.Fatalf("create with no direct grant: %v", err)
 	}
-	granted, err := s.EffectiveGrants(ctx, u.ID)
+	access, err := s.Resolve(ctx, u.ID)
 	if err != nil {
-		t.Fatalf("effective grants: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	if len(granted) != 0 {
-		t.Fatalf("granted = %v; an account in no group with no grants reaches nothing", granted)
+	if len(access.Grants) != 0 {
+		t.Fatalf("granted = %v; an account in no group with no grants reaches nothing", access.Grants)
 	}
-	if u.Principal("ses", granted, nil).CanAccessPlugin("echo") {
+	if u.Principal("ses", access).CanAccessPlugin("echo") {
 		t.Error("an account with no grants reached a plugin")
 	}
 }
@@ -127,7 +140,7 @@ func TestCreate_AllowsAnEmptyGrantAndItReachesNothing(t *testing.T) {
 func TestAuthenticate(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	mustCreate(t, s, "alice@example.com", auth.RoleAdmin)
+	mustCreate(t, s, "alice@example.com", auth.RoleAdministrator)
 
 	// The address is normalised on the way in, so however it was typed works.
 	if _, err := s.Authenticate(ctx, "ALICE@example.com ", "a-sufficiently-long-passphrase"); err != nil {
@@ -151,8 +164,8 @@ func TestAuthenticate(t *testing.T) {
 func TestAuthenticate_DisabledAccountIsRefused(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	mustCreate(t, s, "admin@example.com", auth.RoleAdmin)
-	u := mustCreate(t, s, "bob@example.com", auth.RoleUser)
+	mustCreate(t, s, "admin@example.com", auth.RoleAdministrator)
+	u := mustCreate(t, s, "bob@example.com", auth.RoleOperator)
 
 	off := true
 	if _, err := s.Update(ctx, u.ID, UpdateRequest{Disabled: &off}); err != nil {
@@ -166,7 +179,7 @@ func TestAuthenticate_DisabledAccountIsRefused(t *testing.T) {
 func TestSessions(t *testing.T) {
 	s, setClock := newStore(t)
 	ctx := context.Background()
-	u := mustCreate(t, s, "alice@example.com", auth.RoleAdmin)
+	u := mustCreate(t, s, "alice@example.com", auth.RoleAdministrator)
 
 	token, sess, err := s.NewSession(ctx, u.ID, time.Hour)
 	if err != nil {
@@ -186,11 +199,11 @@ func TestSessions(t *testing.T) {
 
 	// The principal names the session rather than only the person, so the
 	// trail can tell two sign-ins apart.
-	p := got.Principal(resolved.ID, got.Plugins, nil)
+	p := principalOf(t, s, got, resolved.ID)
 	if p.ID != "user:alice@example.com" || p.TokenID != sess.ID {
 		t.Fatalf("principal = %+v", p)
 	}
-	if p.Role != auth.RoleAdmin || !p.Can(auth.CapAdmin) {
+	if p.RoleID != auth.RoleAdministrator || !p.Can(auth.PermAccessWrite) {
 		t.Fatalf("principal lost its role: %+v", p)
 	}
 
@@ -219,8 +232,8 @@ func TestSessions(t *testing.T) {
 func TestUpdate_DisablingEndsLiveSessions(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	mustCreate(t, s, "admin@example.com", auth.RoleAdmin)
-	u := mustCreate(t, s, "bob@example.com", auth.RoleUser)
+	mustCreate(t, s, "admin@example.com", auth.RoleAdministrator)
+	u := mustCreate(t, s, "bob@example.com", auth.RoleOperator)
 
 	token, _, err := s.NewSession(ctx, u.ID, time.Hour)
 	if err != nil {
@@ -240,7 +253,7 @@ func TestUpdate_DisablingEndsLiveSessions(t *testing.T) {
 func TestSetPassword_EndsLiveSessions(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	u := mustCreate(t, s, "alice@example.com", auth.RoleAdmin)
+	u := mustCreate(t, s, "alice@example.com", auth.RoleAdministrator)
 
 	token, _, err := s.NewSession(ctx, u.ID, time.Hour)
 	if err != nil {
@@ -261,11 +274,11 @@ func TestSetPassword_EndsLiveSessions(t *testing.T) {
 func TestLastAdminIsProtected(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	admin := mustCreate(t, s, "admin@example.com", auth.RoleAdmin)
-	mustCreate(t, s, "viewer@example.com", auth.RoleUser)
+	admin := mustCreate(t, s, "admin@example.com", auth.RoleAdministrator)
+	mustCreate(t, s, "viewer@example.com", auth.RoleOperator)
 
-	viewer := auth.RoleUser
-	if _, err := s.Update(ctx, admin.ID, UpdateRequest{Role: &viewer}); !errors.Is(err, ErrLastAdmin) {
+	operator := auth.RoleOperator
+	if _, err := s.Update(ctx, admin.ID, UpdateRequest{RoleID: &operator}); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("demoting the last admin: %v, want ErrLastAdmin", err)
 	}
 	off := true
@@ -277,8 +290,8 @@ func TestLastAdminIsProtected(t *testing.T) {
 	}
 
 	// With a second administrator present, the same edits go through.
-	second := mustCreate(t, s, "second@example.com", auth.RoleAdmin)
-	if _, err := s.Update(ctx, admin.ID, UpdateRequest{Role: &viewer}); err != nil {
+	second := mustCreate(t, s, "second@example.com", auth.RoleAdministrator)
+	if _, err := s.Update(ctx, admin.ID, UpdateRequest{RoleID: &operator}); err != nil {
 		t.Fatalf("demoting one of two admins: %v", err)
 	}
 	if err := s.Delete(ctx, second.ID); !errors.Is(err, ErrLastAdmin) {
@@ -313,11 +326,12 @@ func TestCreateFirst_ClaimsAnEmptyInstance(t *testing.T) {
 	if u.Email != "alice@example.com" {
 		t.Errorf("email = %q, want it normalised", u.Email)
 	}
-	if u.Role != auth.RoleAdmin {
-		t.Errorf("role = %q, want admin", u.Role)
+	if u.RoleID != auth.RoleAdministrator {
+		t.Errorf("role = %q, want administrator", u.RoleID)
 	}
-	if len(u.Plugins) != 1 || u.Plugins[0] != auth.Wildcard {
-		t.Errorf("plugins = %v, want the wildcard", u.Plugins)
+	want := auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite)
+	if !u.Grants.Equal(want) {
+		t.Errorf("grants = %v, want the wildcard at write", u.Grants)
 	}
 	if _, err := s.Authenticate(ctx, "alice@example.com", "a-sufficiently-long-passphrase"); err != nil {
 		t.Errorf("the registered account cannot sign in: %v", err)
@@ -386,29 +400,31 @@ func TestCreateFirst_ConcurrentClaimsProduceOneAdmin(t *testing.T) {
 	}
 }
 
-// A user does everything the integrations exist to do; an administrator
-// additionally administers the host. That one line is the whole role model.
+// An operator does everything the integrations exist to do; an administrator
+// additionally administers the host. That is the whole of the built-in role
+// model, and it holds whether the role arrives directly or is the account's
+// own -- there is no group in play here.
 func TestRolesSeparateOperatingFromAdministering(t *testing.T) {
 	s, _ := newStore(t)
-	ctx := context.Background()
-	admin := mustCreate(t, s, "admin@example.com", auth.RoleAdmin)
-	user := mustCreate(t, s, "user@example.com", auth.RoleUser)
+	operator := mustCreate(t, s, "operator@example.com", auth.RoleOperator)
+	admin := mustCreate(t, s, "admin@example.com", auth.RoleAdministrator)
 
-	up := user.Principal("ses_u", user.Plugins, nil)
-	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove} {
-		if !up.Can(c) {
-			t.Errorf("a user should hold %s", c)
+	op := principalOf(t, s, operator, "ses_o")
+	for _, perm := range []auth.Permission{auth.PermSettingsRead, auth.PermApprovalsDecide} {
+		if !op.Can(perm) {
+			t.Errorf("an operator should hold %s", perm)
 		}
 	}
-	if up.Can(auth.CapAdmin) {
-		t.Error("a user must not hold admin; that is the line between the two roles")
+	if op.Can(auth.PermAccessWrite) || op.Can(auth.PermSettingsWrite) {
+		t.Error("an operator must not administer; that is the line between the two roles")
 	}
 
-	ap := admin.Principal("ses_a", admin.Plugins, nil)
-	for _, c := range []auth.Capability{auth.CapRead, auth.CapPropose, auth.CapApprove, auth.CapAdmin} {
-		if !ap.Can(c) {
-			t.Errorf("an administrator should hold %s", c)
+	ap := principalOf(t, s, admin, "ses_a")
+	for _, perm := range []auth.Permission{
+		auth.PermSettingsRead, auth.PermApprovalsDecide, auth.PermAccessWrite, auth.PermSettingsWrite,
+	} {
+		if !ap.Can(perm) {
+			t.Errorf("an administrator should hold %s", perm)
 		}
 	}
-	_ = ctx
 }

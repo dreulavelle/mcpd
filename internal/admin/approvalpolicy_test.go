@@ -20,7 +20,7 @@ import (
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
 
-func newPolicyDashboard(t *testing.T, role auth.Role) (*Server, *settings.Store) {
+func newPolicyDashboard(t *testing.T, role string) (*Server, *settings.Store) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := sqlite.Open(ctx, sqlite.Options{
@@ -55,7 +55,7 @@ func decodePolicy(t *testing.T, body []byte) approvalPolicyResponse {
 // A host nobody has configured has no rules, and the page has to be able to
 // say so rather than showing an empty list that might mean anything.
 func TestApprovalPolicy_StartsEmpty(t *testing.T) {
-	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s, _ := newPolicyDashboard(t, auth.RoleAdministrator)
 
 	w := request(t, s, http.MethodGet, "/api/approval-policy", nil)
 	if w.Code != http.StatusOK {
@@ -77,7 +77,7 @@ func TestApprovalPolicy_StartsEmpty(t *testing.T) {
 // is in settings history like any other configuration change -- which is the
 // reason these live in the settings store rather than a file of their own.
 func TestApprovalPolicy_WritesAreStoredAndRecorded(t *testing.T) {
-	s, store := newPolicyDashboard(t, auth.RoleAdmin)
+	s, store := newPolicyDashboard(t, auth.RoleAdministrator)
 
 	w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
 		"rules": []map[string]any{
@@ -124,7 +124,7 @@ func TestApprovalPolicy_WritesAreStoredAndRecorded(t *testing.T) {
 // Validation happens before anything is stored, so a bad rule leaves the
 // policy exactly as it was rather than half-applied.
 func TestApprovalPolicy_RefusesAnInvalidSetWithoutStoringIt(t *testing.T) {
-	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s, _ := newPolicyDashboard(t, auth.RoleAdministrator)
 
 	for _, tc := range []struct {
 		name  string
@@ -158,7 +158,7 @@ func TestApprovalPolicy_RefusesAnInvalidSetWithoutStoringIt(t *testing.T) {
 // Reading the policy answers "why was I not asked", which is an operator's
 // question. Changing it decides when the gate is skipped, which is not.
 func TestApprovalPolicy_CapabilityGating(t *testing.T) {
-	operator, _ := newPolicyDashboard(t, auth.RoleUser)
+	operator, _ := newPolicyDashboard(t, auth.RoleOperator)
 
 	if w := request(t, operator, http.MethodGet, "/api/approval-policy", nil); w.Code != http.StatusOK {
 		t.Errorf("an operator reading the policy = %d, want 200", w.Code)
@@ -173,7 +173,7 @@ func TestApprovalPolicy_CapabilityGating(t *testing.T) {
 // Which rule applies is a question an operator has to be able to ask before a
 // change is proposed, not only afterwards from the record.
 func TestApprovalPolicy_ExplainsWhatWouldHappen(t *testing.T) {
-	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s, _ := newPolicyDashboard(t, auth.RoleAdministrator)
 	if w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
 		"rules": []map[string]any{
 			{"id": "routine-radio", "plugin": "cnmaestro", "max_risk": "low"},
@@ -245,7 +245,7 @@ func TestApprovalPolicy_ExplainsWhatWouldHappen(t *testing.T) {
 // box would be validated by nothing, which is the wrong shape for the setting
 // that decides when a human is skipped.
 func TestApprovalPolicy_TheGenericSettingsFormCannotWriteRules(t *testing.T) {
-	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s, _ := newPolicyDashboard(t, auth.RoleAdministrator)
 
 	w := request(t, s, http.MethodPut, "/api/settings", map[string]any{
 		"values": map[string]string{
@@ -264,7 +264,7 @@ func TestApprovalPolicy_TheGenericSettingsFormCannotWriteRules(t *testing.T) {
 // A misspelled selector must reach the operator as an error naming the field,
 // not as a rule that silently covers everybody.
 func TestApprovalPolicy_RefusesAMisspelledSelector(t *testing.T) {
-	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s, _ := newPolicyDashboard(t, auth.RoleAdministrator)
 
 	for _, tc := range []struct {
 		name string
@@ -294,7 +294,7 @@ func TestApprovalPolicy_RefusesAMisspelledSelector(t *testing.T) {
 // Misspelling the wrapper would otherwise read as an empty set and quietly
 // delete the whole policy.
 func TestApprovalPolicy_RefusesAMisspelledWrapper(t *testing.T) {
-	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s, _ := newPolicyDashboard(t, auth.RoleAdministrator)
 	if w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
 		"rules": []map[string]any{{"id": "routine", "plugin": "cnmaestro", "max_risk": "low"}},
 	}); w.Code != http.StatusOK {
@@ -315,7 +315,7 @@ func TestApprovalPolicy_RefusesAMisspelledWrapper(t *testing.T) {
 // in the resolver. This is the reproduction that started as an auto-approved
 // device reboot.
 func TestApprovalPolicy_AnExclusionBeatsABroaderGrant(t *testing.T) {
-	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s, _ := newPolicyDashboard(t, auth.RoleAdministrator)
 	if w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
 		"rules": []map[string]any{
 			{"id": "plugin-wide", "plugin": "cnmaestro", "max_risk": "high"},
@@ -346,7 +346,7 @@ func TestApprovalPolicy_AnExclusionBeatsABroaderGrant(t *testing.T) {
 // -- but it silently stops protecting the action it was written for, and the
 // grant beside it decides instead.
 func TestApprovalPolicy_WarnsAboutARuleThatMatchesNothing(t *testing.T) {
-	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s, _ := newPolicyDashboard(t, auth.RoleAdministrator)
 	s.opts.Manager = mountedManager(t)
 
 	w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
@@ -384,7 +384,7 @@ func TestApprovalPolicy_WarnsAboutARuleThatMatchesNothing(t *testing.T) {
 
 // A host with nothing mounted must not warn that every rule matches nothing.
 func TestApprovalPolicy_DoesNotWarnWithNothingMounted(t *testing.T) {
-	s, _ := newPolicyDashboard(t, auth.RoleAdmin)
+	s, _ := newPolicyDashboard(t, auth.RoleAdministrator)
 
 	w := request(t, s, http.MethodPut, "/api/approval-policy", map[string]any{
 		"rules": []map[string]any{{"id": "routine", "plugin": "cnmaestro", "max_risk": "low"}},

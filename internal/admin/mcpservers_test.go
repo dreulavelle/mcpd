@@ -15,16 +15,27 @@ import (
 	"github.com/spoked/mcpd/internal/mcpservers"
 )
 
-// roleVerifier hands back a principal with a fixed role, so a test can check
-// what each capability may reach without standing up accounts.
-type roleVerifier struct{ role auth.Role }
+// roleVerifier hands back a principal holding a built-in role, so a test can
+// check what each permission may reach without standing up accounts.
+//
+// The role is named by id and expanded here through auth.BuiltinRole, so a
+// test says "an operator" rather than listing the permissions an operator
+// happens to hold today. It reaches every plugin at write, because what these
+// tests are about is the host permission a route requires and not the grant.
+type roleVerifier struct{ role string }
 
 func (roleVerifier) Scheme() string { return "test" }
 
 func (v roleVerifier) Verify(context.Context, string, *http.Request) (*auth.Principal, error) {
+	r, ok := auth.BuiltinRole(v.role)
+	if !ok {
+		return nil, auth.ErrUnauthenticated
+	}
 	return &auth.Principal{
-		ID: "svc:test", DisplayName: "test", Role: v.role,
-		Plugins: []string{auth.Wildcard}, TokenID: "test",
+		ID: "svc:test", DisplayName: "test",
+		RoleID: r.ID, RoleName: r.Name, Permissions: r.Permissions,
+		Grants:  auth.GrantsAt([]string{auth.Wildcard}, auth.LevelWrite),
+		TokenID: "test",
 	}, nil
 }
 
@@ -34,7 +45,7 @@ type recordedCall struct {
 	document         []byte
 }
 
-func newMCPDashboard(t *testing.T, role auth.Role, calls *recordedCall) *Server {
+func newMCPDashboard(t *testing.T, role string, calls *recordedCall) *Server {
 	t.Helper()
 	return NewServer(Options{
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -115,7 +126,7 @@ func TestMCPServerRoutes_CapabilityGating(t *testing.T) {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			var calls recordedCall
 
-			asUser := request(t, newMCPDashboard(t, auth.RoleUser, &calls), tc.method, tc.path, tc.body)
+			asUser := request(t, newMCPDashboard(t, auth.RoleOperator, &calls), tc.method, tc.path, tc.body)
 			if tc.adminOnly && asUser.Code != http.StatusForbidden {
 				t.Errorf("a user reached %s and should not have: %d", tc.path, asUser.Code)
 			}
@@ -123,7 +134,7 @@ func TestMCPServerRoutes_CapabilityGating(t *testing.T) {
 				t.Errorf("a user could not read %s: %d %s", tc.path, asUser.Code, asUser.Body)
 			}
 
-			asAdmin := request(t, newMCPDashboard(t, auth.RoleAdmin, &calls), tc.method, tc.path, tc.body)
+			asAdmin := request(t, newMCPDashboard(t, auth.RoleAdministrator, &calls), tc.method, tc.path, tc.body)
 			if asAdmin.Code >= http.StatusBadRequest {
 				t.Errorf("an admin was refused %s: %d %s", tc.path, asAdmin.Code, asAdmin.Body)
 			}
@@ -135,7 +146,7 @@ func TestMCPServerRoutes_CapabilityGating(t *testing.T) {
 // handler that dropped it would turn a guarded decision into an unguarded one.
 func TestClassifyTool_PassesTheDescriptorHashThrough(t *testing.T) {
 	var calls recordedCall
-	s := newMCPDashboard(t, auth.RoleAdmin, &calls)
+	s := newMCPDashboard(t, auth.RoleAdministrator, &calls)
 
 	w := request(t, s, http.MethodPatch, "/api/mcp-servers/weather/tools/getWeather",
 		map[string]any{"state": "enabled", "descriptor_hash": "deadbeef"})
@@ -155,7 +166,7 @@ func TestClassifyTool_PassesTheDescriptorHashThrough(t *testing.T) {
 // this build does not model.
 func TestImportMCPServer_PassesTheDocumentVerbatim(t *testing.T) {
 	var calls recordedCall
-	s := newMCPDashboard(t, auth.RoleAdmin, &calls)
+	s := newMCPDashboard(t, auth.RoleAdministrator, &calls)
 
 	document := json.RawMessage(`{"$schema":"x","somethingUnmodelled":true}`)
 	w := request(t, s, http.MethodPost, "/api/mcp-servers",
@@ -170,7 +181,7 @@ func TestImportMCPServer_PassesTheDocumentVerbatim(t *testing.T) {
 
 func TestImportMCPServer_RequiresADocument(t *testing.T) {
 	var calls recordedCall
-	s := newMCPDashboard(t, auth.RoleAdmin, &calls)
+	s := newMCPDashboard(t, auth.RoleAdministrator, &calls)
 
 	w := request(t, s, http.MethodPost, "/api/mcp-servers", map[string]any{"name": "weather"})
 	if w.Code != http.StatusBadRequest {
@@ -183,7 +194,7 @@ func TestImportMCPServer_RequiresADocument(t *testing.T) {
 // a refusal they can act on and one they argue with.
 func TestMCPSchema_IsServedAsTheVendoredCopy(t *testing.T) {
 	var calls recordedCall
-	s := newMCPDashboard(t, auth.RoleUser, &calls)
+	s := newMCPDashboard(t, auth.RoleOperator, &calls)
 
 	w := request(t, s, http.MethodGet, "/api/mcp-servers/schema", nil)
 	if w.Code != http.StatusOK {

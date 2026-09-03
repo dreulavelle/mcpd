@@ -251,13 +251,26 @@ type StaticTokenConfig struct {
 	SecretRef string `yaml:"secret_ref"`
 	// Principal is the identity this credential asserts.
 	Principal string `yaml:"principal"`
-	// Role is user or admin.
+	// Role names a role: one of the built-ins by name (reader, operator,
+	// administrator), a custom role by its name, or the two names this file
+	// used to accept, user and admin, which mean operator and administrator.
 	Role string `yaml:"role"`
-	// Plugins lists the plugins this credential may reach, or ["*"].
+	// Plugins lists the plugins this credential may reach at write, or
+	// ["*"]. The form the file has always had: a plugin listed here can be
+	// read and changed through, which is what a token could always do.
 	//
 	// This is the per-agent scoping control: give an agent a token listing one
 	// plugin and it can neither invoke nor enumerate any other.
 	Plugins []string `yaml:"plugins"`
+	// Grants is the finer form: each entry names a plugin, or "*", and a
+	// level, read or write. Either list may be given; both are combined.
+	Grants []GrantConfig `yaml:"grants"`
+}
+
+// GrantConfig is one plugin at one level, in the configuration file.
+type GrantConfig struct {
+	Plugin string `yaml:"plugin"`
+	Level  string `yaml:"level"`
 }
 
 // PluginConfig is the host-level configuration common to every plugin.

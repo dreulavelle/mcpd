@@ -28,7 +28,7 @@ func asAccount(t *testing.T, s *Server, accounts *fakeAccounts, method, path, bo
 // a non-administrator to go and ask somebody else to type their name for them.
 func TestAccount_APersonMayNameThemselvesWithoutBeingAnAdministrator(t *testing.T) {
 	accounts := newFakeAccounts()
-	accounts.user.Role = auth.RoleUser
+	accounts.user.RoleID = auth.RoleOperator
 	s := newTestServer(t, accounts)
 
 	w := asAccount(t, s, accounts, http.MethodPatch, "/api/account", `{"display_name":"Alice A."}`)
@@ -43,7 +43,7 @@ func TestAccount_APersonMayNameThemselvesWithoutBeingAnAdministrator(t *testing.
 	}
 	// Nothing else about the account may travel with it. Role, grants and
 	// disabled are somebody else's decisions.
-	if accounts.updatedReq.Role != nil || accounts.updatedReq.Plugins != nil ||
+	if accounts.updatedReq.RoleID != nil || accounts.updatedReq.Grants != nil ||
 		accounts.updatedReq.Disabled != nil {
 		t.Errorf("the self-service edit carried more than a name: %+v", accounts.updatedReq)
 	}
@@ -65,7 +65,7 @@ func TestAccount_APersonMayNameThemselvesWithoutBeingAnAdministrator(t *testing.
 // identifier to point at another account.
 func TestAccount_NamingSomebodyElseStillNeedsAdministrator(t *testing.T) {
 	accounts := newFakeAccounts()
-	accounts.user.Role = auth.RoleUser
+	accounts.user.RoleID = auth.RoleOperator
 	s := newTestServer(t, accounts)
 
 	w := asAccount(t, s, accounts, http.MethodPatch, "/api/users/usr_2", `{"display_name":"Bob"}`)
@@ -73,7 +73,7 @@ func TestAccount_NamingSomebodyElseStillNeedsAdministrator(t *testing.T) {
 		t.Fatalf("status = %d, want 403 for a user editing another account", w.Code)
 	}
 
-	accounts.user.Role = auth.RoleAdmin
+	accounts.user.RoleID = auth.RoleAdministrator
 	admin := newTestServer(t, accounts)
 	w = asAccount(t, admin, accounts, http.MethodPatch, "/api/users/usr_2", `{"display_name":"Bob"}`)
 	if w.Code != http.StatusOK {
@@ -90,7 +90,7 @@ func TestAccount_ABearerTokenHasNothingToName(t *testing.T) {
 	accounts := newFakeAccounts()
 	s := NewServer(Options{
 		Log:      newTestServer(t, accounts).opts.Log,
-		Verifier: roleVerifier{role: auth.RoleAdmin},
+		Verifier: roleVerifier{role: auth.RoleAdministrator},
 		Accounts: accounts,
 	})
 

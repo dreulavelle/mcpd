@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, ApiError, type Session, type User } from "@/lib/api";
+import { builtinPermissions } from "@/lib/permissions";
 import { renderWith, sessionFor } from "@/test/render";
 import { Profile } from "./Profile";
 
@@ -11,9 +12,11 @@ function userView(overrides: Partial<User> = {}): User {
     email: "user@example.com",
     name: "Alice A.",
     display_name: "Alice A.",
-    role: "user",
-    plugins: ["*"],
-    reaches: ["*"],
+    role: "role_operator",
+    role_name: "Operator",
+    grants: [{ plugin: "*", level: "write" }],
+    reaches: [{ plugin: "*", level: "write" }],
+    permissions: builtinPermissions("role_operator"),
     groups: [],
     disabled: false,
     status: "active",

@@ -58,8 +58,8 @@ func addAccount(t *testing.T, a *App, name string, plugins []string) tunnel.Acco
 	acct, err := a.chatgpt.Create(context.Background(), "user:test", tunnel.Account{
 		Name:    name,
 		APIKey:  "sk-runtime-key-" + name,
-		Role:    auth.RoleUser,
-		Plugins: plugins,
+		RoleID:  auth.RoleOperator,
+		Grants:  auth.GrantsAt(plugins, auth.LevelWrite),
 		Enabled: true,
 	})
 	if err != nil {
@@ -103,8 +103,8 @@ func TestTunnelConfigComesFromSettingsAndTheAccount(t *testing.T) {
 	if got.APIKey != acct.APIKey {
 		t.Fatal("the account's API key must reach the tunnel config")
 	}
-	if got.Principal.Role != auth.RoleUser {
-		t.Fatalf("role = %q, want the account's", got.Principal.Role)
+	if got.Principal.RoleID != auth.RoleOperator {
+		t.Fatalf("role = %q, want the account's", got.Principal.RoleID)
 	}
 	if got.AccountID != acct.ID {
 		t.Fatalf("account = %q, want %q -- a tunnel has to say whose it is",
@@ -129,7 +129,7 @@ func TestTunnelConfig_EmptyGrantsMeanEverything(t *testing.T) {
 	if len(configs) != 1 {
 		t.Fatalf("got %d tunnels, want the aggregate", len(configs))
 	}
-	if len(configs[0].Principal.Plugins) == 0 {
+	if len(configs[0].Principal.Grants.Plugins()) == 0 {
 		t.Fatal("an empty grant would reach nothing, which is never what a blank field meant")
 	}
 }
@@ -291,8 +291,8 @@ func TestAPerPluginTunnelBindsThatPluginsEndpoint(t *testing.T) {
 	if scoped.TunnelID != echo {
 		t.Errorf("TunnelID = %q, want the id stored for echo", scoped.TunnelID)
 	}
-	if len(scoped.Principal.Plugins) != 1 || scoped.Principal.Plugins[0] != "echo" {
-		t.Errorf("Plugins = %v, want echo alone", scoped.Principal.Plugins)
+	if got := scoped.Principal.Grants.Plugins(); len(got) != 1 || got[0] != "echo" {
+		t.Errorf("Plugins = %v, want echo alone", got)
 	}
 }
 
@@ -382,8 +382,7 @@ func TestAPerPluginTunnelIsScopedWithoutSignIn(t *testing.T) {
 	if scoped == nil {
 		t.Fatal("no tunnel was built for echo")
 	}
-	if len(scoped.Principal.Plugins) != 1 || scoped.Principal.Plugins[0] != "echo" {
-		t.Errorf("Plugins = %v, want echo alone -- that is what scopes it in process",
-			scoped.Principal.Plugins)
+	if got := scoped.Principal.Grants.Plugins(); len(got) != 1 || got[0] != "echo" {
+		t.Errorf("Plugins = %v, want echo alone -- that is what scopes it in process", got)
 	}
 }

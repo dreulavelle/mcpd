@@ -44,7 +44,7 @@ func (o *toolObserver) ToolCall(ctx context.Context, plugin, tool, outcome strin
 	principal := auth.FromContext(ctx)
 	if err := o.ledger.Record(ctx, sqlite.ToolCall{
 		Principal:     principal.ID,
-		Role:          string(principal.Role),
+		Role:          principal.RoleName,
 		Plugin:        plugin,
 		Tool:          tool,
 		Outcome:       outcome,

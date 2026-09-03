@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, within } from "@testing-library/react";
 import { api, type Group, type User } from "@/lib/api";
+import { builtinPermissions } from "@/lib/permissions";
 import { renderWith } from "@/test/render";
 import { Users } from "./Users";
 
 function user(overrides: Partial<User> = {}): User {
   return {
     id: "usr_1", email: "alice@example.com", name: "alice@example.com", display_name: "",
-    role: "admin", plugins: ["*"], reaches: ["*"], groups: [], disabled: false,
+    role: "role_operator", role_name: "Operator",
+    grants: [{ plugin: "*", level: "write" }], reaches: [{ plugin: "*", level: "write" }],
+    permissions: builtinPermissions("role_operator"),
+    groups: [], disabled: false,
     status: "active", has_password: true, created_at: "2026-08-01T09:00:00Z", self: false,
     ...overrides,
   };
@@ -15,7 +19,8 @@ function user(overrides: Partial<User> = {}): User {
 
 function group(overrides: Partial<Group> = {}): Group {
   return {
-    id: "grp_1", name: "Readers", description: "", plugins: ["*"], capabilities: null,
+    id: "grp_1", name: "Readers", description: "", role: "", role_name: "",
+    grants: [{ plugin: "*", level: "write" }],
     members: 1, created_by: "", created_at: "", ...overrides,
   };
 }
@@ -28,30 +33,60 @@ function stub(users: User[], groups: Group[] = []) {
 describe("the users page", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  // "Why can't they approve" is the question this page exists to answer, and
-  // the role column alone says "admin" of somebody a group has narrowed to
-  // reading.
-  it("says what an account may actually do, after its groups have had their say", async () => {
+  // "Why can they decide approvals" is the question this page exists to
+  // answer, and the role column alone says "Reader" of somebody a group has
+  // added Operator to. The union is computed server-side and carried on
+  // `permissions`; the page only has to render it and say where the extra
+  // came from.
+  it("says what an account may actually do, after its groups have added to it", async () => {
     stub(
-      [user({ groups: [{ id: "grp_1", name: "Readers", plugins: ["*"] }] })],
-      [group({ capabilities: ["read"] })],
+      [user({
+        role: "role_reader", role_name: "Reader",
+        // Reader alone would read everything and decide nothing; the group
+        // below adds Operator, so the account can also decide approvals.
+        permissions: builtinPermissions("role_operator"),
+        groups: [{ id: "grp_1", name: "Readers", role: "role_operator", role_name: "Operator", grants: [] }],
+      })],
+      [group({ role: "role_operator", role_name: "Operator" })],
     );
     renderWith(<Users />);
     const row = (await screen.findByText("alice@example.com")).closest("tr")!;
-    expect(within(row).getByText("Read")).toBeInTheDocument();
-    expect(within(row).getByText("narrowed")).toBeInTheDocument();
+    expect(within(row).getByText("Decides approvals; reads the rest")).toBeInTheDocument();
+    expect(within(row).getByText("via groups")).toBeInTheDocument();
   });
 
   it("says an unrestricted administrator may do everything", async () => {
-    stub([user({ reaches: ["echo"] })]);
+    stub([user({
+      role: "role_administrator", role_name: "Administrator",
+      permissions: builtinPermissions("role_administrator"),
+    })]);
     renderWith(<Users />);
     const row = (await screen.findByText("alice@example.com")).closest("tr")!;
-    expect(within(row).getByText("Everything")).toBeInTheDocument();
-    expect(within(row).queryByText("narrowed")).not.toBeInTheDocument();
+    // Shows in both the "Can do" and "Can reach" columns for an unrestricted
+    // administrator, which is the point: neither column narrows the other.
+    expect(within(row).getAllByText("Everything").length).toBe(2);
+    expect(within(row).queryByText("via groups")).not.toBeInTheDocument();
+  });
+
+  // A group that hands out the same role the account already holds adds
+  // nothing worth calling out -- the chip is for a group that changed the
+  // answer, not for every membership.
+  it("does not mark an account whose groups add nothing new", async () => {
+    stub(
+      [user({
+        role: "role_operator", role_name: "Operator",
+        permissions: builtinPermissions("role_operator"),
+        groups: [{ id: "grp_1", name: "Readers", role: "role_operator", role_name: "Operator", grants: [] }],
+      })],
+      [group({ role: "role_operator", role_name: "Operator" })],
+    );
+    renderWith(<Users />);
+    const row = (await screen.findByText("alice@example.com")).closest("tr")!;
+    expect(within(row).queryByText("via groups")).not.toBeInTheDocument();
   });
 
   it("says a pending account holds nothing yet", async () => {
-    stub([user({ status: "pending" })]);
+    stub([user({ status: "pending", permissions: [] })]);
     renderWith(<Users />);
     expect(await screen.findByText("Nothing until approved")).toBeInTheDocument();
   });

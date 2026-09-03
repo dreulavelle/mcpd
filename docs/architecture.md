@@ -32,12 +32,13 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/admin` | Dashboard JSON API and the embedded SPA |
 | `internal/operations` | The approval engine: state machine, policy, executor |
 | `internal/plugins` | Plugin registry, tool attachment, approval tools |
-| `internal/auth` | Principals, roles, capabilities, static tokens |
+| `internal/auth` | Principals, permissions, grants, the built-in roles, static tokens |
 | `internal/auth/users` | Accounts, passwords, browser sessions, registration |
 | `internal/observability` | Logging, redaction, health, metrics, and the copy of the log the dashboard streams |
 | `internal/storage/sqlite` (`toolcalls.go`) | The call ledger: who called what, and how it ended |
 | `internal/auth/sso` | Signing in through Google, GitHub, Entra, or the operator's own provider |
-| `internal/auth/groups` | Groups, membership, and the one union that decides reach |
+| `internal/auth/groups` | Groups, membership, and the one union that decides what a subject holds |
+| `internal/auth/roles` | Named permission sets, and the one query that says whether anybody still manages access |
 | `internal/auth/apikeys` | Bearer credentials this host issued, and the verifier over them |
 | `internal/storage/sqlite` | Schema, migrations, every transaction |
 | `internal/tunnel` | The embedded OpenAI tunnel client, one per connector |
@@ -294,11 +295,11 @@ declares preconditions and can be re-read is still a `reviewed_change`; one
 that cannot is still a `gated_call`. Collapsing the two would let the vocabulary
 that exists to stop a claim being overstated start overstating one.
 
-**Auto-approval does not consult `CapApprove`.** The authority is an
+**Auto-approval does not consult `approvals:decide`.** The authority is an
 administrator's rule, not the proposer's standing; what bounds the proposer is
-`CapPropose`, checked where every proposal is. Writing rules is `CapAdmin`;
-reading them is `CapRead`, because "why was I not asked" is a question an
-operator has to be able to answer.
+its grant on the plugin at write, checked where every proposal is. Writing
+rules is `policies:write`; reading them is `policies:read`, because "why was I
+not asked" is a question an operator has to be able to answer.
 
 **A rule removes an interruption, and something else has to take over the
 backpressure.** Before a rule existed, a runaway agent could only pile up
@@ -367,11 +368,11 @@ and go through the same authorization; see *Groups, and keys this host issued*.
 The tunnel presents nothing — it authenticates to OpenAI's control plane with a
 runtime key and carries its identity from configuration.
 
-Roles are `user` and `admin`. A user reads, proposes, and approves; an admin
-additionally changes settings, makes tunnels, manages accounts, issues keys,
-and clears history. Capabilities (`read`, `propose`, `approve`, `admin`) are
-what code checks — never the role directly. What a caller may *reach* is a
-separate axis and is decided by groups.
+A caller holds a **role**, which is a named set of permissions, and a list
+of **grants**, which is what it may reach. Permissions (`settings:write`,
+`approvals:decide`, …) are what code checks — never the role directly. Three
+roles are built in and any number can be composed beside them; see *Roles,
+grants and groups*.
 
 **A display name is a rendering, never an identity.** An account is identified
 by its address, and that is what every audit record, every guard and every
@@ -610,150 +611,141 @@ needs mcpd reachable from the public internet, which is the one thing a tunnel
 avoids. OpenAI's documentation states the authorization server "is not
 automatically tunneled".
 
-## Groups, and keys this host issued
+## Roles, grants and groups
 
-Two axes, and keeping them apart is the whole design. A **role** decides what a
-caller may *do* — read, propose, approve, administer — and `roleCapabilities`
-is the only thing that knows the difference. A **group** decides what a caller
-may *reach*: which plugins, and nothing else.
+Three objects, each answering one question, and nothing subtracts.
 
-**A group may take capabilities away, and may never give them.** This is the
-one asymmetry that makes two mechanisms tolerable. A second bundle-of-rights
-mechanism that *granted* would mean "why can this person approve" is answerable
-only by reading both and knowing which wins; one that grants and one that
-removes is answerable in one direction, and the answer is always the smaller of
-the two.
+A **role** answers *what may this caller do*. It is a named set of host
+permissions: one level per **area** — approvals, policies, plugins, tunnels,
+settings, access, history, system — where write includes read and, for
+approvals, decide includes read. A permission is written `area:level`, and
+`auth.Permission` is a closed vocabulary: a route table names one per route,
+the session reports the ones held, and the dashboard asks `useCan("settings:write")`
+in the same words the server refuses with. Three roles are built in and belong
+to the binary — Reader, Operator, Administrator — with their permissions
+re-applied from `auth.BuiltinRoles` at every startup, so a new area reaches
+every administrator without a migration and nobody can edit Administrator into
+something that cannot administer. Custom roles are composed from the same
+eight rows, usually by copying a built-in and changing one line, and can be
+deleted only while nothing holds them: a subject pointing at a role that no
+longer exists would hold nothing, and nobody decided that.
 
-So a group carries an optional **ceiling**: the set of capabilities it permits
-its members. `Principal.Can` intersects it with the role's own set, which is
-what makes a ceiling incapable of widening anything — an ordinary user in a
-group permitting `admin` is still not an administrator, because the role never
-granted it.
+A **grant** answers *what may this caller reach*: a plugin, or every plugin,
+at read or write. Read calls the plugin's read tools; write also proposes
+changes through it. This is where "read-only" lives, per plugin, so that one
+key can read Graylog and change cnMaestro — a single bit on the role would
+force every credential to be all-read or all-write across everything it
+reaches. A wildcard covers every plugin at its own level, so a wildcard at read
+beside a named plugin at write means write on that one and read on the rest.
 
-Three states, and collapsing any two of them is a bug:
+A **group** is a role and a list of grants, handed to every member. Membership
+is the only thing a group does to a subject.
 
-| stored | means |
-|---|---|
-| `NULL` | this group imposes no ceiling; each member's role stands |
-| `[]` | permits nothing — suspends its members without deleting them |
-| `["read"]` | members may only read, whatever their role allows |
+**Effective access is the union.** `groups.Resolve` is the only function in
+the process that works it out — one SQL statement covering both subject kinds
+and both sources, joined to their roles, so there is nothing to keep in step.
+The subject's own role and grants merge with every group's: the higher level
+in every area, the higher level for every plugin. It is the same arrangement
+`Principal.Can` has for a single permission: one choke point, so a rule applied
+there is applied everywhere. Computing it in a second place would be the bug,
+which is why `User.Principal` takes the resolved access as an argument rather
+than reading anything off the row.
 
-`NULL` is what every group created before this existed means, and must keep
-meaning, which is why the column is nullable rather than defaulted to `[]`.
+**Nothing subtracts, and that is the design.** There used to be a group
+*ceiling* that could take capabilities away from its members, and a rule that
+a subject's own grant beat its groups'. Each was a second answer to a question
+the other already answered, in the opposite direction, so "why can this person
+approve" had to be read twice to be answered once. Every product people trust
+with credentials — GitHub's fine-grained tokens, Stripe's restricted keys,
+Grafana's roles, Tailscale's grants — settled on additive-only, and Vault, the
+one that kept a deny, needs a precedence chapter for it. If a subject must hold
+less, it is given less: a smaller role, a narrower grant, or membership of
+fewer groups. Suspending a person is the account's `disabled` flag; suspending
+a key is revoking it.
 
-Where a subject belongs to several groups, the declared ceilings **union**:
-being organised into a second, more permissive group must not take away what
-the first allowed. Groups declaring no ceiling are ignored rather than treated
-as permitting everything — otherwise ordinary membership of a general group
-would undo every restriction, which is precisely the shape of the grant bug
-described below.
+The migration that removed the ceiling widened nobody silently. A group that
+imposed one, and a subject whose own grant used to beat a wider group's, are
+each named in a startup warning — the same place a stale configuration key is
+named — so the administrator can hand those members a smaller role if the
+restriction was meant.
+
+**The tool listing is filtered by the same rule the gate refuses with.** A
+caller reaching a plugin at read is not shown its propose tools, and a caller
+without `approvals:decide` is not shown the approval tools; `plugins.Manager.FilterTools`
+reads every tool's declared capability and hides what `AuthorizeTool` would
+refuse. A model choosing among tools it will be refused for cannot know that,
+and the old arrangement — list everything, refuse at call time — left it
+guessing.
 
 **The console draws its controls from the effective set, never from the
-role.** `GET /api/session` carries `capabilities`, computed by
-`Principal.Capabilities` from the same `Can` the server refuses with, and
-`useCan` in the dashboard reads that list. `capabilities.ts` still mirrors the
-role map, but only to describe what a role means; the moment the page derived
-what a person may do from their role, a group ceiling was invisible to it, and
-a restricted administrator saw every button and had every click refused.
+role.** `GET /api/session` carries `permissions`, computed by
+`Principal.PermissionList` from the same `Can` the server refuses with, and
+`useCan` in the dashboard reads that list. `lib/permissions.ts` mirrors the
+vocabulary and the built-in roles, but only to draw the matrix editor and to
+build test fixtures; the moment the page derived what a person may do from
+their role, a group's role was invisible to it.
 
-**A ceiling may not strand the host.** The last-administrator guard applies to
-groups as it does to roles: a ceiling without `admin` on a group holding the
-only administrator, or the only administrator joining such a group, is refused
-(`groups.ErrLastAdmin`, a 409). The check counts who holds `admin` before the
-write and after it, inside the transaction, so a host with no administrator
-yet is not refused every restriction — nothing was taken away, because nobody
-had it. There is no dashboard path back from the alternative: editing the
-group needs the capability the change just removed.
+**Nobody may strand the host.** The last-administrator guard is one query,
+`roles.CountAdministrators`: the enabled, non-pending accounts whose own role
+or one of whose groups' roles holds `access:write`. Every write that could
+change the answer — editing a user's role, disabling or deleting one, editing
+or deleting a role, changing or deleting a group's role, removing a member —
+counts before the write and after it, inside the transaction, and refuses with
+`ErrLastAdmin` (a 409) only where somebody could manage access before and
+nobody can after. The comparison rather than a bare "at least one" is what
+lets a host with no administrator yet — a fresh database, a test fixture —
+change things freely: nothing was taken away, because nobody had it. There is
+no dashboard path back from the alternative, since undoing the change needs the
+permission it just took away.
 
-Note the two rules point in opposite directions and that is deliberate. For
-*reach*, a subject's own grant wins and groups fill in when it has none. For
-*capabilities*, the role grants and groups narrow. Both follow the same
-principle — the narrower wins — applied to mechanisms that start from opposite
-defaults: a subject's plugin list is a statement of what it should reach, and a
-role is a bundle nobody writes per subject.
-
-**A subject's own grant is the whole answer; groups apply only when it has
-none.** `groups.Effective` is the only function in the process that works this
-out — one SQL statement covering both subject kinds and both sources, so there
-is nothing to keep in step. It is the same arrangement `Principal.Can` has for
-capabilities: one choke point, so a rule applied there is applied everywhere.
-Computing it in a second place would be the bug, which is why `User.Principal`
-takes the grants as an argument rather than reading them off the row — a method
-on an account cannot answer a question about other rows, and requiring the
-value is what stops a staler answer being assembled elsewhere.
-
-This used to be a **union** of the two, and that was a vulnerability rather than
-a design choice that aged badly. A key saved as `["bandwidth"]`, stored
-correctly and displayed correctly, that also belonged to a group granting
-`["*"]`, reached every plugin on the host — because `["bandwidth"] ∪ ["*"]` is
-`["*"]`. An audit against a live instance called Graylog and Textable tools with
-a key scoped to Bandwidth, and both reached their real upstreams through this
-host's stored credentials. It was fail-open and silent: nothing errored, nothing
-was logged, and every place an operator would look showed the key correctly
-bounded.
-
-The defect in union is not the arithmetic, it is the direction: it lets group
-membership *widen* a subject, so a narrowing written on the subject itself can
-never be relied on. This host already settles the same question the other way
-where a tunnel meets a ChatGPT account — the narrower wins, and assignment can
-only ever reduce reach.
-
-Own-grant-wins rather than intersection, because intersection has the same
-defect pointing the other way: a key showing `["bandwidth"]` whose groups do not
-mention bandwidth would reach nothing, and the displayed scope would be a lie
-again in the other direction. **What is displayed is what is reached**, and
-groups remain the ordinary way a subject gets reach — they simply cannot
-overrule a subject that has said what it reaches.
-
-`TestScopedAPIKey_IsNotWidenedByItsGroups` pins it at the HTTP boundary with a
-real key in a real wildcard group, because the auth package alone cannot show
-that the aggregate endpoint honours the answer.
-
-It is resolved per request, never frozen when a session or a key was issued.
-That is what makes taking somebody out of a group take effect on their next
-call rather than the next restart, and it is the property `Can` already had for
-a pending account.
-
-**Default none, at every level.** A new group grants nothing. A subject in no
-group reaches nothing. A new key reaches nothing. The wildcard absorbs, so a
+**Default none, at every level.** A new group hands out nothing. A subject in
+no group holds its own role and grants and nothing more. A new key reaches
+nothing until a grant or a group says otherwise. The wildcard absorbs, so a
 grant is never rendered as smaller than it means, and an empty list denies
-everything — the reading a principal has always taken of one. The direction
-matters more than the convenience: this is the same reason self-registration
-went from `["*"]` to `[]`.
-
-An account's *direct* grant may now be empty, which used to be refused. That
-refusal was right while a direct grant was the only kind — an account with none
-could never reach anything — and is wrong now that a group is how an account
-usually gets its reach.
+everything — the reading a principal has always taken of one.
 
 **The account that claims the instance is the exception, and it is not one.**
-`CreateFirst` still grants the wildcard. That looks like a breach of the rule
-and is not: the claimant is this host's administrator, with nobody above them
-to grant anything, and an administrator can grant themselves any plugin in two
-clicks. The wildcard therefore changes no security property — it only spares
-the very first person a console that shows them nothing until they have
-granted themselves access to see it. Default none is a rule about principals
-somebody else decides for: a new group, an account an administrator creates, a
-key, a self-registration. The claiming account is not one of those, and this
-paragraph exists so the point is not re-argued.
+`CreateFirst` grants Administrator and the wildcard at write. That looks like a
+breach of the rule and is not: the claimant is this host's administrator, with
+nobody above them to grant anything, and an administrator can grant themselves
+any plugin in two clicks. The wildcard therefore changes no security property —
+it only spares the very first person a console that shows them nothing until
+they have granted themselves access to see it. Default none is a rule about
+principals somebody else decides for: a new group, an account an administrator
+creates, a key, a self-registration. The claiming account is not one of those.
 
-**Deleting a group narrows, and strands nobody.** Its memberships go with it,
-every member keeps its own grant and every other group it is in, and nothing
-gains anything. It is allowed while members remain rather than refused, because
-a group that has to be emptied first is one an operator empties in a hurry with
-no record of what it held; the entry records the grant and how many members
-lost it, and the page confirms with the count.
+**Deleting a group narrows, and strands nobody but the one case the guard
+covers.** Its memberships go with it, every member keeps its own role and
+grants and every other group it is in, and nothing gains anything. It is
+allowed while members remain rather than refused, because a group that has to
+be emptied first is one an operator empties in a hurry with no record of what
+it held; the entry records the role, the grants and how many members lost
+them, and the page confirms with the count.
 
 ### A key is a principal
 
 A static token in `auth.static_tokens` already carries a principal, a role and
-a plugin list — it is an API key declared in a file. So a key is not a parallel
+a grant list — it is an API key declared in a file. So a key is not a parallel
 system: it is that declaration moved into the database, and what moving it buys
-is revocation, an optional expiry, a last-used timestamp, and grants that
-follow a group rather than a file.
+is revocation, rotation, an expiry, a last-used timestamp, and access that
+follows a group rather than a file.
 
-**Only `CapAdmin` may create one**, because a key acts on this host with a role
-and a reach and issuing one hands out both.
+**Only `access:write` may create one**, because a key acts on this host with a
+role and a reach and issuing one hands out both. The same permission edits a
+key's role, grants and groups afterwards; the dashboard offers the three shapes
+a key usually takes — read-only, operator, custom — and starts the expiry at
+ninety days, so a key that never expires is a choice somebody made rather than
+a field left blank.
+
+**Rotation keeps the identity and moves the secret.** `Rotate` issues a new
+secret and lets the old one keep verifying until a moment the administrator
+chose — an hour by default, a week at most, or at once for a secret that has
+leaked — so a deployment can be told the new secret and restarted without a
+window in which neither works. Everything else about the key stays: its id,
+its role, its grants, its groups, and therefore every audit entry and every
+standing rule that names `key:<id>`. The condition is in the verification
+query, so the old secret stops at the chosen instant and not a request later;
+revoking a key ends both secrets together.
 
 **A key has an identity of its own**, `key:<id>`, so the trail names *which key*
 acted rather than a shared service identity. That is the reason the feature is
@@ -787,10 +779,18 @@ path of every tool call to answer a question nobody asks to the second.
 ### Static tokens are untouched
 
 They are how a live deployment and its connectors authenticate, so they keep
-working, unchanged, and nothing migrates them. `apikeys.Verifier` tries the
-static set first — matched in memory, reaching no table — and only a credential
-no file entry matches costs a query. A file token has no row, so no group can
-widen or narrow it and no dashboard action can touch it.
+working and nothing migrates them. `apikeys.Verifier` tries the static set
+first — matched in memory, reaching no table — and only a credential no file
+entry matches costs a query. A file token has no row, so no group can widen it
+and no dashboard action can touch it.
+
+A file token's `role` names a role — a built-in by its name, the two names the
+file used to accept (`user` and `admin`, meaning Operator and Administrator),
+or a custom role by name — and is resolved once at startup; a name matching
+nothing fails the process there, where the operator reads the reason, rather
+than producing a token that authenticates and holds nothing. Its `plugins:`
+list means those plugins at write, which is what a token could always do, and
+a `grants:` list carries a level per plugin for a token that should only read.
 
 **The two id namespaces cannot meet.** A key's identifier is generated and
 begins `key_`; a file token's is chosen by an operator, and config validation
@@ -824,19 +824,23 @@ not in the settings history.
 
 | entry | subject | detail |
 |---|---|---|
-| `group.created` | the group's name | id, grant |
-| `group.updated` | the group's name | id, grant, **the grant it replaced** |
-| `group.deleted` | the group's name | id, grant, how many members lost it |
+| `role.created` | the role's name | id, permissions |
+| `role.updated` | the role's name | id, permissions, **the permissions it replaced** |
+| `role.deleted` | the role's name | id |
+| `group.created` | the group's name | id, role, grants |
+| `group.updated` | the group's name | id, role and grants, **the ones they replaced** |
+| `group.deleted` | the group's name | id, role, grants, how many members lost them |
 | `group.member_added` | the group's name | id, member kind and id |
 | `group.member_removed` | the group's name | id, member kind and id |
-| `apikey.created` | the key's id | name, role, grant, groups, expiry |
-| `apikey.rescoped` | the key's id | each field, **and what it was** — name, role, grant and expiry alike |
+| `apikey.created` | the key's id | name, role, grants, groups, expiry |
+| `apikey.rescoped` | the key's id | each field, **and what it was** — name, role, grants, groups and expiry alike |
+| `apikey.rotated` | the key's id | name, the grace in seconds |
 | `apikey.revoked` | the key's id | name |
 
 Two rules run through the table. A privilege change records what it changed
 *from* as well as to, because an entry carrying only the new value leaves "what
 did this widen" unanswerable — which is why a re-scope carries the previous
-name, role, grant *and* expiry, an extension from next month to next year
+name, role, grants *and* expiry, an extension from next month to next year
 being a grant of a year's more reach. And an act that changes nothing writes
 nothing: adding somebody who is already a member is not an error and is not an
 entry, because a trail that records non-events is one nobody reads carefully.

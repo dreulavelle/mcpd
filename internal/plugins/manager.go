@@ -62,6 +62,80 @@ type Manager struct {
 	aggMu      sync.RWMutex
 	aggregates map[string]*mcp.Server
 	order      []string // registration order, for reverse-order shutdown
+
+	// visibility decides which tools a caller is shown. Nil shows every
+	// tool, which is what a host wired without an authorizer looks like.
+	visibility ToolVisibility
+}
+
+// ToolVisibility reports whether the caller in ctx could invoke a tool that
+// declares a capability. It answers the same question the gate does, without
+// the gate's logging: a listing asks it once per tool per call, and a refusal
+// there is not an event.
+type ToolVisibility func(ctx context.Context, tool string, required auth.Capability) bool
+
+// SetToolVisibility installs the listing filter. Servers built afterwards
+// carry it; see FilterTools.
+func (m *Manager) SetToolVisibility(v ToolVisibility) { m.visibility = v }
+
+// FilterTools makes a server list only the tools its caller could invoke.
+//
+// Every tool of a reachable plugin used to be listed, and a propose tool was
+// refused only when called -- so a read-only credential was shown tools it
+// would be refused for, and a model choosing among them could not know. The
+// filter reads the same declarations the gate does and hides what the gate
+// would refuse.
+//
+// Applied as receiving middleware, which the SDK runs outermost-first in the
+// order added. The tunnel attaches its principal the same way after building
+// its server, so it calls this itself, afterwards; a server reached over HTTP
+// has its principal in the request context before the SDK sees it, so the
+// per-plugin and aggregate servers apply it as they are built.
+func (m *Manager) FilterTools(srv *mcp.Server, caps map[string]auth.Capability) {
+	if m.visibility == nil || srv == nil {
+		return
+	}
+	visible := m.visibility
+	srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			if err != nil || method != "tools/list" {
+				return res, err
+			}
+			listed, ok := res.(*mcp.ListToolsResult)
+			if !ok {
+				return res, err
+			}
+			kept := make([]*mcp.Tool, 0, len(listed.Tools))
+			for _, t := range listed.Tools {
+				required, known := caps[t.Name]
+				if !known {
+					required = auth.CapRead
+				}
+				if visible(ctx, t.Name, required) {
+					kept = append(kept, t)
+				}
+			}
+			listed.Tools = kept
+			return listed, nil
+		}
+	})
+}
+
+// Capabilities returns what every tool of the named plugins takes to call,
+// for FilterTools. Unknown names contribute nothing.
+func (m *Manager) Capabilities(names []string) map[string]auth.Capability {
+	out := map[string]auth.Capability{}
+	for _, name := range names {
+		mounted := m.Lookup(name)
+		if mounted == nil || mounted.Registry == nil {
+			continue
+		}
+		for tool, c := range mounted.Registry.Capabilities() {
+			out[tool] = c
+		}
+	}
+	return out
 }
 
 // NewManager returns an empty manager. middleware is the host gate applied to
@@ -202,6 +276,7 @@ func (m *Manager) build(ctx context.Context, d Descriptor, p Plugin, required bo
 	if err := attachAll(srv, reg, m.middleware, m.approvals, m.inline, m.observer, m.log); err != nil {
 		return nil, fmt.Errorf("plugins: %s: %w", d.Name, err)
 	}
+	m.FilterTools(srv, reg.Capabilities())
 
 	return &Mounted{
 		Descriptor: d,
@@ -425,6 +500,7 @@ func (m *Manager) AggregateServer(names []string) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.FilterTools(srv, m.Capabilities(names))
 
 	if m.aggregates == nil {
 		m.aggregates = make(map[string]*mcp.Server)

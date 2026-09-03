@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
+	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/auth/users"
 )
 
@@ -24,16 +25,12 @@ type Accounts interface {
 	ResolveSession(ctx context.Context, token string) (*users.User, *users.Session, error)
 	DeleteSession(ctx context.Context, token string) error
 
-	// EffectiveGrants is what an account may reach: its own grants unioned
-	// with every group it belongs to. It is asked per request rather than read
-	// off the account, which is what makes adding somebody to a group -- or
-	// taking them out of one -- take effect on their next call.
-	EffectiveGrants(ctx context.Context, userID string) ([]string, error)
-
-	// EffectiveCeiling is what an account's groups permit it to *do*, as
-	// opposed to what it may reach. nil means no group restricts it and its
-	// role stands.
-	EffectiveCeiling(ctx context.Context, userID string) ([]auth.Capability, error)
+	// Resolve is what an account may do and reach: its own role and grants
+	// merged with every group it belongs to. It is asked per request rather
+	// than read off the account, which is what makes adding somebody to a
+	// group -- or taking them out of one, or editing a role -- take effect on
+	// their next call.
+	Resolve(ctx context.Context, userID string) (groups.Resolved, error)
 
 	Count(ctx context.Context) (int, error)
 	CreateFirst(ctx context.Context, email, password, displayName string) (*users.User, error)
@@ -153,12 +150,18 @@ type sessionResponse struct {
 	// Name is what to render and is never empty; DisplayName is what is
 	// stored and may be. An Account page needs both -- one for the heading,
 	// one for the input the person edits.
-	Name        string   `json:"name"`
-	DisplayName string   `json:"display_name"`
-	Role        string   `json:"role"`
-	Plugins     []string `json:"plugins"`
-	CSRFToken   string   `json:"csrf_token"`
-	ExpiresAt   string   `json:"expires_at"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	// Role is the account's own role, by id, and RoleName its name. For
+	// rendering; Permissions is what decides.
+	Role     string `json:"role"`
+	RoleName string `json:"role_name"`
+	// Plugins is what the account reaches, by name, with "*" for everything.
+	// Grants says at which level.
+	Plugins   []string     `json:"plugins"`
+	Grants    []auth.Grant `json:"grants"`
+	CSRFToken string       `json:"csrf_token"`
+	ExpiresAt string       `json:"expires_at"`
 	// Status is "active" or "pending". A pending account is signed in and
 	// holds no capability at all, so the page it gets says it is waiting.
 	//
@@ -170,15 +173,15 @@ type sessionResponse struct {
 	// profile page can offer to set one before unlinking the provider that is
 	// currently the only way in.
 	HasPassword bool `json:"has_password"`
-	// Capabilities is what this account may actually do: its role, less
-	// whatever its groups take away, and nothing at all while it is pending.
+	// Permissions is what this account may actually do: its role merged with
+	// its groups' roles, and nothing at all while it is pending.
 	//
 	// The page draws its controls from this rather than from the role. It
-	// used to derive the set from the role alone, which was right until a
-	// group could impose a ceiling and wrong from then on: a restricted
-	// administrator saw every button and had every click refused. Advisory,
-	// like everything the page knows -- the server checks again on each call.
-	Capabilities []string `json:"capabilities"`
+	// used to derive the set from the role alone, which was wrong the moment
+	// a group could change it: a restricted administrator saw every button
+	// and had every click refused. Advisory, like everything the page knows
+	// -- the server checks again on each call.
+	Permissions []string `json:"permissions"`
 }
 
 // handleSignIn exchanges an email and password for a session cookie.
@@ -302,63 +305,60 @@ func (s *Server) handleCurrentSession(w http.ResponseWriter, r *http.Request) {
 // same Principal the request path builds, so the page and the server answer
 // "can this person approve" from one place.
 func (s *Server) sessionView(r *http.Request, u *users.User, sess *users.Session) sessionResponse {
-	granted := s.grantsFor(r, u)
-	p := u.Principal(sess.ID, granted, s.ceilingFor(r, u))
+	access := s.accessFor(r, u)
+	p := u.Principal(sess.ID, access)
 	return sessionResponse{
-		Email:        u.Email,
-		Name:         u.Name(),
-		DisplayName:  u.DisplayName,
-		Role:         string(u.Role),
-		Plugins:      granted,
-		CSRFToken:    sess.CSRFToken,
-		ExpiresAt:    sess.ExpiresAt.Format(time.RFC3339),
-		Status:       statusOf(u),
-		HasPassword:  u.HasPassword(),
-		Capabilities: capabilityNames(p.Capabilities()),
+		Email:       u.Email,
+		Name:        u.Name(),
+		DisplayName: u.DisplayName,
+		Role:        u.RoleID,
+		RoleName:    access.RoleName,
+		Plugins:     access.Grants.Plugins(),
+		Grants:      nonNilGrants(access.Grants),
+		CSRFToken:   sess.CSRFToken,
+		ExpiresAt:   sess.ExpiresAt.Format(time.RFC3339),
+		Status:      statusOf(u),
+		HasPassword: u.HasPassword(),
+		Permissions: permissionNames(p.PermissionList()),
 	}
 }
 
-// ceilingFor resolves what an account's groups permit it to do, for a page
-// that is about to render it.
+// accessFor resolves what an account may do and reach, for a page that is
+// about to render it.
 //
-// A failure yields a ceiling that permits nothing rather than none at all,
-// for the same reason grantsFor yields an empty list: the console showing a
-// person fewer controls than they hold is a page they can reload, while
-// showing the full rights of a role a group has narrowed is the console
-// disagreeing with the server. The request path refuses outright on the same
-// error; a description of a session is not worth refusing the session over.
-func (s *Server) ceilingFor(r *http.Request, u *users.User) []auth.Capability {
+// A failure yields nothing rather than the row's own role and grants. The
+// console showing a person fewer controls than they hold is a page they can
+// reload, while showing the rights of a role a group has changed is the
+// console disagreeing with the server. The request path refuses outright on
+// the same error; a description of a session is not worth refusing the
+// session over.
+func (s *Server) accessFor(r *http.Request, u *users.User) groups.Resolved {
+	none := groups.Resolved{RoleID: u.RoleID, Permissions: auth.Permissions{}, Grants: auth.Grants{}}
 	if s.opts.Accounts == nil {
-		return []auth.Capability{}
+		return none
 	}
-	ceiling, err := s.opts.Accounts.EffectiveCeiling(r.Context(), u.ID)
+	access, err := s.opts.Accounts.Resolve(r.Context(), u.ID)
 	if err != nil {
-		s.opts.Log.ErrorContext(r.Context(), "could not resolve capability ceiling",
+		s.opts.Log.ErrorContext(r.Context(), "could not resolve an account's access",
 			"account", u.ID, "error", err)
-		return []auth.Capability{}
+		return none
 	}
-	return ceiling
+	return access
 }
 
-// grantsFor resolves what an account may reach, for a page that is about to
-// render it.
-//
-// A failure here yields nothing rather than the row's own grants. The console
-// showing an empty list is a page an operator can act on; showing the direct
-// grants and calling them the effective ones would be the console disagreeing
-// with the server about what this account can do, which is the sort of
-// disagreement nobody looks for.
-func (s *Server) grantsFor(r *http.Request, u *users.User) []string {
-	if s.opts.Accounts == nil {
-		return []string{}
+func permissionNames(list []auth.Permission) []string {
+	out := make([]string, 0, len(list))
+	for _, p := range list {
+		out = append(out, string(p))
 	}
-	granted, err := s.opts.Accounts.EffectiveGrants(r.Context(), u.ID)
-	if err != nil {
-		s.opts.Log.Error("could not resolve plugin grants",
-			"account", u.ID, "error", err)
-		return []string{}
+	return out
+}
+
+func nonNilGrants(gs auth.Grants) []auth.Grant {
+	if gs == nil {
+		return []auth.Grant{}
 	}
-	return granted
+	return gs
 }
 
 // statusOf renders an account's status, defaulting to active.
@@ -395,31 +395,20 @@ func (s *Server) principalFor(w http.ResponseWriter, r *http.Request) (*auth.Pri
 				s.writeError(w, r, http.StatusForbidden, "missing or invalid CSRF token")
 				return nil, false
 			}
-			granted, err := s.opts.Accounts.EffectiveGrants(r.Context(), user.ID)
+			access, err := s.opts.Accounts.Resolve(r.Context(), user.ID)
 			if err != nil {
 				// Refusing beats guessing. Falling back to the row's own
-				// grants would answer a question about groups with an answer
-				// that ignores them, and a database that cannot be read is
-				// not a reason to hand somebody a different set of rights.
-				s.opts.Log.Error("could not resolve plugin grants",
-					"account", user.ID, "error", err)
-				s.writeError(w, r, http.StatusInternalServerError,
-					"could not resolve what this account may reach")
-				return nil, false
-			}
-			ceiling, err := s.opts.Accounts.EffectiveCeiling(r.Context(), user.ID)
-			if err != nil {
-				// Refusing beats guessing, exactly as above. Falling back to
-				// no ceiling would hand somebody the full rights of their role
-				// because a table could not be read, which is the wrong
-				// direction to fail in.
-				s.opts.Log.Error("could not resolve capability ceiling",
+				// role and grants would answer a question about groups with
+				// an answer that ignores them, and a database that cannot be
+				// read is not a reason to hand somebody a different set of
+				// rights.
+				s.opts.Log.Error("could not resolve an account's access",
 					"account", user.ID, "error", err)
 				s.writeError(w, r, http.StatusInternalServerError,
 					"could not resolve what this account may do")
 				return nil, false
 			}
-			return user.Principal(sess.ID, granted, ceiling), true
+			return user.Principal(sess.ID, access), true
 		}
 		if !errors.Is(err, users.ErrNotFound) {
 			s.opts.Log.Error("could not resolve a dashboard session", "error", err)

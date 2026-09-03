@@ -1,12 +1,13 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { api, ApiError, type AccountCheck, type ChatGPTAccount, type ChatGPTAccountBody } from "@/lib/api";
+import { api, ApiError, type AccountCheck, type ChatGPTAccount, type ChatGPTAccountBody, type Grant } from "@/lib/api";
 import { useLoader, usePoll } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { SettingsForm } from "@/components/SettingsForm";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
 import { SettingsTabs } from "./SettingsTabs";
 import { SETTING_LINKS } from "./SettingsSection";
-import { EVERYTHING, ReachPicker } from "@/components/ReachPicker";
+import { EVERYTHING, GrantsPicker, grantsLabel } from "@/components/GrantsPicker";
+import { RolePicker } from "@/components/RolePicker";
 import { Chip } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -41,7 +41,7 @@ export function ChatGPT() {
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const notify = useNotify();
-  const admin = useCan("admin");
+  const admin = useCan("tunnels:write");
 
   // The switches that apply to every account: whether ChatGPT may connect at
   // all, and the two diagnostic ones. They were on the general settings page,
@@ -204,14 +204,10 @@ function AccountRow({ account, notify, onChanged }: {
         </TableCell>
         <TableCell className="font-mono text-xs">{account.principal}</TableCell>
         <TableCell>
-          {account.role === "admin"
-            ? <Chip tone="attention">Allowed</Chip>
-            : <span className="text-xs text-muted-foreground">—</span>}
+          <span className="text-xs">{account.role_name || account.role}</span>
         </TableCell>
         <TableCell className="text-xs">
-          {account.plugins.includes("*")
-            ? "everything"
-            : account.plugins.join(", ") || "nothing"}
+          {grantsLabel(account.grants)}
         </TableCell>
         <TableCell className="font-mono text-xs tabular-nums">
           {account.rate_per_sec > 0 ? `${account.rate_per_sec}/sec` : "—"}
@@ -296,10 +292,12 @@ function AccountDialog({ account, onClose, onSaved }: {
   const [dropAdminKey, setDropAdminKey] = useState(false);
   const [orgID, setOrgID] = useState(account?.organization_id ?? "");
   const [workspaces, setWorkspaces] = useState((account?.workspaces ?? []).join(", "));
-  const [role, setRole] = useState<"user" | "admin">(account?.role ?? "user");
+  const [role, setRole] = useState(account?.role ?? "role_operator");
   // Held in the shape the API takes, so nothing has to be parsed back out of
   // a sentence on the way to the request.
-  const [reach, setReach] = useState<string[]>(account?.plugins ?? [EVERYTHING]);
+  const [reach, setReach] = useState<Grant[]>(
+    account?.grants ?? [{ plugin: EVERYTHING, level: "write" }],
+  );
   const [rate, setRate] = useState(String(account?.rate_per_sec ?? 0));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -317,7 +315,7 @@ function AccountDialog({ account, onClose, onSaved }: {
       organization_id: orgID.trim(),
       workspaces: workspaces.split(/[\s,]+/).map((w) => w.trim()).filter(Boolean),
       role,
-      plugins: reach,
+      grants: reach,
       rate_per_sec: Number(rate) || 0,
     };
     // Omitted rather than sent empty: on an edit, an absent key means "keep
@@ -446,26 +444,12 @@ function AccountDialog({ account, onClose, onSaved }: {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="acct-role">Administrative tools</Label>
-              <NativeSelect
-                id="acct-role" value={role}
-                onChange={(e) => setRole(e.target.value as "user" | "admin")}
-              >
-                <option value="user">Not allowed</option>
-                <option value="admin">Allowed</option>
-              </NativeSelect>
-              {/* Says what the setting does rather than what its value is
-                  called. The old wording claimed admin let ChatGPT change this
-                  host's settings, which it cannot: those live behind the
-                  dashboard's HTTP API, and a tunnel only ever reaches an
-                  in-process MCP server carrying plugin tools. */}
-              <p className="text-xs text-muted-foreground">
-                Whether this account may call a tool a plugin marks
-                administrative. Nothing built in has one, so leave it off
-                unless a plugin's own documentation says otherwise.
-              </p>
-            </div>
+            {/* A tunnel only ever reaches an in-process MCP server carrying
+                plugin tools, so of a role only two lines matter here: whether
+                the account may decide approvals through the approval tools,
+                and whether it may call a tool a plugin marks administrative.
+                Operator is the ordinary answer. */}
+            <RolePicker id="acct-role" value={role} onChange={setRole} />
             <div className="space-y-1.5">
               <Label htmlFor="acct-rate">Rate limit</Label>
               <Input
@@ -483,7 +467,7 @@ function AccountDialog({ account, onClose, onSaved }: {
               text box asks somebody to know a plugin's exact name and spell
               it, and gets its punishment wrong: a name matching nothing is not
               an error, it is a grant to a system that does not exist. */}
-          <ReachPicker
+          <GrantsPicker
             id="acct-reach" value={reach} onChange={setReach}
             subject="this account"
           />

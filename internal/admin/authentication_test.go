@@ -336,7 +336,7 @@ func TestApproveRegistration_NamesTheActingAdministrator(t *testing.T) {
 // Approving decides who may do anything here, so it is an administrator's.
 func TestRegistrationQueue_TakesAnAdministrator(t *testing.T) {
 	accounts := newFakeAccounts()
-	accounts.user.Role = auth.RoleUser
+	accounts.user.RoleID = auth.RoleOperator
 	s := NewServer(testOptions(accounts, &fakeIdentities{}))
 
 	for _, tc := range []struct{ method, path string }{

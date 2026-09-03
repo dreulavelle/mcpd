@@ -63,12 +63,19 @@ describe("the audit trail", () => {
   });
 
   /**
-   * Only an administrator may run the check. Asking anyway and swallowing the
-   * refusal would put a 403 in everyone else's network log for a question they
-   * were never allowed to ask.
+   * Verifying is gated on history:read, same as reading the trail itself --
+   * every built-in role that can see this page can also run the check. Only a
+   * principal that cannot read history at all is not asked. Asking anyway and
+   * swallowing the refusal would put a 403 in its network log for a question
+   * it was never allowed to ask.
    */
-  it("does not ask for a verification a plain user may not run", async () => {
-    const { verify } = mount([record(1)], INTACT, "user");
+  it("does not ask for a verification a principal without history:read may not run", async () => {
+    vi.spyOn(api, "audit").mockResolvedValue({ records: [record(1)], count: 1 });
+    const verify = vi.spyOn(api, "verifyAudit").mockResolvedValue(INTACT);
+    renderWith(<Audit />, {
+      session: sessionFor("user", { permissions: ["settings:read"] }),
+    });
+
     await screen.findAllByText(/Suggested/);
     await waitFor(() => expect(verify).not.toHaveBeenCalled());
   });

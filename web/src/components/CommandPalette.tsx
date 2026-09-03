@@ -7,11 +7,10 @@ import {
 } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { api, type Operation, type Plugin, type TunnelStatus } from "@/lib/api";
-import type { Capability } from "@/lib/capabilities";
 import { NAV } from "@/lib/nav";
 import { useRouter } from "@/lib/router";
 import { score } from "@/lib/search";
-import { useCan } from "@/lib/session";
+import { useCanFn } from "@/lib/session";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { TABS } from "@/pages/settings/SettingsTabs";
@@ -52,12 +51,7 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
 }) {
   const { navigate } = useRouter();
   const [, chooseTheme] = useTheme();
-  const held: Record<Capability, boolean> = {
-    read: useCan("read"),
-    propose: useCan("propose"),
-    approve: useCan("approve"),
-    admin: useCan("admin"),
-  };
+  const can = useCanFn();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [plugins, setPlugins] = useState<Plugin[]>([]);
@@ -71,7 +65,7 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
     if (!open) return;
     setQuery("");
     setActive(0);
-    if (!held.read) return;
+    if (!can("")) return;
     api.plugins().then((r) => setPlugins(r.plugins ?? [])).catch(() => setPlugins([]));
     api.operations("pending_approval", 50)
       .then((r) => setWaiting(r.operations ?? [])).catch(() => setWaiting([]));
@@ -88,7 +82,7 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
     const out: Command[] = [];
     for (const group of NAV) {
       for (const item of group.items) {
-        if (item.capability !== "signed-in" && !held[item.capability]) continue;
+        if (item.capability !== "signed-in" && !can(item.capability)) continue;
         out.push({
           id: `nav:${item.path}`, group: "Go to", label: item.label,
           hint: item.lede, icon: item.icon, keywords: group.title,
@@ -97,7 +91,7 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
       }
     }
     for (const tab of TABS) {
-      if (tab.path === "/settings" || (tab.admin && !held.admin)) continue;
+      if (tab.path === "/settings" || !can(tab.requires)) continue;
       out.push({
         id: `tab:${tab.path}`, group: "Go to", label: `Settings › ${tab.label}`,
         keywords: "settings", run: () => go(tab.path),
@@ -143,7 +137,7 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
     );
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plugins, waiting, tunnels, held.read, held.propose, held.approve, held.admin, go]);
+  }, [plugins, waiting, tunnels, can, go]);
 
   const shown = useMemo(() => {
     const q = query.trim();

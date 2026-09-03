@@ -45,9 +45,9 @@ func (a *ApprovalPolicy) AuthorizeApproval(p *auth.Principal, op *Operation) aut
 	if d := a.authz.AuthorizeEndpoint(p, op.Plugin); !d.Allowed {
 		return d
 	}
-	if !p.Can(auth.CapApprove) {
+	if !p.Can(auth.PermApprovalsDecide) {
 		return auth.Deny(auth.CodeNotAuthorized,
-			fmt.Sprintf("principal %s lacks the approve capability", p.ID))
+			fmt.Sprintf("principal %s may not decide on approvals", p.ID))
 	}
 	return auth.Allow()
 }

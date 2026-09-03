@@ -18,8 +18,11 @@ import (
 )
 
 func testPrincipal() auth.Principal {
+	operator, _ := auth.BuiltinRole(auth.RoleOperator)
 	return auth.Principal{
-		ID: "svc:chatgpt", Role: auth.RoleUser, Plugins: []string{"echo"},
+		ID: "svc:chatgpt", RoleID: operator.ID, RoleName: operator.Name,
+		Permissions: operator.Permissions,
+		Grants:      auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
 	}
 }
 
@@ -47,7 +50,7 @@ func TestConfig_Validate(t *testing.T) {
 			APIKey: "k", Principal: testPrincipal()}, "tunnel_"},
 		{"no key", Config{TunnelID: validID, Principal: testPrincipal()}, "API key"},
 		{"no plugin grants", Config{TunnelID: validID, APIKey: "k",
-			Principal: auth.Principal{ID: "svc:x", Role: auth.RoleUser}}, "plugin"},
+			Principal: auth.Principal{ID: "svc:x", RoleID: auth.RoleOperator}}, "plugin"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -378,12 +381,12 @@ func TestReconfigure_DoesNotInterleaveWithAnother(t *testing.T) {
 	config := func(i int) Config {
 		c := Config{
 			Enabled: true, Plugin: "echo", TunnelID: idA, APIKey: "sk-a",
-			Principal:           auth.Principal{ID: "svc:a", Role: auth.RoleUser, Plugins: []string{"echo"}, TokenID: "a"},
+			Principal:           auth.Principal{ID: "svc:a", RoleID: auth.RoleOperator, Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite), TokenID: "a"},
 			ControlPlaneBaseURL: srv.URL,
 		}
 		if i%2 == 1 {
 			c.TunnelID, c.APIKey = idB, "sk-b"
-			c.Principal = auth.Principal{ID: "svc:b", Role: auth.RoleUser, Plugins: []string{"echo"}, TokenID: "b"}
+			c.Principal = auth.Principal{ID: "svc:b", RoleID: auth.RoleOperator, Grants: auth.GrantsAt([]string{"echo"}, auth.LevelWrite), TokenID: "b"}
 		}
 		return c
 	}

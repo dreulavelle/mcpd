@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,8 +41,15 @@ func newStore(t *testing.T) (*Store, *groups.Store, *sqlite.DB, func(time.Time))
 
 const admin = "user:admin@example.com"
 
+// writes and reads spell a grant list the way an administrator says it: these
+// plugins, at this level.
+func writes(plugins ...string) auth.Grants { return auth.GrantsAt(plugins, auth.LevelWrite) }
+
 func mustCreate(t *testing.T, s *Store, req CreateRequest) (*Key, string) {
 	t.Helper()
+	if req.RoleID == "" {
+		req.RoleID = auth.RoleOperator
+	}
 	k, secret, err := s.Create(context.Background(), admin, req)
 	if err != nil {
 		t.Fatalf("create key: %v", err)
@@ -62,7 +68,7 @@ func TestVerify_AKeyIsAPrincipalThatNamesItself(t *testing.T) {
 	s, _, _, _ := newStore(t)
 	ctx := context.Background()
 	key, secret := mustCreate(t, s, CreateRequest{
-		Name: "ChatGPT connector", Role: auth.RoleUser, Plugins: []string{"echo"},
+		Name: "ChatGPT connector", RoleID: auth.RoleOperator, Grants: writes("echo"),
 	})
 
 	p, err := s.Verify(ctx, secret)
@@ -78,33 +84,35 @@ func TestVerify_AKeyIsAPrincipalThatNamesItself(t *testing.T) {
 	if p.DisplayName != "ChatGPT connector" {
 		t.Errorf("display name = %q", p.DisplayName)
 	}
-	if !p.Can(auth.CapRead) || p.Can(auth.CapAdmin) {
-		t.Error("a key with the user role reads and does not administer")
+	if !p.Can(auth.PermSettingsRead) || p.Can(auth.PermPluginsWrite) {
+		t.Error("a key with the operator role reads and does not administer plugins")
 	}
 	if !p.CanAccessPlugin("echo") || p.CanAccessPlugin("netbox") {
-		t.Errorf("reaches = %v; a key reaches exactly what it is granted", p.Plugins)
+		t.Errorf("reaches = %v; a key reaches exactly what it is granted", p.Grants)
 	}
 }
 
 // The grants on the principal are the union, resolved per request, so adding a
-// key to a group takes effect on its next call.
+// key to a group takes effect on its next call -- and unlike the retired
+// own-grant-wins rule, the group's reach adds to the key's own rather than
+// being shut out by it.
 func TestVerify_GrantsAreTheUnionAndFollowAGroup(t *testing.T) {
 	s, gs, _, _ := newStore(t)
 	ctx := context.Background()
 	key, secret := mustCreate(t, s, CreateRequest{
-		Name: "agent", Role: auth.RoleUser, Plugins: []string{"echo"},
+		Name: "agent", RoleID: auth.RoleOperator, Grants: writes("echo"),
 	})
 
 	p, err := s.Verify(ctx, secret)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if !slices.Equal(p.Plugins, []string{"echo"}) {
-		t.Fatalf("reaches = %v, want [echo]", p.Plugins)
+	if !p.Grants.Equal(writes("echo")) {
+		t.Fatalf("reaches = %v, want [echo]", p.Grants)
 	}
 
 	g, err := gs.Create(ctx, admin, groups.CreateRequest{
-		Name: "Field", Plugins: []string{"cnmaestro"},
+		Name: "Field", Grants: writes("cnmaestro"),
 	})
 	if err != nil {
 		t.Fatalf("create group: %v", err)
@@ -117,25 +125,23 @@ func TestVerify_GrantsAreTheUnionAndFollowAGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	// The key's own grant still decides. Joining a group cannot widen it, which
-	// is the whole point: a key saved and displayed as reaching one integration
-	// must reach one integration.
-	if !slices.Equal(p.Plugins, []string{"echo"}) {
-		t.Errorf("reaches = %v, want [echo]; a group must not widen a key's "+
-			"own grant", p.Plugins)
+	want := writes("cnmaestro", "echo")
+	if !p.Grants.Equal(want) {
+		t.Errorf("reaches = %v, want %v; the union includes the group's grant "+
+			"beside the key's own", p.Grants, want)
 	}
 }
 
 // Default none. A key created with nothing and in no group reaches nothing.
 func TestVerify_ANewKeyReachesNothing(t *testing.T) {
 	s, _, _, _ := newStore(t)
-	_, secret := mustCreate(t, s, CreateRequest{Name: "bare", Role: auth.RoleUser})
+	_, secret := mustCreate(t, s, CreateRequest{Name: "bare", RoleID: auth.RoleOperator})
 	p, err := s.Verify(context.Background(), secret)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if len(p.Plugins) != 0 {
-		t.Errorf("reaches = %v; a new key reaches nothing", p.Plugins)
+	if len(p.Grants) != 0 {
+		t.Errorf("reaches = %v; a new key reaches nothing", p.Grants)
 	}
 	if p.CanAccessPlugin("echo") {
 		t.Error("a key with no grants reached a plugin")
@@ -148,7 +154,7 @@ func TestVerify_RevocationTakesEffectOnTheNextRequest(t *testing.T) {
 	s, _, _, _ := newStore(t)
 	ctx := context.Background()
 	key, secret := mustCreate(t, s, CreateRequest{
-		Name: "agent", Role: auth.RoleUser, Plugins: []string{"echo"},
+		Name: "agent", RoleID: auth.RoleOperator, Grants: writes("echo"),
 	})
 	if _, err := s.Verify(ctx, secret); err != nil {
 		t.Fatalf("verify before revocation: %v", err)
@@ -176,10 +182,10 @@ func TestVerify_ExpiredAndRevokedAreDistinguishable(t *testing.T) {
 
 	expiry := testClock.Add(time.Hour)
 	_, expiring := mustCreate(t, s, CreateRequest{
-		Name: "expiring", Role: auth.RoleUser, ExpiresAt: &expiry,
+		Name: "expiring", RoleID: auth.RoleOperator, ExpiresAt: &expiry,
 	})
 	revoked, revokedSecret := mustCreate(t, s, CreateRequest{
-		Name: "revoked", Role: auth.RoleUser,
+		Name: "revoked", RoleID: auth.RoleOperator,
 	})
 	if err := s.Revoke(ctx, admin, revoked.ID); err != nil {
 		t.Fatalf("revoke: %v", err)
@@ -208,7 +214,7 @@ func TestVerify_ExpiredAndRevokedAreDistinguishable(t *testing.T) {
 func TestCreate_TheSecretIsNeverReadableAgain(t *testing.T) {
 	s, _, db, _ := newStore(t)
 	ctx := context.Background()
-	key, secret := mustCreate(t, s, CreateRequest{Name: "agent", Role: auth.RoleUser})
+	key, secret := mustCreate(t, s, CreateRequest{Name: "agent", RoleID: auth.RoleOperator})
 
 	// Nothing the store hands back carries it.
 	loaded, err := s.ByID(ctx, key.ID)
@@ -249,7 +255,7 @@ func TestCreate_TheSecretIsNeverReadableAgain(t *testing.T) {
 func TestVerify_RecordsWhenAKeyWasLastUsed(t *testing.T) {
 	s, _, _, setClock := newStore(t)
 	ctx := context.Background()
-	key, secret := mustCreate(t, s, CreateRequest{Name: "agent", Role: auth.RoleUser})
+	key, secret := mustCreate(t, s, CreateRequest{Name: "agent", RoleID: auth.RoleOperator})
 
 	if loaded, err := s.ByID(ctx, key.ID); err != nil {
 		t.Fatal(err)
@@ -300,12 +306,12 @@ func TestVerify_RecordsWhenAKeyWasLastUsed(t *testing.T) {
 func TestVerifier_StaticTokensStillAuthenticateAndReachTheSame(t *testing.T) {
 	s, gs, _, _ := newStore(t)
 	ctx := context.Background()
+	r, _ := auth.BuiltinRole(auth.RoleOperator)
 
 	const secret = "a-static-token-of-quite-sufficient-length"
 	st, err := auth.NewStaticToken("chatgpt", secret, auth.Principal{
-		ID:      "service:chatgpt",
-		Role:    auth.RoleUser,
-		Plugins: []string{"echo"},
+		ID: "service:chatgpt", RoleID: r.ID, RoleName: r.Name,
+		Permissions: r.Permissions, Grants: writes("echo"),
 	})
 	if err != nil {
 		t.Fatalf("static token: %v", err)
@@ -323,15 +329,15 @@ func TestVerifier_StaticTokensStillAuthenticateAndReachTheSame(t *testing.T) {
 	if before.ID != "service:chatgpt" || before.TokenID != "chatgpt" {
 		t.Errorf("principal = %+v; a file token keeps its declared identity", before)
 	}
-	if !slices.Equal(before.Plugins, []string{"echo"}) {
-		t.Errorf("reaches = %v, want [echo]", before.Plugins)
+	if !before.Grants.Equal(writes("echo")) {
+		t.Errorf("reaches = %v, want [echo]", before.Grants)
 	}
 
 	// A group that grants everything, with the token's own identifiers in it
 	// as far as anything could contrive. A file token has no row, so nothing
 	// here can touch it.
 	g, err := gs.Create(ctx, admin, groups.CreateRequest{
-		Name: "Everything", Plugins: []string{auth.Wildcard},
+		Name: "Everything", Grants: writes(auth.Wildcard),
 	})
 	if err != nil {
 		t.Fatalf("create group: %v", err)
@@ -360,10 +366,12 @@ func TestVerifier_StaticTokensStillAuthenticateAndReachTheSame(t *testing.T) {
 func TestVerifier_AKeyAndAStaticTokenCoexist(t *testing.T) {
 	s, _, _, _ := newStore(t)
 	ctx := context.Background()
+	r, _ := auth.BuiltinRole(auth.RoleOperator)
 
 	const fileSecret = "a-static-token-of-quite-sufficient-length"
 	st, err := auth.NewStaticToken("chatgpt", fileSecret, auth.Principal{
-		ID: "service:chatgpt", Role: auth.RoleUser, Plugins: []string{"echo"},
+		ID: "service:chatgpt", RoleID: r.ID, RoleName: r.Name,
+		Permissions: r.Permissions, Grants: writes("echo"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +383,7 @@ func TestVerifier_AKeyAndAStaticTokenCoexist(t *testing.T) {
 	v := NewVerifier(s, static, quiet())
 
 	key, keySecret := mustCreate(t, s, CreateRequest{
-		Name: "agent", Role: auth.RoleUser, Plugins: []string{"netbox"},
+		Name: "agent", RoleID: auth.RoleOperator, Grants: writes("netbox"),
 	})
 
 	fromFile, err := v.Verify(ctx, fileSecret, nil)
@@ -402,10 +410,10 @@ func TestKeyOperationsAreAuditedAndTheChainVerifies(t *testing.T) {
 	ctx := context.Background()
 
 	key, _ := mustCreate(t, s, CreateRequest{
-		Name: "agent", Role: auth.RoleUser, Plugins: []string{"echo"},
+		Name: "agent", RoleID: auth.RoleOperator, Grants: writes("echo"),
 	})
 	if _, err := s.Update(ctx, admin, key.ID, UpdateRequest{
-		Plugins: &[]string{"echo", "netbox"},
+		Grants: ptr(writes("echo", "netbox")),
 	}); err != nil {
 		t.Fatalf("rescope: %v", err)
 	}
@@ -457,10 +465,10 @@ func TestUpdate_RecordsWhatTheGrantWas(t *testing.T) {
 	s, _, db, _ := newStore(t)
 	ctx := context.Background()
 	key, _ := mustCreate(t, s, CreateRequest{
-		Name: "agent", Role: auth.RoleUser, Plugins: []string{"echo"},
+		Name: "agent", RoleID: auth.RoleOperator, Grants: writes("echo"),
 	})
 	if _, err := s.Update(ctx, admin, key.ID, UpdateRequest{
-		Plugins: &[]string{"netbox"},
+		Grants: ptr(writes("netbox")),
 	}); err != nil {
 		t.Fatalf("rescope: %v", err)
 	}
@@ -473,7 +481,7 @@ func TestUpdate_RecordsWhatTheGrantWas(t *testing.T) {
 			continue
 		}
 		detail := string(r.Entry.Detail)
-		if !strings.Contains(detail, "plugins_before") || !strings.Contains(detail, "echo") {
+		if !strings.Contains(detail, "grants_before") || !strings.Contains(detail, "echo") {
 			t.Errorf("detail = %s; it must carry the grant it replaced", detail)
 		}
 		return
@@ -486,12 +494,12 @@ func TestUpdate_RecordsWhatTheGrantWas(t *testing.T) {
 func TestUpdate_RefusesARevokedKey(t *testing.T) {
 	s, _, _, _ := newStore(t)
 	ctx := context.Background()
-	key, _ := mustCreate(t, s, CreateRequest{Name: "agent", Role: auth.RoleUser})
+	key, _ := mustCreate(t, s, CreateRequest{Name: "agent", RoleID: auth.RoleOperator})
 	if err := s.Revoke(ctx, admin, key.ID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	if _, err := s.Update(ctx, admin, key.ID, UpdateRequest{
-		Plugins: &[]string{"echo"},
+		Grants: ptr(writes("echo")),
 	}); !errors.Is(err, ErrRevoked) {
 		t.Errorf("editing a revoked key: %v, want ErrRevoked", err)
 	}
@@ -506,10 +514,11 @@ func TestCreate_Refusals(t *testing.T) {
 		name string
 		req  CreateRequest
 	}{
-		{"no name", CreateRequest{Role: auth.RoleUser}},
-		{"unknown role", CreateRequest{Name: "k", Role: "superuser"}},
-		{"expiry in the past", CreateRequest{Name: "k", Role: auth.RoleUser, ExpiresAt: &past}},
-		{"newline in the name", CreateRequest{Name: "a\nb", Role: auth.RoleUser}},
+		{"no name", CreateRequest{RoleID: auth.RoleOperator}},
+		{"unknown role", CreateRequest{Name: "k", RoleID: "role_superuser"}},
+		{"no role", CreateRequest{Name: "k"}},
+		{"expiry in the past", CreateRequest{Name: "k", RoleID: auth.RoleOperator, ExpiresAt: &past}},
+		{"newline in the name", CreateRequest{Name: "a\nb", RoleID: auth.RoleOperator}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, _, err := s.Create(ctx, admin, tc.req); err == nil {
@@ -575,7 +584,7 @@ func TestUpdate_RecordsThePriorExpiry(t *testing.T) {
 
 	first := testClock.Add(24 * time.Hour)
 	key, _ := mustCreate(t, s, CreateRequest{
-		Name: "agent", Role: auth.RoleUser, ExpiresAt: &first,
+		Name: "agent", RoleID: auth.RoleOperator, ExpiresAt: &first,
 	})
 
 	extended := testClock.Add(365 * 24 * time.Hour)
@@ -604,7 +613,7 @@ func TestUpdate_RecordsThePriorExpiry(t *testing.T) {
 func TestUpdate_RecordsAnExpiryArrivingAndLeaving(t *testing.T) {
 	s, _, db, _ := newStore(t)
 	ctx := context.Background()
-	key, _ := mustCreate(t, s, CreateRequest{Name: "agent", Role: auth.RoleUser})
+	key, _ := mustCreate(t, s, CreateRequest{Name: "agent", RoleID: auth.RoleOperator})
 
 	at := testClock.Add(24 * time.Hour)
 	if _, err := s.Update(ctx, admin, key.ID, UpdateRequest{ExpiresAt: ptr(&at)}); err != nil {
@@ -636,13 +645,13 @@ func TestCreate_AuditsTheGroupsAKeyIsIssuedInto(t *testing.T) {
 	ctx := context.Background()
 
 	g, err := gs.Create(ctx, admin, groups.CreateRequest{
-		Name: "Field", Plugins: []string{"cnmaestro"},
+		Name: "Field", Grants: writes("cnmaestro"),
 	})
 	if err != nil {
 		t.Fatalf("create group: %v", err)
 	}
 	key, _ := mustCreate(t, s, CreateRequest{
-		Name: "agent", Role: auth.RoleUser, Groups: []string{g.ID},
+		Name: "agent", RoleID: auth.RoleOperator, Groups: []string{g.ID},
 	})
 
 	detail := detailOf(t, db, "group.member_added")
@@ -651,6 +660,175 @@ func TestCreate_AuditsTheGroupsAKeyIsIssuedInto(t *testing.T) {
 	}
 	if !strings.Contains(detail, `"kind":"key"`) {
 		t.Errorf("detail = %s; it must say the member is a key", detail)
+	}
+}
+
+// --- rotation ----------------------------------------------------------
+
+// A rotated key gets a new secret; the old one keeps verifying until the
+// grace period ends, and not a moment after -- the deployment window a
+// rotation exists to give.
+func TestRotate_TheOldSecretWorksUntilTheGraceEnds(t *testing.T) {
+	s, _, _, setClock := newStore(t)
+	ctx := context.Background()
+	key, original := mustCreate(t, s, CreateRequest{
+		Name: "agent", RoleID: auth.RoleOperator, Grants: writes("echo"),
+	})
+
+	rotated, next, err := s.Rotate(ctx, admin, key.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if next == original {
+		t.Fatal("rotate returned the same secret")
+	}
+	if rotated.PreviousUntil == nil {
+		t.Fatal("a rotation with a grace period must record when the old secret dies")
+	}
+
+	// Both work inside the grace window.
+	if _, err := s.Verify(ctx, next); err != nil {
+		t.Errorf("the new secret: %v", err)
+	}
+	if _, err := s.Verify(ctx, original); err != nil {
+		t.Errorf("the old secret within its grace: %v", err)
+	}
+
+	setClock(testClock.Add(2 * time.Hour))
+	if _, err := s.Verify(ctx, original); err == nil {
+		t.Error("the old secret still verified after its grace ended")
+	}
+	if _, err := s.Verify(ctx, next); err != nil {
+		t.Errorf("the new secret after the grace ended: %v", err)
+	}
+}
+
+// A grace of zero kills the old secret immediately: there is no deployment
+// window to give, and the rotation is meant to end it now.
+func TestRotate_ZeroGraceKillsTheOldSecretAtOnce(t *testing.T) {
+	s, _, _, _ := newStore(t)
+	ctx := context.Background()
+	key, original := mustCreate(t, s, CreateRequest{Name: "agent", RoleID: auth.RoleOperator})
+
+	_, next, err := s.Rotate(ctx, admin, key.ID, 0)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if _, err := s.Verify(ctx, original); err == nil {
+		t.Error("the old secret verified after a zero-grace rotation")
+	}
+	if _, err := s.Verify(ctx, next); err != nil {
+		t.Errorf("the new secret: %v", err)
+	}
+}
+
+// Revoking a key kills its previous secret too. A revoked key must not be
+// reachable through any credential it ever held.
+func TestRevoke_KillsThePreviousSecret(t *testing.T) {
+	s, _, _, _ := newStore(t)
+	ctx := context.Background()
+	key, original := mustCreate(t, s, CreateRequest{Name: "agent", RoleID: auth.RoleOperator})
+
+	_, _, err := s.Rotate(ctx, admin, key.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if err := s.Revoke(ctx, admin, key.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	// Revoke clears previous_secret_hash outright, so the old secret matches
+	// neither column and the row is not found at all -- a stronger result
+	// than merely reporting the key revoked, and just as refusing.
+	if _, err := s.Verify(ctx, original); err == nil {
+		t.Error("the previous secret still verified after revocation")
+	}
+}
+
+// Rotate is a privilege-adjacent event and belongs in the trail, naming who
+// rotated it -- without ever naming the secret.
+func TestRotate_IsAudited(t *testing.T) {
+	s, _, db, _ := newStore(t)
+	ctx := context.Background()
+	key, _ := mustCreate(t, s, CreateRequest{Name: "agent", RoleID: auth.RoleOperator})
+
+	if _, _, err := s.Rotate(ctx, admin, key.ID, time.Hour); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	detail := detailOf(t, db, "apikey.rotated")
+	if strings.Contains(detail, "mcpd_") {
+		t.Errorf("detail = %s; a rotation entry must never carry the secret", detail)
+	}
+}
+
+// Rotating a revoked key must not hand out a working secret for a credential
+// that is dead.
+func TestRotate_RefusesARevokedKey(t *testing.T) {
+	s, _, _, _ := newStore(t)
+	ctx := context.Background()
+	key, _ := mustCreate(t, s, CreateRequest{Name: "agent", RoleID: auth.RoleOperator})
+	if err := s.Revoke(ctx, admin, key.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if _, _, err := s.Rotate(ctx, admin, key.ID, time.Hour); !errors.Is(err, ErrRevoked) {
+		t.Errorf("rotating a revoked key: %v, want ErrRevoked", err)
+	}
+}
+
+// A grace beyond the maximum is refused: past that bound a rotation is not
+// keeping two secrets alive for a deployment window, it is running two keys.
+func TestRotate_RefusesAGraceBeyondTheMaximum(t *testing.T) {
+	s, _, _, _ := newStore(t)
+	ctx := context.Background()
+	key, _ := mustCreate(t, s, CreateRequest{Name: "agent", RoleID: auth.RoleOperator})
+	if _, _, err := s.Rotate(ctx, admin, key.ID, MaxGrace+time.Hour); err == nil {
+		t.Error("a grace beyond the maximum was accepted")
+	}
+	if _, _, err := s.Rotate(ctx, admin, key.ID, -time.Minute); err == nil {
+		t.Error("a negative grace was accepted")
+	}
+}
+
+// --- groups on keys ------------------------------------------------------
+
+// Setting a key's groups adds and removes membership in one write, each
+// change audited through the same functions a membership change on the
+// Groups page goes through.
+func TestUpdate_GroupsSetsWholeMembership(t *testing.T) {
+	s, gs, db, _ := newStore(t)
+	ctx := context.Background()
+
+	field, err := gs.Create(ctx, admin, groups.CreateRequest{Name: "Field", Grants: writes("cnmaestro")})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	noc, err := gs.Create(ctx, admin, groups.CreateRequest{Name: "NOC", Grants: writes("echo")})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	key, _ := mustCreate(t, s, CreateRequest{
+		Name: "agent", RoleID: auth.RoleOperator, Groups: []string{field.ID},
+	})
+
+	if _, err := s.Update(ctx, admin, key.ID, UpdateRequest{
+		Groups: &[]string{noc.ID},
+	}); err != nil {
+		t.Fatalf("update groups: %v", err)
+	}
+
+	loaded, err := s.ByID(ctx, key.ID)
+	if err != nil {
+		t.Fatalf("by id: %v", err)
+	}
+	var names []string
+	for _, g := range loaded.Groups() {
+		names = append(names, g.Name)
+	}
+	if len(names) != 1 || names[0] != "NOC" {
+		t.Errorf("groups = %v, want [NOC] only; setting groups replaces membership", names)
+	}
+
+	if got := detailOf(t, db, "group.member_removed"); !strings.Contains(got, key.ID) {
+		t.Errorf("member_removed detail = %s; it must name the key", got)
 	}
 }
 

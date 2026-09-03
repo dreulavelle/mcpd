@@ -3,7 +3,6 @@ package users
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -275,21 +274,17 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 		Email:        email,
 		PasswordHash: hash,
 		DisplayName:  displayName,
-		Role:         auth.RoleUser,
-		Plugins:      []string{},
+		RoleID:       auth.RoleOperator,
+		Grants:       auth.Grants{},
 		Status:       status,
-	}
-	plugins, err := json.Marshal(u.Plugins)
-	if err != nil {
-		return nil, fmt.Errorf("users: encode plugin grants: %w", err)
 	}
 
 	actor := "self:" + email
 	now := s.now().UnixMilli()
 	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
 		affected, err := tx.ExecAffected(`
-			INSERT INTO users (id, email, password_hash, display_name, role,
-			                   plugins_json, disabled, status, created_at, updated_at)
+			INSERT INTO users (id, email, password_hash, display_name, role_id,
+			                   grants_json, disabled, status, created_at, updated_at)
 			SELECT ?,?,?,?,?,?,0,?,?,?
 			-- Claimed: at least one account already exists. An unclaimed
 			-- instance is claimed from the setup form and nowhere else.
@@ -300,8 +295,8 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 			AND (? = '' OR NOT EXISTS (
 				SELECT 1 FROM users WHERE email = lower(?)
 			))`,
-			u.ID, u.Email, u.PasswordHash, u.DisplayName, string(u.Role),
-			string(plugins), string(u.Status), now, now,
+			u.ID, u.Email, u.PasswordHash, u.DisplayName, u.RoleID,
+			auth.EncodeGrants(u.Grants), string(u.Status), now, now,
 			u.Email, u.Email, u.DisplayName, u.DisplayName)
 		if err != nil {
 			return err
@@ -361,7 +356,7 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*User, error
 			Action:  "register",
 			Detail: map[string]any{
 				"status":   string(u.Status),
-				"role":     string(u.Role),
+				"role":     u.RoleID,
 				"provider": providerName(req.Identity),
 				"groups":   joined,
 			},
@@ -634,9 +629,9 @@ func (s *Store) PendingRegistrations(ctx context.Context) ([]*User, error) {
 func (s *Store) ApproveRegistration(ctx context.Context, actor, id string, groupIDs []string) (*User, error) {
 	now := s.now().UnixMilli()
 	err := s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		var email, role string
-		if err := tx.QueryRow(`SELECT email, role FROM users WHERE id = ?`, id).
-			Scan(&email, &role); err != nil {
+		var email, roleID string
+		if err := tx.QueryRow(`SELECT email, role_id FROM users WHERE id = ?`, id).
+			Scan(&email, &roleID); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -667,7 +662,7 @@ func (s *Store) ApproveRegistration(ctx context.Context, actor, id string, group
 			Action:  "approve",
 			Detail: map[string]any{
 				"account": id,
-				"role":    role,
+				"role":    roleID,
 				"groups":  joined,
 			},
 		})

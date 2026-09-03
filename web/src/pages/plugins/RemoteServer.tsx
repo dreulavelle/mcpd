@@ -116,7 +116,7 @@ function Body({ server, tools, toolsError, onChanged }: {
   const { navigate } = useRouter();
   // Reading is an operator's; classifying, discovering and removing are an
   // administrator's, which is how the endpoints are gated.
-  const mayAdminister = useCan("admin");
+  const mayAdminister = useCan("plugins:write");
   const [filter, setFilter] = useState<ToolFilter>("all");
   const [needle, setNeedle] = useState("");
   const [classifying, setClassifying] = useState<MCPTool | null>(null);
