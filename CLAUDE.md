@@ -77,7 +77,11 @@ with the constraints left out. They live in `chatgpt_accounts`, where a name
 can be unique and a credential can be NOT NULL. Each is still the only
 authority for what it holds; what stays in `settings` is the *assignment* of a
 tunnel to an account, beside the tunnel id it already held, because those are
-one decision made on one page.
+one decision made on one page. A plugin needing a collection of its own -- the
+customers one 3CX instance serves -- declares a `KindCollection` field and its
+rows live in `plugin_rows`, edited one at a time through the row endpoints;
+`PUT /api/settings` refuses the key, because a whole-table write has no honest
+way to say "keep that row's secret".
 
 **Permissions, not roles.** Check `principal.Can(auth.PermSettingsWrite)`,
 never `role == "admin"` or `RoleID == auth.RoleAdministrator`. A role is a

@@ -300,6 +300,14 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 			})
 		}
 	}
+	// The rows of its table settings go too, for the same reason its scalar
+	// settings do: a name reused later must not silently inherit somebody
+	// else's customers and their credentials.
+	if a.pluginRows != nil {
+		if err := a.pluginRows.DeleteAll(ctx, name); err != nil {
+			return err
+		}
+	}
 	return a.settings.Apply(ctx, actor, changes)
 }
 

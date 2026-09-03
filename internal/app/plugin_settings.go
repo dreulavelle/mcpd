@@ -50,6 +50,15 @@ func (a *App) resolveFields(ctx context.Context, instance string, fields []setti
 	for _, f := range fields {
 		key := settings.PluginSettingKey(instance, f.Key)
 
+		if f.Kind == settings.KindCollection {
+			rows, err := a.collectionRows(ctx, instance, f, fileSettings, resolver)
+			if err != nil {
+				return nil, err
+			}
+			out[f.Key] = rows
+			continue
+		}
+
 		if f.Kind == settings.KindSecret {
 			if v := a.settings.Secret(ctx, key, ""); v != "" {
 				out[f.Key] = v
@@ -95,6 +104,73 @@ func (a *App) resolveFields(ctx context.Context, instance string, fields []setti
 			continue
 		}
 		out[k] = v
+	}
+	return out, nil
+}
+
+// collectionRows resolves a table setting: the rows the dashboard holds, or
+// failing those the list the configuration file supplies.
+//
+// The store wins outright rather than merging with the file, for the same
+// reason a scalar setting does: two sources that both contribute rows would
+// leave nobody able to say where a customer came from or how to remove it. A
+// file row may give a secret column as <column>_ref, resolved like every other
+// credential in the file, so a committed file still holds none.
+func (a *App) collectionRows(ctx context.Context, instance string, f settings.Field,
+	fileSettings map[string]any, resolver *config.SecretResolver) ([]map[string]any, error) {
+	if a.pluginRows != nil {
+		stored, err := a.pluginRows.List(ctx, instance, f.Key)
+		if err != nil {
+			return nil, fmt.Errorf("app: plugin %q setting %q: %w", instance, f.Key, err)
+		}
+		if len(stored) > 0 {
+			out := make([]map[string]any, 0, len(stored))
+			for _, row := range stored {
+				merged := make(map[string]any, len(row.Data)+len(row.Secrets))
+				for k, v := range row.Data {
+					merged[k] = v
+				}
+				for k, v := range row.Secrets {
+					merged[k] = v
+				}
+				out = append(out, merged)
+			}
+			return out, nil
+		}
+	}
+
+	raw, ok := fileSettings[f.Key]
+	if !ok {
+		return []map[string]any{}, nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("app: plugin %q setting %q must be a list of rows in the configuration file", instance, f.Key)
+	}
+	out := make([]map[string]any, 0, len(items))
+	for i, item := range items {
+		row, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("app: plugin %q setting %q: row %d is not a mapping", instance, f.Key, i+1)
+		}
+		merged := make(map[string]any, len(row))
+		for k, v := range row {
+			merged[k] = v
+		}
+		for _, col := range f.Columns {
+			if col.Kind != settings.KindSecret {
+				continue
+			}
+			if ref, ok := stringFrom(row, col.Key+"_ref"); ok {
+				v, err := resolver.Resolve(ref)
+				if err != nil {
+					return nil, fmt.Errorf("app: plugin %q setting %q row %d: %s: %w", instance, f.Key, i+1, col.Key, err)
+				}
+				merged[col.Key] = v
+				delete(merged, col.Key+"_ref")
+			}
+		}
+		out = append(out, merged)
 	}
 	return out, nil
 }

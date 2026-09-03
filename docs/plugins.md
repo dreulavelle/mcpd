@@ -133,6 +133,60 @@ The value is read when the plugin is built, so editing it remounts the instance
 and the new text reaches a client on its next connection. An assistant halfway
 through a conversation keeps the tool list it already fetched.
 
+## A setting that is a table
+
+A plugin's settings are ordinarily scalars: an address, a token, a number. Some
+integrations need a *collection* -- the customers one instance serves, each with
+an address and a credential -- and a flat key/value store cannot hold that
+without synthesising keys, nor can a form edit it in one masked box.
+
+So a field may be `settings.KindCollection`, with `Columns` shaping each row:
+
+```go
+{
+    Key: "customers", Label: "Customers", Kind: settings.KindCollection, Required: true,
+    Columns: []settings.Field{
+        {Key: "name", Label: "Business name", Kind: settings.KindString, Required: true},
+        {Key: "aliases", Label: "Aliases", Kind: settings.KindList},
+        {Key: "host", Label: "Address", Kind: settings.KindString, Required: true},
+        {Key: "password", Label: "Password", Kind: settings.KindSecret, Required: true},
+    },
+}
+```
+
+The first column is the row's identity: a required string, unique within the
+collection folding case, and what the dashboard lists a row by. Columns are
+ordinary fields -- string, secret, list, int, bool, enum -- and may not nest.
+
+What the host does with it:
+
+- rows live in `plugin_rows`, one JSON object per row, with the secret columns
+  encrypted as a unit by the same cipher every other stored credential uses;
+- the dashboard renders a table with add, edit and remove, each row saved on
+  its own through `/api/settings/rows/{key}`. A secret is shown as set or
+  missing and a blank on edit means keep, so one row's credential can be
+  replaced without any other's being retyped. `PUT /api/settings` refuses the
+  key outright;
+- the plugin receives the field as `[]map[string]any`, secrets included, and
+  decodes it the way it decodes everything else. A `Required` collection with
+  no rows leaves the instance waiting to be configured, like a required scalar
+  left blank;
+- `config.yaml` may supply the rows as a list under the field's key, with a
+  secret column given as `<column>_ref`. Rows in the store win outright over the
+  file when any exist -- two sources that both contributed rows would leave
+  nobody able to say where a customer came from or how to remove it;
+- removing the instance removes its rows.
+
+Every row write rebuilds the instance, the way a scalar change does, so a
+customer added on the page is reachable without a restart.
+
+What it does *not* do is narrow access. Authorization is per plugin instance,
+so a caller who may reach the instance may ask about every row in it. A
+collection is for the case where that is right -- one MSP's technicians and
+all of that MSP's customers -- and separate instances remain the answer where
+it is not. `internal/plugins/threecx` is the first use, and
+[3cx.md](3cx.md) describes what it makes of the rows.
+
 ## The tool list is a budget
 
 Everything a plugin advertises — names, descriptions, input schemas, output

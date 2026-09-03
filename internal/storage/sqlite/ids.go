@@ -41,3 +41,16 @@ func newBypassID() string {
 	}
 	return "byp_" + hex.EncodeToString(b[:])
 }
+
+// newRowID returns a random identifier for a plugin collection row.
+//
+// Generated rather than derived from the row's name: a customer can be
+// renamed, and the dashboard edits a row by id, so a name-derived id would
+// turn fixing a typo into a delete and a re-add with the credential retyped.
+func newRowID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("sqlite: system entropy unavailable: " + err.Error())
+	}
+	return "row_" + hex.EncodeToString(b[:])
+}

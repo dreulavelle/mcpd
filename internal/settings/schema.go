@@ -28,13 +28,23 @@ const (
 	KindDuration Kind = "duration"
 	KindEnum     Kind = "enum"
 	KindList     Kind = "list"
+	// KindCollection is a table of rows, each shaped by the field's Columns.
+	//
+	// It exists for the setting whose size nobody knows in advance -- the
+	// customers one integration instance serves, each with an address and a
+	// credential. The flat store cannot hold several of those without
+	// synthesising keys, and a form cannot edit them in one masked box. So
+	// the rows live in their own table, are edited one at a time through the
+	// row endpoints rather than through PUT /api/settings, and reach the
+	// plugin as a list of records.
+	KindCollection Kind = "collection"
 )
 
 // Valid reports whether k is a recognised kind. Plugins declare their own
 // fields, so this is checked rather than assumed.
 func (k Kind) Valid() bool {
 	switch k {
-	case KindString, KindSecret, KindBool, KindInt, KindDuration, KindEnum, KindList:
+	case KindString, KindSecret, KindBool, KindInt, KindDuration, KindEnum, KindList, KindCollection:
 		return true
 	}
 	return false
@@ -117,6 +127,20 @@ type Field struct {
 	// straight from its database -- where a single flat form would show every
 	// field for both and leave the operator to work out which half applies.
 	ShowWhen *ShowWhen `json:"show_when,omitempty"`
+	// Columns shape each row of a KindCollection. Ordinary fields, keyed bare
+	// within the row: a string, a secret, a list, a number, a switch. The
+	// first column is the row's identity -- what a person calls it and what
+	// no two rows may share -- so it must be a required string.
+	Columns []Field `json:"columns,omitempty"`
+}
+
+// Identity returns the column that names a row of a collection: the first
+// one, by declaration.
+func (f Field) Identity() (Field, bool) {
+	if f.Kind != KindCollection || len(f.Columns) == 0 {
+		return Field{}, false
+	}
+	return f.Columns[0], true
 }
 
 // ShowWhen makes a field's visibility depend on another field's value.
@@ -1180,6 +1204,14 @@ func Validate(key, value string) error {
 // schema does not, checks them the same way.
 func validateAgainst(f Field, key, value string) error {
 	switch f.Kind {
+	case KindCollection:
+		// Rows are edited one at a time, through their own endpoints, so a
+		// credential in one row can be replaced without every other row's
+		// being sent again. A whole-table write here has no honest way to say
+		// "keep that secret".
+		return fmt.Errorf("settings: %s is a table; add, edit or remove its rows "+
+			"one at a time rather than writing it whole", f.Label)
+
 	case KindBool:
 		if _, err := strconv.ParseBool(value); err != nil {
 			return fmt.Errorf("settings: %s must be true or false", f.Label)
@@ -1323,4 +1355,10 @@ func validTunnelID(id string) bool {
 func IsSecret(key string) bool {
 	f, ok := FieldFor(key)
 	return ok && f.Kind == KindSecret
+}
+
+// ValidateValue checks a value against a field that is not in any catalog --
+// a column of a collection, whose key is bare and whose row is the scope.
+func ValidateValue(f Field, value string) error {
+	return validateAgainst(f, f.Key, value)
 }

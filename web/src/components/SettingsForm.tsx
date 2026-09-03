@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
+import { CollectionField } from "@/components/CollectionField";
 
 export interface FieldLink {
   href: string;
@@ -171,6 +172,13 @@ function Field({ field, value, link, isSet, clearing, readOnly, onChange, onTogg
   onToggleClear: () => void;
 }) {
   const id = `s-${field.key}`;
+
+  // A table has its own editor and its own endpoints: rows are saved as they
+  // are added or changed, not with this form's Save, because a row's secret
+  // cannot be carried in a draft of strings without being sent back whole.
+  if (field.kind === "collection") {
+    return <CollectionField field={field} readOnly={readOnly} />;
+  }
 
   if (field.kind === "bool") {
     return (

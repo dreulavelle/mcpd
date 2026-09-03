@@ -2018,6 +2018,10 @@ performance decision.
 **Settings belong to the plugin, resolution belongs to the host.** A type
 declares its fields; the host namespaces them per instance, validates them,
 encrypts the secrets, renders the form, and hands back resolved values. A
+field may be a *collection* -- a table of rows, each shaped by declared
+columns, held in `plugin_rows` with its secret columns encrypted and edited
+row by row -- for the setting whose size nobody knows in advance; see
+[plugins.md](plugins.md). A
 plugin never reads a file or an environment variable. Values resolve store,
 then file, then default — the store winning because a value changed in the
 dashboard has to beat the one the host started with.

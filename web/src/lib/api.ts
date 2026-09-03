@@ -601,7 +601,7 @@ export interface ChatGPTAccountBody {
 }
 
 export type SettingKind =
-  | "string" | "secret" | "bool" | "int" | "duration" | "enum" | "list";
+  | "string" | "secret" | "bool" | "int" | "duration" | "enum" | "list" | "collection";
 
 export type SettingApply = "live" | "reconnect" | "restart";
 
@@ -645,6 +645,12 @@ export interface SettingField {
    * submits it, and the server still stores it. Never treat hidden as unset.
    */
   show_when?: { field: string; equals: string[] };
+  /**
+   * The columns of a "collection" field: a table of rows, each shaped by these
+   * ordinary fields. The first column names the row. Rows are edited one at a
+   * time through the row endpoints, never through saveSettings.
+   */
+  columns?: SettingField[];
 }
 
 export interface SettingGroup {
@@ -671,6 +677,16 @@ export interface SettingsPayload {
   secrets_set: Record<string, boolean>;
   encryption_available: boolean;
   bootstrap: BootstrapSetting[];
+}
+
+/** One row of a collection setting: values for the non-secret columns, and
+ *  for each secret column only whether it holds something. */
+export interface SettingRow {
+  id: string;
+  values: Record<string, unknown>;
+  secrets_set: string[];
+  updated_at: string;
+  updated_by: string;
 }
 
 export interface SaveResult {
@@ -1662,6 +1678,23 @@ export const api = {
     request<SaveResult>("/api/settings", {
       method: "PUT",
       body: JSON.stringify({ values, clear_secrets: clearSecrets }),
+    }),
+
+  /** The rows of one collection setting, by the setting's key. */
+  settingRows: (key: string) =>
+    request<{ field: SettingField; rows: SettingRow[]; count: number }>(
+      `/api/settings/rows/${encodeURIComponent(key)}`),
+  addSettingRow: (key: string, values: Record<string, string>) =>
+    request<SettingRow>(`/api/settings/rows/${encodeURIComponent(key)}`, {
+      method: "POST", body: JSON.stringify({ values }),
+    }),
+  updateSettingRow: (key: string, id: string, values: Record<string, string>, clearSecrets: string[] = []) =>
+    request<SettingRow>(`/api/settings/rows/${encodeURIComponent(key)}/${encodeURIComponent(id)}`, {
+      method: "PATCH", body: JSON.stringify({ values, clear_secrets: clearSecrets }),
+    }),
+  removeSettingRow: (key: string, id: string) =>
+    request<void>(`/api/settings/rows/${encodeURIComponent(key)}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
     }),
 
   tunnelStart: () =>
