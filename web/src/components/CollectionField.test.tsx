@@ -27,7 +27,11 @@ const ROWS: SettingRow[] = [
     secrets_set: ["password"], updated_at: "2026-09-03T10:00:00Z", updated_by: "user:alice",
   },
   {
-    id: "row_2", values: { name: "Globex", aliases: [], host: "globex.example" },
+    id: "row_2", values: { name: "Globex", aliases: [], host: "https://globex.example/" },
+    secrets_set: [], updated_at: "2026-09-03T10:00:00Z", updated_by: "user:alice",
+  },
+  {
+    id: "row_3", values: { name: "Initech", aliases: [], host: "http://pbx.internal:5000" },
     secrets_set: [], updated_at: "2026-09-03T10:00:00Z", updated_by: "user:alice",
   },
 ];
@@ -35,7 +39,7 @@ const ROWS: SettingRow[] = [
 describe("CollectionField", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(api, "settingRows").mockResolvedValue({ field: FIELD, rows: ROWS, count: 2 });
+    vi.spyOn(api, "settingRows").mockResolvedValue({ field: FIELD, rows: ROWS, count: ROWS.length });
   });
 
   // The table shows the non-secret columns as text and a secret column only as
@@ -50,6 +54,30 @@ describe("CollectionField", () => {
     expect(within(globex).getByText("missing")).toBeInTheDocument();
     // An empty list reads as a dash rather than as nothing at all.
     expect(within(globex).getByText("—")).toBeInTheDocument();
+  });
+
+  // An https address reads without its scheme: in a table it is eight
+  // characters repeated on every row. http stays, because that one is the
+  // exception, and what was typed is still what is stored.
+  it("shows an https address without its scheme, and leaves http alone", async () => {
+    renderWith(<CollectionField field={FIELD} readOnly={false} />);
+    const globex = (await screen.findByText("Globex")).closest("tr")!;
+    expect(within(globex).getByText("globex.example")).toBeInTheDocument();
+    const initech = screen.getByText("Initech").closest("tr")!;
+    expect(within(initech).getByText("http://pbx.internal:5000")).toBeInTheDocument();
+  });
+
+  // Editing shows what is stored, scheme included: the tidying is the table's,
+  // and a form that quietly rewrote the value would be saving something the
+  // operator did not type.
+  it("edits against the stored address, not the tidied one", async () => {
+    renderWith(<CollectionField field={FIELD} readOnly={false} />);
+    const globex = (await screen.findByText("Globex")).closest("tr")!;
+    const user = userEvent.setup();
+    await user.click(within(globex).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect((within(dialog).getByLabelText(/Address/) as HTMLInputElement).value)
+      .toBe("https://globex.example/");
   });
 
   // Adding a row submits every column as a string, the way the settings form

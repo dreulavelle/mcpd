@@ -2,6 +2,7 @@ package threecx
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/spoked/mcpd/internal/plugins"
@@ -33,7 +34,10 @@ type customersArgs struct {
 type CustomerRow struct {
 	Name    string   `json:"name"`
 	Aliases []string `json:"aliases"`
-	Host    string   `json:"host"`
+	// Host is the address without its https scheme, which is the form 3CX
+	// itself reports and the form somebody types. An http address keeps its
+	// scheme, because that one is the exception.
+	Host string `json:"host"`
 	// Reachable is what the last call found: true, false, or absent when
 	// nothing has been asked of this customer yet.
 	Reachable *bool  `json:"reachable,omitempty"`
@@ -66,7 +70,7 @@ func (p *Plugin) listCustomers(ctx context.Context, args customersArgs) (Custome
 	}
 	out := CustomersResult{Customers: make([]CustomerRow, 0, len(p.accounts))}
 	for _, a := range p.accounts {
-		row := CustomerRow{Name: a.name, Aliases: a.aliases, Host: a.host}
+		row := CustomerRow{Name: a.name, Aliases: a.aliases, Host: displayHost(a.host)}
 		if row.Aliases == nil {
 			row.Aliases = []string{}
 		}
@@ -84,4 +88,14 @@ func (p *Plugin) listCustomers(ctx context.Context, args customersArgs) (Custome
 	}
 	out.Count = len(out.Customers)
 	return out, nil
+}
+
+// displayHost renders an address the way a person writes one: the bare FQDN
+// for the ordinary https case, and the whole thing when it is not.
+func displayHost(root string) string {
+	trimmed, found := strings.CutPrefix(root, "https://")
+	if !found {
+		return root
+	}
+	return strings.TrimRight(trimmed, "/")
 }

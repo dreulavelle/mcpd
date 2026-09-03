@@ -146,6 +146,12 @@ func TestTools_ReachTheNamedCustomer(t *testing.T) {
 	if strings.Join(list.Customers[1].Aliases, ",") != "globex" {
 		t.Errorf("aliases: %v", list.Customers[1].Aliases)
 	}
+	// An https address is reported without its scheme; these fakes are http,
+	// so they keep theirs.
+	if displayHost("https://acme.ny.3cx.us/") != "acme.ny.3cx.us" ||
+		displayHost("http://pbx.internal:5000") != "http://pbx.internal:5000" {
+		t.Error("an https address should read as the bare host and http should not")
+	}
 }
 
 // Starting reaches no phone system; a check on demand reaches every one, and
