@@ -94,9 +94,9 @@ type trunkRecord struct {
 const trunkFields = "Id,Number,ExternalNumber,Direction,IsOnline,DidNumbers,SimultaneousCalls," +
 	"ConfigurationIssue,EnableInboundCalls,EnableOutboundCalls,OutboundCallerID,Gateway"
 
-func (p *Plugin) readTrunks(ctx context.Context) ([]trunkRecord, error) {
+func (p *Plugin) readTrunks(ctx context.Context, acct *account) ([]trunkRecord, error) {
 	q := url.Values{"$select": {trunkFields}}
-	got, err := list[trunkRecord](ctx, p.client, "Trunks", q, p.cfg.MaxItems)
+	got, err := list[trunkRecord](ctx, acct.client, "Trunks", q, p.cfg.MaxItems)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,9 @@ func (p *Plugin) readTrunks(ctx context.Context) ([]trunkRecord, error) {
 	return got.Rows, nil
 }
 
-type trunksArgs struct{}
+type trunksArgs struct {
+	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+}
 
 // TrunkRow is one trunk with its numbers.
 type TrunkRow struct {
@@ -134,26 +136,30 @@ type TrunkRow struct {
 
 // TrunksResult is the trunk list.
 type TrunksResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer string     `json:"customer"`
 	Trunks   []TrunkRow `json:"trunks"`
 	Returned int        `json:"returned"`
 	Offline  int        `json:"offline"`
 	truncation
 }
 
-func (p *Plugin) listTrunks(ctx context.Context, _ trunksArgs) (TrunksResult, error) {
-	if err := p.ready(); err != nil {
+func (p *Plugin) listTrunks(ctx context.Context, args trunksArgs) (TrunksResult, error) {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return TrunksResult{}, err
 	}
-	trunks, err := p.readTrunks(ctx)
+	trunks, err := p.readTrunks(ctx, acct)
 	if err != nil {
-		return TrunksResult{}, p.call(err)
+		return TrunksResult{}, acct.call(err)
 	}
 
 	// Which of each trunk's numbers actually route somewhere. A phone system
 	// that will not list its rules is not a failure here: the numbers are
 	// still the answer to the question this tool was asked.
 	routed := map[int]map[string]bool{}
-	if rules, err := p.readInboundRules(ctx); err == nil {
+	if rules, err := p.readInboundRules(ctx, acct); err == nil {
 		for _, rule := range rules {
 			if rule.TrunkDN == nil || !strings.EqualFold(rule.Condition, "BasedOnDID") {
 				continue
@@ -202,7 +208,8 @@ func (p *Plugin) listTrunks(ctx context.Context, _ trunksArgs) (TrunksResult, er
 	}
 	out.Trunks, out.truncation = bound(out.Trunks, false)
 	out.Returned = len(out.Trunks)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
 
@@ -229,12 +236,12 @@ type inboundRuleRecord struct {
 const inboundRuleFields = "Id,RuleName,Condition,Data,CallType,AlterDestinationDuringOutOfOfficeHours," +
 	"AlterDestinationDuringHolidays,OfficeHoursDestination,OutOfOfficeHoursDestination,HolidaysDestination"
 
-func (p *Plugin) readInboundRules(ctx context.Context) ([]inboundRuleRecord, error) {
+func (p *Plugin) readInboundRules(ctx context.Context, acct *account) ([]inboundRuleRecord, error) {
 	q := url.Values{
 		"$select": {inboundRuleFields},
 		"$expand": {"TrunkDN($select=Id,Number,Name)"},
 	}
-	got, err := list[inboundRuleRecord](ctx, p.client, "InboundRules", q, p.cfg.MaxItems)
+	got, err := list[inboundRuleRecord](ctx, acct.client, "InboundRules", q, p.cfg.MaxItems)
 	if err != nil {
 		return nil, err
 	}
@@ -242,9 +249,10 @@ func (p *Plugin) readInboundRules(ctx context.Context) ([]inboundRuleRecord, err
 }
 
 type inboundRulesArgs struct {
-	Number string `json:"number,omitempty" jsonschema:"only rules for a DID containing these digits"`
-	Trunk  string `json:"trunk,omitempty" jsonschema:"only rules on the trunk with this number or name"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"most rules to return"`
+	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	Number   string `json:"number,omitempty" jsonschema:"only rules for a DID containing these digits"`
+	Trunk    string `json:"trunk,omitempty" jsonschema:"only rules on the trunk with this number or name"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"most rules to return"`
 }
 
 // InboundRuleRow is where one number rings.
@@ -264,18 +272,22 @@ type InboundRuleRow struct {
 
 // InboundRulesResult is the routing table.
 type InboundRulesResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer string           `json:"customer"`
 	Rules    []InboundRuleRow `json:"rules"`
 	Returned int              `json:"returned"`
 	truncation
 }
 
 func (p *Plugin) listInboundRules(ctx context.Context, args inboundRulesArgs) (InboundRulesResult, error) {
-	if err := p.ready(); err != nil {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return InboundRulesResult{}, err
 	}
-	rules, err := p.readInboundRules(ctx)
+	rules, err := p.readInboundRules(ctx, acct)
 	if err != nil {
-		return InboundRulesResult{}, p.call(err)
+		return InboundRulesResult{}, acct.call(err)
 	}
 	limit := p.limitOf(args.Limit)
 	number := strings.TrimSpace(args.Number)
@@ -324,13 +336,16 @@ func (p *Plugin) listInboundRules(ctx context.Context, args inboundRulesArgs) (I
 	})
 	out.Rules, out.truncation = bound(out.Rules, truncated)
 	out.Returned = len(out.Rules)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
 
 // --- outbound rules ---------------------------------------------------------------
 
-type outboundRulesArgs struct{}
+type outboundRulesArgs struct {
+	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+}
 
 // OutboundRuleRow is one way a dialled number may leave.
 type OutboundRuleRow struct {
@@ -347,13 +362,17 @@ type OutboundRuleRow struct {
 
 // OutboundRulesResult is the dialling plan.
 type OutboundRulesResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer string            `json:"customer"`
 	Rules    []OutboundRuleRow `json:"rules"`
 	Returned int               `json:"returned"`
 	truncation
 }
 
-func (p *Plugin) listOutboundRules(ctx context.Context, _ outboundRulesArgs) (OutboundRulesResult, error) {
-	if err := p.ready(); err != nil {
+func (p *Plugin) listOutboundRules(ctx context.Context, args outboundRulesArgs) (OutboundRulesResult, error) {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return OutboundRulesResult{}, err
 	}
 	type record struct {
@@ -380,9 +399,9 @@ func (p *Plugin) listOutboundRules(ctx context.Context, _ outboundRulesArgs) (Ou
 		"$select":  {"Id,Name,Prefix,Priority,NumberLengthRanges,GroupNames,Routes,DNRanges,EmergencyRule"},
 		"$orderby": {"Priority"},
 	}
-	got, err := list[record](ctx, p.client, "OutboundRules", q, p.cfg.MaxItems)
+	got, err := list[record](ctx, acct.client, "OutboundRules", q, p.cfg.MaxItems)
 	if err != nil {
-		return OutboundRulesResult{}, p.call(err)
+		return OutboundRulesResult{}, acct.call(err)
 	}
 	out := OutboundRulesResult{Rules: make([]OutboundRuleRow, 0, len(got.Rows))}
 	for _, r := range got.Rows {
@@ -427,16 +446,18 @@ func (p *Plugin) listOutboundRules(ctx context.Context, _ outboundRulesArgs) (Ou
 	}
 	out.Rules, out.truncation = bound(out.Rules, got.Truncated)
 	out.Returned = len(out.Rules)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
 
 // --- directory --------------------------------------------------------------------
 
 type directoryArgs struct {
-	Query string `json:"query,omitempty" jsonschema:"a number or part of a name"`
-	Type  string `json:"type,omitempty" jsonschema:"only this kind: Extension, Queue, RingGroup, IVR, Fax, Conference, Parking, SpecialMenu, RoutePoint"`
-	Limit int    `json:"limit,omitempty" jsonschema:"most entries to return"`
+	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	Query    string `json:"query,omitempty" jsonschema:"a number or part of a name"`
+	Type     string `json:"type,omitempty" jsonschema:"only this kind: Extension, Queue, RingGroup, IVR, Fax, Conference, Parking, SpecialMenu, RoutePoint"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"most entries to return"`
 }
 
 // PeerRow is one thing with a number.
@@ -449,6 +470,9 @@ type PeerRow struct {
 
 // DirectoryResult is the numbering plan, narrowed.
 type DirectoryResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer string    `json:"customer"`
 	Entries  []PeerRow `json:"entries"`
 	Total    int       `json:"total"`
 	Returned int       `json:"returned"`
@@ -462,7 +486,8 @@ var peerTypes = map[string]string{
 }
 
 func (p *Plugin) searchDirectory(ctx context.Context, args directoryArgs) (DirectoryResult, error) {
-	if err := p.ready(); err != nil {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return DirectoryResult{}, err
 	}
 	var filters []string
@@ -487,9 +512,9 @@ func (p *Plugin) searchDirectory(ctx context.Context, args directoryArgs) (Direc
 		Type   string `json:"Type"`
 		Hidden bool   `json:"Hidden"`
 	}
-	got, err := list[record](ctx, p.client, "Peers", q, p.limitOf(args.Limit))
+	got, err := list[record](ctx, acct.client, "Peers", q, p.limitOf(args.Limit))
 	if err != nil {
-		return DirectoryResult{}, p.call(err)
+		return DirectoryResult{}, acct.call(err)
 	}
 	out := DirectoryResult{Entries: make([]PeerRow, 0, len(got.Rows)), Total: got.Total}
 	for _, r := range got.Rows {
@@ -500,6 +525,7 @@ func (p *Plugin) searchDirectory(ctx context.Context, args directoryArgs) (Direc
 	}
 	out.Entries, out.truncation = bound(out.Entries, got.Truncated)
 	out.Returned = len(out.Entries)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }

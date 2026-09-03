@@ -34,7 +34,7 @@ func integrationPlugin(t *testing.T) *Plugin {
 		Instance: "threecx",
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Now:      time.Now,
-	}, Config{Host: host, Extension: ext, Password: pass})
+	}, Config{Customers: []Customer{{Name: "Trial", Host: host, Extension: ext, Password: pass}}})
 	if err != nil {
 		t.Fatalf("building the plugin: %v", err)
 	}

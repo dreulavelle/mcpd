@@ -4,18 +4,76 @@ What the 3CX v20 configuration API does that a reader would not expect, and
 what this integration does about it. The plugin is `internal/plugins/threecx`;
 this is the companion to the comments in it.
 
-One instance is one phone system. An MSP with thirty customers has thirty
-PBXs, each with its own address and its own system-owner extension, and each
-is an instance here. That is what puts the customer's name in every tool the
-model sees (`acme_pbx_list_extensions`) and what lets a credential be scoped to
-one of them.
+One instance serves many phone systems. An MSP with thirty customers has
+thirty PBXs, each with its own address and its own system-owner extension; they
+are rows of one instance's **Customers** table, so the MSP runs one endpoint,
+one tunnel and one ChatGPT connector rather than thirty of each. Every tool
+takes a `customer` argument and `list_customers` says what the choices are.
+
+## Customers
+
+The Customers setting is a table (`settings.KindCollection`; see
+[plugins.md](plugins.md)). Each row is one business:
+
+| column | |
+|---|---|
+| Business name | what the assistant is told and answers with; unique within the instance |
+| Aliases | other names people use, so "acme" finds "Acme Dental Group" |
+| Address | the PBX's FQDN, with or without `https://` |
+| System owner extension | the number or email to sign in as; needs the System Owner role |
+| Password | that extension's web-client password, stored encrypted |
+
+Rows are added, edited and removed one at a time on the Plugins page, each
+saved as it is closed. Replacing one customer's password never means retyping
+another's. A file-provisioned host can supply them in `config.yaml` instead,
+with the password as a reference so the file holds none:
+
+```yaml
+plugins:
+  pbx:
+    type: threecx
+    settings:
+      customers:
+        - name: Acme Dental Group
+          aliases: [acme, ADG]
+          host: acme.ny.3cx.us
+          extension: "100"
+          password_ref: env:ACME_PBX_PASSWORD
+```
+
+Rows in the dashboard win outright over the file when any exist.
+
+**Resolution never guesses.** A tool's `customer` is matched against every
+name and alias, folding case. An exact match wins. Failing that, a fragment
+contained in exactly one customer's name or alias is taken -- "dental" for
+"Acme Dental Group" -- but a fragment that fits two customers is refused with
+both named, and the refusal tells the model to ask the person which they mean
+rather than pick one. No name at all is fine when the instance has one
+customer and is refused with the list when it has several. Two rows may not
+share a name or alias, or a host, because either would be a call that could
+only be resolved by guessing; `Config.Validate` refuses them.
+
+**Access is per instance.** Anyone who can reach the instance -- a key, a
+tunnel, a ChatGPT workspace -- can ask about every customer on it. If some
+people should see only some customers, those customers go on a second
+instance. This is the trade the single connector buys, and it is written on
+the setting's own help text so nobody discovers it later.
+
+**Nothing crosses between customers.** Each customer has its own client, its
+own token, its own rate limit, its own transport pinned to its own host, and
+its own health; there is no cache; and every answer carries a `customer` field
+naming the business it is about, so a result can never be read as another
+customer's. One customer's PBX being down leaves the others' tools working and
+names the failing one on the health report; only every customer failing fails
+the plugin's start.
 
 ## The tools
 
-Sixteen reads, in six groups, split by the question a technician is asking:
+Seventeen reads, in seven groups, split by the question a technician is asking:
 
 | | |
 |---|---|
+| `list_customers` | which businesses this instance serves, their aliases, and whether the last call to each worked |
 | `get_system_status` | health, licence, offline trunks, stopped services, disk, backups, and the findings in words |
 | `list_services`, `list_active_calls`, `search_events` | which service is down, what is going through now, what the system has logged |
 | `list_extensions`, `get_extension`, `list_devices` | who is registered, why one extension behaves as it does, what handsets exist |

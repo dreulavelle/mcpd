@@ -73,31 +73,64 @@ const loginPath = "/webclient/api/Login/GetAccessToken"
 
 // Config is the plugin's own configuration, from the `settings` block.
 type Config struct {
-	// Host is the phone system's web address: the FQDN somebody types to reach
-	// its console, such as acme.ny.3cx.us, or that address with https:// in
-	// front of it. Every customer has their own, so there is no default.
-	Host string `yaml:"host" json:"host"`
-
-	// Extension is the number, or the email address, that this integration
-	// signs in as. It needs the system owner role: a normal extension can
-	// sign in and see only itself, and every listing here answers 403.
-	Extension string `yaml:"extension" json:"extension"`
-
-	// Password is that extension's web client password. Exchanged for a token
-	// at sign-in and never sent anywhere else.
-	Password string `yaml:"password" json:"password"`
+	// Customers are the phone systems this instance serves, one per business.
+	// Every tool takes a customer argument resolved against these by name or
+	// alias; an instance with one customer resolves it without being told.
+	Customers []Customer `yaml:"customers" json:"customers"`
 
 	// MaxItems caps what one tool call accumulates. Reported in the result
 	// when it bites, so a caller narrows their filter instead of silently
 	// seeing part of a phone system.
 	MaxItems int `yaml:"max_items" json:"max_items"`
 
-	// RequestsPerSecond bounds outbound calls. Walking pages is a loop, which
-	// is the shape most likely to lean on a small PBX.
+	// RequestsPerSecond bounds outbound calls to each phone system. Walking
+	// pages is a loop, which is the shape most likely to lean on a small PBX.
 	RequestsPerSecond float64 `yaml:"requests_per_second" json:"requests_per_second"`
 
 	// Timeout bounds a single upstream request.
 	Timeout time.Duration `yaml:"timeout" json:"timeout"`
+}
+
+// Customer is one business and the phone system it runs.
+type Customer struct {
+	// Name is what the business is called: what a person types and what the
+	// answer names. Unique within the instance.
+	Name string `yaml:"name" json:"name"`
+	// Aliases are the other things people call it -- an abbreviation, a
+	// trading name, the site -- so "acme" finds "Acme Dental Group".
+	Aliases []string `yaml:"aliases" json:"aliases"`
+	// Host is the phone system's web address: the FQDN somebody types to reach
+	// its console, such as acme.ny.3cx.us, or that address with https:// in
+	// front of it.
+	Host string `yaml:"host" json:"host"`
+	// Extension is the number, or the email address, this integration signs
+	// in as. It needs the system owner role: a normal extension can sign in
+	// and see only itself, and every listing here answers 403.
+	Extension string `yaml:"extension" json:"extension"`
+	// Password is that extension's web client password. Exchanged for a token
+	// at sign-in and never sent anywhere else.
+	Password string `yaml:"password" json:"password"`
+}
+
+// complete reports whether enough was supplied to sign in to this customer.
+func (c Customer) complete() bool {
+	return strings.TrimSpace(c.Name) != "" && strings.TrimSpace(c.Host) != "" &&
+		strings.TrimSpace(c.Extension) != "" && c.Password != ""
+}
+
+// names is the customer's name and aliases, trimmed and non-empty, for
+// matching.
+func (c Customer) names() []string {
+	out := make([]string, 0, 1+len(c.Aliases))
+	if n := strings.TrimSpace(c.Name); n != "" {
+		out = append(out, n)
+	}
+	for _, a := range c.Aliases {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // withDefaults fills anything the operator left alone.
@@ -113,14 +146,19 @@ func (c *Config) withDefaults() {
 	}
 }
 
-// Configured reports whether enough was supplied to sign in.
-//
-// All three, because none is useful without the others, which is why this is
-// one question rather than three booleans a caller has to combine.
+// Configured reports whether there is at least one customer that can be
+// signed in to. A customer half filled in does not count, and is named by
+// Validate rather than silently skipped.
 func (c Config) Configured() bool {
-	return strings.TrimSpace(c.Host) != "" &&
-		strings.TrimSpace(c.Extension) != "" &&
-		c.Password != ""
+	if len(c.Customers) == 0 {
+		return false
+	}
+	for _, cu := range c.Customers {
+		if !cu.complete() {
+			return false
+		}
+	}
+	return true
 }
 
 // Validate rejects a configuration that cannot work.
@@ -130,29 +168,53 @@ func (c Config) Configured() bool {
 // configuration that is present and wrong, because that fails later, further
 // away, and with a worse message.
 func (c Config) Validate() error {
-	host := strings.TrimSpace(c.Host)
-	if host == "" {
-		return nil
-	}
-
-	u, err := parseHost(host)
-	if err != nil {
-		return err
-	}
-	if u.User != nil {
-		return fmt.Errorf("3cx: put the extension and password in their own " +
-			"fields, not in the address; a URL with a password in it ends up in logs")
-	}
-	if strings.Contains(u.Path, "/xapi") || strings.Contains(u.Path, "/webclient") {
-		return fmt.Errorf("3cx: the address should be the phone system's web "+
-			"root, not the API path -- drop everything after the host from %q", c.Host)
-	}
-	if p := strings.Trim(u.Path, "/"); p != "" {
-		return fmt.Errorf("3cx: the address %q carries a path; a 3CX is reached "+
-			"at the root of its host", c.Host)
-	}
-	if strings.ContainsAny(c.Extension, " \t\r\n") {
-		return fmt.Errorf("3cx: the extension %q has whitespace in it", c.Extension)
+	seenName := map[string]string{}
+	seenHost := map[string]string{}
+	for i, cu := range c.Customers {
+		label := strings.TrimSpace(cu.Name)
+		if label == "" {
+			label = fmt.Sprintf("customer %d", i+1)
+		}
+		if strings.TrimSpace(cu.Name) == "" {
+			return fmt.Errorf("3cx: %s has no name; every customer needs one", label)
+		}
+		// A name or alias shared by two customers is a call that cannot be
+		// resolved without guessing, and this integration does not guess.
+		for _, n := range cu.names() {
+			folded := strings.ToLower(n)
+			if other, taken := seenName[folded]; taken && other != label {
+				return fmt.Errorf("3cx: %q names both %s and %s; a name or alias has to point at one customer", n, other, label)
+			}
+			seenName[folded] = label
+		}
+		host := strings.TrimSpace(cu.Host)
+		if host == "" {
+			continue
+		}
+		u, err := parseHost(host)
+		if err != nil {
+			return fmt.Errorf("3cx: %s: %w", label, err)
+		}
+		if u.User != nil {
+			return fmt.Errorf("3cx: %s: put the extension and password in their own "+
+				"fields, not in the address; a URL with a password in it ends up in logs", label)
+		}
+		if strings.Contains(u.Path, "/xapi") || strings.Contains(u.Path, "/webclient") {
+			return fmt.Errorf("3cx: %s: the address should be the phone system's web "+
+				"root, not the API path -- drop everything after the host from %q", label, cu.Host)
+		}
+		if p := strings.Trim(u.Path, "/"); p != "" {
+			return fmt.Errorf("3cx: %s: the address %q carries a path; a 3CX is reached "+
+				"at the root of its host", label, cu.Host)
+		}
+		if other, taken := seenHost[strings.ToLower(u.Host)]; taken {
+			return fmt.Errorf("3cx: %s and %s share the address %s; a 3CX serves one business, "+
+				"so one of them is pointed at the wrong system", other, label, u.Host)
+		}
+		seenHost[strings.ToLower(u.Host)] = label
+		if strings.ContainsAny(cu.Extension, " \t\r\n") {
+			return fmt.Errorf("3cx: %s: the extension %q has whitespace in it", label, cu.Extension)
+		}
 	}
 	if c.MaxItems < 1 {
 		return fmt.Errorf("3cx: max_items must be at least 1, got %d", c.MaxItems)
@@ -188,11 +250,11 @@ func parseHost(host string) (*url.URL, error) {
 	return u, nil
 }
 
-// root returns the address requests are built on: scheme and host, no path,
+// rootOf returns the address requests are built on: scheme and host, no path,
 // no trailing slash. An address Validate has turned down yields the empty
 // string, and every request built on it fails at the guard.
-func (c Config) root() string {
-	u, err := parseHost(c.Host)
+func rootOf(host string) string {
+	u, err := parseHost(host)
 	if err != nil {
 		return ""
 	}

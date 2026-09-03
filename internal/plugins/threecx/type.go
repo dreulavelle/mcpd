@@ -10,15 +10,17 @@ import (
 
 // Type declares the integration and what an instance of it needs.
 //
-// One instance is one phone system. An MSP with thirty customers has thirty
-// PBXs, each with its own address and its own system-owner extension, and each
-// is an instance here -- which is what puts the customer's name in every tool
-// the model sees, and what lets a credential be scoped to one of them.
+// One instance serves many phone systems. An MSP with thirty customers has
+// thirty PBXs, each with its own address and its own system-owner extension;
+// they are rows of one instance here, so the MSP runs one endpoint, one tunnel
+// and one connector, and every tool says which customer it is about. The cost
+// is that access is per instance: anyone who reaches it reaches every customer
+// on it, so customers that must be kept apart go on separate instances.
 func Type() plugins.Type {
 	return plugins.Type{
 		Name:  "threecx",
 		Title: "3CX",
-		Description: "Reads a 3CX v20 phone system: whether it is healthy, " +
+		Description: "Reads the 3CX v20 phone systems of one or more customers: whether each is healthy, " +
 			"which extensions and handsets are registered, trunks and the " +
 			"numbers on them, where a number rings, ring groups, queues, " +
 			"digital receptionists, office hours and holidays, call history " +
@@ -29,31 +31,54 @@ func Type() plugins.Type {
 			"-- are never requested.",
 		Settings: []settings.Field{
 			{
-				Key: "host", Label: "Address", Kind: settings.KindString,
-				Required:    true,
-				Placeholder: "acme.ny.3cx.us",
-				Help: "The phone system's web address, as its console reports " +
-					"it — the FQDN, with or without https:// in front. Every " +
-					"customer has their own, so there is no default.",
-			},
-			{
-				Key: "extension", Label: "System owner extension", Kind: settings.KindString,
-				Required:    true,
-				Placeholder: "100",
-				Help: "The extension number, or the email address, to sign in " +
-					"as. It needs the System Owner role: a normal extension can " +
-					"sign in and see only itself, and every listing here would " +
-					"answer 403. Make it an extension kept for this purpose " +
-					"rather than a person's, so revoking it later does not lock " +
-					"anybody out.",
-			},
-			{
-				Key: "password", Label: "Password", Kind: settings.KindSecret,
+				Key: "customers", Label: "Customers", Kind: settings.KindCollection,
 				Required: true,
-				Help: "That extension's web client password. Exchanged for a " +
-					"bearer token that lasts an hour, so it crosses the network " +
-					"once an hour at sign-in and appears nowhere else. Stored " +
-					"encrypted.",
+				Help: "One row per business, each with its own phone system and " +
+					"its own system-owner sign-in. Every tool takes a customer, " +
+					"matched against the name and aliases; with one row it is " +
+					"matched without being asked. Anyone who can reach this " +
+					"instance reaches every customer on it — split them across " +
+					"instances if some people should see only some.",
+				Columns: []settings.Field{
+					{
+						Key: "name", Label: "Business name", Kind: settings.KindString,
+						Required:    true,
+						Placeholder: "Acme Dental Group",
+						Help:        "What the business is called. This is what an assistant is told and what it answers with.",
+					},
+					{
+						Key: "aliases", Label: "Aliases", Kind: settings.KindList,
+						Placeholder: "acme, acme dental, ADG",
+						Help: "Other names people use for it, separated by commas, so " +
+							"\"acme\" finds the right customer. A name or alias may " +
+							"point at one customer only.",
+					},
+					{
+						Key: "host", Label: "Address", Kind: settings.KindString,
+						Required:    true,
+						Placeholder: "acme.ny.3cx.us",
+						Help: "The phone system's web address, as its console reports " +
+							"it — the FQDN, with or without https:// in front.",
+					},
+					{
+						Key: "extension", Label: "System owner extension", Kind: settings.KindString,
+						Required:    true,
+						Placeholder: "100",
+						Help: "The extension number, or the email address, to sign in " +
+							"as. It needs the System Owner role: a normal extension can " +
+							"sign in and see only itself, and every listing here would " +
+							"answer 403. Make it an extension kept for this purpose " +
+							"rather than a person's.",
+					},
+					{
+						Key: "password", Label: "Password", Kind: settings.KindSecret,
+						Required: true,
+						Help: "That extension's web client password. Exchanged for a " +
+							"bearer token that lasts an hour, so it crosses the network " +
+							"once an hour at sign-in and appears nowhere else. Stored " +
+							"encrypted.",
+					},
+				},
 			},
 			{
 				Key: "max_items", Label: "Most rows per listing",
@@ -68,7 +93,7 @@ func Type() plugins.Type {
 				Key: "requests_per_second", Label: "Requests per second",
 				Kind: settings.KindInt, Default: int(defaultRPS),
 				Min: intPtr(1), Max: intPtr(20),
-				Help: "Bounds how hard mcpd leans on the phone system. A 3CX is " +
+				Help: "Bounds how hard mcpd leans on each phone system. A 3CX is " +
 					"one process on one machine with live calls going through " +
 					"it, and the calls matter more than we do, so the default " +
 					"is deliberately modest.",

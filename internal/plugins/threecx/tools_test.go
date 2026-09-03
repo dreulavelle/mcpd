@@ -161,6 +161,9 @@ func TestListExtensions_NeverCarriesCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustNotContain(t, res, credentialWords...)
+	if res.Customer != "Acme" {
+		t.Errorf("the answer should name the customer, got %q", res.Customer)
+	}
 	if res.Total != 3 || res.Returned != 3 {
 		t.Errorf("total %d returned %d; want 3 and 3", res.Total, res.Returned)
 	}

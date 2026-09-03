@@ -67,6 +67,7 @@ func (p *Plugin) registerExtensionTools(r *plugins.Registry) {
 // --- listing ----------------------------------------------------------------
 
 type extensionsArgs struct {
+	Customer         string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
 	Query            string `json:"query,omitempty" jsonschema:"only extensions whose name, number or email contains this"`
 	OnlyUnregistered bool   `json:"only_unregistered,omitempty" jsonschema:"only extensions with no handset or app registered"`
 	Department       string `json:"department,omitempty" jsonschema:"only extensions whose primary department has this name or number"`
@@ -87,6 +88,9 @@ type ExtensionRow struct {
 
 // ExtensionsResult is the extension list with its counts.
 type ExtensionsResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer   string         `json:"customer"`
 	Extensions []ExtensionRow `json:"extensions"`
 	// Total is how many extensions match on the phone system, which can be
 	// more than were returned.
@@ -116,15 +120,16 @@ type userSummary struct {
 }
 
 func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (ExtensionsResult, error) {
-	if err := p.ready(); err != nil {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return ExtensionsResult{}, err
 	}
 
 	// Departments, for the name on each row and for the filter. One small
 	// call; a PBX has a handful of groups.
-	groups, err := p.readGroups(ctx)
+	groups, err := p.readGroups(ctx, acct)
 	if err != nil {
-		return ExtensionsResult{}, p.call(err)
+		return ExtensionsResult{}, acct.call(err)
 	}
 	byID := map[int]string{}
 	for _, g := range groups {
@@ -153,9 +158,9 @@ func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (Exten
 	if len(filters) > 0 {
 		q.Set("$filter", strings.Join(filters, " and "))
 	}
-	got, err := list[userSummary](ctx, p.client, "Users", q, p.limitOf(args.Limit))
+	got, err := list[userSummary](ctx, acct.client, "Users", q, p.limitOf(args.Limit))
 	if err != nil {
-		return ExtensionsResult{}, p.call(err)
+		return ExtensionsResult{}, acct.call(err)
 	}
 
 	out := ExtensionsResult{Extensions: make([]ExtensionRow, 0, len(got.Rows)), Total: got.Total}
@@ -177,18 +182,23 @@ func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (Exten
 	}
 	out.Extensions, out.truncation = bound(out.Extensions, got.Truncated)
 	out.Returned = len(out.Extensions)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
 
 // --- one extension ------------------------------------------------------------
 
 type extensionArgs struct {
+	Customer  string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
 	Extension string `json:"extension" jsonschema:"the extension number"`
 }
 
 // Extension is one extension in full.
 type Extension struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer   string `json:"customer"`
 	Number     string `json:"number"`
 	Name       string `json:"name"`
 	FirstName  string `json:"first_name,omitempty"`
@@ -345,7 +355,8 @@ type forwardingProfile struct {
 }
 
 func (p *Plugin) getExtension(ctx context.Context, args extensionArgs) (Extension, error) {
-	if err := p.ready(); err != nil {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return Extension{}, err
 	}
 	number := strings.TrimSpace(args.Extension)
@@ -358,9 +369,9 @@ func (p *Plugin) getExtension(ctx context.Context, args extensionArgs) (Extensio
 		"$expand": {extensionExpand},
 		"$filter": {"Number eq " + odataString(number)},
 	}
-	u, found, err := one[userDetail](ctx, p.client, "Users", q)
+	u, found, err := one[userDetail](ctx, acct.client, "Users", q)
 	if err != nil {
-		return Extension{}, p.call(err)
+		return Extension{}, acct.call(err)
 	}
 	if !found {
 		return Extension{}, fmt.Errorf("there is no extension %s on this phone system; "+
@@ -415,7 +426,8 @@ func (p *Plugin) getExtension(ctx context.Context, args extensionArgs) (Extensio
 	if u.LanOnly {
 		out.WhyCallsMayNotLand = append(out.WhyCallsMayNotLand, "lan_only is set, so a handset or app outside the office network cannot register")
 	}
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
 
@@ -508,6 +520,7 @@ func parseKeys(raw string) []KeyRow {
 // --- handsets -----------------------------------------------------------------
 
 type devicesArgs struct {
+	Customer       string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
 	Query          string `json:"query,omitempty" jsonschema:"only handsets whose MAC, model, vendor, address or assigned extension contains this"`
 	UnassignedOnly bool   `json:"unassigned_only,omitempty" jsonschema:"only handsets not yet attached to an extension"`
 	Limit          int    `json:"limit,omitempty" jsonschema:"most handsets to return"`
@@ -529,6 +542,9 @@ type DeviceRow struct {
 
 // DevicesResult is the handset list.
 type DevicesResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer   string      `json:"customer"`
 	Devices    []DeviceRow `json:"devices"`
 	Returned   int         `json:"returned"`
 	Unassigned int         `json:"unassigned"`
@@ -542,7 +558,8 @@ const deviceFields = "Id,MAC,Vendor,Model,FirmwareVersion,NetworkAddress,Assigne
 	"DetectedAt,UserAgent,TemplateName,ViaSBC,SbcName"
 
 func (p *Plugin) listDevices(ctx context.Context, args devicesArgs) (DevicesResult, error) {
-	if err := p.ready(); err != nil {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return DevicesResult{}, err
 	}
 	type record struct {
@@ -563,9 +580,9 @@ func (p *Plugin) listDevices(ctx context.Context, args devicesArgs) (DevicesResu
 	if args.UnassignedOnly {
 		q.Set("$filter", "Assigned eq false")
 	}
-	got, err := list[record](ctx, p.client, "DeviceInfos", q, p.limitOf(args.Limit))
+	got, err := list[record](ctx, acct.client, "DeviceInfos", q, p.limitOf(args.Limit))
 	if err != nil {
-		return DevicesResult{}, p.call(err)
+		return DevicesResult{}, acct.call(err)
 	}
 	out := DevicesResult{Devices: make([]DeviceRow, 0, len(got.Rows))}
 	for _, d := range got.Rows {
@@ -587,6 +604,7 @@ func (p *Plugin) listDevices(ctx context.Context, args devicesArgs) (DevicesResu
 	}
 	out.Devices, out.truncation = bound(out.Devices, got.Truncated)
 	out.Returned = len(out.Devices)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }

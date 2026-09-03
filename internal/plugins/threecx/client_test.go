@@ -18,7 +18,7 @@ func TestClient_SignsInOnceAndReusesTheToken(t *testing.T) {
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		var s struct{ Version string }
-		if err := p.client.get(ctx, "SystemStatus", url.Values{"$select": {"Version"}}, &s); err != nil {
+		if err := firstClient(p).get(ctx, "SystemStatus", url.Values{"$select": {"Version"}}, &s); err != nil {
 			t.Fatal(err)
 		}
 		if s.Version != "20.0.9" {
@@ -42,11 +42,11 @@ func TestClient_SignsInAgainWhenTheTokenIsRefused(t *testing.T) {
 	})
 	ctx := context.Background()
 	sel := url.Values{"$select": {"Version"}}
-	if err := p.client.get(ctx, "SystemStatus", sel, nil); err != nil {
+	if err := firstClient(p).get(ctx, "SystemStatus", sel, nil); err != nil {
 		t.Fatal(err)
 	}
 	f.rejectToken.Store(true)
-	if err := p.client.get(ctx, "SystemStatus", sel, nil); err != nil {
+	if err := firstClient(p).get(ctx, "SystemStatus", sel, nil); err != nil {
 		t.Fatalf("a refused token should be replaced by a fresh sign-in: %v", err)
 	}
 	if got := f.logins.Load(); got != 2 {
@@ -57,7 +57,7 @@ func TestClient_SignsInAgainWhenTheTokenIsRefused(t *testing.T) {
 	// says what to check.
 	f.rejectToken.Store(true)
 	f.loginOK = false
-	err := p.client.get(ctx, "SystemStatus", sel, nil)
+	err := firstClient(p).get(ctx, "SystemStatus", sel, nil)
 	if err == nil || !strings.Contains(err.Error(), "extension and password") {
 		t.Errorf("a second refusal should be reported as a credential problem, got %v", err)
 	}
@@ -68,21 +68,21 @@ func TestClient_SignsInAgainWhenTheTokenIsRefused(t *testing.T) {
 func TestClient_RefreshesBeforeExpiry(t *testing.T) {
 	p, f := toolPlugin(t, map[string]string{"SystemStatus": `{}`})
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
-	p.client.now = func() time.Time { return now }
+	firstClient(p).now = func() time.Time { return now }
 	ctx := context.Background()
 	sel := url.Values{"$select": {"Version"}}
-	if err := p.client.get(ctx, "SystemStatus", sel, nil); err != nil {
+	if err := firstClient(p).get(ctx, "SystemStatus", sel, nil); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(58 * time.Minute)
-	if err := p.client.get(ctx, "SystemStatus", sel, nil); err != nil {
+	if err := firstClient(p).get(ctx, "SystemStatus", sel, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.logins.Load(); got != 1 {
 		t.Errorf("a token with two minutes left is still good; signed in %d times", got)
 	}
 	now = now.Add(90 * time.Second)
-	if err := p.client.get(ctx, "SystemStatus", sel, nil); err != nil {
+	if err := firstClient(p).get(ctx, "SystemStatus", sel, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.logins.Load(); got != 2 {
@@ -118,12 +118,8 @@ func TestClient_SecondFactorIsExplained(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"Status":"AuthSecurityCodeRequired","Token":null}`))
 	})
-	p, err := New(testDeps(), Config{Host: srv.URL, Extension: "100", Password: "p"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.client.http = readOnly(srv.Client(), p.cfg.root())
-	_, err = p.client.bearer(context.Background())
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
+	_, err := firstClient(p).bearer(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "two-factor") {
 		t.Errorf("want a message about a second factor, got %v", err)
 	}
@@ -135,12 +131,8 @@ func TestClient_NotAPBXIsExplained(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<html>Welcome to nginx</html>`))
 	})
-	p, err := New(testDeps(), Config{Host: srv.URL, Extension: "100", Password: "p"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.client.http = readOnly(srv.Client(), p.cfg.root())
-	_, err = p.client.bearer(context.Background())
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
+	_, err := firstClient(p).bearer(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "not the phone system's JSON") {
 		t.Errorf("want the address to be doubted, got %v", err)
 	}
@@ -169,14 +161,10 @@ func TestClient_PagesAtOneHundredAndStopsAtTheCeiling(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(collection(1000, rows...)))
 	})
-	p, err := New(testDeps(), Config{Host: srv.URL, Extension: "100", Password: "p"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.client.http = readOnly(srv.Client(), p.cfg.root())
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
 
 	type row struct{ Number string }
-	got, err := list[row](context.Background(), p.client, "Users", url.Values{"$select": {"Number"}}, 250)
+	got, err := list[row](context.Background(), firstClient(p), "Users", url.Values{"$select": {"Number"}}, 250)
 	if err != nil {
 		t.Fatal(err)
 	}

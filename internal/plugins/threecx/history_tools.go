@@ -33,6 +33,7 @@ func (p *Plugin) registerHistoryTools(r *plugins.Registry) {
 }
 
 type callHistoryArgs struct {
+	Customer   string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
 	Extension  string `json:"extension,omitempty" jsonschema:"only calls involving this extension, either end"`
 	Number     string `json:"number,omitempty" jsonschema:"only calls involving a phone number containing these digits, either end"`
 	Since      string `json:"since,omitempty" jsonschema:"only calls at or after this time, as 2026-09-01T14:00:00Z or 2026-09-01"`
@@ -60,6 +61,9 @@ type CallRow struct {
 
 // CallHistoryResult is a page of call records.
 type CallHistoryResult struct {
+	// Customer is the business this answer is about, so an answer can never be
+	// read as another customer's.
+	Customer string    `json:"customer"`
 	Calls    []CallRow `json:"calls"`
 	Returned int       `json:"returned"`
 	Answered int       `json:"answered"`
@@ -77,7 +81,8 @@ const callFields = "SegmentId,SegmentStartTime,SegmentEndTime,CallTime,CallAnswe
 const defaultCalls = 50
 
 func (p *Plugin) searchCallHistory(ctx context.Context, args callHistoryArgs) (CallHistoryResult, error) {
-	if err := p.ready(); err != nil {
+	acct, err := p.resolve(args.Customer)
+	if err != nil {
 		return CallHistoryResult{}, err
 	}
 	limit := args.Limit
@@ -140,9 +145,9 @@ func (p *Plugin) searchCallHistory(ctx context.Context, args callHistoryArgs) (C
 		DstNumber string `json:"DstCallerNumber"`
 		DstExt    bool   `json:"DstExternal"`
 	}
-	got, err := list[record](ctx, p.client, "CallHistoryView", q, limit)
+	got, err := list[record](ctx, acct.client, "CallHistoryView", q, limit)
 	if err != nil {
-		return CallHistoryResult{}, p.call(err)
+		return CallHistoryResult{}, acct.call(err)
 	}
 
 	out := CallHistoryResult{Calls: make([]CallRow, 0, len(got.Rows))}
@@ -176,6 +181,7 @@ func (p *Plugin) searchCallHistory(ctx context.Context, args callHistoryArgs) (C
 	}
 	out.Calls, out.truncation = bound(out.Calls, got.Truncated)
 	out.Returned = len(out.Calls)
-	p.note(nil)
+	acct.note(nil)
+	out.Customer = acct.name
 	return out, nil
 }
