@@ -20,6 +20,16 @@ func Type() plugins.Type {
 		Title: "ExtremeCloud IQ",
 		Description: "Access points, switches, clients, alerts, and what is " +
 			"going wrong with any of them. Read-only.",
+		Guide: plugins.Guide{
+			Questions: []string{
+				"Which access points at the high school are offline?",
+				"How many clients are connected right now, and on which SSIDs?",
+				"What alerts have fired in the last 24 hours?",
+			},
+			Notes: []string{
+				"Location names match the ExtremeCloud IQ location tree.",
+			},
+		},
 		Settings: []settings.Field{
 			{
 				Key: "api_token", Label: "API token", Kind: settings.KindSecret,

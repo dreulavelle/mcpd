@@ -30,8 +30,23 @@ type Type struct {
 	// Settings are the fields an instance needs, keyed bare. The host
 	// namespaces them per instance.
 	Settings []settings.Field
+	// Guide is how somebody uses the integration, shown on its page under the
+	// address. For the person about to ask their first question, not for a
+	// developer: a few things worth asking, and the notes that save a wrong
+	// first attempt.
+	Guide Guide
 	// New builds an instance from resolved settings.
 	New func(deps Deps, cfg map[string]any) (Plugin, error)
+}
+
+// Guide is a type's getting-started notes for the people who will use it.
+type Guide struct {
+	// Questions are things worth asking an assistant connected to this
+	// integration, written the way a person would ask them. Three or so.
+	Questions []string
+	// Notes are the facts that save a wrong first attempt: what to configure
+	// first, what a name has to look like, what the integration will not do.
+	Notes []string
 }
 
 // Validate checks a type declaration.

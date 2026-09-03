@@ -286,3 +286,57 @@ describe("a plugin the configuration file declares", () => {
     await waitFor(() => expect(restore).toHaveBeenCalledWith("weather"));
   });
 });
+
+/**
+ * The "How to use" section is the plugin type's own guide, shown under the
+ * address for the person about to ask their first question. It appears only
+ * when the type declares one.
+ */
+describe("a plugin's how-to-use guide", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api, "plugins").mockResolvedValue({
+      count: 1,
+      plugins: [{
+        name: "pbx", type: "threecx", version: "0.2.0", title: "3CX", description: "",
+        endpoint: "/mcp/pbx", connect_url: "https://host/mcp/pbx",
+        health: "healthy", tools: [{ name: "pbx_list_customers", kind: "read" }],
+        mutations: [], required: false, settings: [],
+      }],
+    });
+    vi.spyOn(api, "instances").mockResolvedValue({
+      count: 1,
+      instances: [{ name: "pbx", type: "threecx", runtime: "builtin", from_file: false, enabled: true, mounted: true }],
+    });
+    vi.spyOn(api, "settings").mockResolvedValue({
+      groups: [], values: {}, secrets_set: {}, encryption_available: true, bootstrap: [],
+    });
+    vi.spyOn(api, "tunnel").mockResolvedValue({
+      tunnels: [], can_manage: false, plugins: ["pbx"], workspaces: [], assignments: {}, accounts: [],
+    });
+  });
+
+  it("shows the type's questions and notes under the address", async () => {
+    vi.spyOn(api, "pluginTypes").mockResolvedValue({
+      count: 1,
+      types: [{
+        name: "threecx", title: "3CX", description: "", configurable: true,
+        guide: { questions: ["Are the phones at Acme working?"], notes: ["Read-only."] },
+      }],
+    });
+    renderWith(<PluginDetail name="pbx" />);
+    expect(await screen.findByText("How to use")).toBeInTheDocument();
+    expect(screen.getByText(/Are the phones at Acme working\?/)).toBeInTheDocument();
+    expect(screen.getByText("Read-only.")).toBeInTheDocument();
+  });
+
+  it("shows nothing when the type declares no guide", async () => {
+    vi.spyOn(api, "pluginTypes").mockResolvedValue({
+      count: 1,
+      types: [{ name: "threecx", title: "3CX", description: "", configurable: true }],
+    });
+    renderWith(<PluginDetail name="pbx" />);
+    await screen.findByText("Address");
+    expect(screen.queryByText("How to use")).not.toBeInTheDocument();
+  });
+});

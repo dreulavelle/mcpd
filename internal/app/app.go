@@ -662,10 +662,20 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			PluginTypes: func() []admin.PluginTypeInfo {
 				out := make([]admin.PluginTypeInfo, 0)
 				for _, t := range a.types.Types() {
-					out = append(out, admin.PluginTypeInfo{
+					info := admin.PluginTypeInfo{
 						Name: t.Name, Title: t.Title, Description: t.Description,
 						Configurable: len(t.Settings) > 0,
-					})
+					}
+					if len(t.Guide.Questions) > 0 || len(t.Guide.Notes) > 0 {
+						info.Guide = &admin.GuideInfo{Questions: t.Guide.Questions, Notes: t.Guide.Notes}
+						if info.Guide.Questions == nil {
+							info.Guide.Questions = []string{}
+						}
+						if info.Guide.Notes == nil {
+							info.Guide.Notes = []string{}
+						}
+					}
+					out = append(out, info)
 				}
 				return out
 			},

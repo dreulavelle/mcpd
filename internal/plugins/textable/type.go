@@ -27,6 +27,16 @@ func Type() plugins.Type {
 			"account: the tenants on it, the organizations and users inside " +
 			"them, and individual users, organizations and contacts by id. " +
 			"Read-only.",
+		Guide: plugins.Guide{
+			Questions: []string{
+				"Which tenants are on this instance, and how many users does each have?",
+				"Who are the users in the Acme organization?",
+				"Look up this contact by id and tell me whether they have opted out.",
+			},
+			Notes: []string{
+				"Contacts are read one at a time by id; there is no contact listing.",
+			},
+		},
 		Settings: []settings.Field{
 			{
 				Key: "base_url", Label: "Address", Kind: settings.KindString,

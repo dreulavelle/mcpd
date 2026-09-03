@@ -363,6 +363,8 @@ export interface PluginType {
   description: string;
   /** Whether adding one will ask for settings. */
   configurable: boolean;
+  /** How to use it: sample questions and notes, for the person about to ask. */
+  guide?: { questions: string[]; notes: string[] };
 }
 
 /** One configured instance, mounted or not. */

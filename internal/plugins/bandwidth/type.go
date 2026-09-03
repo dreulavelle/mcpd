@@ -27,6 +27,17 @@ func Type() plugins.Type {
 		Description: "Calls, messages, numbers, port-ins, 10DLC registration " +
 			"and E911, across every Bandwidth account this credential " +
 			"reaches. Read-only.",
+		Guide: plugins.Guide{
+			Questions: []string{
+				"Which numbers on the account are not assigned to anything?",
+				"Why is the port-in order for this number stalled?",
+				"Show me the calls from this number in the last hour and how each ended.",
+			},
+			Notes: []string{
+				"Numbers are written in E.164, with the country code.",
+				"list_products says which Bandwidth products this account actually has.",
+			},
+		},
 		Settings: []settings.Field{
 			{
 				Key: "client_id", Label: "Client ID", Kind: settings.KindString,

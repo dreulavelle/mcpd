@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import {
-  api, ApiError, type Plugin, type PluginInstance, type SettingsPayload,
+  api, ApiError, type Plugin, type PluginType, type PluginInstance, type SettingsPayload,
   type TunnelInfo, type TunnelStatus,
 } from "@/lib/api";
 import { unprefixed, when } from "@/lib/format";
@@ -29,6 +29,7 @@ export function PluginDetail({ name }: { name: string }) {
   const [plugin, setPlugin] = useState<Plugin | null>(null);
   const [instance, setInstance] = useState<PluginInstance | null>(null);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
+  const [types, setTypes] = useState<PluginType[]>([]);
   const [tunnels, setTunnels] = useState<TunnelInfo | null>(null);
   // Absent from the plugin list alone means unmounted, which this page exists
   // to fix. Absent from both is the only thing that means "not a plugin here".
@@ -45,6 +46,7 @@ export function PluginDetail({ name }: { name: string }) {
       .finally(() => setAsked((a) => (a.instances ? a : { ...a, instances: true })));
     api.settings().then(setSettings).catch(() => setSettings(null));
     api.tunnel().then(setTunnels).catch(() => setTunnels(null));
+    api.pluginTypes().then((r) => setTypes(r.types ?? [])).catch(() => setTypes([]));
   }, [name]);
   usePoll(load, 15_000);
 
@@ -75,17 +77,19 @@ export function PluginDetail({ name }: { name: string }) {
     <Body
       name={name} plugin={plugin} instance={instance}
       settings={settings} tunnels={tunnels} onChanged={load}
+      guide={types.find((t) => t.name === (instance?.type ?? name))?.guide}
     />
   );
 }
 
-function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
+function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
   name: string;
   plugin: Plugin | null;
   instance: PluginInstance | null;
   settings: SettingsPayload | null;
   tunnels: TunnelInfo | null;
   onChanged: () => void;
+  guide?: PluginType["guide"];
 }) {
   const mayAdminister = useCan("plugins:write");
   // Activity needs history, so the link to it does too.
@@ -222,6 +226,8 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged }: {
             <Section title="Address">
               <Copyable value={plugin.connect_url} label="address" />
             </Section>
+
+            {guide && <HowToUse guide={guide} />}
 
             <Section title="ChatGPT">
               <Card>
@@ -666,4 +672,36 @@ function describe(state: TunnelStatus["state"]): string {
     case "stopped": return "switched off";
     default: return String(state);
   }
+}
+
+/**
+ * How to use this integration, for the person about to ask their first
+ * question: a few things worth asking, and the notes that save a wrong first
+ * attempt. Declared by the plugin type, not written here.
+ */
+function HowToUse({ guide }: { guide: NonNullable<PluginType["guide"]> }) {
+  return (
+    <Section title="How to use">
+      <Card>
+        <CardContent className="space-y-4">
+          {guide.questions.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">Things to ask</p>
+              <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                {guide.questions.map((q) => <li key={q}>“{q}”</li>)}
+              </ul>
+            </div>
+          )}
+          {guide.notes.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">Good to know</p>
+              <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                {guide.notes.map((n) => <li key={n}>{n}</li>)}
+              </ul>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </Section>
+  );
 }

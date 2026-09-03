@@ -25,6 +25,16 @@ func Type() plugins.Type {
 		Title: "Echo",
 		Description: "A test connection. One read tool and one harmless change " +
 			"to practise approving. It touches nothing outside mcpd.",
+		Guide: plugins.Guide{
+			Questions: []string{
+				"Echo back \"hello\" so I can see the connection works.",
+				"What is the echo plugin's status?",
+				"Propose setting the echo label to \"test\" so I can practise approving a change.",
+			},
+			Notes: []string{
+				"A test integration. It reaches nothing outside mcpd.",
+			},
+		},
 		Settings: []settings.Field{
 			{
 				Key:   "benchmarks_enabled",
