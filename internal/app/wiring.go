@@ -25,6 +25,7 @@ import (
 	"github.com/spoked/mcpd/internal/plugins/graylog"
 	"github.com/spoked/mcpd/internal/plugins/observium"
 	"github.com/spoked/mcpd/internal/plugins/textable"
+	"github.com/spoked/mcpd/internal/plugins/threecx"
 )
 
 // decodeSettings converts a plugin's untyped YAML settings into its own config
@@ -133,6 +134,7 @@ func builtinTypes() (*plugins.Catalog, error) {
 		graylog.Type(),
 		observium.Type(),
 		textable.Type(),
+		threecx.Type(),
 	)
 }
 

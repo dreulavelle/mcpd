@@ -70,6 +70,7 @@ mcpd currently ships with:
 * **Extreme Networks ExtremeCloud IQ** — access points, switches, connected clients, alerts, sites, and what's going wrong with any of them.
 * **Bandwidth** — calls, messages, number inventory, port-in orders and why they stalled, 10DLC registration, and E911 addresses.
 * **Textable** — business SMS: tenants, the organizations and users inside them, and individual users, organizations and contacts.
+* **3CX** — a v20 phone system: health and licence, extensions and registration, trunks and the numbers on them, where each number rings, queues and ring groups, office hours and holidays, call records and the event log.
 * **Echo** — a reference plugin demonstrating the plugin and approval system.
 
 The infrastructure integrations are read-only — they look, they don't touch. Need something else? Build your own plugin with the included Go SDK, connect a remote MCP server, or find one in the marketplace.
