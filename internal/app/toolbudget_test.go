@@ -81,7 +81,7 @@ var toolListBudget = map[string]int{
 	// -- and a flat row shape cannot say those without a nested array each.
 	// Raised from 28,000 when the instance grew to serve several customers:
 	// every tool gained a customer argument and list_customers arrived.
-	"threecx": 32_000,
+	"threecx": 38_000,
 }
 
 // budgetTotal bounds every plugin at once, which is what the aggregate
@@ -108,12 +108,12 @@ var toolListBudget = map[string]int{
 // six only for a host that mounted one of them, and nobody mounts one -- the
 // question "why is this number not receiving texts" crosses four.
 // Raised from 155,000 with the bandwidth expansion above and the arrival of
-// textable, and again to 215,000 when threecx arrived with seventeen tools.
+// textable, and again to 220,000 when threecx arrived with nineteen tools.
 // Nobody in practice mounts every integration -- a host with two is the
 // ordinary case -- so this bounds the worst arrangement rather than the
 // likely one, and it is the aggregate endpoint's cost for one credential scoped
 // to everything.
-const budgetTotal = 215_000
+const budgetTotal = 220_000
 
 func TestToolList_StaysWithinItsContextBudget(t *testing.T) {
 	h := allPluginsApp(t).Handler()

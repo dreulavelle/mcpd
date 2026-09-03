@@ -69,7 +69,7 @@ the plugin's start.
 
 ## The tools
 
-Seventeen reads, in seven groups, split by the question a technician is asking:
+Nineteen reads, in eight groups, split by the question a technician is asking:
 
 | | |
 |---|---|
@@ -81,6 +81,7 @@ Seventeen reads, in seven groups, split by the question a technician is asking:
 | `list_ring_groups`, `list_queues`, `list_receptionists` | the things a call can land on that are not a person |
 | `get_schedule` | one department's office hours, holidays, time zone and whether somebody forced it open or closed |
 | `search_call_history` | did the call happen, and what became of it |
+| `aggregate_support_bundle`, `get_support_bundle_report` | the support bundle, read into a digest; a last resort |
 
 Every one is read-only and every one is idempotent.
 
@@ -242,6 +243,48 @@ system this was built against reports five trunks and lists three; the other
 two are bridges that do not appear as `Pbx.Trunk`. The status tool names the
 offline trunks it can see and falls back to "3 of 5 registered" for the rest.
 
+## The support bundle
+
+`GET /xapi/v1/SupportInfo` builds and returns the zip the console's "collect
+support info" button produces: several hundred files and tens of megabytes,
+holding a week of metrics, the event and audit logs as CSV, every service log
+and the packet capture where one was taken. It is not in the OData metadata
+and it is a file rather than an entity, so it is the one entry on the
+transport's allow-list marked `raw`: no `$select` is required of it, and
+nothing else may claim that exemption. It is also the one read that costs the
+phone system something -- seconds on a small system, minutes of walking its
+own logs on a large one -- which is why it is two tools, rate limited to one
+capture every ten minutes, and described to the model as the thing to reach
+for last.
+
+`aggregate_support_bundle` starts a capture and returns a job at once, because
+a tool call cannot wait minutes. The fetch runs detached with a ten-minute
+ceiling and a hundred-megabyte cap on the zip, which is held in memory -- a
+zip needs random access, and a temporary file of a customer's logs is a thing
+to clean up and eventually fail to. `get_support_bundle_report` reports where
+the job got to and, once done, the digest; a finished digest is kept an hour
+and reused unless `force` is passed.
+
+The digest comes from the `supportinfo` package beside the plugin, ported from
+an earlier integration: it reads the dozen files that matter and produces the
+system's account of itself, 3CX's own health checks, findings with the lines
+they were read from, the event log grouped and judged, call quality where the
+media server logged it, the packet capture reduced to RTP streams with loss and
+jitter and one-way audio called out, service memory growth, throughput, and the
+audit log distilled to the handful of edits that changed a setting. The report
+tool returns the summary -- system facts, findings, counts -- and one section in
+detail on request, each bounded, with the metric series summarised to peak,
+average and minimum rather than listed. The zip itself is never returned.
+
+**A timed packet capture is not in the API.** The console can start and stop a
+capture by hand and the bundle then carries the pcap, but the v20 OData
+metadata declares no action for it: the only capture-adjacent members are
+`DownloadEventLogs`, the report functions and the purge actions. Whatever the
+console calls is outside `/xapi/v1`. Offering "capture for three minutes"
+would mean finding that endpoint by watching the console, and it would be a
+write in the sense that matters -- it starts a process on the PBX -- so it
+belongs with the mutations when those come, not on the read side.
+
 ## What is cached, and what is never
 
 Nothing. A read tool's result is evidence a model acts on, and on a PBX the
@@ -294,13 +337,6 @@ re-reading -- and the transport's allow-list will be widened one path at a
 time. The paths that would be needed are known: `PATCH Users(id)`,
 `POST/DELETE Users`, `PATCH Trunks(id)`, `POST InboundRules`, `POST/DELETE
 Holidays`, `PATCH Groups(id)`, and the phone actions under `Users/Pbx.*`.
-
-**The support bundle.** `GET /xapi/v1/SupportInfo` builds and returns the same
-zip the console's "collect support info" button produces: thirteen to forty
-megabytes, produced over minutes. Reading it means holding it in memory and
-parsing a dozen log formats, and the result would blow through what one tool
-call may return many times over. `search_events` and `search_call_history`
-answer most of what a bundle is opened for.
 
 **Recordings, chat history, contacts.** Call recordings and chat transcripts
 are the content of somebody's conversations, and a phonebook is personal data

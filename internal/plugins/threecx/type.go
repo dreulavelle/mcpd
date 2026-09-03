@@ -20,63 +20,44 @@ func Type() plugins.Type {
 	return plugins.Type{
 		Name:  "threecx",
 		Title: "3CX",
-		Description: "Reads the 3CX v20 phone systems of one or more customers: whether each is healthy, " +
-			"which extensions and handsets are registered, trunks and the " +
-			"numbers on them, where a number rings, ring groups, queues, " +
-			"digital receptionists, office hours and holidays, call history " +
-			"and the event log. Read-only: it will not create, change or " +
-			"delete anything, and every request is checked against a list " +
-			"of read endpoints. Credentials the API would hand out -- SIP " +
-			"passwords, voicemail PINs, provisioning links, the licence key " +
-			"-- are never requested.",
+		Description: "The 3CX v20 phone systems of one or more customers. Read-only; " +
+			"credentials the API would return are never requested.",
 		Settings: []settings.Field{
 			{
 				Key: "customers", Label: "Customers", Kind: settings.KindCollection,
 				Required: true,
-				Help: "One row per business, each with its own phone system and " +
-					"its own system-owner sign-in. Every tool takes a customer, " +
-					"matched against the name and aliases; with one row it is " +
-					"matched without being asked. Anyone who can reach this " +
-					"instance reaches every customer on it — split them across " +
-					"instances if some people should see only some.",
+				Help: "One row per business. Anyone who can reach this instance " +
+					"reaches every customer on it; split them across instances if " +
+					"some people should see only some.",
 				Columns: []settings.Field{
 					{
 						Key: "name", Label: "Business name", Kind: settings.KindString,
 						Required:    true,
 						Placeholder: "Acme Dental Group",
-						Help:        "What the business is called. This is what an assistant is told and what it answers with.",
+						Help:        "What the business is called.",
 					},
 					{
 						Key: "aliases", Label: "Aliases", Kind: settings.KindList,
 						Placeholder: "acme, acme dental, ADG",
-						Help: "Other names people use for it, separated by commas, so " +
-							"\"acme\" finds the right customer. A name or alias may " +
-							"point at one customer only.",
+						Help:        "Other names people use for it, separated by commas.",
 					},
 					{
 						Key: "host", Label: "Address", Kind: settings.KindString,
 						Required:    true,
 						Placeholder: "acme.ny.3cx.us",
-						Help: "The phone system's web address, as its console reports " +
-							"it — the FQDN, with or without https:// in front.",
+						Help:        "The phone system's FQDN, with or without https://.",
 					},
 					{
 						Key: "extension", Label: "System owner extension", Kind: settings.KindString,
 						Required:    true,
 						Placeholder: "100",
-						Help: "The extension number, or the email address, to sign in " +
-							"as. It needs the System Owner role: a normal extension can " +
-							"sign in and see only itself, and every listing here would " +
-							"answer 403. Make it an extension kept for this purpose " +
-							"rather than a person's.",
+						Help: "The extension number or email to sign in as. It needs the " +
+							"System Owner role; use one kept for this purpose rather than a person's.",
 					},
 					{
 						Key: "password", Label: "Password", Kind: settings.KindSecret,
 						Required: true,
-						Help: "That extension's web client password. Exchanged for a " +
-							"bearer token that lasts an hour, so it crosses the network " +
-							"once an hour at sign-in and appears nowhere else. Stored " +
-							"encrypted.",
+						Help:     "That extension's web client password. Stored encrypted.",
 					},
 				},
 			},
@@ -84,19 +65,13 @@ func Type() plugins.Type {
 				Key: "max_items", Label: "Most rows per listing",
 				Kind: settings.KindInt, Default: defaultMaxItems,
 				Min: intPtr(10), Max: intPtr(2000),
-				Help: "A listing stops here and says so. It bounds what one " +
-					"answer can pull into a conversation, not what the phone " +
-					"system holds — a large PBX has a thousand extensions, and " +
-					"narrowing with a query is the better answer than raising this.",
+				Help: "A listing stops here and says so.",
 			},
 			{
 				Key: "requests_per_second", Label: "Requests per second",
 				Kind: settings.KindInt, Default: int(defaultRPS),
 				Min: intPtr(1), Max: intPtr(20),
-				Help: "Bounds how hard mcpd leans on each phone system. A 3CX is " +
-					"one process on one machine with live calls going through " +
-					"it, and the calls matter more than we do, so the default " +
-					"is deliberately modest.",
+				Help: "Bounds how hard mcpd leans on each phone system.",
 			},
 		},
 		New: func(deps plugins.Deps, cfg map[string]any) (plugins.Plugin, error) {

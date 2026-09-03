@@ -22,12 +22,8 @@ func (p *Plugin) registerScheduleTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "get_schedule",
 		Title: "Get office hours and holidays",
-		Description: "One department's office hours, its holidays and early " +
-			"closings, its time zone, and whether somebody has forced it open " +
-			"or closed by hand -- which no amount of reading the schedule would " +
-			"tell you, and is the first thing to check when calls go to the " +
-			"closed greeting during the day. Leave department out for the " +
-			"default one, which is everybody; the answer names the others.",
+		Description: "One department's office hours, holidays, time zone, and " +
+			"whether it has been forced open or closed. Default department when none is named.",
 		Idempotent: true,
 	}, p.getSchedule)
 }

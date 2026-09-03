@@ -28,38 +28,25 @@ func (p *Plugin) registerExtensionTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_extensions",
 		Title: "List extensions",
-		Description: "The extensions on the phone system with the name on each, " +
-			"whether a handset or app is registered, whether it is enabled, its " +
-			"status profile and department. An extension that exists but is " +
-			"not registered is a phone that is unplugged, on a dead network " +
-			"port or misconfigured, which is what a 'my phone does not ring' " +
-			"ticket usually is. Narrow with a query on name, number or email, " +
-			"to the unregistered ones, or to one department.",
+		Description: "Extensions with name, registration, enabled state, status " +
+			"profile and department. Narrow by query, unregistered only, or department.",
 		Idempotent: true,
 	}, p.listExtensions)
 
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "get_extension",
 		Title: "Get one extension",
-		Description: "Everything about one extension that explains how it " +
-			"behaves: registration, status profile, queue login, voicemail, " +
-			"the options that decide whether it works from outside the office, " +
-			"its department and role, the handsets on it, every forwarding " +
-			"profile's rules, and the desk phone's key layout. Reach for this " +
-			"when one person is not receiving calls; the why_calls_may_not_land " +
-			"field says what to check first. Never returns SIP credentials or " +
-			"the voicemail PIN.",
+		Description: "One extension in full: registration, status, queue login, " +
+			"voicemail, remote-access options, department and role, handsets, " +
+			"forwarding rules per profile, desk-phone keys, and why calls may not land.",
 		Idempotent: true,
 	}, p.getExtension)
 
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_devices",
 		Title: "List provisioned handsets",
-		Description: "The desk phones the phone system has provisioned or seen: " +
-			"make, model, firmware, network address, which extension each " +
-			"belongs to and when it was last detected. Use it for a phone that " +
-			"will not register, or to find out what hardware is on a site. " +
-			"Provisioning links are never returned.",
+		Description: "Provisioned handsets: make, model, firmware, address, " +
+			"assigned extension and when last seen.",
 		Idempotent: true,
 	}, p.listDevices)
 }

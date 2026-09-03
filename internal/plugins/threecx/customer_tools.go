@@ -17,11 +17,8 @@ func (p *Plugin) registerCustomerTools(r *plugins.Registry) {
 	plugins.Tool(r, plugins.ToolSpec{
 		Name:  "list_customers",
 		Title: "List customers",
-		Description: "The businesses whose phone systems this instance serves, " +
-			"with each one's aliases, address and whether the last call to it " +
-			"worked. Use it to find the right customer name before asking " +
-			"about a phone system, and when a name you were given matched " +
-			"more than one.",
+		Description: "The businesses this instance serves, with aliases, address " +
+			"and whether the last call to each worked.",
 		Idempotent: true,
 	}, p.listCustomers)
 }

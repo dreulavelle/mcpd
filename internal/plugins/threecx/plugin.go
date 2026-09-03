@@ -36,6 +36,12 @@ type account struct {
 	mu      sync.RWMutex
 	lastErr error
 	checked time.Time
+
+	// bundle is the most recent support bundle capture for this customer,
+	// running or finished. One at a time: the PBX builds the zip on request,
+	// and two at once would be two walks of the same logs.
+	bundleMu sync.Mutex
+	bundle   *bundleJob
 }
 
 // New constructs the plugin from resolved settings.
@@ -96,32 +102,17 @@ func (p *Plugin) Descriptor() plugins.Descriptor {
 		Name:    "threecx",
 		Version: "0.2.0",
 		Title:   "3CX",
-		Description: "Reads the 3CX v20 phone systems of one or more customers: " +
-			"system health and licence, extensions and whether each is " +
-			"registered, one extension in full with its forwarding and " +
-			"desk-phone keys, provisioned handsets, trunks and the DID numbers " +
-			"on them, where each number rings, outbound dialling rules, ring " +
-			"groups, queues, digital receptionists, a department's office hours " +
-			"and holidays, call records, calls in progress and the event log.\n\n" +
-			"Every tool takes a customer: the business name or an alias, as " +
-			"list_customers reports them. When this instance serves one " +
-			"customer it may be left out. A name that matches more than one " +
-			"customer is refused with the candidates -- ask the person which " +
-			"they mean rather than picking one.\n\n" +
-			"Read-only. It will not create, change or delete anything, and " +
-			"every request is checked against a list of read endpoints rather " +
-			"than merely being a method nothing writes with. Credentials the " +
-			"API would hand out -- SIP passwords, voicemail PINs, provisioning " +
-			"links, the licence key -- are never requested, so they cannot " +
-			"appear in an answer. Start with get_system_status for any " +
-			"\"the phones are down\" question; most of them are a trunk or a " +
-			"handset that is not registered.",
+		Description: "The 3CX v20 phone systems of one or more customers. Every tool " +
+			"takes customer: a business name or alias from list_customers, optional " +
+			"when there is one. A name matching several customers is refused with " +
+			"the candidates: ask the person, do not pick. Read-only; credentials " +
+			"the API would return are never requested. Start with get_system_status.",
 	}
 }
 
 // Register implements plugins.Plugin.
 //
-// Seventeen read tools in seven groups, split by the question a technician is
+// Nineteen read tools in eight groups, split by the question a technician is
 // asking rather than by the entity 3CX keeps the answer on.
 func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	p.registerCustomerTools(r)
@@ -131,6 +122,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	p.registerGroupTools(r)
 	p.registerScheduleTools(r)
 	p.registerHistoryTools(r)
+	p.registerBundleTools(r)
 	return nil
 }
 
