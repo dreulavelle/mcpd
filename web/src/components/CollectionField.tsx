@@ -137,7 +137,22 @@ function cellText(v: unknown): string {
   if (v === undefined || v === null || v === "") return "—";
   if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
   if (typeof v === "boolean") return v ? "yes" : "no";
-  return String(v);
+  return tidyAddress(String(v));
+}
+
+/**
+ * Drops the scheme from an https address, and any trailing slash.
+ *
+ * In a table the scheme is noise: https is what an address is unless somebody
+ * says otherwise, and a column of them repeats eight characters on every row.
+ * `http://` is left exactly as it is, because that one is the exception and
+ * seeing it is the point. Display only -- what was typed is what is stored,
+ * and the edit dialog shows that.
+ */
+function tidyAddress(v: string): string {
+  if (!v.startsWith("https://")) return v;
+  const trimmed = v.slice("https://".length).replace(/\/+$/, "");
+  return trimmed || v;
 }
 
 /** The form for one row: every column, with a secret shown as saved or not. */
