@@ -128,15 +128,12 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 
 // Start implements plugins.Starter.
 //
-// Every customer is probed: sign in, read the system status, list one
-// extension. The three fail differently -- a wrong address, a wrong password
-// and an extension without the system owner role -- and told apart at startup
-// they are three different sentences on the dashboard rather than one
-// confusing failure inside the first tool call an assistant makes.
-//
-// One customer failing does not fail the start. The others are reachable and
-// their tools work; the failure is on the health report, named, until it is
-// fixed. Every customer failing is a start that failed.
+// It reaches no phone system. A customer's PBX is signed in to when somebody
+// asks about that customer, and not before: a start that probed thirty
+// customers cost thirty sign-ins per restart, each counted by 3CX's
+// anti-hacking protection, and marked the plugin degraded over a customer
+// nobody had asked about. list_customers with check set does the probing when
+// somebody actually wants it.
 func (p *Plugin) Start(ctx context.Context) error {
 	if !p.configured {
 		// Not an error the host should die on. The plugin is mounted, its
@@ -146,73 +143,34 @@ func (p *Plugin) Start(ctx context.Context) error {
 			"address, a system owner extension and its password on the Plugins page")
 		return nil
 	}
-
-	// Probed together rather than in turn: thirty customers at twenty seconds
-	// each is ten minutes of startup done one at a time, and none of them
-	// depends on another.
-	results := make([]string, len(p.accounts))
-	var wg sync.WaitGroup
-	for i, a := range p.accounts {
-		wg.Add(1)
-		go func(i int, a *account) {
-			defer wg.Done()
-			actx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
-			defer cancel()
-			info, err := a.client.Probe(actx)
-			a.note(err)
-			if err != nil {
-				results[i] = a.name + ": " + plugins.Explain(err).Error()
-				p.deps.Log.WarnContext(ctx, "3cx customer is not reachable", "customer", a.name, "error", err)
-				return
-			}
-			p.deps.Log.InfoContext(ctx, "3cx customer ready",
-				"customer", a.name, "reading", a.client.Describe(),
-				"fqdn", info.FQDN, "version", info.Version,
-				"extensions", info.ExtensionsTotal, "trunks", info.TrunksTotal)
-		}(i, a)
-	}
-	wg.Wait()
-	var failed []string
-	for _, r := range results {
-		if r != "" {
-			failed = append(failed, r)
-		}
-	}
-	if len(failed) == len(p.accounts) {
-		return fmt.Errorf("3cx: no customer could be reached: %s", strings.Join(failed, "; "))
-	}
+	p.deps.Log.InfoContext(ctx, "3cx ready", "customers", len(p.accounts),
+		"reading", "each customer's configuration API on first use, restricted to a "+
+			"named list of read endpoints by its transport")
 	return nil
 }
 
 // Check implements plugins.Checker.
 //
 // It reports what the last real call to each customer found rather than making
-// one of its own. A health check that polls every PBX on a schedule spends the
-// phone systems' capacity to answer a question the next tool call answers for
-// free, and readiness that depends on someone else's uptime reports mcpd as
-// broken when it is not.
+// one of its own. A customer nobody has asked about yet is not a problem, so
+// it is not reported as one; a customer whose last call failed is named, so
+// the dashboard says which of thirty phone systems is the one to look at.
 func (p *Plugin) Check(_ context.Context) plugins.Health {
 	if !p.configured {
 		return plugins.Degraded("not configured yet — add a customer below with its " +
 			"address, a system owner extension and its password")
 	}
-	var failing, unchecked []string
+	var failing []string
 	for _, a := range p.accounts {
 		a.mu.RLock()
-		err, checked := a.lastErr, a.checked
+		err := a.lastErr
 		a.mu.RUnlock()
-		switch {
-		case checked.IsZero():
-			unchecked = append(unchecked, a.name)
-		case err != nil:
+		if err != nil {
 			failing = append(failing, a.name+": "+plugins.Explain(err).Error())
 		}
 	}
-	switch {
-	case len(failing) > 0:
+	if len(failing) > 0 {
 		return plugins.Degraded("last call failed for " + strings.Join(failing, "; "))
-	case len(unchecked) == len(p.accounts):
-		return plugins.Degraded("has not reached any phone system yet")
 	}
 	return plugins.Healthy()
 }

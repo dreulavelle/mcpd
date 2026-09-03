@@ -181,3 +181,20 @@ func TestGuard_SupportInfoIsTheOneRawRead(t *testing.T) {
 		t.Errorf("only the download should have reached the network: %v", rec.reached)
 	}
 }
+
+// An edit the audit log recorded may be a credential being changed. The value
+// is removed on the way out and the edit stays visible as an edit.
+func TestScrubSecrets_RemovesCredentialValues(t *testing.T) {
+	cases := map[string]string{
+		`{"Number":"101","AuthPassword":"s3cret","Enabled":true}`:              `{"AuthPassword":"[redacted]","Enabled":true,"Number":"101"}`,
+		`{"Gateway":{"Host":"sip.example","AuthPassword":"p"},"VMPIN":"1234"}`: `{"Gateway":{"AuthPassword":"[redacted]","Host":"sip.example"},"VMPIN":"[redacted]"}`,
+		`AuthPassword: "s3cret", Number: "101"`:                                `AuthPassword: "[redacted]", Number: "101"`,
+		`plain text with no credential`:                                        `plain text with no credential`,
+		``:                                                                     ``,
+	}
+	for in, want := range cases {
+		if got := scrubSecrets(in); got != want {
+			t.Errorf("scrubSecrets(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

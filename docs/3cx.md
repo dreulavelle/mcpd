@@ -59,6 +59,13 @@ people should see only some customers, those customers go on a second
 instance. This is the trade the single connector buys, and it is written on
 the setting's own help text so nobody discovers it later.
 
+**Nothing is reached until asked.** Start signs in to no phone system: thirty
+customers would be thirty sign-ins per restart, each counted by 3CX's
+anti-hacking protection, to mark the plugin degraded over a customer nobody
+had asked about. Health is what the last real call to each customer found, a
+customer never asked about is not a problem, and `list_customers` with `check`
+signs in to every one on demand when somebody wants to know which is wrong.
+
 **Nothing crosses between customers.** Each customer has its own client, its
 own token, its own rate limit, its own transport pinned to its own host, and
 its own health; there is no cache; and every answer carries a `customer` field
@@ -161,10 +168,10 @@ Three things about the sign-in are worth knowing:
   401 is reported as a credential problem.
 
 The extension needs the **System Owner** role. A normal extension signs in
-perfectly well and is refused every listing with a 403, so the startup probe
+perfectly well and is refused every listing with a 403, so the on-demand check
 lists one extension after signing in: a wrong address, a wrong password and a
-missing role are then three different sentences on the dashboard rather than
-one failure inside the first tool call.
+missing role are then three different sentences rather than one failure inside
+the first tool call.
 
 ## OData, as 3CX speaks it
 
