@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.14.0](https://github.com/dreulavelle/mcpd/compare/v0.13.0...v0.14.0) (2026-09-04)
+
+
+### Features
+
+* **plugins:** a type can say how to use it ([96fc9c6](https://github.com/dreulavelle/mcpd/commit/96fc9c6bc4722b0e9968c1df037a3c361bd1b943))
+* **sdk:** an out-of-process plugin is a type, and its settings reach it ([cda9e24](https://github.com/dreulavelle/mcpd/commit/cda9e24614d97bacbd4a115209240cfbe94f4cf7))
+* **settings:** a plugin setting can be a table of rows ([e69327a](https://github.com/dreulavelle/mcpd/commit/e69327a578080f78a1d76901a9b0baceba58b885))
+* **threecx:** one instance serves many customers ([de38380](https://github.com/dreulavelle/mcpd/commit/de3838030f6aeeb4d1e8096dd2d5eeb08ec61342))
+* **threecx:** probe customers together, and prove the plugin through the host ([d8de4b0](https://github.com/dreulavelle/mcpd/commit/d8de4b0d2bfeb239f83cf15bfc2efaa3fbd1b9ba))
+* **threecx:** read a 3CX v20 phone system ([989260f](https://github.com/dreulavelle/mcpd/commit/989260f4abdd2386bf2fb7702befa4063824d4ef))
+* **threecx:** read the support bundle as a digest, as a last resort ([be72fc8](https://github.com/dreulavelle/mcpd/commit/be72fc81600d6eb29188c33d6c8d0891829211c1))
+* **threecx:** read what the phone system is refusing, and remote connectivity ([bed47ff](https://github.com/dreulavelle/mcpd/commit/bed47ff005ea8f369fb834dc07711ba7e2da22ae))
+
+
+### Fixes
+
+* **settings:** an https address reads without its scheme ([9ba6647](https://github.com/dreulavelle/mcpd/commit/9ba6647cc50738ff0c05dc0dcb4a1623808e79e4))
+* **threecx:** a port is part of the address, and a trailing slash is not ([5432868](https://github.com/dreulavelle/mcpd/commit/543286863c41beae29eabe803087fc476e79a9e7))
+* **threecx:** an unknown customer says where to add it ([9bbf7b5](https://github.com/dreulavelle/mcpd/commit/9bbf7b5f31a0246786553c6c4770c384222db495))
+* **threecx:** reach a customer's phone system only when asked ([e3fe9b9](https://github.com/dreulavelle/mcpd/commit/e3fe9b920b2fb5b5613cf090103786085a0fcbee))
+* **threecx:** read a capture's state under the lock that guards it ([350608e](https://github.com/dreulavelle/mcpd/commit/350608ea45208b059b63efcf07a03a1d3a34012a))
+* **threecx:** say what it does in a sentence ([aa62a99](https://github.com/dreulavelle/mcpd/commit/aa62a99f638f8adfbf9efe23fb25ac230e9850ec))
+
 ## [0.13.0](https://github.com/dreulavelle/mcpd/compare/v0.12.0...v0.13.0) (2026-09-03)
 
 
