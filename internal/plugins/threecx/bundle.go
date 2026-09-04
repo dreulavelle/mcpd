@@ -56,9 +56,26 @@ type bundleJob struct {
 	report   *supportinfo.Snapshot
 }
 
-func (j *bundleJob) state() string {
+// snapshot copies a customer's capture under the lock that guards it.
+//
+// The fields are written by the goroutine doing the capture and read by
+// whoever asks how it is going, so every read has to be under the same lock.
+// Taking a copy rather than holding the lock across the whole answer keeps the
+// lock short and makes it impossible for a caller to read a half-written job:
+// the copy is a value, and the report it points at is written once and never
+// changed afterwards.
+func (a *account) snapshot() (bundleJob, bool) {
+	a.bundleMu.Lock()
+	defer a.bundleMu.Unlock()
+	if a.bundle == nil {
+		return bundleJob{}, false
+	}
+	return *a.bundle, true
+}
+
+func (j bundleJob) state() string {
 	switch {
-	case j == nil:
+	case j.id == "":
 		return "none"
 	case j.finished.IsZero():
 		return "running"
@@ -126,7 +143,10 @@ func (p *Plugin) startBundle(ctx context.Context, args startBundleArgs) (BundleS
 	acct.bundleMu.Lock()
 	defer acct.bundleMu.Unlock()
 
-	if j := acct.bundle; j != nil {
+	// Read under the lock this function already holds, so the capture running
+	// in the background cannot be observed half-written.
+	if acct.bundle != nil {
+		j := *acct.bundle
 		switch {
 		case j.state() == "running":
 			st := statusOf(acct.name, j)
@@ -145,7 +165,7 @@ func (p *Plugin) startBundle(ctx context.Context, args startBundleArgs) (BundleS
 	// a model with a deadline. Bounded by its own timeout instead.
 	go p.runBundle(acct, job)
 
-	st := statusOf(acct.name, job)
+	st := statusOf(acct.name, *job)
 	st.Note = "capture started; the phone system is building the bundle. Poll get_support_bundle_report -- seconds on a small system, minutes on a large one"
 	return st, nil
 }
@@ -173,22 +193,23 @@ func (p *Plugin) runBundle(acct *account, job *bundleJob) {
 	job.finished = time.Now()
 	job.err = err
 	job.report = report
+	took := job.finished.Sub(job.started)
 	acct.bundleMu.Unlock()
+
 	acct.note(err)
 	if err != nil {
 		p.deps.Log.WarnContext(ctx, "3cx support bundle failed", "customer", acct.name, "error", err)
 		return
 	}
 	p.deps.Log.InfoContext(ctx, "3cx support bundle read", "customer", acct.name,
-		"findings", len(report.Findings), "files", len(report.Read), "took", job.finished.Sub(job.started))
+		"findings", len(report.Findings), "files", len(report.Read), "took", took)
 }
 
-func statusOf(customer string, j *bundleJob) BundleStatus {
+// statusOf renders a capture. It takes a copy rather than the job itself,
+// because the fields are guarded by the account's lock and a pointer would
+// invite reading them without it -- which is the race this used to have.
+func statusOf(customer string, j bundleJob) BundleStatus {
 	st := BundleStatus{Customer: customer, State: j.state()}
-	if j == nil {
-		st.Note = "no capture has been started; call aggregate_support_bundle first"
-		return st
-	}
 	st.JobID = j.id
 	st.StartedAt = j.started.UTC().Format(time.RFC3339)
 	if !j.finished.IsZero() {
@@ -384,14 +405,14 @@ func (p *Plugin) bundleReport(_ context.Context, args bundleReportArgs) (BundleR
 		return BundleReport{}, fmt.Errorf("section %q is not one of events, changes, quality, capture, services, network, health or files", args.Section)
 	}
 
-	acct.bundleMu.Lock()
-	job := acct.bundle
-	acct.bundleMu.Unlock()
-
-	out := BundleReport{BundleStatus: statusOf(acct.name, job)}
-	if job == nil {
-		return out, nil
+	job, started := acct.snapshot()
+	if !started {
+		return BundleReport{BundleStatus: BundleStatus{
+			Customer: acct.name, State: "none",
+			Note: "no capture has been started; call aggregate_support_bundle first",
+		}}, nil
 	}
+	out := BundleReport{BundleStatus: statusOf(acct.name, job)}
 	switch job.state() {
 	case "running":
 		out.Note = fmt.Sprintf("still collecting, %s so far; ask again shortly", time.Since(job.started).Round(time.Second))
