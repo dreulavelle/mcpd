@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/dreulavelle/mcpd/compare/v0.14.0...v0.14.1) (2026-09-04)
+
+
+### Fixes
+
+* **bandwidth:** read every 10DLC campaign, not the second page onward ([7eb0309](https://github.com/dreulavelle/mcpd/commit/7eb0309bb3ebd12549615777fbad748627b4f290))
+
 ## [0.14.0](https://github.com/dreulavelle/mcpd/compare/v0.13.0...v0.14.0) (2026-09-04)
 
 
