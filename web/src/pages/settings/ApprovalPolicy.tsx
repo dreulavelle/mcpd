@@ -252,9 +252,7 @@ export function ApprovalPolicy() {
         </Notice>
       ) : loadProblem ? (
         <Notice tone="problem">
-          {loadProblem instanceof ApiError
-            ? loadProblem.detail
-            : "Couldn't load the approval policy."}
+          {problemText(loadProblem, "Couldn't load the approval policy.")}
         </Notice>
       ) : null}
 

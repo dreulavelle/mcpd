@@ -376,11 +376,9 @@ export function FirstRun({ onDone }: {
       onDone(await api.registerFirst(email.trim(), password));
     } catch (err) {
       setError(
-        err instanceof ApiError
-          ? (err.status === 409
-            ? "Someone already claimed this instance. Reload and sign in."
-            : err.detail)
-          : "Couldn't reach mcpd. Is it running?",
+        err instanceof ApiError && err.status === 409
+          ? "Someone already claimed this instance. Reload and sign in."
+          : problemText(err, "Couldn't claim this instance. Try again in a moment."),
       );
     } finally {
       setBusy(false);

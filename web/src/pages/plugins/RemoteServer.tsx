@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
   api,
-  ApiError,
   type MCPDiff,
   type MCPDiscovery,
   type MCPServer,
@@ -153,9 +152,7 @@ function Body({ server, tools, toolsError, onChanged }: {
       setDiff(result.diff ?? {});
       notify("good", result.note ?? "Discovered.");
     } catch (e) {
-      notify("problem", e instanceof ApiError
-        ? e.detail
-        : "Couldn't reach the server.");
+      notify("problem", problemText(e, "Couldn't reach the server."));
     } finally {
       setDiscovering(false);
       onChanged();
