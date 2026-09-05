@@ -61,9 +61,8 @@ function Version({ mayAdmin }: { mayAdmin: boolean }) {
         <div>
           <CardTitle className="text-base">Version</CardTitle>
           <p className="text-sm text-muted-foreground">
-            mcpd never installs an update. Replacing a running host is the
-            deployment's job — a container that could rewrite itself would need
-            privileges this one drops on purpose.
+            mcpd does not install updates. Replacing a running host is your
+            deployment's job.
           </p>
         </div>
         {mayAdmin && (
@@ -93,32 +92,29 @@ function VersionBody({ status }: { status: UpdateStatus }) {
         {status.enabled && !status.update_available && status.comparable
           && status.latest && <Chip tone="good">up to date</Chip>}
         {!status.comparable && (
-          <Chip tone="neutral">not a released version</Chip>
+          <Chip tone="neutral">not a release number</Chip>
         )}
       </div>
 
       {!status.enabled && (
         <Notice tone="neutral">
-          Update checking is off, so nothing is asking what the current release
-          is. Turn it on under Settings → Updates. It reaches github.com on a
-          timer, which is a connection worth agreeing to rather than
-          discovering.
+          Update checking is off, so nothing knows whether a newer version
+          exists. Turn it on under Settings → Updates. It checks github.com on a
+          timer.
         </Notice>
       )}
 
       {status.error && (
         <Notice tone="problem">
-          The last check failed: {status.error}
+          The last check failed. It said: “{status.error}”
         </Notice>
       )}
 
       {!status.comparable && status.enabled && (
         <Notice tone="neutral">
-          This build reports <code className="font-mono">{status.current}</code>,
-          which cannot be compared with a release number — so it is not being
-          called out of date. Build with a version to change that: the image
-          takes a <code className="font-mono">VERSION</code> build argument, and
-          releases set it for you.
+          This host reports <code className="font-mono">{status.current}</code>,
+          which is not a release number, so it cannot be compared with one.
+          Nothing here is calling it out of date.
         </Notice>
       )}
 
@@ -183,8 +179,7 @@ function Usage() {
       <CardHeader>
         <CardTitle className="text-base">Resources</CardTitle>
         <p className="text-sm text-muted-foreground">
-          What this process is using, read from the Go runtime and{" "}
-          <code className="font-mono">/proc</code>. Refreshes every ten seconds.
+          What mcpd is using on this host. Refreshes every ten seconds.
         </p>
       </CardHeader>
       <CardContent>
@@ -215,7 +210,7 @@ function UsageBody({ r }: { r: Resources }) {
             className="h-2 w-full overflow-hidden rounded-full bg-muted"
             role="progressbar" aria-valuenow={Math.round(pressure)}
             aria-valuemin={0} aria-valuemax={100}
-            aria-label="Memory used against the container limit"
+            aria-label="Memory used against this host's limit"
           >
             <div
               className={pressure > 85 ? "h-full bg-destructive" : "h-full bg-primary"}
@@ -226,34 +221,40 @@ function UsageBody({ r }: { r: Resources }) {
       )}
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
-        <Stat label="Uptime" value={duration(r.uptime_seconds)} />
-        <Stat label="Resident memory" value={r.resident_bytes ? bytes(r.resident_bytes) : "—"} />
-        <Stat label="Heap in use" value={bytes(r.heap_in_use_bytes)} />
+        <Stat label="Running for" value={duration(r.uptime_seconds)} />
+        <Stat label="Memory in use" value={r.resident_bytes ? bytes(r.resident_bytes) : "—"} />
         <Stat
-          label="From the OS" value={bytes(r.sys_bytes)}
-          help="Taken from the kernel and not necessarily given back."
+          label="Memory holding data" value={bytes(r.heap_in_use_bytes)}
+          help="Part of the memory in use."
         />
-        <Stat label="Goroutines" value={String(r.goroutines)} />
-        <Stat label="OS threads" value={r.os_threads ? String(r.os_threads) : "—"} />
         <Stat
-          label="CPU used"
+          label="Reserved from this host" value={bytes(r.sys_bytes)}
+          help="Asked for from the host, and not always handed back."
+        />
+        <Stat
+          label="Jobs running" value={String(r.goroutines)}
+          help="Pieces of work mcpd is doing at once."
+        />
+        <Stat label="Threads" value={r.os_threads ? String(r.os_threads) : "—"} />
+        <Stat
+          label="CPU time used"
           value={r.cpu_seconds ? `${r.cpu_seconds.toFixed(1)}s` : "—"}
-          help="Total since start, not a rate."
+          help="Total since it started, not a rate."
         />
         <Stat label="Open files" value={r.open_files ? String(r.open_files) : "—"} />
         <Stat
-          label="GC cycles" value={String(r.gc_cycles)}
+          label="Memory clean-ups" value={String(r.gc_cycles)}
           help={`${r.gc_pause_total_ms.toFixed(0)}ms paused in total, ${r.gc_cpu_percent.toFixed(2)}% of CPU.`}
         />
-        <Stat label="CPUs" value={`${r.gomaxprocs} of ${r.num_cpu}`} />
-        <Stat label="Allocated ever" value={bytes(r.total_alloc_bytes)} />
-        <Stat label="Stacks" value={bytes(r.stack_in_use_bytes)} />
+        <Stat label="CPUs in use" value={`${r.gomaxprocs} of ${r.num_cpu}`} />
+        <Stat label="Memory used since it started" value={bytes(r.total_alloc_bytes)} />
+        <Stat label="Memory for running jobs" value={bytes(r.stack_in_use_bytes)} />
       </dl>
 
       {!r.memory_limit_bytes && (
         <p className="text-xs text-muted-foreground">
-          No memory limit is set on this host, so there is nothing to measure
-          usage against — the figures above are absolute.
+          No memory limit is set on this host, so the figures above are totals
+          rather than a share of anything.
         </p>
       )}
     </div>
@@ -302,24 +303,22 @@ function Restart() {
       <CardHeader>
         <CardTitle className="text-base">Restart</CardTitle>
         <p className="text-sm text-muted-foreground">
-          mcpd drains and exits; whatever supervises it starts it again. Some
-          settings say they need this — a credential a connector is using is
-          picked up without one.
+          mcpd stops and starts again. Some settings say they need this. Most
+          changes take effect without one.
         </p>
       </CardHeader>
       <CardContent>
         {sent ? (
           <Notice tone="neutral">
-            Draining. Connectors will reconnect once the new process is
-            serving; if this page does not come back within a minute, whatever
-            supervises this host did not start it again.
+            Restarting. Connectors reconnect on their own. If this page does not
+            come back within a minute, mcpd did not start again.
           </Notice>
         ) : confirming ? (
           <div className="space-y-3">
             <Notice tone="attention">
               <AlertTriangle className="mr-1 inline size-4 align-text-bottom" />
-              Every connector drops and reconnects, and a tool call in flight
-              will fail. Approved changes still executing are drained first.
+              Every connector drops and reconnects, and a call in progress will
+              fail. Changes already running are finished first.
             </Notice>
             <div className="flex gap-2">
               <Button variant="destructive" onClick={restart} disabled={busy}>
