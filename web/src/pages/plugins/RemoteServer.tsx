@@ -39,7 +39,7 @@ type ToolFilter = "all" | MCPToolState;
 /** Where a server stands. "Unreadable" first: no other state applies to one. */
 export function ServerState({ server: s }: { server: MCPServer }) {
   if (!s.readable) {
-    return <Chip tone="problem">Unreadable document</Chip>;
+    return <Chip tone="problem">Can't be read</Chip>;
   }
   if (!s.enabled) {
     return <Chip tone="neutral">Switched off</Chip>;
@@ -55,7 +55,7 @@ export function ServerState({ server: s }: { server: MCPServer }) {
   return (
     <Chip tone="attention">
       <StatusDot tone="attention" />
-      {s.enabled_tools === 0 ? "No tools enabled" : "Not mounted"}
+      {s.enabled_tools === 0 ? "No tools switched on" : "Not being served"}
     </Chip>
   );
 }
@@ -93,9 +93,9 @@ export function RemoteServer({ name, onChanged }: {
   if (!server) {
     return (
       <Notice tone="problem">
-        <code className="font-mono">{name}</code> is mounted as a remote MCP
-        server, but no imported document goes with it. Nothing here can be
-        changed until that is sorted out.
+        <code className="font-mono">{name}</code> is set up as a remote MCP
+        server, but its details are missing. Nothing here can be changed until
+        that is fixed.
       </Notice>
     );
   }
@@ -173,7 +173,7 @@ function Body({ server, tools, toolsError, onChanged }: {
   }
 
   async function remove() {
-    if (!(await confirm(`Remove ${server.name}? Its document, its tool snapshot and its settings go with it.`))) return;
+    if (!(await confirm(`Remove ${server.name}? Its tools and its settings go with it, including any credential.`))) return;
     setBusy(true);
     try {
       await api.removeMCPServer(server.name);
@@ -198,9 +198,9 @@ function Body({ server, tools, toolsError, onChanged }: {
 
       {!server.readable && (
         <Notice tone="problem">
-          <strong>This build cannot read the stored document.</strong> The row
-          can be listed and removed, and nothing else. It was imported by a
-          build that understood a schema this one does not.
+          <strong>This version of mcpd cannot read this server's saved
+          details.</strong> It can be listed and removed, and nothing else. It
+          was added by a different version.
         </Notice>
       )}
 
@@ -209,8 +209,8 @@ function Body({ server, tools, toolsError, onChanged }: {
           often has the wrong idea about. */}
       {pending > 0 && (
         <Notice tone="attention">
-          {pending} {pending === 1 ? "tool is" : "tools are"} waiting to be
-          classified, and{" "}
+          {pending} {pending === 1 ? "tool is" : "tools are"} waiting for you to
+          allow {pending === 1 ? "it" : "them"}, and{" "}
           {pending === 1 ? "it is not being served" : "they are not being served"}{" "}
           until you decide.
         </Notice>
@@ -220,7 +220,7 @@ function Body({ server, tools, toolsError, onChanged }: {
 
       <Section
         title="Tools"
-        description="A tool arrives pending and is not served. What you classify is a description and a schema, not a name — if the server changes either, the tool comes back here."
+        description="A new tool is not served until you allow it. If the server changes what a tool does, it comes back here for another look."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <NativeSelect
@@ -265,7 +265,7 @@ function Body({ server, tools, toolsError, onChanged }: {
           <EmptyState title={tools?.length ? "Nothing in that state" : "No tools yet"}>
             {tools?.length
               ? "Try another filter, or a different word."
-              : "Run discovery and mcpd will ask the server what it offers."}
+              : "Press Discover to ask the server what it offers."}
           </EmptyState>
         ) : (
           <Card className="overflow-hidden p-0">
@@ -306,7 +306,7 @@ function Body({ server, tools, toolsError, onChanged }: {
                             size="sm"
                             onClick={() => setClassifying(t)}
                           >
-                            {t.state === "pending" ? "Review" : "Change"}
+                            {t.state === "pending" ? "Decide" : "Change"}
                           </Button>
                         )}
                       </TableCell>
@@ -319,16 +319,16 @@ function Body({ server, tools, toolsError, onChanged }: {
         )}
       </Section>
 
-      <Section title="The document">
+      <Section title="About this server">
         <Card>
           <CardContent>
             <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {server.title && <Detail label="Title">{server.title}</Detail>}
               {server.version && <Detail label="Version">{server.version}</Detail>}
-              <Detail label="Transport">
+              <Detail label="How it connects">
                 <code className="font-mono text-xs">{server.transport || "—"}</code>
               </Detail>
-              <Detail label="Schema">
+              <Detail label="server.json version">
                 <code className="font-mono text-xs">{server.schema_version || "—"}</code>
               </Detail>
               <Detail label="Added">{whenExact(server.created_at)}</Detail>
@@ -336,9 +336,8 @@ function Body({ server, tools, toolsError, onChanged }: {
               <Detail label="Address" className="sm:col-span-2 lg:col-span-3">
                 <Copyable value={server.url} label="address" />
                 <span className="mt-1 block text-xs text-muted-foreground">
-                  The template as imported. Anything in braces is filled in at
-                  dial time from this server's settings, which is why a
-                  credential never appears here.
+                  Anything in braces is filled in from this server's settings
+                  when it connects, so no credential appears here.
                 </span>
               </Detail>
             </dl>
@@ -357,9 +356,9 @@ function Body({ server, tools, toolsError, onChanged }: {
               <ServerState server={server} />
               {mayAdminister && (
                 <p className="text-sm text-muted-foreground">
-                  Switching it off stops serving its tools and keeps everything
-                  that was decided about them. Removing it forgets the document,
-                  the snapshot and the settings, including any credential.
+                  Switching it off stops serving its tools and keeps your
+                  decisions about them. Removing it forgets this server
+                  completely, including any credential.
                 </p>
               )}
             </div>
@@ -447,11 +446,10 @@ function Headers({ server, mayAdminister, onChanged }: {
       <CardContent className="space-y-4">
         {server.declares_no_credential && headers.length === 0 && (
           <Notice tone="info">
-            This server's document declares no credential. That may be right —
-            some servers need none — but it is silence rather than a statement,
-            and it is the usual reason discovery comes back 401. If it does, add
-            the header the server asks for and fill its value in on the settings
-            page.
+            This server does not name a credential. That may be right — some
+            servers need none — but it is the usual reason a check comes back
+            refused. If that happens, add the header the server asks for and
+            fill in its value on the Settings page.
           </Notice>
         )}
 
@@ -510,9 +508,8 @@ function Headers({ server, mayAdminister, onChanged }: {
               </label>
             </div>
             <p className="text-sm text-muted-foreground">
-              The exact header the server expects — a 401 usually names it. Its
-              value is a credential, so it is stored encrypted and asked for on
-              the settings page rather than here.
+              The exact header the server expects. Its value is a credential, so
+              you type it on the Settings page, where it is stored encrypted.
             </p>
             <div className="flex gap-2">
               <Button disabled={busy || !name.trim()} onClick={add}>
@@ -561,12 +558,12 @@ function DiscoveryResult({ diff }: { diff: MCPDiff }) {
     <Notice tone="attention">
       <div className="space-y-1">
         {added.length > 0 && (
-          <p><strong>New:</strong> {added.join(", ")} — pending, and not served.</p>
+          <p><strong>New:</strong> {added.join(", ")} — waiting on you, and not served.</p>
         )}
         {changed.length > 0 && (
           <p>
-            <strong>Changed:</strong> {changed.join(", ")} — the description or
-            schema differs, so any decision about the old one no longer applies.
+            <strong>Changed:</strong> {changed.join(", ")} — what these do has
+            changed, so your earlier decision no longer applies.
           </p>
         )}
         {removed.length > 0 && (
@@ -597,7 +594,8 @@ function Discovered({ discovery }: { discovery?: MCPDiscovery }) {
   if (!attempted && !succeeded) {
     return (
       <p className="mb-3 text-xs text-muted-foreground">
-        Not checked yet. mcpd re-checks on a schedule; press Discover to ask now.
+        Not checked yet. This is re-checked on a schedule, or press Discover to
+        ask now.
       </p>
     );
   }
@@ -609,7 +607,8 @@ function Discovered({ discovery }: { discovery?: MCPDiscovery }) {
         : <>This list has never been confirmed.</>}
       {error && (
         <span className="text-problem">
-          {" "}The last check{attempted ? ` (${when(attempted)})` : ""} failed: {error}
+          {" "}The last check{attempted ? ` (${when(attempted)})` : ""} failed.
+          It said: “{error}”
         </span>
       )}
     </p>

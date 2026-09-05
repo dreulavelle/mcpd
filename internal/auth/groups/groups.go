@@ -824,13 +824,13 @@ func (s *Store) RemoveMember(ctx context.Context, actor, groupID string, subject
 
 // ValidateName checks and normalises a group name.
 func ValidateName(raw string) (string, error) {
-	return auth.ValidateLabel("groups", "group name", raw)
+	return auth.ValidateLabel("group name", raw)
 }
 
 // ValidateLabel is kept for the packages that validated their names through
 // this one before the rule moved to auth.
-func ValidateLabel(pkg, noun, raw string) (string, error) {
-	return auth.ValidateLabel(pkg, noun, raw)
+func ValidateLabel(noun, raw string) (string, error) {
+	return auth.ValidateLabel(noun, raw)
 }
 
 // maxDescriptionRunes bounds the line under a group's name.
@@ -840,7 +840,7 @@ func validateDescription(raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
 	}
-	return auth.ValidateText("groups", "description", raw, maxDescriptionRunes)
+	return auth.ValidateText("description", raw, maxDescriptionRunes)
 }
 
 // --- plumbing --------------------------------------------------------------

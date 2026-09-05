@@ -14,7 +14,7 @@ export function Advanced() {
     <SettingsSection
       section="advanced"
       title="Advanced"
-      lede="Timeouts and durability. The defaults are right until something says otherwise."
+      lede="Timeouts and how data is saved. The defaults are right until something says otherwise."
     />
   );
 }

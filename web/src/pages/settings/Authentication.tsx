@@ -96,9 +96,9 @@ function RedirectURIs() {
     return (
       <Notice tone="attention">
         <strong>Nobody can be redirected back here yet.</strong> A provider
-        sends people back to an address you register with it, and mcpd does not
-        know its own. Set <strong>Dashboard address</strong> under Settings, and
-        the exact addresses to paste will appear here.
+        sends people back to an address you register with it, and this host does
+        not know its own yet. Set <strong>Dashboard address</strong> under
+        Settings, and the exact addresses to paste will appear here.
       </Notice>
     );
   }

@@ -22,32 +22,34 @@ const MaxLabelRunes = 64
 // for, and refusing spaces or capitals would mean asking them to spell it in
 // a way nobody says out loud.
 //
-// pkg and noun go into the error so that a message about a key's name does
-// not send somebody to the Groups page.
-func ValidateLabel(pkg, noun, raw string) (string, error) {
-	return ValidateText(pkg, noun, raw, MaxLabelRunes)
+// The refusal reaches a form, so it is written for the person filling it in.
+// noun says which field, and there is no package prefix: "a key name is
+// required" needs no help from "apikeys: " to be understood, and admin's
+// writeProblem answers a prefixed error with its own sentence instead.
+func ValidateLabel(noun, raw string) (string, error) {
+	return ValidateText(noun, raw, MaxLabelRunes)
 }
 
 // ValidateText is ValidateLabel with the length supplied, for a description
 // that may run longer than a name.
-func ValidateText(pkg, noun, raw string, maxRunes int) (string, error) {
+func ValidateText(noun, raw string, maxRunes int) (string, error) {
 	text := strings.TrimSpace(raw)
 	if text == "" {
-		return "", fmt.Errorf("%s: a %s is required", pkg, noun)
+		return "", fmt.Errorf("a %s is required", noun)
 	}
 	if !utf8.ValidString(text) {
-		return "", fmt.Errorf("%s: a %s must be valid UTF-8", pkg, noun)
+		return "", fmt.Errorf("a %s must be valid UTF-8", noun)
 	}
 	for _, r := range text {
 		switch {
 		case unicode.IsControl(r):
-			return "", fmt.Errorf("%s: a %s cannot contain control characters", pkg, noun)
+			return "", fmt.Errorf("a %s cannot contain control characters", noun)
 		case unicode.Is(unicode.Cf, r):
-			return "", fmt.Errorf("%s: a %s cannot contain invisible formatting characters", pkg, noun)
+			return "", fmt.Errorf("a %s cannot contain invisible formatting characters", noun)
 		}
 	}
 	if utf8.RuneCountInString(text) > maxRunes {
-		return "", fmt.Errorf("%s: a %s must be at most %d characters", pkg, noun, maxRunes)
+		return "", fmt.Errorf("a %s must be at most %d characters", noun, maxRunes)
 	}
 	return text, nil
 }

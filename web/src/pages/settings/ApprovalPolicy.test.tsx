@@ -101,7 +101,7 @@ describe("the two kinds of rule", () => {
   // surprises people, so the page says it where somebody would hit it.
   it("says how to write the nobody-but-Alice case", async () => {
     mount(policy());
-    expect(await screen.findByText(/write just her allow rule and nothing here/i))
+    expect(await screen.findByText(/write her allow rule and nothing here/i))
       .toBeInTheDocument();
   });
 

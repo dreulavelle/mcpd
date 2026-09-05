@@ -150,7 +150,7 @@ describe("the performance page", () => {
     expect(await screen.findByText("Largest answer (p95)")).toBeInTheDocument();
     const tile = screen.getByText("Largest answer (p95)").parentElement!;
     expect(tile.querySelector(".text-problem")).not.toBeNull();
-    expect(tile).toHaveTextContent("1 past the budget");
+    expect(tile).toHaveTextContent("1 too large");
   });
 
   /**

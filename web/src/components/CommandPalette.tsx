@@ -187,7 +187,7 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
           className="fixed top-[12vh] left-1/2 z-50 w-[min(40rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
           onKeyDown={onKey}
         >
-          <DialogPrimitive.Title className="sr-only">Search the console</DialogPrimitive.Title>
+          <DialogPrimitive.Title className="sr-only">Search the dashboard</DialogPrimitive.Title>
           <div className="flex items-center gap-2 border-b px-3">
             <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <input
@@ -195,7 +195,7 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Go to a page, a plugin, a change waiting on you…"
-              aria-label="Search the console"
+              aria-label="Search the dashboard"
               aria-activedescendant={shown[active] ? `cmd-${shown[active].id}` : undefined}
               role="combobox"
               aria-expanded="true"

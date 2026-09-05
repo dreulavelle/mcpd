@@ -309,9 +309,8 @@ export class ErrorBoundary extends Component<
     if (this.props.quiet) return null;
     return (
       <Notice tone="problem">
-        This page could not be drawn, so it is showing this instead of nothing.
-        The rest of the console still works — go somewhere else and come back to
-        try it again.
+        This page could not be shown. The rest of the dashboard still works —
+        go somewhere else and come back to try it again.
         <span className="mt-1 block font-mono text-xs opacity-80">
           {this.state.problem}
         </span>

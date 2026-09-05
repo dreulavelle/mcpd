@@ -51,7 +51,7 @@ export const STEPS: readonly Step[] = [
   {
     id: "plugin",
     label: "Add an MCP server",
-    detail: "Browse the public catalogues, or paste a server.json of your own.",
+    detail: "Browse the public catalogues, or paste in details of your own.",
     to: "/marketplace",
     permission: "plugins:write",
     probe: async () => {
@@ -86,7 +86,7 @@ export const STEPS: readonly Step[] = [
   {
     id: "tunnel",
     label: "Connect ChatGPT",
-    detail: "A tunnel dials out from here, so this host needs no inbound port.",
+    detail: "A tunnel connects out from here, so nothing has to reach in.",
     to: "/tunnels",
     permission: "plugins:write",
     probe: async () => {
@@ -98,7 +98,7 @@ export const STEPS: readonly Step[] = [
   {
     id: "policy",
     label: "Let routine changes run",
-    detail: "A standing rule authorises a class of change, so you are asked about the rest.",
+    detail: "A rule can approve routine changes, so you are only asked about the rest.",
     to: "/settings/policy",
     permission: "plugins:write",
     probe: async () => {

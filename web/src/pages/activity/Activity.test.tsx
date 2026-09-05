@@ -72,7 +72,8 @@ describe("the activity page", () => {
     );
     renderWith(<Activity />);
 
-    expect(await screen.findByText("denied")).toBeInTheDocument();
+    const calls = await screen.findByRole("table", { name: "Calls" });
+    expect(within(calls).getByText("Refused")).toBeInTheDocument();
   });
 
   // Zero is a call refused before it ran, not a call that took no time.

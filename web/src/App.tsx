@@ -107,7 +107,7 @@ function Console({ onSignOut, version }: { onSignOut: () => void; version: strin
   const shortcuts = useMemo<Shortcut[]>(() => {
     const go = (to: string) => () => navigate(to);
     const list: Shortcut[] = [
-      { keys: "mod+k", label: "Search the console", run: () => setPalette((o) => !o) },
+      { keys: "mod+k", label: "Search the dashboard", run: () => setPalette((o) => !o) },
       { keys: "?", label: "This list", run: () => setHelp((o) => !o) },
       { keys: "g o", label: "Go to Overview", run: go("/") },
       { keys: "g a", label: "Go to Approvals", run: go("/approvals") },

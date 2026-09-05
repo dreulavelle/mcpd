@@ -79,7 +79,7 @@ export function ApprovalsList() {
     <>
       <PageHeader
         title="Approvals"
-        lede="A change an assistant proposed is frozen when it is proposed. What you decide on is exactly what will run."
+        lede="Changes your assistants have proposed. What you see here is exactly what will run."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <NativeSelect

@@ -56,16 +56,20 @@ export function BypassBanner() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="text-sm">
           <strong className="font-medium">
-            Changes are being approved without asking anyone.
+            Some changes are being approved without asking anyone.
           </strong>{" "}
           <span className="text-muted-foreground">
-            {b.plugin ? `${b.plugin}, ` : "Every plugin, "}
+            {/* Reversible, because a window never covers a change with no way
+                back -- Bypass.Covers refuses that before it looks at the
+                ceiling, and a banner saying otherwise overstates what is
+                open. */}
+            {b.plugin ? `Reversible changes on ${b.plugin}, ` : "Reversible changes, "}
             up to {b.ceiling} risk, for another {remaining(b.seconds_left)}.
             Opened by {b.created_by}
             {b.reason ? ` — ${b.reason}` : ""}.
             {b.approved > 0 && ` ${b.approved} so far.`}
             {(status.open ?? 1) > 1 &&
-              ` ${status.open} windows are open; this is the widest.`}
+              ` ${status.open} windows are open, and this is the widest.`}
           </span>
         </div>
         {admin && (

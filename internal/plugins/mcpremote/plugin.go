@@ -270,7 +270,7 @@ func (p *Plugin) call(ctx context.Context, name string, args map[string]any) (an
 
 	session, err := p.conn.session(ctx)
 	if err != nil {
-		p.setHealth(plugins.Unhealthy(p.redact.Error(err)))
+		p.setHealth(plugins.Unhealthy(unreachable(p.name, p.redact.Error(err))))
 		return nil, fmt.Errorf("%s is not reachable: %s", p.name, p.redact.Error(err))
 	}
 
@@ -283,7 +283,7 @@ func (p *Plugin) call(ctx context.Context, name string, args map[string]any) (an
 		// The handle this call used, not whatever is current: by the time a
 		// slow failure lands, another caller may already have replaced it.
 		p.conn.drop(session)
-		p.setHealth(plugins.Unhealthy(p.redact.Error(err)))
+		p.setHealth(plugins.Unhealthy(unreachable(p.name, p.redact.Error(err))))
 		return nil, fmt.Errorf("calling %s on %s failed: %s", name, p.name, p.redact.Error(err))
 	}
 
@@ -335,7 +335,7 @@ func textOf(result *mcp.CallToolResult) string {
 func (p *Plugin) Start(ctx context.Context) error {
 	if err := p.conn.ping(ctx); err != nil {
 		msg := p.redact.Error(err)
-		p.setHealth(plugins.Unhealthy(msg))
+		p.setHealth(plugins.Unhealthy(unreachable(p.name, msg)))
 		p.deps.Log.Warn("remote MCP server is not reachable; its tools are mounted "+
 			"from the last snapshot and will fail until it returns",
 			"plugin", p.name, "error", msg)
@@ -360,7 +360,7 @@ func (p *Plugin) Check(ctx context.Context) plugins.Health {
 		return p.Health()
 	}
 	if err := p.conn.ping(ctx); err != nil {
-		h := plugins.Unhealthy(p.redact.Error(err))
+		h := plugins.Unhealthy(unreachable(p.name, p.redact.Error(err)))
 		p.setHealth(h)
 		return h
 	}
@@ -376,6 +376,18 @@ func (p *Plugin) Health() plugins.Health {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.health
+}
+
+// unreachable is what a person reads when this server cannot be dialled.
+//
+// The transport error is the far end's own words, or the network's, so it is
+// quoted rather than run into the sentence -- run in, it reads as something
+// mcpd is claiming rather than something it was told.
+func unreachable(name, detail string) string {
+	if detail == "" {
+		return name + " could not be reached."
+	}
+	return fmt.Sprintf("%s could not be reached. It said: \u201c%s\u201d", name, detail)
 }
 
 func (p *Plugin) setHealth(h plugins.Health) {
@@ -395,7 +407,7 @@ func (p *Plugin) setHealth(h plugins.Health) {
 func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 	session, err := p.conn.session(ctx)
 	if err != nil {
-		p.setHealth(plugins.Unhealthy(p.redact.Error(err)))
+		p.setHealth(plugins.Unhealthy(unreachable(p.name, p.redact.Error(err))))
 		return nil, fmt.Errorf("%s is not reachable: %s", p.name, p.redact.Error(err))
 	}
 
@@ -405,7 +417,7 @@ func (p *Plugin) Discover(ctx context.Context) ([]mcpservers.Tool, error) {
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
 			p.conn.drop(session)
-			p.setHealth(plugins.Unhealthy(p.redact.Error(err)))
+			p.setHealth(plugins.Unhealthy(unreachable(p.name, p.redact.Error(err))))
 			return nil, fmt.Errorf("listing the tools of %s failed: %s",
 				p.name, p.redact.Error(err))
 		}

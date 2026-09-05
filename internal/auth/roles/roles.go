@@ -453,7 +453,7 @@ func GuardAdminRemains(tx *sqlite.UnitOfWork, before int) error {
 
 // ValidateName checks and normalises a role name.
 func ValidateName(raw string) (string, error) {
-	return auth.ValidateLabel("roles", "role name", raw)
+	return auth.ValidateLabel("role name", raw)
 }
 
 const maxDescriptionRunes = 200
@@ -462,7 +462,7 @@ func validateDescription(raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
 	}
-	return auth.ValidateText("roles", "description", raw, maxDescriptionRunes)
+	return auth.ValidateText("description", raw, maxDescriptionRunes)
 }
 
 type rowScanner interface{ Scan(...any) error }

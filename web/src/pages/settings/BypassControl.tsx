@@ -71,7 +71,7 @@ export function BypassControl() {
   return (
     <Section
       title="Stop asking, for a while"
-      description="A window that closes on its own. It can never be made permanent — that is the difference between this and widening a rule."
+      description="Approves reversible changes up to a risk level you choose, for a limited time, then closes on its own. Critical changes and always-ask rules are never covered."
     >
       <Card>
         <CardContent className="pt-6">
@@ -146,9 +146,8 @@ export function BypassControl() {
                 Stop asking
               </Button>
               <p className="text-xs text-muted-foreground">
-                Every change it lets through records this window as the
-                authority, so the trail says it ran because asking was switched
-                off rather than because a rule allowed it.
+                Every change it lets through says so in the history, so none of
+                them looks as though a rule allowed it.
               </p>
             </form>
           ) : (

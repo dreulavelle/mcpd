@@ -80,15 +80,14 @@ export function SettingsForm({ groups, settings, links, placeholders, onSaved, r
 
       {!settings.encryption_available && (
         <Notice tone="attention">
-          <strong>Passwords and keys can't be saved yet.</strong> mcpd has
-          nowhere safe to keep them. This is the one setting that cannot be
-          typed in here: it names the key everything else in the store is
-          encrypted with, and a copy of it inside the store would be a lock
-          holding its own key. Add{" "}
-          <code className="font-mono">secret_key_ref</code> to your startup file
-          pointing at a key —{" "}
-          <code className="font-mono">openssl rand -base64 32</code> makes a good
-          one — then restart.
+          <strong>Passwords and keys can't be saved yet.</strong> This host has
+          nowhere safe to keep them. Add{" "}
+          <code className="font-mono">secret_key_ref</code> to your startup file,
+          pointing at a key, then restart. This is the one setting that cannot
+          be typed in here.
+          <span className="mt-2 block font-mono text-xs">
+            openssl rand -base64 32
+          </span>
         </Notice>
       )}
 

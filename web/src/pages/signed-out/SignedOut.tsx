@@ -26,9 +26,9 @@ import { ProviderMark } from "@/components/provider-mark";
  * should not be the one place that oversells.
  */
 const FACTS = [
-  "One address your assistants reach every system through.",
-  "Reads run. Changes are held, or approved by a rule you wrote.",
-  "Every call is on an append-only record that notices tampering.",
+  "Each assistant reaches only the systems you allow it to.",
+  "Reads go straight through. Changes wait for you, or for a rule you wrote.",
+  "Every call is recorded, and the record cannot be edited.",
 ];
 
 /**
@@ -76,7 +76,7 @@ function SignedOutCard({ error, title, children }: {
 
         <div className="relative max-w-md space-y-6">
           <h2 className="text-2xl font-semibold leading-snug tracking-tight">
-            A control plane for the systems your assistants can reach.
+            One way in for the assistants that reach your systems.
           </h2>
           <ul className="space-y-3 text-sm/relaxed opacity-90">
             {FACTS.map((fact) => (
@@ -377,8 +377,8 @@ export function FirstRun({ onDone }: {
     } catch (err) {
       setError(
         err instanceof ApiError && err.status === 409
-          ? "Someone already claimed this instance. Reload and sign in."
-          : problemText(err, "Couldn't claim this instance. Try again in a moment."),
+          ? "Someone has already set this host up. Reload the page and sign in."
+          : problemText(err, "Couldn't set this host up. Try again in a moment."),
       );
     } finally {
       setBusy(false);
@@ -388,9 +388,9 @@ export function FirstRun({ onDone }: {
   return (
     <SignedOutCard error={error} title="Create the first account">
       <p className="text-sm text-muted-foreground">
-        Nobody has claimed this host yet. This account will be an administrator;
-        you can add others, and turn on sign-in with Google, GitHub, Microsoft
-        or your own provider, once you are in.
+        Nobody has set this host up yet. This first account is an
+        administrator. You can add other people, and turn on sign-in with
+        Google, GitHub or Microsoft, once you are in.
       </p>
 
       <form className="space-y-4" onSubmit={submit}>

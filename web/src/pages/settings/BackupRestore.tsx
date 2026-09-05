@@ -300,8 +300,8 @@ function Restore({ status, onStaged }: {
         <CardTitle className="text-base">Restore</CardTitle>
         <p className="text-sm text-muted-foreground">
           Replaces everything on this host with the contents of an archive. The
-          archive is checked first; if it is sound, mcpd restarts to apply it.
-          The database being replaced is kept.
+          archive is checked first. If it is sound, mcpd restarts to apply it,
+          and the database it replaces is kept.
         </p>
       </CardHeader>
       <CardContent>
