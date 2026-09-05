@@ -54,7 +54,7 @@ export function Profile() {
     <>
       <PageHeader
         title={signedInAs(session) || "Your profile"}
-        lede="The account you are signed in as, what it lets you do, and the parts of it you can change."
+        lede="Your account, what it lets you do, and the parts you can change."
       />
 
       <div className="space-y-6">
@@ -86,7 +86,7 @@ export function Profile() {
 
         <Section
           title="Appearance"
-          description="Kept in this browser rather than on your account, because a dark laptop and a light monitor are two different answers."
+          description="Saved in this browser."
         >
           <Card>
             <CardContent>
@@ -101,7 +101,7 @@ export function Profile() {
 
         <Section
           title="What you may do"
-          description={`mcpd checks permissions rather than roles. These are the ones you hold: ${describe(held).toLowerCase()}. Your role, merged with the role of every group you are in.`}
+          description={`What you can do here: ${describe(held).toLowerCase()}. This is your role plus the role of every group you are in.`}
         >
           <Card>
             <CardContent>
@@ -159,7 +159,7 @@ function LinkedProviders() {
   async function unlink(provider: ProviderName, label: string) {
     if (!(await confirm({
       title: `Stop signing in with ${label}?`,
-      description: "The provider is unlinked from this account. Linking it again is a click away.",
+      description: "You can link it again at any time.",
       action: "Unlink",
     }))) return;
     setBusy(provider);
@@ -178,7 +178,7 @@ function LinkedProviders() {
   return (
     <Section
       title="Sign in with"
-      description="Linking a provider is something you do here, signed in. mcpd never attaches one to an account because the email address happens to match."
+      description="Sign-in providers are linked here, by you."
     >
       <Card>
         <CardContent className="space-y-4">
@@ -250,7 +250,7 @@ function DisplayName({ session }: { session: Session }) {
       // address the way the next reader will see it.
       adopt({ ...session, name: saved.name, display_name: saved.display_name });
       setName(saved.display_name);
-      notify("good", next ? "Saved." : "Cleared. The console will use your address.");
+      notify("good", next ? "Saved." : "Cleared. The dashboard will use your address.");
     } catch (err) {
       // The server's sentence: it is the only thing that knows which rule
       // the value broke.
@@ -263,7 +263,7 @@ function DisplayName({ session }: { session: Session }) {
   return (
     <Section
       title="Name"
-      description="What the console calls you. Your email is what identifies the account, and that is what every audit record is keyed on."
+      description="What the dashboard calls you. Your email is what identifies the account, and what the history records."
     >
       <Card>
         <CardContent>
@@ -285,7 +285,7 @@ function DisplayName({ session }: { session: Session }) {
               <p id="profile-name-help" className="text-xs text-muted-foreground">
                 {session.display_name.trim()
                   ? "Leave it empty to go back to being called by your address."
-                  : "Not set, so the console calls you by your address."}
+                  : "Not set, so the dashboard calls you by your address."}
               </p>
             </div>
             <Button type="submit" disabled={busy || unchanged}>
@@ -317,8 +317,8 @@ function ChangePassword({ email, self, mayEdit }: {
     return (
       <Section title="Password">
         <p className="text-sm text-muted-foreground">
-          Ask an administrator to change the password for {email}. mcpd has no
-          self-service password endpoint.
+          Ask an administrator to change the password for {email}. You cannot
+          change it yourself here.
         </p>
       </Section>
     );
