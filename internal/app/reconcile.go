@@ -124,11 +124,11 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 	}
 	t, ok := a.types.Lookup(inst.Type)
 	if !ok {
-		// Shown on the Plugins page with the instance's name printed beside
-		// it, so this is the continuation of that name and repeats neither
-		// the name nor a package prefix.
-		return nil, t, errors.New("is not included in this build of mcpd, so it " +
-			"cannot start. Remove it, or run a build that has it")
+		// This is stored as PluginInstance.problem and printed on its own by
+		// both the Plugins list and a plugin's own page, so it is a whole
+		// sentence and carries no package prefix.
+		return nil, t, errors.New("This plugin's type is not in this build of mcpd, " +
+			"so it cannot start. Remove it, or run a build that includes it.")
 	}
 	cfg, err := a.resolveInstanceSettings(ctx, inst.Name, t)
 	if err != nil {
@@ -136,7 +136,8 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 	}
 	p, err := t.New(a.pluginDeps(inst.Name), cfg)
 	if err != nil {
-		return nil, t, fmt.Errorf("could not start: %w", err)
+		// The plugin wrote the inner text, so it is quoted rather than run in.
+		return nil, t, fmt.Errorf("This plugin could not start. It said: %q", err.Error())
 	}
 	return p, t, nil
 }
@@ -149,7 +150,7 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 func (a *App) buildMCPInstance(ctx context.Context, name string) (plugins.Plugin, error) {
 	srv, ok := a.mcpServer(name)
 	if !ok {
-		return nil, fmt.Errorf("names no remote MCP server called %q", name)
+		return nil, fmt.Errorf("This plugin names a remote MCP server, %q, that is not on this host.", name)
 	}
 	tools, err := a.mcpStore.EnabledTools(ctx, name)
 	if err != nil {

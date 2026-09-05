@@ -791,42 +791,44 @@ func TestFailureMessages_AreSentencesNotErrors(t *testing.T) {
 // A failure keeps its sentence and its evidence apart, and the notification
 // gets the sentence.
 func TestFail_SeparatesTheSentenceFromTheEvidence(t *testing.T) {
+	// Each row builds the manager so that the named path is the one that
+	// fails: a malformed id fails validation, a factory that errors fails the
+	// build, and a factory returning no server fails the runtime.
 	tests := []struct {
-		name string
-		// provoke drives a real failure path and returns nothing; the
-		// assertions read Status afterwards.
-		provoke  func(t *testing.T, m *Manager)
+		name     string
+		tunnelID string
+		factory  ServerFactory
+		// provoke drives the failure. Start for the paths a real start
+		// reaches; the credential path is driven directly, because reaching
+		// it for real means waiting on a control plane to log a rejection.
+		provoke  func(m *Manager)
 		wantMsg  string
 		wantCode string
 	}{
 		{
-			name: "settings that do not validate",
-			provoke: func(t *testing.T, m *Manager) {
-				t.Helper()
-				_ = m.Start(context.Background())
-			},
-			wantMsg: msgBadConfig,
+			name:     "settings that do not validate",
+			tunnelID: "tunnel_not-hex",
+			provoke:  func(m *Manager) { _ = m.Start(context.Background()) },
+			wantMsg:  msgBadConfig,
 		},
 		{
-			name: "an MCP server that cannot be built",
-			provoke: func(t *testing.T, m *Manager) {
-				t.Helper()
-				_ = m.Start(context.Background())
-			},
-			wantMsg: msgCannotBuild,
+			name:     "an MCP server that cannot be built",
+			tunnelID: "tunnel_0123456789abcdef0123456789abcdef",
+			factory:  func(*auth.Principal) (*mcp.Server, error) { return nil, errors.New("no such plugin") },
+			provoke:  func(m *Manager) { _ = m.Start(context.Background()) },
+			wantMsg:  msgCannotBuild,
 		},
 		{
-			name: "a tunnel that cannot be dialled",
-			provoke: func(t *testing.T, m *Manager) {
-				t.Helper()
-				_ = m.Start(context.Background())
-			},
-			wantMsg: msgUnreachable,
+			name:     "a tunnel that cannot be dialled",
+			tunnelID: "tunnel_0123456789abcdef0123456789abcdef",
+			factory:  func(*auth.Principal) (*mcp.Server, error) { return nil, nil },
+			provoke:  func(m *Manager) { _ = m.Start(context.Background()) },
+			wantMsg:  msgUnreachable,
 		},
 		{
-			name: "a credential the control plane refuses",
-			provoke: func(t *testing.T, m *Manager) {
-				t.Helper()
+			name:     "a credential the control plane refuses",
+			tunnelID: "tunnel_0123456789abcdef0123456789abcdef",
+			provoke: func(m *Manager) {
 				m.failWithCode("tunnel_use_forbidden",
 					diagnose("sk-proj-x", "tunnel_use_forbidden"),
 					errors.New("tunnel: OpenAI refused this account's key (tunnel_use_forbidden)"),
@@ -837,35 +839,18 @@ func TestFail_SeparatesTheSentenceFromTheEvidence(t *testing.T) {
 		},
 	}
 
-	// One manager per case, built so that the named path is the one that
-	// fails: a malformed id fails validation, a factory that errors fails the
-	// build, and a factory returning no server fails the runtime.
-	factories := map[string]ServerFactory{
-		"an MCP server that cannot be built": func(*auth.Principal) (*mcp.Server, error) {
-			return nil, errors.New("no such plugin")
-		},
-		"a tunnel that cannot be dialled": func(*auth.Principal) (*mcp.Server, error) {
-			return nil, nil
-		},
-		"a credential the control plane refuses": nil,
-	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{
+			var reported []string
+			m := NewManager(Config{
 				Enabled:   true,
 				Plugin:    "echo",
-				TunnelID:  "tunnel_0123456789abcdef0123456789abcdef",
+				TunnelID:  tc.tunnelID,
 				APIKey:    "sk-proj-x",
 				Principal: testPrincipal(),
-			}
-			if tc.wantMsg == msgBadConfig {
-				cfg.TunnelID = "tunnel_not-hex"
-			}
-			var reported []string
-			m := NewManager(cfg, factories[tc.name], discardLog())
+			}, tc.factory, discardLog())
 			m.onFailure = func(_, _, _, reason string, _ bool) { reported = append(reported, reason) }
-			tc.provoke(t, m)
+			tc.provoke(m)
 			t.Cleanup(func() { _ = m.Stop(context.Background()) })
 
 			s := m.Status()
@@ -887,19 +872,69 @@ func TestFail_SeparatesTheSentenceFromTheEvidence(t *testing.T) {
 	}
 }
 
-// A tunnel that connects forgets the failure whole: a sentence left without
+// A tunnel that comes back forgets the failure whole: a sentence left without
 // its evidence, or evidence without its sentence, is a status that
 // contradicts itself.
-func TestClearFailure_ForgetsSentenceAndEvidenceTogether(t *testing.T) {
-	m := NewManager(Config{Enabled: true, TunnelID: "tunnel_abc"}, nil, discardLog())
-	m.failWithCode("invalid_api_key", diagnose("sk-proj-x", "invalid_api_key"),
-		errors.New("tunnel: refused"), false)
+func TestReconnect_ForgetsSentenceAndEvidenceTogether(t *testing.T) {
+	m := NewManager(Config{
+		Enabled:   true,
+		Plugin:    "echo",
+		TunnelID:  "tunnel_0123456789abcdef0123456789abcdef",
+		APIKey:    "sk-proj-x",
+		Principal: testPrincipal(),
+		// No server, so the runtime cannot be built and the start fails for
+		// real rather than by calling fail directly.
+	}, func(*auth.Principal) (*mcp.Server, error) { return nil, nil }, discardLog())
 
-	m.mu.Lock()
-	m.clearFailureLocked()
-	m.mu.Unlock()
+	_ = m.Start(context.Background())
+	if s := m.Status(); s.Message == "" || s.Detail == "" {
+		t.Fatalf("the failure was not recorded: %+v", s)
+	}
+
+	// The next start clears it before anything else, which is what a
+	// reconnect does.
+	m.factory = func(*auth.Principal) (*mcp.Server, error) {
+		return mcp.NewServer(&mcp.Implementation{Name: "t", Version: "1"}, nil), nil
+	}
+	_ = m.Start(context.Background())
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
 
 	if s := m.Status(); s.Message != "" || s.Detail != "" || s.Code != "" {
 		t.Fatalf("a cleared failure left something behind: %+v", s)
+	}
+}
+
+// A tunnel switched off after a rejected key is off, not off and still
+// showing token_invalidated under Technical details.
+func TestStop_ForgetsTheFailure(t *testing.T) {
+	m := NewManager(Config{Enabled: true, Plugin: "echo", TunnelID: "tunnel_abc"}, nil, discardLog())
+	m.failWithCode("token_invalidated", diagnose("sk-proj-x", "token_invalidated"),
+		errors.New("tunnel: OpenAI refused this account's key (token_invalidated)"), false)
+
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	s := m.Status()
+	if s.State != StateStopped {
+		t.Fatalf("state = %s, want %s", s.State, StateStopped)
+	}
+	if s.Message != "" || s.Detail != "" || s.Code != "" {
+		t.Fatalf("a stopped tunnel still carries its failure: %+v", s)
+	}
+}
+
+// halt is the exception, and deliberately so: it exists to stop the client
+// retrying a credential the control plane has already refused *without*
+// erasing the explanation, which is the only thing telling anybody why.
+func TestHalt_KeepsTheFailure(t *testing.T) {
+	m := NewManager(Config{Enabled: true, Plugin: "echo", TunnelID: "tunnel_abc"}, nil, discardLog())
+	m.failWithCode("token_invalidated", diagnose("sk-proj-x", "token_invalidated"),
+		errors.New("tunnel: OpenAI refused this account's key (token_invalidated)"), false)
+
+	if err := m.halt(t.Context()); err != nil {
+		t.Fatalf("halt: %v", err)
+	}
+	if s := m.Status(); s.Message == "" || s.Code != "token_invalidated" {
+		t.Fatalf("halting must keep the explanation: %+v", s)
 	}
 }

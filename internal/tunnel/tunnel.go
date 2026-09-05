@@ -669,6 +669,10 @@ func (m *Manager) stop(ctx context.Context) error {
 	m.requests = 0
 	m.lastRequest = nil
 	m.troubleSince = nil
+	// A tunnel somebody switched off is off, not off-and-still-complaining.
+	// halt deliberately does not do this -- it keeps the rejected credential
+	// on screen, which is the whole reason it exists apart from stop.
+	m.clearFailureLocked()
 	m.mu.Unlock()
 
 	if cancel != nil {
@@ -1067,7 +1071,7 @@ const (
 	// msgCannotBuild: the MCP server behind the tunnel could not be built.
 	msgCannotBuild = "mcpd could not set this connector up. Try restarting it."
 	// msgUnreachable: the tunnel could not be dialled. Worth retrying.
-	msgUnreachable = "mcpd could not reach OpenAI's tunnel service."
+	msgUnreachable = "OpenAI's tunnel service could not be reached."
 )
 
 // diagnose names the likeliest cause of a failure to connect, in words a
