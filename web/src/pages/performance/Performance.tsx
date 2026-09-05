@@ -127,7 +127,7 @@ function Headline({ perf }: { perf: Perf }) {
         value={biggest ? bytes(biggest.result_bytes!.p95) : "—"}
         help={
           cut
-            ? `${cut.toLocaleString()} past the budget, cut by the client`
+            ? `${cut.toLocaleString()} too large, cut short by the client`
             : biggest
               ? `${biggest.tool} · mean ${bytes(mean(biggest.result_bytes!))}`
               : "nothing measured yet"
@@ -186,8 +186,7 @@ function Distributions({ perf, initial }: { perf: Perf; initial: string }) {
         <div>
           <CardTitle className="text-base">Distribution</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Where a tool's calls actually land, rather than an average that no
-            single call resembles.
+            Where a tool's calls actually land, rather than an average.
           </p>
         </div>
         <NativeSelect
@@ -220,8 +219,8 @@ function Distributions({ perf, initial }: { perf: Perf; initial: string }) {
             <>
               Past{" "}
               <span className="font-mono">{bytes(perf.result_budget_bytes)}</span>{" "}
-              an answer is cut by the client rather than by the plugin, mid-JSON
-              and without a note saying what went missing.
+              the client cuts the answer short, and does not say what went
+              missing.
             </>
           }
         />
@@ -358,9 +357,9 @@ function CacheCard({ perf }: { perf: Perf }) {
       <CardHeader>
         <CardTitle className="text-base">Read caches</CardTitle>
         <p className="text-sm text-muted-foreground">
-          A cache with no hits is costing memory and returning nothing. A kind
-          that is nearly all misses is either a read that should not be cached
-          or a lifetime that is too short to catch a follow-up question.
+          A cache with no hits is using memory for nothing. Nearly all misses
+          means either a read that should not be cached, or a cache that expires
+          too soon.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -429,8 +428,8 @@ function ToolTable({ perf }: { perf: Perf }) {
       <CardHeader>
         <CardTitle className="text-base">Every tool</CardTitle>
         <p className="text-sm text-muted-foreground">
-          Refused is not failed: a denial is a grant that was never made, and a
-          rate limit is a ceiling to raise or a caller to slow down.
+          Refused is not failed. A refusal means access was never granted. A
+          rate limit means a ceiling to raise, or a caller to slow down.
         </p>
       </CardHeader>
       <CardContent>
