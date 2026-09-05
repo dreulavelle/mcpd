@@ -207,7 +207,7 @@ describe("the tunnels page", () => {
     expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Waiting for ChatGPT/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Details for mcpd: graylog" }));
-    expect(await screen.findByText(/nothing has come through since mcpd started/)).toBeInTheDocument();
+    expect(await screen.findByText(/Nothing has come through since mcpd last started/)).toBeInTheDocument();
   });
 
   // The bars are a way in: a chart worth looking at is worth looking at

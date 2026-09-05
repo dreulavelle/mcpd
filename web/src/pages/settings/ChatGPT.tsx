@@ -69,7 +69,7 @@ export function ChatGPT() {
     <>
       <PageHeader
         title="ChatGPT"
-        lede="One account per OpenAI organisation: its keys, and the identity its connectors act as."
+        lede="One account per OpenAI organisation, with its keys and the identity its connectors use."
         actions={rows && <Button onClick={() => setAdding(true)}>Add account</Button>}
       />
 
@@ -182,7 +182,7 @@ function AccountRow({ account, notify, onChanged }: {
       onChanged();
       notify("good", enabled
         ? `${account.name} is connecting again.`
-        : `${account.name} is switched off; its tunnels have stopped.`);
+        : `${account.name} is switched off. Its tunnels have stopped.`);
     } catch (e) {
       setError(problemText(e, "That didn't work."));
     } finally {
@@ -225,7 +225,7 @@ function AccountRow({ account, notify, onChanged }: {
             />
             {account.has_admin_key && (
               <Button variant="ghost" size="sm" disabled={busy} onClick={() => void runCheck()}
-                      title="Prove the admin key can list and make tunnels">
+                      title="Check that the admin key can list and make tunnels">
                 {busy ? "Checking…" : "Check"}
               </Button>
             )}
@@ -249,8 +249,8 @@ function AccountRow({ account, notify, onChanged }: {
               <span className="text-problem">{check.problem}</span>
             ) : (
               <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <Chip tone="good">can list</Chip>
-                <Chip tone={check.can_make ? "good" : "problem"}>{check.can_make ? "can make tunnels" : "cannot make tunnels"}</Chip>
+                <Chip tone="good">Can list tunnels</Chip>
+                <Chip tone={check.can_make ? "good" : "problem"}>{check.can_make ? "Can make tunnels" : "Cannot make tunnels"}</Chip>
                 <span className="text-muted-foreground">
                   {check.tunnels} tunnel{check.tunnels === 1 ? "" : "s"} in its organisation
                   {check.workspaces.length > 0 && <> · workspaces {check.workspaces.join(", ")}</>}
@@ -351,12 +351,10 @@ function AccountDialog({ account, onClose, onSaved }: {
         <DialogHeader>
           <DialogTitle>{editing ? `Edit ${account.name}` : "Add a ChatGPT account"}</DialogTitle>
           <DialogDescription>
-            The key is stored encrypted and is never shown again. Everything a
-            tunnel on this account does is recorded under its own identity.
-            What this account can actually touch is <em>Systems it can
-            reach</em>, below — reading from those systems and proposing
-            changes to them is what every account may do, and a change is still
-            shown in the conversation and needs your yes before it runs.
+            The key is stored encrypted and is never shown again. What this
+            account can touch is set under <em>Systems it can reach</em>, below.
+            A change it proposes is still shown in the conversation and needs
+            your yes before it runs.
           </DialogDescription>
         </DialogHeader>
 

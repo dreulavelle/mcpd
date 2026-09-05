@@ -30,9 +30,9 @@ describe("OpenAI refusals", () => {
     );
     // Both gates named, and the key's own scopes first, because that is the
     // one an owner has not already satisfied.
-    expect(screen.getByText(/scopes chosen for the key itself/)).toBeInTheDocument();
-    expect(screen.getByText(/Restricted without the tunnel scopes/)).toBeInTheDocument();
-    expect(screen.getByText(/regenerate the key/)).toBeInTheDocument();
+    expect(screen.getByText(/permissions chosen for the key itself/)).toBeInTheDocument();
+    expect(screen.getByText(/Restricted without the tunnel permissions/)).toBeInTheDocument();
+    expect(screen.getByText(/make the key again/)).toBeInTheDocument();
     // The claim that got this wrong must not come back.
     expect(screen.queryByText(/Making another key will not help/)).toBeNull();
     // Links straight to where each is changed, rather than a path to read.

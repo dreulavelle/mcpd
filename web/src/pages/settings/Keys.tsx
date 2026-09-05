@@ -133,8 +133,9 @@ export function Keys() {
 
       {!keys ? <Loading rows={3} /> : keys.length === 0 ? (
         <EmptyState mark={<KeyRound />} title="No keys yet">
-          Tokens in the configuration file keep working. A key made here can
-          be rotated, re-scoped and revoked without a restart.
+          Keys in the configuration file keep working. Add one here for a
+          script or an agent — it can be replaced, given different access or
+          switched off without a restart.
         </EmptyState>
       ) : (
         <Card className="overflow-hidden p-0">

@@ -80,7 +80,7 @@ export function Audit() {
     <>
       <PageHeader
         title="Audit"
-        lede="Every decision and every transition, in order. Each entry carries the hash of the one before it, so an entry that was altered no longer follows the one it claims to."
+        lede="Every decision and change, in order. Nothing here can be edited without it showing."
         actions={
           <div className="flex items-center gap-2">
             <NativeSelect
@@ -103,9 +103,9 @@ export function Audit() {
 
       {brokenAt !== null && (
         <Notice tone="problem" icon={<ShieldAlert />}>
-          <strong>The history has been altered.</strong> Something edited the
-          database directly: entry {brokenAt} does not follow the one before it.
-          Everything from there on is no longer evidence of anything.
+          <strong>The history has been altered.</strong> Something changed the
+          record directly: entry {brokenAt} does not follow the one before it.
+          Nothing from there on can be trusted.
         </Notice>
       )}
 
@@ -147,7 +147,7 @@ export function Audit() {
           {filtering && (
             <p className="mt-2 text-xs text-muted-foreground">
               {shown.length} of the last {records.length} entries match.
-              {" "}Gaps in the chain below are entries the filter hides, not missing ones.
+              {" "}Gaps below are entries the filter hides, not missing ones.
             </p>
           )}
           {shown.length === 0 ? (
@@ -243,7 +243,7 @@ function Entry({ record: r, first, last, severed, missing, open, onToggle }: {
         {severed && (
           <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-problem">
             <Unlink className="size-3.5" aria-hidden="true" />
-            The chain breaks here — this entry does not follow the one below it.
+            This entry does not follow the one below it.
           </p>
         )}
 

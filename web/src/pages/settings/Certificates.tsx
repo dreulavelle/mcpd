@@ -57,10 +57,10 @@ export function Certificates() {
 
       {!rows ? <Loading rows={3} /> : rows.length === 0 ? (
         <Notice tone="neutral">
-          Nothing added, which is right until something needs it. A plugin whose
-          address fails with a certificate this host does not trust — a company
-          authority, or an appliance that issued its own — is what this page is
-          for. Adding one takes effect immediately; there is nothing to restart.
+          Nothing added, which is right until something needs it. This page is
+          for a system whose certificate this host does not trust — one signed
+          by your own company, or by the appliance itself. Adding one takes
+          effect at once.
         </Notice>
       ) : (
         <Card className="mt-4 overflow-hidden p-0">
@@ -131,7 +131,7 @@ function CertificateRow({ cert, notify, onChanged }: {
           {cert.self_signed && <Chip>self-signed</Chip>}
           {/* Said plainly, because trusting one of these changes nothing and
               the operator would otherwise be left wondering why. */}
-          {!cert.anchors && <Chip tone="problem">cannot anchor a chain</Chip>}
+          {!cert.anchors && <Chip tone="problem">not an authority</Chip>}
         </span>
         <button
           type="button"
@@ -156,8 +156,8 @@ function CertificateRow({ cert, notify, onChanged }: {
             {!cert.anchors && (
               <p className="text-problem">
                 This certificate says it is not an authority, so nothing can be
-                verified against it. Trusting it will not stop the handshake
-                failing — the authority that signed it is the one to add.
+                checked against it. Trusting it will not fix the connection. Add
+                the certificate of whoever signed this one instead.
               </p>
             )}
             <pre className="scroll-x rounded-md border bg-muted/30 p-2 font-mono">

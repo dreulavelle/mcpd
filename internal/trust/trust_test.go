@@ -166,6 +166,22 @@ func TestParse_PKCS7SaysHowToConvertIt(t *testing.T) {
 	}
 }
 
+// The same bundle, PEM-armoured. This path used to answer with a bare
+// "that is a PKCS#7 bundle" and no next step, so which of the two answers
+// somebody got depended on which armour their CA exported -- a difference
+// they cannot see and did not choose.
+func TestParse_PEMArmouredPKCS7SaysHowToConvertItToo(t *testing.T) {
+	armoured := []byte("-----BEGIN PKCS7-----\nMAA=\n-----END PKCS7-----\n")
+
+	_, err := Parse(armoured)
+	if !errors.Is(err, ErrPKCS7) {
+		t.Fatalf("err = %v, want it recognised as PKCS#7", err)
+	}
+	if !strings.Contains(err.Error(), "openssl pkcs7") {
+		t.Errorf("message = %q, want it to name the conversion", err)
+	}
+}
+
 // CanAnchor is the question that decides whether storing a certificate can fix
 // anything at all. The first case is the one this feature exists for: an
 // appliance certificate with no extensions, which Go accepts as a root because

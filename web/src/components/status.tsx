@@ -36,13 +36,16 @@ export function StatusDot({ tone, className }: { tone: Tone; className?: string 
   );
 }
 
-export function Chip({ tone = "neutral", className, children }: {
+export function Chip({ tone = "neutral", className, title, children }: {
   tone?: Tone;
   className?: string;
+  /** Evidence a chip's words stand in for -- an HTTP status, say. */
+  title?: string;
   children: ReactNode;
 }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5",
         "text-xs font-medium whitespace-nowrap",
@@ -134,8 +137,8 @@ export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
           </span>
         </TooltipTrigger>
         <TooltipContent className="max-w-xs">
-          mcpd re-read the target afterwards and what it found was not what was
-          asked for.
+          The system was read again afterwards, and it did not show the change
+          that was asked for.
         </TooltipContent>
       </Tooltip>
     );
@@ -151,8 +154,8 @@ export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
         </span>
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
-        Nobody has re-read the target, so this says nothing either way about
-        whether the change is in place.
+        Nobody has read the system again, so this does not say whether the
+        change is in place.
       </TooltipContent>
     </Tooltip>
   );
@@ -181,10 +184,10 @@ export function AssuranceBadge({ assurance, authorizedByRule }: {
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
         {reviewed
-          ? "Exact fields, a drift check against a stored snapshot, and an outcome confirmed by re-reading the target."
+          ? "The exact change was recorded, checked against how the system looked beforehand, and confirmed afterwards."
           : authorizedByRule
-            ? "A rule allowed it and the call was made. That is all this record proves — it does not say the change is in place."
-            : "A person authorised it and the call was made. That is all this record proves — it does not say the change is in place."}
+            ? "A rule allowed it and the call was made. This does not say whether the change is in place."
+            : "A person allowed it and the call was made. This does not say whether the change is in place."}
       </TooltipContent>
     </Tooltip>
   );
@@ -224,5 +227,20 @@ export function healthTone(health: string): Tone {
     case "healthy": case "up": return "good";
     case "degraded": return "attention";
     default: return "problem";
+  }
+}
+
+/**
+ * A health state as a word somebody would say out loud. "unhealthy" and
+ * "degraded" are the API's vocabulary, not a person's; a state this build does
+ * not know renders as itself, which is the signal the two have drifted apart.
+ */
+export function healthWords(health: string): string {
+  switch (health) {
+    case "healthy": case "up": return "Working";
+    case "degraded": return "Having trouble";
+    case "unhealthy": case "down": return "Not working";
+    case "unknown": case "": return "Not checked";
+    default: return health;
   }
 }

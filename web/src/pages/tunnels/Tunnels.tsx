@@ -108,11 +108,11 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
   const waitingOn = row.assigned && !s && !plugins.includes(row.assigned) ? row.assigned : "";
   if (!row.account && accounts.length > 1) {
     return { kind: "unassigned", label: "No account", tone: "attention", rank: 3, bucket: "needs",
-      detail: "This host has more than one ChatGPT account, so a tunnel has to say which one it connects with. Until it does, it is not started." };
+      detail: "Choose which ChatGPT account this tunnel uses. It will not start until you do." };
   }
   if (waitingOn) {
     return { kind: "waiting", label: "Waiting", tone: "attention", rank: 4, bucket: "waiting",
-      detail: `${waitingOn} is not running, so this tunnel is not started. It connects on its own once that plugin has what it needs.` };
+      detail: `${waitingOn} is not running, so this tunnel has not started. It connects on its own once that system is working.` };
   }
   if (!s) {
     return { kind: "unused", label: "Not used", tone: "neutral", rank: 8, bucket: "off",
@@ -125,11 +125,11 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
   if (row.owners.length > 0 && row.account && !row.owners.includes(row.account)) {
     const names = row.owners.map((id) => accountName(accounts, id)).filter(Boolean);
     return { kind: "elsewhere", label: "Wrong account", tone: "problem", rank: 0, bucket: "needs",
-      detail: `This tunnel belongs to ${names.join(" and ")} but is assigned to ${accountName(accounts, row.account)}, whose key OpenAI refuses for it. Move it to ${names.length === 1 ? names[0] : "one of them"}.` };
+      detail: `This tunnel belongs to ${names.join(" and ")}, so ${accountName(accounts, row.account)} cannot use it. Move it to ${names.length === 1 ? names[0] : "one of them"}.` };
   }
   if (s.upstream === "missing") {
-    return { kind: "gone", label: "Not in this organisation", tone: "problem", rank: 0, bucket: "needs",
-      detail: "This account's organisation does not have this tunnel: it was deleted, or made in an organisation no account here can see. Forget it, and make a new one if its system still needs a connector of its own." };
+    return { kind: "gone", label: "Not in this account", tone: "problem", rank: 0, bucket: "needs",
+      detail: "This ChatGPT account no longer has this tunnel. Forget it here, and make a new one if the system still needs a connector." };
   }
   switch (s.state) {
     case "failed":
@@ -146,18 +146,18 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
         detail: "Connecting to OpenAI." };
     case "connected":
       if (s.degraded) {
-        return { kind: "degraded", label: "Degraded", tone: "attention", rank: 2, bucket: "needs",
-          detail: "Connected, but nothing is getting through and the connection keeps reporting errors. mcpd restarts it if this goes on." };
+        return { kind: "degraded", label: "Having trouble", tone: "attention", rank: 2, bucket: "needs",
+          detail: "Connected, but nothing is getting through and the connection keeps reporting errors. It restarts on its own if this continues." };
       }
       if ((s.requests ?? 0) === 0 && !s.last_request_at && awaiting.has(row.id)) {
         return { kind: "attach", label: "Waiting for ChatGPT", tone: "info", rank: 4, bucket: "waiting",
-          detail: "mcpd is connected and nothing has come through yet. Attach the tunnel in ChatGPT; this clears itself on the first request." };
+          detail: "Connected, and nothing has come through yet. Attach the tunnel in ChatGPT, and this clears itself on the first request." };
       }
       if ((s.requests ?? 0) === 0 && !s.last_request_at) {
         // A restart of mcpd starts the count again; an attached connector
         // that nobody has used since is not one that was never attached.
         return { kind: "ready", label: "Ready", tone: "good", rank: 6, bucket: "ready",
-          detail: `Connected${s.connected_at ? ` ${relative(s.connected_at)}` : ""}; nothing has come through since mcpd started. A connector ChatGPT already has reconnects on its own.` };
+          detail: `Connected${s.connected_at ? ` ${relative(s.connected_at)}` : ""}. Nothing has come through since mcpd last started.` };
       }
       return { kind: "ready", label: "Ready", tone: "good", rank: 6, bucket: "ready",
         detail: `${s.requests ?? 0} request${s.requests === 1 ? "" : "s"} since it connected${s.connected_at ? ` ${relative(s.connected_at)}` : ""}.` };
@@ -294,7 +294,7 @@ export function Tunnels() {
       )}
       <PageHeader
         title="Tunnels"
-        lede="Every connector this host serves, and what each is doing right now. One tunnel is one connector in ChatGPT."
+        lede="Every connector this host serves, and what each is doing. One tunnel is one connector in ChatGPT."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {rows.length > 6 && (
@@ -350,8 +350,8 @@ export function Tunnels() {
       {!info ? <Loading rows={5} /> : rows.length === 0 ? (
         <EmptyState mark={<Waypoints />} title="No tunnels yet">
           {info.can_manage
-            ? "Make one. One tunnel is one connector in ChatGPT, and a connector can cover everything on this host or a single system."
-            : "A tunnel is made in the OpenAI dashboard and pasted in here, or made from here once an admin key is set under Settings › ChatGPT."}
+            ? "Make one. A tunnel can reach everything on this host, or a single system."
+            : "Make one on OpenAI's site and paste it in here, or ask an administrator to add a ChatGPT admin key under Settings › ChatGPT."}
         </EmptyState>
       ) : (
         <>
@@ -589,7 +589,7 @@ function Chart({ values, errors }: { values: number[]; errors: number[] }) {
       </div>
       <div className="mt-1 flex gap-3 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1"><span className="inline-block size-2 rounded-sm bg-good" />requests</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block size-2 rounded-sm bg-problem" />client errors</span>
+        <span className="inline-flex items-center gap-1"><span className="inline-block size-2 rounded-sm bg-problem" />connection errors</span>
       </div>
     </div>
   );
@@ -726,11 +726,11 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
       <Chart values={activity} errors={errors} />
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
         <div><dt className="text-muted-foreground">Requests</dt><dd className="font-mono">{activity.reduce((a, b) => a + b, 0)}</dd></div>
-        <div><dt className="text-muted-foreground">Client errors</dt><dd className="font-mono">{errors.reduce((a, b) => a + b, 0)}</dd></div>
-        <div><dt className="text-muted-foreground">Last request</dt><dd>{s.last_request_at ? relative(s.last_request_at) : "none since mcpd started"}</dd></div>
+        <div><dt className="text-muted-foreground">Connection errors</dt><dd className="font-mono">{errors.reduce((a, b) => a + b, 0)}</dd></div>
+        <div><dt className="text-muted-foreground">Last request</dt><dd>{s.last_request_at ? relative(s.last_request_at) : "none since mcpd last started"}</dd></div>
         <div><dt className="text-muted-foreground">Connected</dt><dd>{s.connected_at ? relative(s.connected_at) : "—"}</dd></div>
         <div><dt className="text-muted-foreground">Restarts since it worked</dt><dd className="font-mono">{s.attempts ?? 0}</dd></div>
-        <div><dt className="text-muted-foreground">In this organisation</dt><dd>{s.upstream === "missing" ? "no" : s.upstream === "present" ? `yes, checked ${s.upstream_checked_at ? relative(s.upstream_checked_at) : ""}` : "not checked"}</dd></div>
+        <div><dt className="text-muted-foreground">In this ChatGPT account</dt><dd>{s.upstream === "missing" ? "no" : s.upstream === "present" ? `yes, checked ${s.upstream_checked_at ? relative(s.upstream_checked_at) : ""}` : "not checked"}</dd></div>
       </dl>
     </div>
   );
@@ -769,7 +769,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
 
   async function remove() {
     const question = r.kind === "gone"
-      ? { title: `Forget "${row.name}"?`, description: "OpenAI no longer has it, so there is nothing there to delete. This clears its assignment here, which is what keeps mcpd reporting it.", action: "Forget" }
+      ? { title: `Forget "${row.name}"?`, description: "OpenAI no longer has this tunnel, so there is nothing to delete there. This takes it off the list here.", action: "Forget" }
       : `Delete "${row.name}"? Any connector using it stops working.`;
     if (!(await confirm(question))) return;
     setBusy("remove");
@@ -821,7 +821,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
           ))}
           {admin && s && s.state !== "disabled" && (
             <Button variant="outline" size="sm" onClick={restart} disabled={busy !== null}
-                    title="Stop it and start it again, against the plugins as they are now">
+                    title="Stop it and start it again">
               <RotateCw className={busy === "restart" ? "size-3.5 animate-spin" : "size-3.5"} aria-hidden="true" />
               Restart
             </Button>
@@ -866,7 +866,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </NativeSelect>
               <p className="text-xs text-muted-foreground">
-                No account here can see this tunnel, so which one runs it has to be said.
+                No account here can see this tunnel, so choose which one runs it.
               </p>
             </div>
           )}
@@ -898,8 +898,8 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
             )}
             {!attached && r.kind !== "attach" && s?.state === "connected" && (
               <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
-                Nothing has come through since mcpd started, so this cannot be
-                confirmed from here. A connector ChatGPT already has needs nothing.
+                A connector ChatGPT already has needs nothing. Nothing has come
+                through yet, so this cannot be ticked from here.
               </span>
             )}
           </Step>
@@ -1023,10 +1023,8 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
         <DialogHeader>
           <DialogTitle>Make a tunnel</DialogTitle>
           <DialogDescription>
-            Made in the account's organisation, listed wherever its other
-            tunnels are, pointed at the system, and connected straight away.
-            Attaching it in ChatGPT is the one step left, and the page walks
-            you through it.
+            This makes the tunnel and connects it. Attaching it in ChatGPT is
+            the one step left, and this page walks you through it.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
@@ -1053,8 +1051,8 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
           </div>
           <p className="text-xs text-muted-foreground">
             {workspaces.length > 0
-              ? <>It will be listed in {workspaces.length === 1 ? "the workspace" : `the ${workspaces.length} workspaces`} this account already uses, so it appears in ChatGPT beside the others.</>
-              : <>This account has no workspace on record yet, so the tunnel is listed to the organisation only. If ChatGPT Enterprise does not show it, add the workspace to the account under Settings › ChatGPT.</>}
+              ? <>It appears in {workspaces.length === 1 ? "the workspace" : `the ${workspaces.length} workspaces`} this account already uses, beside its other tunnels.</>
+              : <>This account has no workspace saved yet. If ChatGPT does not show the tunnel, add the workspace under Settings › ChatGPT.</>}
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>

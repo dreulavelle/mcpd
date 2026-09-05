@@ -132,7 +132,7 @@ describe("what the record will prove", () => {
       await screen.findByText(/This is a gated call, not a reviewed change/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/cannot be confirmed by re-reading the target/i),
+      screen.getByText(/cannot be confirmed by reading the system again/i),
     ).toBeInTheDocument();
   });
 
@@ -148,7 +148,7 @@ describe("what the record will prove", () => {
     // two facts in its own words further down, which is the point -- one warns
     // before the decision, the other documents afterwards.
     await screen.findByText(
-      /no precondition snapshot, so nothing will be compared for drift, and its outcome cannot be confirmed by re-reading the target/i,
+      /nothing recorded how the system looked before, so nothing will be compared, and its result cannot be confirmed by reading the system again/i,
     );
   });
 
@@ -157,13 +157,13 @@ describe("what the record will prove", () => {
   it("distinguishes a drift check that did not run from one that found nothing", async () => {
     const { unmount } = mount(operationFixture({ drift_checked: false, assurance: "gated_call" }), "admin");
     expect(
-      await screen.findByText(/No snapshot was declared, so nothing was compared/i),
+      await screen.findByText(/Nothing recorded how it looked before, so nothing was compared/i),
     ).toBeInTheDocument();
     unmount();
 
     mount(operationFixture({ drift_checked: true }), "admin");
     expect(
-      await screen.findByText(/planned against a stored snapshot/i),
+      await screen.findByText(/compared against a record of how the system looked before/i),
     ).toBeInTheDocument();
   });
 });

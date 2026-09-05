@@ -90,7 +90,7 @@ describe("a remote MCP server's plugin page", () => {
   it("says plainly that a pending tool is not being served", async () => {
     renderWith(<PluginDetail name="weather" />);
 
-    expect(await screen.findByText(/waiting to be\s+classified/)).toBeInTheDocument();
+    expect(await screen.findByText(/waiting for you to\s+allow/)).toBeInTheDocument();
     // Twice: the filter offers the state, and the row is in it.
     expect(screen.getAllByText("Waiting on you")).toHaveLength(2);
   });
@@ -98,7 +98,7 @@ describe("a remote MCP server's plugin page", () => {
   it("opens the classify dialog for the descriptor that was on screen", async () => {
     renderWith(<PluginDetail name="weather" />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Review" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Decide" }));
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("What the server says about it")).toBeInTheDocument();
@@ -145,7 +145,7 @@ describe("a remote MCP server's plugin page", () => {
     renderWith(<PluginDetail name="weather" />, { session: sessionFor("user") });
 
     expect(await screen.findByText("forecast")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Decide" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Discover" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
   });
@@ -233,7 +233,7 @@ describe("a plugin the configuration file declares", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog.textContent).toMatch(/required: true/);
-    expect(dialog.textContent).toMatch(/configuration file is not changed/);
+    expect(dialog.textContent).toMatch(/configuration file does not change/);
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", true));

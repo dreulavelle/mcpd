@@ -95,10 +95,10 @@ function Body({ operation: op, audit, onChanged }: {
       <div className="space-y-6">
         {op.state === "indeterminate" && (
           <Notice tone="attention" icon={<TriangleAlert />}>
-            <strong>This may have landed.</strong> Execution began and the
-            outcome was never recorded, which is not the same as failing. Read
-            the target upstream before proposing this again — a retry would
-            apply the change a second time.
+            <strong>This may have landed.</strong> It started, and nobody
+            recorded what happened, which is not the same as failing. Check the
+            system before proposing this again — a retry would apply the change
+            a second time.
           </Notice>
         )}
 
@@ -116,7 +116,7 @@ function Body({ operation: op, audit, onChanged }: {
 
         <Section
           title="Where this stands"
-          description="What has happened, what can still happen, and what the record will prove afterwards."
+          description="What has happened, and what can still happen."
         >
           <Lifecycle operation={op} audit={audit} />
         </Section>
@@ -155,22 +155,22 @@ function Body({ operation: op, audit, onChanged }: {
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  No field-level summary was recorded. The full payload is below.
+                  No list of fields was recorded. What was sent is below.
                 </p>
               )}
             </CardContent>
           </Card>
         </Section>
 
-        <Section title="Payload" description="Frozen when the change was proposed, and hashed. A payload that differs at execution time matches nothing and the change does not run.">
+        <Section title="What was sent" description="Recorded when the change was proposed. If it does not match at the moment it runs, it does not run.">
           <div className="grid gap-3 lg:grid-cols-2">
-            <Payload label="Target" value={op.target} />
-            <Payload label="Desired" value={op.desired} />
-            <Payload label="Before" value={op.before} />
+            <Payload label="What it changes" value={op.target} />
+            <Payload label="What it should become" value={op.desired} />
+            <Payload label="How it was before" value={op.before} />
             <Payload
-              label="Observed after"
+              label="How it looked afterwards"
               value={op.observed}
-              empty="Nothing has been re-read yet."
+              empty="Nobody has looked yet."
             />
           </div>
         </Section>
@@ -212,7 +212,7 @@ function Body({ operation: op, audit, onChanged }: {
                   <Detail label="Must run by">
                     {whenExact(op.execute_by)}
                     <span className="block text-xs text-muted-foreground">
-                      An approval is not open-ended; after this it expires.
+                      An approval does not last for ever. After this it expires.
                     </span>
                   </Detail>
                 )}
@@ -223,15 +223,15 @@ function Body({ operation: op, audit, onChanged }: {
                 <Detail label="Outcome confirmed">
                   <VerifiedBadge verified={op.verified} />
                 </Detail>
-                <Detail label="Drift checked">
+                <Detail label="Checked against how it was before">
                   {op.drift_checked
-                    ? "Yes — planned against a stored snapshot."
-                    : "No snapshot was declared, so nothing was compared."}
+                    ? "Yes — compared against a record of how the system looked before."
+                    : "Nothing recorded how it looked before, so nothing was compared."}
                 </Detail>
-                <Detail label="Outcome verifiable">
+                <Detail label="Can be confirmed afterwards">
                   {op.outcome_verifiable
-                    ? "Re-reading the target proves this write."
-                    : "This kind of change cannot be confirmed by re-reading."}
+                    ? "Reading the system again can prove this change happened."
+                    : "This kind of change leaves nothing to read back, so it cannot be confirmed."}
                 </Detail>
                 <Detail label="Reference" className="sm:col-span-2 lg:col-span-3">
                   <code className="font-mono text-xs break-all">{op.id}</code>
@@ -241,7 +241,7 @@ function Body({ operation: op, audit, onChanged }: {
           </Card>
         </Section>
 
-        <Section title="History" description="Every transition this change went through, from the audit trail.">
+        <Section title="History" description="Every step this change went through.">
           <Card className="overflow-hidden p-0">
             {audit.length === 0 ? (
               <p className="p-4 text-sm text-muted-foreground">
@@ -331,10 +331,10 @@ function WhatThisProves({ operation: op }: { operation: Operation }) {
 
   const missing: string[] = [];
   if (!op.drift_checked) {
-    missing.push("it declares no precondition snapshot, so nothing will be compared for drift");
+    missing.push("nothing recorded how the system looked before, so nothing will be compared");
   }
   if (!op.outcome_verifiable) {
-    missing.push("its outcome cannot be confirmed by re-reading the target");
+    missing.push("its result cannot be confirmed by reading the system again");
   }
 
   return (
@@ -342,9 +342,9 @@ function WhatThisProves({ operation: op }: { operation: Operation }) {
       <strong>This is a gated call, not a reviewed change.</strong>{" "}
       {op.authorized_by_rule
         // Nobody is about to approve this one, and nobody did.
-        ? <>A rule allowed it and the call was made — </>
-        : <>Approving it records that a person authorised it and that the call
-            was made — </>}
+        ? <>A rule allowed it and the call was made, but </>
+        : <>Approving it records that a person allowed it and that the call was
+            made, but </>}
       {missing.join(", and ")}. The record will not say the change is in place.
     </Notice>
   );

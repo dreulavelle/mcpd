@@ -45,23 +45,23 @@ const EXPLANATIONS: Record<OpenAIReason, Explanation> = {
   openai_tunnels_manage_required: {
     title: "That key cannot manage tunnels",
     lede:
-      "Two separate things gate this, and if you are an organisation owner it " +
-      "is almost certainly the second: the org role of whoever created the " +
-      "key, and the scopes chosen for the key itself. A key can lack a " +
-      "permission its creator holds.",
+      "Two things decide this: the role of whoever created the key, and the " +
+      "permissions chosen for the key itself. If you are an organisation " +
+      "owner it is almost certainly the second — a key can lack a permission " +
+      "its creator holds.",
     steps: [
       {
         do:
-          "Check the key's own permissions. A key created as Restricted without " +
-          "the tunnel scopes is refused even for an owner. Set it to All, or " +
-          "include api.organization.tunnel.read and .write.",
+          "Check the key's own permissions. A key created as Restricted " +
+          "without the tunnel permissions is refused even for an owner. Set " +
+          "it to All, or include api.organization.tunnel.read and .write.",
         where: { label: "Organization → Admin keys", href: ADMIN_KEYS_URL },
       },
       {
         do:
-          "If it already says All, regenerate the key. OpenAI has issued keys " +
-          "missing scopes they should have had, and regenerating is their own " +
-          "advice for it.",
+          "If it already says All, make the key again. OpenAI has issued keys " +
+          "missing permissions they should have had, and making a new one is " +
+          "their own advice for it.",
         where: { label: "Organization → Admin keys", href: ADMIN_KEYS_URL },
       },
       {

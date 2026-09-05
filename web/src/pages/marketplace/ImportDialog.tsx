@@ -119,8 +119,8 @@ export function ImportDialog({
           <DialogTitle>Add a remote MCP server</DialogTitle>
           <DialogDescription>
             {seedDocument === undefined
-              ? <>Paste the server's published <code className="font-mono">server.json</code>, or the <code className="font-mono">mcpServers</code> block from an editor's <code className="font-mono">mcp.json</code>. A server.json is stored as-is; a client config is converted, and any server in it that runs a local command is named and skipped, because this host reaches servers over HTTP rather than running them.</>
-              : <>Give it a name on this host. Nothing is served until you approve its tools.</>}
+              ? <>Paste the server's published <code className="font-mono">server.json</code>, or the <code className="font-mono">mcpServers</code> block from an editor's <code className="font-mono">mcp.json</code>. Any server in it that runs a local command is named and skipped — this host reaches servers over the network rather than running them itself.</>
+              : <>Give it a name on this host. Nothing is served until you allow its tools.</>}
           </DialogDescription>
         </DialogHeader>
 
@@ -154,15 +154,15 @@ export function ImportDialog({
               </p>
             )}
             <p id="mcp-name-help" className="text-xs text-muted-foreground">
-              Its endpoint path, its tool prefix, and its entry in a credential's
-              plugin list. Not the document's own reverse-DNS name — that is not
-              a legal path segment.
+              What this server is called everywhere else in mcpd. Lowercase
+              letters, digits, dashes or underscores, 2 to 32 characters,
+              starting with a letter — not the server's long published name.
             </p>
           </div>
 
           <Notice tone="info">
             Adding doesn't switch anything on. Next, on its plugin page: fill in
-            what it asks for, run discovery, then choose which tools to allow.
+            what it asks for, press Discover, then choose which tools to allow.
           </Notice>
           </div>
 
@@ -228,7 +228,7 @@ function CatalogFacts({ entry }: { entry: CatalogEntry }) {
       {entry.version && (
         <Detail label="Version"><span className="font-mono">{entry.version}</span></Detail>
       )}
-      {entry.transport && <Detail label="Transport">{entry.transport}</Detail>}
+      {entry.transport && <Detail label="How it connects">{entry.transport}</Detail>}
       {credential && <Detail label="Credential">{credential}</Detail>}
       {entry.updated_at && (
         <Detail label="Updated">
@@ -237,7 +237,7 @@ function CatalogFacts({ entry }: { entry: CatalogEntry }) {
       )}
       {entry.source && <Detail label="Catalogue">{entry.source}</Detail>}
       {entry.url && (
-        <Detail label="Endpoint" className="sm:col-span-2">
+        <Detail label="Address" className="sm:col-span-2">
           <span className="block truncate font-mono text-xs" title={entry.url}>
             {entry.url}
           </span>

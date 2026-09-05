@@ -236,8 +236,8 @@ export function ApprovalPolicy() {
       {unreadable ? (
         <Notice tone="problem" icon={<TriangleAlert />}>
           <strong>The saved rules can't be read.</strong> Every change is going
-          to a person, but that is not what anybody configured — and nothing can
-          be shown or edited until the rules are replaced.
+          to a person, which is not what anybody set up. Nothing can be shown or
+          edited until the rules are replaced.
           <span className="mt-1 block font-mono text-xs opacity-80">
             {unreadable.detail}
           </span>
@@ -276,7 +276,7 @@ export function ApprovalPolicy() {
           <div className="space-y-6">
             <Section
               title="Always ask"
-              description="There is no exception to one of these. To let only Alice run something automatically, write just her allow rule and nothing here."
+              description="A change matching one of these always goes to a person, with no exceptions. To let only Alice run something automatically, write her allow rule and nothing here."
               actions={mayWrite && (
                 <Button variant="outline" size="sm" onClick={() => add("")}>
                   Add an always-ask rule
@@ -438,7 +438,7 @@ function RuleRow({
             onChange={(e) => onChange({ id: e.target.value })}
           />
           <p className="text-xs text-muted-foreground">
-            Lowercase, no spaces. It appears in the audit trail whenever the rule
+            Lowercase, no spaces. It appears in the history whenever the rule
             applies.
           </p>
         </div>
@@ -745,8 +745,8 @@ function DefaultDecision({ policy, mayWrite, onSaved }: {
         <p className="text-sm text-muted-foreground">{policy.default}</p>
         <p className="text-xs text-muted-foreground">
           An always-ask rule below beats this, and beats an allow rule for the
-          same change. Nothing limits how fast an assistant can write, so keep
-          allow rules narrow.
+          same change. An allow rule runs as often as an assistant asks, with no
+          limit. Keep allow rules narrow.
         </p>
       </CardContent>
     </Card>

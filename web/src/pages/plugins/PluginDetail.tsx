@@ -12,13 +12,13 @@ import {
 import { unprefixed, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link, useRouter } from "@/lib/router";
-import { parseHealth } from "@/lib/health";
+import { parseHealth, statusTone, statusWords } from "@/lib/health";
 import { useCan } from "@/lib/session";
 import {
   Copyable, Detail, Loading, Notice, PageHeader, Section,
 } from "@/components/chrome";
 import { SettingsForm } from "@/components/SettingsForm";
-import { Chip, healthTone, StatusDot } from "@/components/status";
+import { Chip, healthTone, healthWords, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -137,7 +137,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
             ) : running ? (
               <Chip tone={healthTone(health)}>
                 <StatusDot tone={healthTone(health)} />
-                {health === "healthy" ? "Serving" : health}
+                {health === "healthy" ? "Serving" : healthWords(health)}
               </Chip>
             ) : (
               <Chip tone="attention">Not running</Chip>
@@ -158,8 +158,8 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
 
         {runtime === "mcp" && (
           <Notice tone="info">
-            This is somebody else's server, mounted here. It cannot propose
-            changes, and only the tools an administrator classified are served.
+            This server is run by somebody else. It cannot suggest changes, and
+            only the tools an administrator has allowed are served.
           </Notice>
         )}
 
@@ -291,7 +291,7 @@ function Declaration({ instance }: { instance: PluginInstance | null }) {
   return (
     <Section
       title="In the configuration file"
-      description="What the file declares. mcpd does not write this file; nothing on this page changes it."
+      description="What the configuration file says. Nothing on this page changes that file."
     >
       <Card>
         <CardContent className="grid gap-4 sm:grid-cols-3">
@@ -300,7 +300,7 @@ function Declaration({ instance }: { instance: PluginInstance | null }) {
           </Detail>
           <Detail label="Enabled">{d.enabled ? "true" : "false"}</Detail>
           <Detail label="Required">
-            {d.required ? "true — the host is meant not to run without it" : "false"}
+            {d.required ? "true — this host is not meant to run without it" : "false"}
           </Detail>
           {d.settings_keys && d.settings_keys.length > 0 && (
             <Detail label="Settings it sets" className="sm:col-span-3">
@@ -310,8 +310,8 @@ function Declaration({ instance }: { instance: PluginInstance | null }) {
                 ))}
               </span>
               <span className="mt-1 block text-xs text-muted-foreground">
-                Names only. Their values are on the Settings page, where the
-                secret ones are redacted.
+                Names only. Their values are on the Settings page, with the
+                secret ones hidden.
               </span>
             </Detail>
           )}
@@ -335,7 +335,7 @@ function RemovedNotice({ name, instance, mayManage, onChanged }: {
     <Notice tone="attention">
       <div className="space-y-2">
         <p>
-          <strong>Removed.</strong> mcpd is not serving this plugin, now or
+          <strong>Removed.</strong> This plugin is not being served, now or
           after a restart.{" "}
           {instance.removed_by && (
             <>Removed by {instance.removed_by}
@@ -394,12 +394,12 @@ function EnabledControl({ name, instance, runtime, onChanged }: {
       <CardContent className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-[52ch] text-sm text-muted-foreground">
           {on
-            ? "Switching it off stops mcpd serving it and keeps everything it is configured with."
-            : "Switched off. Its settings are still here; switching it back on serves it again."}
+            ? "Switching it off stops it being served. Its settings are kept."
+            : "Switched off. Its settings are still here, and switching it back on serves it again."}
           {instance.from_file && (
             <>
-              {" "}This is recorded here rather than in the configuration file,
-              which is unchanged and stays that way.
+              {" "}This is saved here, not in the configuration file, which does
+              not change.
             </>
           )}
         </p>
@@ -440,12 +440,11 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
     // their credentials are about to be forgotten when they are not is as
     // wrong as not telling them when they are.
     const question = fromFile
-      ? "mcpd stops serving it, now and after every restart. "
-        + "Your configuration file is not changed — it still declares it, and "
-        + "you can restore it here."
+      ? "This stops it being served, now and after every restart. "
+        + "Your configuration file does not change, and you can restore it here."
         + (required
-          ? "\n\nThe file also marks it required: true, meaning this host is "
-            + "meant not to run without it. Removing it overrides that."
+          ? "\n\nThe file marks it required: true, so this host is not meant "
+            + "to run without it. Removing it overrides that."
           : "")
       : "Its settings, including credentials, go with it.";
     if (!(await confirm({ title: `Remove ${name}?`, description: question, action: "Remove" }))) return;
@@ -474,8 +473,8 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
           {fromFile ? (
             <>
               <p>
-                This plugin is declared in the configuration file. Removing it
-                here stops mcpd serving it, now and on every restart.{" "}
+                This plugin is listed in the configuration file. Removing it
+                here stops it being served, now and on every restart.{" "}
                 <strong className="text-foreground">
                   The file is unchanged
                 </strong>{" "}
@@ -486,9 +485,9 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
               </p>
               {required && (
                 <p className="text-attention">
-                  The file marks this <code className="font-mono">required: true</code>:
-                  this host is meant not to run without it. You will be asked to
-                  confirm that.
+                  The file marks this <code className="font-mono">required: true</code>,
+                  so this host is not meant to run without it. You will be asked
+                  to confirm.
                 </p>
               )}
             </>
@@ -524,10 +523,14 @@ function HealthNotice({ health, message }: { health: string; message: string }) 
       <span className="block space-y-2">
         {(h.status !== undefined || h.reference) && (
           <span className="flex flex-wrap items-center gap-2">
-            {h.status !== undefined && <Chip tone="problem" className="font-mono">HTTP {h.status}</Chip>}
+            {h.status !== undefined && (
+              <Chip tone={statusTone(h.status)} title={`HTTP ${h.status}`}>
+                {statusWords(h.status)}
+              </Chip>
+            )}
             {h.reference && (
               <span className="text-xs">
-                reference <code className="font-mono select-all">{h.reference}</code>
+                their reference <code className="font-mono select-all">{h.reference}</code>
               </span>
             )}
           </span>

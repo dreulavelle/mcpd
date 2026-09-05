@@ -345,7 +345,7 @@ describe("the profile", () => {
     render(<App />);
 
     await screen.findByText("What you may do");
-    expect(screen.getByText(/no self-service password endpoint/i)).toBeInTheDocument();
+    expect(screen.getByText(/cannot change it yourself here/i)).toBeInTheDocument();
     expect(screen.queryByLabelText("New password")).not.toBeInTheDocument();
     expect(api.users).not.toHaveBeenCalled();
   });

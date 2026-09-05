@@ -143,7 +143,7 @@ function Exposed() {
         <li>Expose the MCP listener only. The dashboard is a separate port so a firewall can tell them apart.</li>
         <li>
           Terminate TLS in front and set <em>Address assistants use</em> to the https address, or set{" "}
-          <em>Certificate for the MCP endpoint</em> to self-signed. Both under{" "}
+          <em>Certificate for the address assistants use</em> to self-signed. Both under{" "}
           <Link to="/settings" className="text-primary hover:underline">Settings › General</Link>.
         </li>
         <li>One key per client, the narrowest grant that works, an expiry. Every call lands on Activity under the key's name.</li>
