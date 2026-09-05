@@ -26,7 +26,7 @@ import { ProviderMark } from "@/components/provider-mark";
  * should not be the one place that oversells.
  */
 const FACTS = [
-  "One place your assistants reach every system through.",
+  "Each assistant reaches only the systems you allow it to.",
   "Reads go straight through. Changes wait for you, or for a rule you wrote.",
   "Every call is recorded, and the record cannot be edited.",
 ];
@@ -76,7 +76,7 @@ function SignedOutCard({ error, title, children }: {
 
         <div className="relative max-w-md space-y-6">
           <h2 className="text-2xl font-semibold leading-snug tracking-tight">
-            Lets your AI assistants use your company's systems, safely.
+            One way in for the assistants that reach your systems.
           </h2>
           <ul className="space-y-3 text-sm/relaxed opacity-90">
             {FACTS.map((fact) => (
