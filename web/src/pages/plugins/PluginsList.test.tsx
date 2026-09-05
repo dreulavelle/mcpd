@@ -77,9 +77,9 @@ describe("instances that are configured but not serving", () => {
     expect(rows[0]?.healthMessage).toBe("Waiting on token.");
   });
 
-  it("says it is switched off rather than broken", () => {
+  it("says it is disabled rather than broken", () => {
     const rows = toRows([], [instance("netbox", { mounted: false, enabled: false })], types);
-    expect(rows[0]?.healthMessage).toBe("Switched off.");
+    expect(rows[0]?.healthMessage).toBe("Disabled.");
   });
 
   /**

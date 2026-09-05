@@ -86,7 +86,7 @@ export function toRows(
       health: "unhealthy",
       healthMessage: i.missing?.length
         ? `Waiting on ${i.missing.join(", ")}.`
-        : i.problem || (i.enabled ? "Not running yet." : "Switched off."),
+        : i.problem || (i.enabled ? "Not running yet." : "Disabled."),
       reads: 0,
       writes: 0,
     });
