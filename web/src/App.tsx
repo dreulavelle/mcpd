@@ -24,7 +24,10 @@ import { Routes } from "@/Routes";
 // depends on whether the person ended up signed in, which is not known yet: a
 // refused sign-in belongs on the sign-in form, and a refused link belongs on
 // the profile page beside the button that started it.
-const SSO_NOTICE = takeSSOOutcome();
+// The code travels beside the sentence because one outcome is not a refusal at
+// all: `link_password` says a screen is waiting rather than that something
+// went wrong.
+const SSO_OUTCOME = takeSSOOutcome();
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -70,7 +73,12 @@ export default function App() {
   // Nothing to sign in with yet on an unclaimed instance.
   if (!session && meta.needs_setup) return <FirstRun onDone={adopt} />;
   if (!session) {
-    return <SignIn auth={auth} notice={SSO_NOTICE} onDone={adopt} />;
+    return (
+      <SignIn
+        auth={auth} notice={SSO_OUTCOME.message} outcome={SSO_OUTCOME.code}
+        onDone={adopt}
+      />
+    );
   }
   // Signed in, and holding nothing until somebody says so. The server refuses
   // every call this account makes; this is only so the refusals are not what

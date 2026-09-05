@@ -347,6 +347,18 @@ type idClaims struct {
 	Email     string          `json:"email"`
 	Verified  verifiableClaim `json:"email_verified"`
 	Name      string          `json:"name"`
+	// EmailDomainOwnerVerified is Entra's optional `xms_edov` claim, and is a
+	// pointer because absent and false are different answers. It says whether
+	// the directory owns the domain of the address in the token -- which is
+	// exactly what a tenant does not establish on its own, since a directory
+	// may hold a member whose address is at a domain nobody verified.
+	//
+	// Absent is the ordinary case for an app registration made before the
+	// claim existed, and leaves Entra's behaviour as it was: the tenant is the
+	// guarantee. Present and false is the directory saying it cannot vouch for
+	// the domain, and this host does not believe an address it says that
+	// about.
+	EmailDomainOwnerVerified *verifiableClaim `json:"xms_edov"`
 	// PreferredUsername is Entra's usual home for a work address. It is read
 	// only as a fallback, and only when it is an address.
 	PreferredUsername string `json:"preferred_username"`

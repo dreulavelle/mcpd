@@ -268,6 +268,22 @@ describe("an audit entry as a sentence", () => {
       plugin: "sam@example.com", detail: { provider: "google", account: "u_7" },
     }), "linked a google sign-in to Sam Vimes"],
 
+    // A link made from a live session and one confirmed by the account's own
+    // password at a collision are the same fact reached two ways, and only one
+    // of them happened while somebody was already signed in.
+    ["account.identity_linked, confirmed by a password",
+      entry("account.identity_linked", {
+        plugin: "sam@example.com",
+        detail: { provider: "google", account: "u_7", confirmed: "password" },
+      }), "linked a google sign-in to Sam Vimes"],
+
+    // Its own kind rather than a link, because the fact worth keeping is that
+    // this account had no credential at all until this moment.
+    ["account.invitation_claimed", entry("account.invitation_claimed", {
+      actor: "self:sam@example.com", plugin: "sam@example.com",
+      detail: { provider: "google", account: "u_7" },
+    }), "took up an invitation to sign in with google"],
+
     // The subject on this one is an account id, not an address, so it is
     // named from the book or not at all.
     ["account.identity_unlinked", entry("account.identity_unlinked", {

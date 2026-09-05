@@ -228,10 +228,26 @@ export interface User {
   status: AccountStatus;
   /** False for an account that only signs in through a provider. */
   has_password: boolean;
+  /**
+   * The provider an invited account is waiting for a first sign-in through,
+   * and the same fact in the words the button uses. Both absent for every
+   * account that is not waiting.
+   */
+  invite_provider?: ProviderName;
+  invite_label?: string;
+  /** When the invitation stops being claimable. */
+  invite_expires_at?: string;
   created_at: string;
   last_login_at?: string;
   /** True for the account making the request. */
   self: boolean;
+}
+
+/** An offer to connect a provider to an account that already holds the address. */
+export interface PendingLink {
+  provider: ProviderName;
+  label: string;
+  email: string;
 }
 
 /**
@@ -317,11 +333,17 @@ export interface UpdateKey {
 
 export interface CreateUser {
   email: string;
-  password: string;
+  /** Required unless `invite_provider` names a provider instead. */
+  password?: string;
   display_name?: string;
   role: Role;
   grants: Grant[];
   groups?: string[];
+  /**
+   * Invites the person to sign in with that provider rather than with a
+   * password an administrator has to invent and then hand over.
+   */
+  invite_provider?: ProviderName;
 }
 
 export interface UpdateUser {
@@ -330,6 +352,13 @@ export interface UpdateUser {
   grants?: Grant[];
   disabled?: boolean;
   password?: string;
+  /**
+   * Offers an invitation again, with a fresh expiry, to an account still
+   * waiting for its first sign-in. Refused for one that already signs in some
+   * other way — both at once would leave an account somebody is using still
+   * claimable by whoever holds its address at the provider.
+   */
+  invite_provider?: ProviderName;
 }
 
 export interface Tool {
@@ -1504,6 +1533,29 @@ export const api = {
   unlinkIdentity: (provider: ProviderName) =>
     request<void>(`/api/account/identities/${encodeURIComponent(provider)}`,
       { method: "DELETE" }),
+
+  /**
+   * The offer a sign-in left behind when the address already belongs to an
+   * account here. 404 when this browser is holding none, which is what the
+   * connect screen asks before it draws a password field: a code in the
+   * address bar is a parameter somebody can type.
+   */
+  pendingLink: () => request<PendingLink>("/api/auth/sso/pending"),
+
+  /**
+   * Connects the provider with the account's own password, and signs in. The
+   * account, the provider and the subject all come out of the offer, so there
+   * is nothing here to aim somewhere else.
+   */
+  connectPendingLink: (password: string) =>
+    request<Session>("/api/auth/sso/pending", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
+  /** "Not now". Retires the offer rather than merely navigating away from it. */
+  discardPendingLink: () =>
+    request<void>("/api/auth/sso/pending", { method: "DELETE" }),
 
   /** The exact addresses to paste into each provider's console. */
   redirectURIs: () =>

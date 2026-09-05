@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   api,
   ApiError,
   type AuthOptions,
+  type PendingLink,
   type ProviderName,
   type Session,
   problemText,
@@ -163,7 +164,7 @@ function Or({ label }: { label: string }) {
   );
 }
 
-export function SignIn({ auth, notice, onDone }: {
+export function SignIn({ auth, notice, outcome, onDone }: {
   /** What this host offers. Null while it is still being asked. */
   auth: AuthOptions | null;
   /**
@@ -171,6 +172,12 @@ export function SignIn({ auth, notice, onDone }: {
    * Omitted in the app, which lets this screen take the one the URL carried.
    */
   notice?: string;
+  /**
+   * The code that round trip came back with. One of them is not a refusal:
+   * `link_password` means an account here already uses the address and the
+   * offer to connect this provider to it is waiting.
+   */
+  outcome?: string;
   onDone: (s: Session) => void;
 }) {
   const [email, setEmail] = useState("");
@@ -182,6 +189,9 @@ export function SignIn({ auth, notice, onDone }: {
   const [error, setError] = useState(() => notice ?? consumeSSOOutcome());
   const [busy, setBusy] = useState(false);
   const [signingUp, setSigningUp] = useState(false);
+  // Spent by the screen finishing rather than by being read, so a re-render
+  // does not drop somebody out of the middle of connecting a provider.
+  const [connecting, setConnecting] = useState(outcome === "link_password");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -198,6 +208,15 @@ export function SignIn({ auth, notice, onDone }: {
     } finally {
       setBusy(false);
     }
+  }
+
+  if (connecting) {
+    return (
+      <ConnectProvider
+        onDone={onDone}
+        onCancel={(why) => { setConnecting(false); setError(why ?? ""); }}
+      />
+    );
   }
 
   if (signingUp) {
@@ -251,6 +270,104 @@ export function SignIn({ auth, notice, onDone }: {
           </button>
         </p>
       )}
+    </SignedOutCard>
+  );
+}
+
+/**
+ * Connecting a provider to an account that already uses the address.
+ *
+ * The refusal this replaces was correct and was a dead end: mcpd will not hand
+ * an account over because an address matched, and the person on the other end
+ * of that sentence was usually its owner. The password is the one proof the
+ * provider cannot give, and this is where it is given — once.
+ *
+ * It asks the server before it draws anything. The code in the address bar is
+ * a parameter somebody can type, and a password field on the strength of one
+ * would be asking for a password against nothing.
+ */
+function ConnectProvider({ onDone, onCancel }: {
+  onDone: (s: Session) => void;
+  /** Back to the ordinary form, optionally saying why. */
+  onCancel: (why?: string) => void;
+}) {
+  const [link, setLink] = useState<PendingLink | null>(null);
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api.pendingLink()
+      .then((l) => { if (live) setLink(l); })
+      // Nothing is waiting: the offer expired, it belongs to another browser,
+      // or somebody typed the parameter. The sign-in form is the honest
+      // answer, and it is where they were going anyway.
+      .catch(() => { if (live) onCancel(); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      onDone(await api.connectPendingLink(password));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setError("That password did not match.");
+      } else if (err instanceof ApiError && err.status === 404) {
+        // Several things retire an offer -- three wrong passwords, the ten
+        // minutes running out, "Not now" in another tab, a second sign-in
+        // replacing it -- and the server does not say which, on purpose.
+        // Naming one of them would be wrong most of the time, and what to do
+        // is the same either way.
+        onCancel("That offer is no longer open. Start the sign-in again.");
+      } else {
+        setError(problemText(err, "Couldn't connect that provider. Try again in a moment."));
+      }
+    } finally {
+      setBusy(false);
+      setPassword("");
+    }
+  }
+
+  // Nothing is drawn until the server has confirmed the offer. A card with a
+  // heading and no fields would read as a screen that failed to load.
+  if (!link) return null;
+
+  function notNow() {
+    api.discardPendingLink().catch(() => undefined).finally(() => onCancel());
+  }
+
+  return (
+    <SignedOutCard error={error} title={`Connect ${link.label} to your account`}>
+      <p className="text-sm text-muted-foreground">
+        An account here already uses <span className="font-medium">{link.email}</span>.
+        Enter its password once to connect {link.label}.
+      </p>
+
+      <form className="space-y-4" onSubmit={submit}>
+        <div className="space-y-1.5">
+          <Label htmlFor="connect-password">Password</Label>
+          <Input
+            id="connect-password" type="password" autoComplete="current-password" autoFocus
+            value={password} placeholder="Your password"
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+
+        <Button className="w-full" type="submit" disabled={busy || !password}>
+          {busy ? "Connecting…" : "Connect and sign in"}
+        </Button>
+      </form>
+
+      <p className="text-center text-sm text-muted-foreground">
+        <button type="button" className="underline underline-offset-4" onClick={notNow}>
+          Not now
+        </button>
+      </p>
     </SignedOutCard>
   );
 }

@@ -285,10 +285,26 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
     case "account.rejected":
       return { phrase: ["turned down ", person(subject, book), "'s sign-up"], facts };
     case "account.identity_linked":
+      // How it was confirmed, where the entry says. A link made from a live
+      // session and one confirmed by the account's password at a collision
+      // are the same fact reached two ways, and only one of them happened
+      // while somebody was already signed in.
+      if (str(d, "confirmed") === "password") {
+        facts.push("confirmed with the account's password");
+      }
       return {
         phrase: [
           `linked a ${str(d, "provider") || "provider"} sign-in to `,
           person(subject, book),
+        ],
+        facts,
+      };
+    case "account.invitation_claimed":
+      // Its own kind rather than a link, because the fact worth keeping is
+      // that this account had no credential at all until this moment.
+      return {
+        phrase: [
+          `took up an invitation to sign in with ${str(d, "provider") || "a provider"}`,
         ],
         facts,
       };
@@ -930,7 +946,7 @@ function moment(iso: string, near: string): string {
 }
 
 /** A date without a time, for an expiry or a cutoff. */
-function day(iso: string): string {
+export function day(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { day: "numeric", month: "long" });

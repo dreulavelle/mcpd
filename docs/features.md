@@ -86,7 +86,10 @@ See [Writing a plugin](plugins.md), the [SDK](../sdk), the
 - **Outbound notifications.** Send configured notifications about remote MCP
   tool-list changes and cancellations. See [Notifications](notifications.md).
 - **SSO and local accounts.** Sign in with Google, Microsoft Entra, GitHub,
-  or an OpenID Connect provider alongside local users.
+  or an OpenID Connect provider alongside local users. An administrator can
+  invite somebody to sign in with a provider rather than setting a password
+  for them, and a provider sign-in for an address a password account already
+  holds asks for that password once and connects the two.
 - **API keys for automation.** Give scripts and agents their own identities
   and permissions.
 - **Encrypted integration credentials.** Store secrets locally, encrypted

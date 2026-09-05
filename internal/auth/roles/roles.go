@@ -406,14 +406,26 @@ func (s *Store) Delete(ctx context.Context, actor, id string) error {
 // holds access at write.
 //
 // The one place the rule is written in SQL, used by every guard that has to
-// ask it inside a transaction. Keys are not counted -- a key cannot sign in
-// to put things right -- and a pending account holds nothing whatever its
+// ask it inside a transaction. The rule behind every exclusion is the same:
+// a subject who cannot sign in cannot put things right, so it is not what
+// stands between this host and nobody being able to administer it. Keys are
+// excluded for that reason, and a pending account holds nothing whatever its
 // row says.
+//
+// An unclaimed invitation is excluded for the same reason, and it is the one
+// that is easy to miss because the row looks like an ordinary administrator:
+// it has the role, it is enabled, and it is active. What it has not got is a
+// credential -- the password is the sentinel and no identity has been linked
+// -- so nobody has ever signed in to it and nobody may be able to. Counting it
+// let the last person who actually holds the role demote or delete themselves,
+// with the guard reporting an administrator who is an address somebody typed
+// on the Users page and an invitation that may already have lapsed.
 func CountAdministrators(tx *sqlite.UnitOfWork) (int, error) {
 	var n int
 	err := tx.QueryRow(`
 		SELECT COUNT(*) FROM users u
 		 WHERE u.disabled = 0 AND u.status <> 'pending'
+		   AND u.invite_provider = ''
 		   AND (
 		     EXISTS (SELECT 1 FROM roles r
 		              WHERE r.id = u.role_id

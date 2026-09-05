@@ -3,12 +3,51 @@ package admin
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/groups"
+	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
 )
+
+// providerConfigured reports whether a provider is set up and ready here.
+//
+// The same list the sign-in page's buttons come from, so an administrator
+// cannot invite somebody through a provider the page will not offer them.
+func (s *Server) providerConfigured(r *http.Request, p users.Provider) bool {
+	if s.opts.SSO == nil {
+		return false
+	}
+	for _, d := range s.opts.SSO.Available(r.Context()) {
+		if d.Provider == string(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// providerLabel is what a button for this provider says.
+//
+// From the configured providers rather than from sso.Label, because a provider
+// the operator runs is called whatever they called it and sso.Label has
+// nothing to fall back to but the bare name. "You were invited to sign in with
+// oidc" is a sentence naming a thing nobody on this host has ever seen; the
+// Authentication page calls it Authentik, and so should this.
+//
+// The bare label is still the fallback, for a provider that has since been
+// switched off: the row it names is still there and still has to render.
+func (s *Server) providerLabel(r *http.Request, p users.Provider) string {
+	if s.opts.SSO != nil {
+		for _, d := range s.opts.SSO.Available(r.Context()) {
+			if d.Provider == string(p) {
+				return d.Label
+			}
+		}
+	}
+	return sso.Label(p)
+}
 
 // userView is what the dashboard sees. The password hash is never in it: the
 // page has no use for it and every serialisation is a chance to leak it.
@@ -48,9 +87,18 @@ type userView struct {
 	// HasPassword is false for an account that only signs in through a
 	// provider, which the Users page shows so that "why can I not reset this
 	// password" has an answer on the page.
-	HasPassword bool   `json:"has_password"`
-	CreatedAt   string `json:"created_at"`
-	LastLoginAt string `json:"last_login_at,omitempty"`
+	HasPassword bool `json:"has_password"`
+	// InviteProvider names the provider an invited account is waiting for a
+	// first sign-in through, and is empty for every other account.
+	// InviteLabel is the same fact in the words the button uses.
+	InviteProvider string `json:"invite_provider,omitempty"`
+	InviteLabel    string `json:"invite_label,omitempty"`
+	// InviteExpiresAt is when the invitation stops being claimable. A row that
+	// has one, and an administrator wondering why somebody cannot get in,
+	// meet here.
+	InviteExpiresAt string `json:"invite_expires_at,omitempty"`
+	CreatedAt       string `json:"created_at"`
+	LastLoginAt     string `json:"last_login_at,omitempty"`
 	// Self marks the account making the request, so the page can warn before
 	// someone edits themselves out of their own access.
 	Self bool `json:"self"`
@@ -80,6 +128,15 @@ func viewOfUser(u *users.User, self bool, access groups.Resolved, memberOf []gro
 	if u.LastLoginAt != nil {
 		v.LastLoginAt = u.LastLoginAt.Format(time.RFC3339)
 	}
+	if u.Invited() {
+		v.InviteProvider = string(u.InviteProvider)
+		// The bare name here; viewUser replaces it with the configured label,
+		// which is a question about settings this function cannot see.
+		v.InviteLabel = sso.Label(u.InviteProvider)
+		if u.InviteExpiresAt != nil {
+			v.InviteExpiresAt = u.InviteExpiresAt.Format(time.RFC3339)
+		}
+	}
 	return v
 }
 
@@ -100,7 +157,11 @@ func (s *Server) viewUser(r *http.Request, u *users.User, self bool) userView {
 			memberOf = viewOfGroupRefs(list)
 		}
 	}
-	return viewOfUser(u, self, s.accessFor(r, u), memberOf)
+	v := viewOfUser(u, self, s.accessFor(r, u), memberOf)
+	if v.InviteProvider != "" {
+		v.InviteLabel = s.providerLabel(r, u.InviteProvider)
+	}
+	return v
 }
 
 // currentAccountID returns the signed-in account's identifier.
@@ -139,11 +200,17 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 type createUserRequest struct {
-	Email       string       `json:"email"`
+	Email string `json:"email"`
+	// Password is what this account signs in with, and is required unless
+	// InviteProvider names a provider instead.
 	Password    string       `json:"password"`
 	DisplayName string       `json:"display_name"`
 	Role        string       `json:"role"`
 	Grants      []auth.Grant `json:"grants"`
+	// InviteProvider invites the person to sign in with that provider rather
+	// than with a password an administrator has to invent and then hand over
+	// by some channel neither of them chose.
+	InviteProvider string `json:"invite_provider"`
 	// Groups the account joins as it is created. An empty list is the default
 	// and reaches nothing, which is what an account with no direct grants and
 	// no group has always been.
@@ -159,14 +226,25 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &req) {
 		return
 	}
+	invite := users.Provider(strings.TrimSpace(req.InviteProvider))
+	if invite != "" && !s.providerConfigured(r, invite) {
+		// Refused here rather than at the store, because "is this provider set
+		// up on this host" is a question about settings the store cannot see.
+		// An invitation naming a provider nobody configured is an account
+		// nobody can ever sign in to.
+		s.writeError(w, r, http.StatusBadRequest,
+			"that sign-in provider is not set up on this host")
+		return
+	}
 	user, err := s.opts.Accounts.Create(r.Context(), users.CreateRequest{
-		Email:       req.Email,
-		Password:    req.Password,
-		DisplayName: req.DisplayName,
-		RoleID:      req.Role,
-		Grants:      req.Grants,
-		Groups:      req.Groups,
-		Actor:       auth.FromContext(r.Context()).ID,
+		Email:          req.Email,
+		Password:       req.Password,
+		DisplayName:    req.DisplayName,
+		RoleID:         req.Role,
+		Grants:         req.Grants,
+		Groups:         req.Groups,
+		InviteProvider: invite,
+		Actor:          auth.FromContext(r.Context()).ID,
 	})
 	switch {
 	case errors.Is(err, users.ErrDuplicateEmail):
@@ -187,8 +265,9 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.opts.Log.Info("account created", "email", user.Email,
-		"role", user.RoleID, "by", auth.FromContext(r.Context()).ID)
+	s.opts.Log.InfoContext(r.Context(), "account created", "email", user.Email,
+		"role", user.RoleID, "invited_with", string(user.InviteProvider),
+		"by", auth.FromContext(r.Context()).ID)
 	s.writeJSON(w, r, http.StatusCreated, s.viewUser(r, user, false))
 }
 
@@ -198,6 +277,10 @@ type updateUserRequest struct {
 	Grants      *[]auth.Grant `json:"grants,omitempty"`
 	Disabled    *bool         `json:"disabled,omitempty"`
 	Password    *string       `json:"password,omitempty"`
+	// InviteProvider offers an invitation again, with a fresh expiry, to an
+	// account still waiting for its first sign-in. It is refused for one that
+	// already signs in some other way.
+	InviteProvider *string `json:"invite_provider,omitempty"`
 }
 
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +314,15 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		RoleID:      req.Role,
 		Disabled:    req.Disabled,
 	}
+	if req.InviteProvider != nil {
+		invite := users.Provider(strings.TrimSpace(*req.InviteProvider))
+		if !s.providerConfigured(r, invite) {
+			s.writeError(w, r, http.StatusBadRequest,
+				"that sign-in provider is not set up on this host")
+			return
+		}
+		update.InviteProvider = &invite
+	}
 	if req.Grants != nil {
 		gs := auth.Grants(*req.Grants)
 		update.Grants = &gs
@@ -251,11 +343,15 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusConflict,
 			"that display name is another account's address")
 		return
+	case errors.Is(err, users.ErrAlreadySignsIn):
+		s.writeError(w, r, http.StatusConflict,
+			"that account already has a way to sign in, so it cannot be invited")
+		return
 	case err != nil:
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.opts.Log.Info("account updated", "email", user.Email,
+	s.opts.Log.InfoContext(r.Context(), "account updated", "email", user.Email,
 		"by", auth.FromContext(r.Context()).ID)
 	s.writeJSON(w, r, http.StatusOK, s.viewUser(r, user, user.ID == s.currentAccountID(r)))
 }
