@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { describeEvent, pretty, relative, unprefixed, who } from "./format";
+import type { AuditRecord } from "./api";
+import {
+  actionWords, auditCategory, auditWords, changeRows, describeActor,
+  describeEvent, phraseText, pretty, relative, stepWords, unprefixed, who,
+  type NameBook,
+} from "./format";
+// Kept as its own import so the approvals half stays one contiguous piece.
+import {
+  confirmationWord, describeChange, describeOutcome, principalWords,
+  type ChangeLike,
+} from "./format";
 // Kept as its own import so this file's new half stays one contiguous piece.
 import {
   confirmationWord, describeChange, describeOutcome, principalWords,
   type ChangeLike,
+=======
+import type { AuditRecord } from "./api";
+import {
+  actionWords, auditCategory, auditWords, changeRows, describeActor,
+  describeEvent, phraseText, pretty, relative, stepWords, unprefixed, who,
+  type NameBook,
+>>>>>>> 0af84cf (feat(web): say what an audit entry means in one sentence)
 } from "./format";
 
 const NOW = Date.parse("2026-08-22T12:00:00Z");
@@ -59,27 +76,494 @@ describe("identities", () => {
   });
 });
 
-describe("audit events", () => {
-  it("names the action when there is one", () => {
+/**
+ * Who did it, in words a reader recognises.
+ *
+ * The trail records identifiers because a name can change and an entry cannot.
+ * That makes the identifier the honest thing to store and the wrong thing to
+ * read: `key_993f…` at the head of a sentence is a string somebody has to
+ * decode before they know what the line says.
+ */
+describe("who acted", () => {
+  const book: NameBook = {
+    users: { "sam@example.com": "Sam Vimes", u_7: "Sam Vimes" },
+    keys: { key_993f: "ledger" },
+  };
+
+  const cases: [string, string, string, string][] = [
+    ["a person, by their display name", "user:sam@example.com", "Sam Vimes", "person"],
+    ["somebody who signed themselves up", "self:sam@example.com", "Sam Vimes", "person"],
+    ["a key, by its name", "key:key_993f", "the key ledger", "key"],
+    ["a ChatGPT workspace", "svc:chatgpt:work", "ChatGPT (work)", "service"],
+    ["a connector with no workspace", "svc:chatgpt", "ChatGPT", "service"],
+    // A rule an operator wrote approved this. Reading it as the host's own
+    // doing hides the thing that needs revisiting.
+    ["a standing rule", "system:policy", "a standing rule", "system"],
+    ["mcpd applying a change", "system:executor", "mcpd", "system"],
+    ["mcpd closing a stalled one", "system:reaper", "mcpd", "system"],
+    ["mcpd tidying the record", "system:retention", "mcpd", "system"],
+    ["a setting nobody invoked", "system:registration", "a sign-up default", "system"],
+  ];
+
+  it.each(cases)("names %s", (_name, actor, word, kind) => {
+    const words = describeActor(actor, book);
+    expect(words.word).toBe(word);
+    expect(words.kind).toBe(kind);
+  });
+
+  // Listing accounts and keys takes a permission the reader may not hold. A
+  // sentence still has to be a sentence without them.
+  it("falls back to the local part, and to 'a key', without the names", () => {
+    expect(describeActor("user:sam@example.com").word).toBe("sam");
+    expect(describeActor("key:key_993f").word).toBe("a key");
+  });
+
+  // Housekeeping is in the record and not in the foreground.
+  it("marks only the scheduled tidying as housekeeping", () => {
+    expect(describeActor("system:retention").housekeeping).toBe(true);
+    expect(describeActor("system:executor").housekeeping).toBe(false);
+  });
+});
+
+/**
+ * An action is `resource.verb` because the approval policy matches on it, so
+ * the words are derivable rather than invented -- and every sentence puts the
+ * result after "to" or after a modal, so no verb is ever conjugated.
+ */
+describe("an action as words", () => {
+  it.each([
+    ["label.set", "set the label"],
+    ["device.reboot", "reboot the device"],
+    ["stream.pause", "pause the stream"],
+    ["firewall_rule.delete", "delete the firewall rule"],
+    ["site.device.reboot", "reboot the site device"],
+    ["reboot", "reboot"],
+  ])("reads %s as %s", (action, want) => {
+    expect(actionWords(action)).toBe(want);
+  });
+
+  it("has nothing to say about an absent action", () => {
+    expect(actionWords(undefined)).toBeNull();
+    expect(actionWords("  ")).toBeNull();
+  });
+});
+
+/**
+ * Every kind of entry, as the sentence an ops manager reads.
+ *
+ * The table is the point: a kind added to a writer without a sentence here
+ * falls through to the default, and the default is checked too. Two rules hold
+ * across every row and are asserted for all of them at once below -- no
+ * identifier and no JSON reaches prose.
+ */
+describe("an audit entry as a sentence", () => {
+  const book: NameBook = {
+    users: { "sam@example.com": "Sam Vimes", u_7: "Sam Vimes" },
+    keys: { key_993f: "ledger" },
+  };
+
+  function entry(kind: string, over: Partial<AuditRecord> = {}): AuditRecord {
+    return { seq: 1, at: at(0), kind, actor: "user:sam@example.com", ...over };
+  }
+
+  const cases: [string, AuditRecord, string][] = [
+    ["operation.proposed", entry("operation.proposed", {
+      operation_id: "op_1", plugin: "echo", action: "label.set",
+      detail: { impact: "Changes the label reported upstream", reversible: true },
+    }), "asked to set the label on echo"],
+
+    ["operation.approved", entry("operation.approved", {
+      actor: "system:policy", operation_id: "op_1", plugin: "echo", action: "label.set",
+      detail: { channel: "policy", authority: "bypass:byp_2", reason: "inside an open window" },
+    }), "approved a request to set the label on echo"],
+
+    ["operation.rejected", entry("operation.rejected", {
+      operation_id: "op_1", plugin: "echo", action: "label.set",
+      detail: { reason: "wrong window" },
+    }), "turned down a request to set the label on echo"],
+
+    ["operation.cancelled", entry("operation.cancelled", {
+      operation_id: "op_1", plugin: "echo", action: "label.set",
+    }), "withdrew a request to set the label on echo"],
+
+    ["operation.expired", entry("operation.expired", {
+      actor: "system:reaper", operation_id: "op_1", plugin: "echo", action: "label.set",
+    }), "let a request to set the label on echo run out of time"],
+
+    ["operation.executing", entry("operation.executing", {
+      actor: "system:executor", operation_id: "op_1", plugin: "echo", action: "label.set",
+      detail: { drift: "none" },
+    }), "started to set the label on echo"],
+
+    ["operation.succeeded", entry("operation.succeeded", {
+      actor: "system:executor", operation_id: "op_1", plugin: "echo", action: "label.set",
+      detail: { verified: true },
+    }), "applied the change to set the label on echo"],
+
+    ["operation.failed", entry("operation.failed", {
+      actor: "system:executor", operation_id: "op_1", plugin: "echo", action: "label.set",
+      detail: { error_code: "upstream_failed", detail: "echo refused it" },
+    }), "could not set the label on echo"],
+
+    ["operation.indeterminate", entry("operation.indeterminate", {
+      actor: "system:executor", operation_id: "op_1", plugin: "echo", action: "label.set",
+      detail: { verified: null },
+    }), "started to set the label on echo and could not tell whether it landed"],
+
+    ["account.registered", entry("account.registered", {
+      actor: "self:sam@example.com", plugin: "sam@example.com",
+      detail: { status: "pending", role: "role_operator", provider: "password", groups: [] },
+    }), "signed up"],
+
+    ["account.approved", entry("account.approved", {
+      plugin: "sam@example.com", detail: { account: "u_7", role: "role_operator", groups: ["g_1"] },
+    }), "let Sam Vimes in"],
+
+    ["account.rejected", entry("account.rejected", {
+      plugin: "sam@example.com", detail: { account: "u_7" },
+    }), "turned down Sam Vimes's sign-up"],
+
+    ["account.identity_linked", entry("account.identity_linked", {
+      plugin: "sam@example.com", detail: { provider: "google", account: "u_7" },
+    }), "linked a google sign-in to Sam Vimes"],
+
+    // The subject on this one is an account id, not an address, so it is
+    // named from the book or not at all.
+    ["account.identity_unlinked", entry("account.identity_unlinked", {
+      plugin: "u_7", detail: { provider: "google" },
+    }), "unlinked a google sign-in from Sam Vimes"],
+
+    ["apikey.created", entry("apikey.created", {
+      plugin: "key_993f",
+      detail: {
+        name: "ledger", role: "role_operator", groups: [],
+        grants: [{ plugin: "cnmaestro", level: "write" }], expires_at: null,
+      },
+    }), "created the key ledger"],
+
+    ["apikey.rescoped", entry("apikey.rescoped", {
+      plugin: "key_993f",
+      detail: {
+        grants: [{ plugin: "cnmaestro", level: "write" }, { plugin: "netbox", level: "read" }],
+        grants_before: [{ plugin: "cnmaestro", level: "write" }],
+      },
+    }), "changed what the key ledger may do"],
+
+    ["apikey.rotated", entry("apikey.rotated", {
+      plugin: "key_993f", detail: { name: "ledger", grace_seconds: 3600 },
+    }), "gave the key ledger a new secret"],
+
+    ["apikey.revoked", entry("apikey.revoked", {
+      plugin: "key_993f", detail: { name: "ledger" },
+    }), "revoked the key ledger"],
+
+    ["role.created", entry("role.created", {
+      plugin: "Auditor", detail: { role: "role_x1", permissions: { history: "read" } },
+    }), "created the role Auditor"],
+
+    ["role.updated", entry("role.updated", {
+      plugin: "Auditor",
+      detail: { role: "role_x1", permissions: { history: "read" }, permissions_before: {} },
+    }), "changed what the role Auditor may do"],
+
+    ["role.updated, renamed only", entry("role.updated", {
+      plugin: "Auditor", detail: { role: "role_x1", renamed_from: "Reader" },
+    }), "renamed the role Reader to the role Auditor"],
+
+    ["role.deleted", entry("role.deleted", {
+      plugin: "Auditor", detail: { role: "role_x1" },
+    }), "deleted the role Auditor"],
+
+    ["group.created", entry("group.created", {
+      plugin: "Field team",
+      detail: { group: "g_1", role: "role_operator", grants: [{ plugin: "echo", level: "read" }] },
+    }), "created the group Field team"],
+
+    ["group.updated", entry("group.updated", {
+      plugin: "Field team",
+      detail: {
+        group: "g_1",
+        grants: [{ plugin: "echo", level: "write" }],
+        grants_before: [{ plugin: "echo", level: "read" }],
+      },
+    }), "changed what the group Field team hands out"],
+
+    ["group.deleted", entry("group.deleted", {
+      plugin: "Field team", detail: { group: "g_1", role: "role_operator", grants: [], members: 3 },
+    }), "deleted the group Field team"],
+
+    ["group.member_added", entry("group.member_added", {
+      actor: "system:registration", plugin: "Field team",
+      detail: { group: "g_1", kind: "user", id: "u_7" },
+    }), "added Sam Vimes to the group Field team"],
+
+    ["group.member_removed", entry("group.member_removed", {
+      plugin: "Field team", detail: { group: "g_1", kind: "key", id: "key_993f" },
+    }), "removed the key ledger from the group Field team"],
+
+    ["certificate.added", entry("certificate.added", {
+      plugin: "corp root",
+      detail: {
+        certificate: "cert_1", subject: "CN=corp", fingerprint: "ab:cd",
+        expires_at: "2027-01-09T00:00:00Z",
+      },
+    }), "trusted the certificate corp root"],
+
+    ["certificate.removed", entry("certificate.removed", {
+      plugin: "corp root", detail: { certificate: "cert_1", subject: "CN=corp", fingerprint: "ab:cd" },
+    }), "stopped trusting the certificate corp root"],
+
+    ["mcpserver.imported", entry("mcpserver.imported", {
+      plugin: "graylog",
+      detail: { transport: "http", endpoint: "https://example.test/mcp", schema_version: "1" },
+    }), "added the remote server graylog"],
+
+    ["mcpserver.removed", entry("mcpserver.removed", {
+      plugin: "graylog", detail: { tools_stored: 9, tools_enabled: 2 },
+    }), "removed the remote server graylog"],
+
+    ["mcpserver.enabled", entry("mcpserver.enabled", {
+      plugin: "graylog", detail: { enabled: true },
+    }), "switched on the remote server graylog"],
+
+    ["mcpserver.disabled", entry("mcpserver.disabled", {
+      plugin: "graylog", detail: { enabled: false },
+    }), "switched off the remote server graylog"],
+
+    // The header's name is evidence, so the sentence does not carry it.
+    ["mcpserver.header_added", entry("mcpserver.header_added", {
+      plugin: "graylog", detail: { header: "X-Api-Key", secret: true },
+    }), "added a header to graylog"],
+
+    ["mcpserver.header_removed", entry("mcpserver.header_removed", {
+      plugin: "graylog", detail: { header: "X-Api-Key" },
+    }), "removed a header from graylog"],
+
+    ["mcpserver.discovered", entry("mcpserver.discovered", {
+      actor: "system:rediscovery", plugin: "graylog",
+      detail: { offered: 9, sequence: 3, added: ["search_events"], changed: [], removed: [], unchanged: 8 },
+    }), "read the tools graylog offers"],
+
+    ["mcpserver.tool_classified", entry("mcpserver.tool_classified", {
+      plugin: "graylog",
+      detail: { tool: "search_events", from: "pending", to: "enabled", descriptor_hash: "ab" },
+    }), "allowed search_events on graylog"],
+
+    ["plugin.removed", entry("plugin.removed", {
+      plugin: "echo", detail: { source: "configuration file", declared_type: "echo" },
+    }), "removed the plugin echo"],
+
+    ["plugin.restored", entry("plugin.restored", {
+      plugin: "echo", detail: { source: "configuration file" },
+    }), "restored the plugin echo"],
+
+    ["plugin.enabled", entry("plugin.enabled", {
+      plugin: "echo", detail: { source: "configuration file", enabled: true },
+    }), "switched on the plugin echo"],
+
+    ["plugin.disabled", entry("plugin.disabled", {
+      plugin: "echo", detail: { source: "configuration file", enabled: false },
+    }), "switched off the plugin echo"],
+
+    ["chatgpt.account.added", entry("chatgpt.account.added", {
+      detail: {
+        account: "Field ops", account_id: "acct_3", principal: "svc:chatgpt",
+        role: "role_operator", grants: [], rate_per_sec: 2, has_admin_key: false,
+      },
+    }), "added the ChatGPT account Field ops"],
+
+    ["chatgpt.account.updated", entry("chatgpt.account.updated", {
+      detail: { account: "Field ops", account_id: "acct_3", admin_key: "cleared" },
+    }), "changed the ChatGPT account Field ops"],
+
+    ["chatgpt.account.removed", entry("chatgpt.account.removed", {
+      detail: { account: "Field ops", account_id: "acct_3", principal: "svc:chatgpt" },
+    }), "removed the ChatGPT account Field ops"],
+
+    ["approval.bypass.opened", entry("approval.bypass.opened", {
+      plugin: "byp_2",
+      detail: {
+        minutes: 30, plugin: "echo", ceiling: "low", reason: "narrower, right plugin",
+        expires_at: "2026-08-22T12:40:00Z",
+      },
+    }), "opened a 30-minute approval window"],
+
+    ["approval.bypass.revoked", entry("approval.bypass.revoked", {
+      plugin: "all", detail: { closed: 1 },
+    }), "closed the open approval window"],
+
+    // Midday, and the day itself spelled by the platform: the cutoff is drawn
+    // in the reader's own locale and time zone, and pinning either here would
+    // fail on a machine set to neither.
+    ["audit.pruned", entry("audit.pruned", {
+      actor: "system:retention",
+      detail: { removed_entries: 16, older_than: "2026-07-29T12:00:00Z" },
+    }), `removed 16 entries older than ${new Date("2026-07-29T12:00:00Z")
+      .toLocaleDateString(undefined, { day: "numeric", month: "long" })}`],
+
+    // A trail outliving the dashboard that renders it is the normal case
+    // after an upgrade, so an unknown kind is still a sentence.
+    ["a kind this build has never heard of", entry("tunnels.disconnected", {
+      plugin: "field", actor: "system:executor",
+    }), "recorded tunnels disconnected"],
+  ];
+
+  it.each(cases)("says, for %s, what happened", (_name, record, sentence) => {
+    expect(phraseText(auditWords(record, book).phrase)).toBe(sentence);
+  });
+
+  /**
+   * Two rules, over every row at once. An identifier in a sentence is a string
+   * a reader has to decode, and a JSON fragment in prose is the record leaking
+   * through the words that exist to explain it.
+   */
+  it.each(cases)("keeps identifiers and JSON out of the sentence for %s", (_name, record) => {
+    const sentence = phraseText(auditWords(record, book).phrase);
+    expect(sentence).not.toMatch(/\b(key_|byp_|op_|acct_|cert_|u_\d|g_\d|role_x)/);
+    expect(sentence).not.toMatch(/[{}[\]]/);
+  });
+
+  it("carries the facts under the sentence rather than in it", () => {
+    const [, opened] = cases.find(([name]) => name === "approval.bypass.opened")!;
+    const { facts } = auditWords(opened, book);
+    expect(facts).toContain("echo only");
+    expect(facts).toContain("up to low risk");
+    expect(facts).toContain("“narrower, right plugin”");
+  });
+
+  /**
+   * A re-scope records what the grant was as well as what it became, because
+   * an entry carrying only the new value leaves "what did this widen"
+   * unanswerable.
+   */
+  it("shows a widened reach as what it was and what it became", () => {
+    const [, rescoped] = cases.find(([name]) => name === "apikey.rescoped")!;
+    expect(auditWords(rescoped, book).facts).toContain("reads nothing → netbox");
+  });
+
+  // Null is "nobody checked" and false is "checked, and it did not match".
+  // Collapsing them turns an unverified change into a verified one.
+  it.each([
+    [true, "checked against echo: the change is in place"],
+    [false, "checked against echo: it did not match"],
+    [null, "not checked"],
+  ])("keeps all three values of verified apart (%s)", (verified, want) => {
+    const record: AuditRecord = {
+      seq: 1, at: at(0), kind: "operation.succeeded", actor: "system:executor",
+      operation_id: "op_1", plugin: "echo", action: "label.set", detail: { verified },
+    };
+    expect(auditWords(record).facts).toContain(want);
+  });
+
+  // Two absent snapshots comparing equal is not a check that passed.
+  it.each([
+    ["none", "nothing had changed since it was proposed"],
+    ["detected", "the system had changed since it was proposed"],
+    ["not_checked", "no drift check ran"],
+  ])("says which of the three a drift check was (%s)", (drift, want) => {
+    const record: AuditRecord = {
+      seq: 1, at: at(0), kind: "operation.executing", actor: "system:executor",
+      operation_id: "op_1", plugin: "echo", action: "label.set", detail: { drift },
+    };
+    expect(auditWords(record).facts).toContain(want);
+  });
+
+  it("sorts every kind it knows into a category somebody can filter on", () => {
+    expect(auditCategory({ seq: 1, at: at(0), kind: "operation.proposed", actor: "x" }))
+      .toBe("changes");
+    expect(auditCategory({ seq: 1, at: at(0), kind: "apikey.created", actor: "x" }))
+      .toBe("access");
+    expect(auditCategory({ seq: 1, at: at(0), kind: "approval.bypass.opened", actor: "x" }))
+      .toBe("windows");
+    expect(auditCategory({ seq: 1, at: at(0), kind: "audit.pruned", actor: "x" }))
+      .toBe("housekeeping");
+    expect(auditCategory({ seq: 1, at: at(0), kind: "mcpserver.imported", actor: "x" }))
+      .toBe("systems");
+  });
+});
+
+/**
+ * The later entries of a change, read as steps of the one thing that happened.
+ *
+ * "A standing rule approved this" is a different fact from "somebody approved
+ * this", and an auto-approved change means a propose call can execute before
+ * it returns with nobody asked at all.
+ */
+describe("a change's steps", () => {
+  function step(kind: string, over: Partial<AuditRecord> = {}) {
+    return stepWords({
+      seq: 1, at: at(0), kind, actor: "system:executor",
+      operation_id: "op_1", plugin: "echo", action: "label.set", ...over,
+    });
+  }
+
+  it("names the rule that approved it rather than the host that ran it", () => {
+    expect(step("operation.approved", {
+      actor: "system:policy",
+      detail: { channel: "policy", rule: "rule_4", rule_note: "labels on echo" },
+    }).line).toBe("approved by the rule “labels on echo”");
+  });
+
+  it("says when an open window was what cleared it", () => {
+    expect(step("operation.approved", {
+      actor: "system:policy",
+      detail: { channel: "policy", authority: "bypass:byp_2" },
+    }).line).toBe("approved by an open approval window");
+  });
+
+  it("names the person when a person decided", () => {
+    expect(step("operation.approved", {
+      actor: "user:sam@example.com", detail: { channel: "dashboard", reason: "fine" },
+    }).line).toBe("approved by sam");
+  });
+
+  it("does not read an unknown outcome as a failure", () => {
+    const words = step("operation.indeterminate", { detail: { verified: null } });
+    expect(words.tone).toBe("attention");
+    expect(words.line).not.toMatch(/fail/i);
+    expect(words.facts).toContain("not checked");
+  });
+});
+
+describe("the exact fields a change carries", () => {
+  it("reads them as was and now", () => {
+    expect(changeRows({
+      seq: 1, at: at(0), kind: "operation.proposed", actor: "user:sam",
+      detail: { changes: [{ field: "label", from: "multi-window", to: "narrower-window" }] },
+    })).toEqual([{ field: "label", from: "multi-window", to: "narrower-window" }]);
+  });
+
+  it("has nothing to draw for a call that carried an authorisation and nothing else", () => {
+    expect(changeRows({
+      seq: 1, at: at(0), kind: "operation.proposed", actor: "user:sam",
+      detail: { assurance: "gated_call" },
+    })).toEqual([]);
+  });
+});
+
+describe("audit events, as one string", () => {
+  // Overview's last few lines want a sentence with a capital on it.
+  it("is a single sentence starting with a capital", () => {
     expect(describeEvent({
       seq: 1, at: at(0), kind: "operation.approved",
       actor: "user:sam", action: "device.reboot",
-    })).toBe("Approved: device reboot");
+    })).toBe("Approved a request to reboot the device");
   });
 
   // Indeterminate reads as unknown rather than failed, here as everywhere.
   it("does not describe an indeterminate outcome as a failure", () => {
     const text = describeEvent({
       seq: 1, at: at(0), kind: "operation.indeterminate", actor: "system:executor",
+      action: "label.set", plugin: "echo",
     });
-    expect(text).toBe("A change ended up in an unknown state");
+    expect(text).toBe("Started to set the label on echo and could not tell whether it landed");
     expect(text).not.toMatch(/fail/i);
   });
 
   it("falls back to a readable form of an event it does not know", () => {
     expect(describeEvent({
-      seq: 1, at: at(0), kind: "audit.pruned", actor: "user:sam",
-    })).toBe("audit pruned");
+      seq: 1, at: at(0), kind: "tunnels.disconnected", actor: "user:sam",
+    })).toBe("Recorded tunnels disconnected");
   });
 });
 
