@@ -178,7 +178,7 @@ function LinkedProviders() {
   return (
     <Section
       title="Sign in with"
-      description="Sign-in providers are linked here, by you."
+      description="You link sign-in providers here."
     >
       <Card>
         <CardContent className="space-y-4">
