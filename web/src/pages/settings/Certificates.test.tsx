@@ -57,11 +57,11 @@ describe("the certificates page", () => {
   // A leaf that says it is not an authority cannot verify anything. Trusting
   // it changes nothing, and somebody who is not told that waits for a
   // handshake to start working that never will.
-  it("says outright when a certificate cannot anchor a chain", async () => {
+  it("says outright when a certificate is not an authority", async () => {
     stub([certView({ anchors: false, is_ca: false, self_signed: false })]);
     renderWith(<Certificates />);
 
-    expect(await screen.findByText("cannot anchor a chain")).toBeInTheDocument();
+    expect(await screen.findByText("not an authority")).toBeInTheDocument();
   });
 
   // Paste and upload fill the same box, and what is sent is the text as typed.
