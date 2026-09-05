@@ -10,18 +10,6 @@ import {
   confirmationWord, describeChange, describeOutcome, principalWords,
   type ChangeLike,
 } from "./format";
-// Kept as its own import so this file's new half stays one contiguous piece.
-import {
-  confirmationWord, describeChange, describeOutcome, principalWords,
-  type ChangeLike,
-=======
-import type { AuditRecord } from "./api";
-import {
-  actionWords, auditCategory, auditWords, changeRows, describeActor,
-  describeEvent, phraseText, pretty, relative, stepWords, unprefixed, who,
-  type NameBook,
->>>>>>> 0af84cf (feat(web): say what an audit entry means in one sentence)
-} from "./format";
 
 const NOW = Date.parse("2026-08-22T12:00:00Z");
 const at = (offsetSeconds: number) =>
