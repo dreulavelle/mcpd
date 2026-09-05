@@ -16,7 +16,7 @@ on a light surface and the dark variant on a dark surface. Keep the aspect
 ratio and leave clear space around the mark.
 
 The wordmark is drawn as paths and needs no font download. Banner captions
-use a system sans-serif stack. The SVGs contain no scripts, animation,
+use an Arial/Helvetica/sans-serif stack. The SVGs contain no scripts, animation,
 embedded raster images, or external resources, and can be edited directly.
 
 The root README uses a `picture` element to select a banner from the reader's
