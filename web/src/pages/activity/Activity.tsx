@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { api, type Caller, type ToolCall, problemText } from "@/lib/api";
-import { when } from "@/lib/format";
+import { when, who } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link, useQueryParam } from "@/lib/router";
 import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
@@ -26,10 +26,10 @@ import {
  * credential doing more than it was issued for.
  */
 const OUTCOMES: Record<ToolCall["outcome"], { label: string; tone: "good" | "problem" | "attention" | "neutral" }> = {
-  ok: { label: "ok", tone: "good" },
-  error: { label: "error", tone: "problem" },
-  denied: { label: "denied", tone: "attention" },
-  rate_limited: { label: "rate limited", tone: "neutral" },
+  ok: { label: "Succeeded", tone: "good" },
+  error: { label: "Failed", tone: "problem" },
+  denied: { label: "Refused", tone: "attention" },
+  rate_limited: { label: "Rate limited", tone: "neutral" },
 };
 
 /**
@@ -175,8 +175,8 @@ export function Activity() {
           {plugins.map((p) => <option key={p} value={p}>{p}</option>)}
         </NativeSelect>
         {principal && (
-          <Button variant="outline" size="sm" onClick={() => setPrincipal("")}>
-            Clear caller: {principal}
+          <Button variant="outline" size="sm" title={principal} onClick={() => setPrincipal("")}>
+            Clear caller: {who(principal)}
           </Button>
         )}
       </div>
@@ -184,13 +184,12 @@ export function Activity() {
       <div className="space-y-10">
       <Section
         title="Callers"
-        description={`What each credential actually reached over the last ${callerDays === 1 ? "day" : `${callerDays} days`}, which is not the same as what it is permitted to reach.`}
+        description={`What each caller actually reached over the last ${callerDays === 1 ? "day" : `${callerDays} days`}. This is not the same as what it is allowed to reach.`}
       >
         {!callers ? <Loading rows={2} /> : callers.length === 0 ? (
           <Notice tone="neutral">
-            Nothing has called a tool in this period. That is the right state for
-            a host nobody is using yet — a connector that has been set up but not
-            asked anything looks exactly like this.
+            Nothing has called a tool in this period. A connector that is set up
+            but has not been asked anything looks exactly like this.
           </Notice>
         ) : (
           <Card className="overflow-hidden p-0">
@@ -213,9 +212,10 @@ export function Activity() {
                         <button
                           type="button"
                           className="font-mono text-sm underline-offset-2 hover:underline"
+                          title={c.principal}
                           onClick={() => setPrincipal(c.principal)}
                         >
-                          {c.principal}
+                          {who(c.principal)}
                         </button>
                         <div className="text-xs text-muted-foreground">
                           {c.role}
@@ -290,9 +290,10 @@ export function Activity() {
                           <button
                             type="button"
                             className="underline-offset-2 hover:underline"
+                            title={c.principal}
                             onClick={() => setPrincipal(c.principal)}
                           >
-                            {c.principal}
+                            {who(c.principal)}
                           </button>
                         </TableCell>
                         <TableCell>
