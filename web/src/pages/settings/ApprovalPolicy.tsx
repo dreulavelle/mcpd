@@ -746,7 +746,7 @@ function DefaultDecision({ policy, mayWrite, onSaved }: {
         <p className="text-xs text-muted-foreground">
           An always-ask rule below beats this, and beats an allow rule for the
           same change. An allow rule runs as often as an assistant asks, with no
-          limit, so keep them narrow.
+          limit. Keep allow rules narrow.
         </p>
       </CardContent>
     </Card>
