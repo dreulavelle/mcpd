@@ -2081,13 +2081,54 @@ that editing the entry silently resurrects the plugin, which is the failure
 this exists to prevent. A tool approval is a statement about a descriptor; a
 removal is a statement about a name.
 
-**Reversible, and reversible to the file.** Restoring forgets the override
-entirely, so what comes back is whatever the file declares now rather than a
-copy of what it declared then. The settings are kept across a removal, because
-a restore that came back without the credentials somebody typed in would be a
-restore in name only — which is also the difference from removing a
-dashboard-defined instance, where the settings do go, so that a name reused
-later cannot silently inherit them.
+**A removal keeps nothing this host stored, whichever way the plugin was
+defined.** Every setting under the instance's name and every row of its table
+settings goes with it, credentials included. The settings used to be kept
+across a file-declared removal, so that a restore came back "as it was" — which
+meant a credential outliving the decision to stop using it, and a name that
+could silently inherit it. The vocabulary is add and remove rather than remove
+and restore: what a file-declared plugin gets is a way to be added again, from
+the declaration that is still in the file.
+
+**By namespace, not by the type's field list.** The wipe deletes every key
+under `plugins.<name>.` rather than walking the fields the type declares today.
+A type this build does not have declares nothing, and a field renamed or
+dropped since a value was stored is in nobody's list — either way an encrypted
+credential would be left under a name that can be used again, which is the one
+thing the removal promises not to do. The trailing dot is what keeps
+`plugins.nas.` off `nas-backup`.
+
+**The wipe commits before the override.** A failure then leaves the plugin
+exactly as it was, and the operator can try again. The other order leaves it
+removed with its credentials still stored — the state this exists to prevent —
+so removing something already removed is not refused: it re-runs the wipe and
+returns, which is how a removal interrupted between its two halves is finished.
+Inside the wipe the same reasoning orders the two writes: the settings go
+first, the `plugin_rows` second, because a row holds a customer's address and
+password that nobody can recreate and a retry has to still find it there.
+
+A removed instance therefore reports `stored_settings` when anything is left
+under its name — a removal made by a build that kept them deliberately, or one
+interrupted. The dashboard offers to finish it, since the Remove card is not
+drawn for something already removed and there would otherwise be nowhere to
+reach the idempotent path from.
+
+**What the file itself supplies is not this host's to forget.** A declaration
+may carry a `settings:` block, and `resolveFields` falls back to it, so a
+plugin added back from the file comes back with whatever that block provides.
+Every sentence an operator reads says both halves: what was entered here is
+forgotten, and what the file provides stays.
+
+**Added back to the file, not to a snapshot.** Adding one back forgets the
+override entirely, so what returns is whatever the file declares now rather
+than a copy of what it declared then. The endpoint and `App.RestoreInstance`
+keep their old names because clients depend on them; what they do is an add.
+
+One endpoint, two acts: with a declaration still in the file the plugin comes
+back, and without one — a stale removal being forgotten — nothing does. The
+audit entry records `declared` so the trail can say which, since it is read
+long after either the file or this host can be asked. Rows written before that
+field get the sentence true of both, which is that a removal was forgotten.
 
 **Removing one is an administrative act and is audited.** It overrides the
 deployment's own configuration, so it appends to the hash-chained trail inside

@@ -83,21 +83,22 @@ describe("instances that are configured but not serving", () => {
   });
 
   /**
-   * "Switched off" of a removed plugin hides the one fact that explains it:
-   * somebody removed it here, and the configuration file still declares it.
+   * A removed plugin is not on this host and holds nothing, so it is not one
+   * of the things this host serves. It used to stay here as a dimmed row with
+   * a Restore beside it, which promised settings the removal had taken.
    */
-  it("says a removed plugin was removed, not that it is off", () => {
+  it("leaves out a plugin that was removed", () => {
     const rows = toRows(
       [],
-      [instance("netbox", {
-        mounted: false, enabled: false, removed: true, removed_by: "user:alice",
-      })],
+      [
+        instance("netbox", {
+          mounted: false, enabled: false, removed: true, removed_by: "user:alice",
+        }),
+        instance("graylog", { mounted: false }),
+      ],
       types,
     );
-    expect(rows[0]?.removed).toBe(true);
-    expect(rows[0]?.removedBy).toBe("user:alice");
-    expect(rows[0]?.healthMessage)
-      .toBe("Removed here. The configuration file still declares it.");
+    expect(rows.map((r) => r.name)).toEqual(["graylog"]);
   });
 
   it("prefers a reported problem over the generic wording", () => {

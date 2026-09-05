@@ -408,8 +408,21 @@ describe("an audit entry as a sentence", () => {
     }), "removed the plugin echo"],
 
     ["plugin.restored", entry("plugin.restored", {
+      plugin: "echo", detail: { source: "configuration file", declared: true },
+    }), "added the plugin echo back"],
+
+    // The same action, written by Forget on a removal whose declaration has
+    // left the file. Nothing was added, and saying so would be a plugin
+    // appearing in the trail that is not on the host.
+    ["plugin.restored with no declaration", entry("plugin.restored", {
+      plugin: "gone", detail: { source: "configuration file", declared: false },
+    }), "forgot the removal of gone"],
+
+    // Rows written before the field existed cannot say which it was, so they
+    // get the sentence that is true either way.
+    ["plugin.restored before declared was recorded", entry("plugin.restored", {
       plugin: "echo", detail: { source: "configuration file" },
-    }), "restored the plugin echo"],
+    }), "forgot the removal of echo"],
 
     ["plugin.enabled", entry("plugin.enabled", {
       plugin: "echo", detail: { source: "configuration file", enabled: true },

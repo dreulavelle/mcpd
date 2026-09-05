@@ -166,8 +166,9 @@ func TestRemoveInstance_OverridesTheFileAndSurvivesARestart(t *testing.T) {
 	}
 }
 
-// Reversible from the same page, because a one-way door that needs SSH to
-// undo is the problem this replaced rather than a fix for it.
+// Addable again from the same page, because a one-way door that needs SSH to
+// undo is the problem this replaced rather than a fix for it. What comes back
+// is the file's declaration, and nothing else.
 func TestRestoreInstance_PutsItBackUnderTheFile(t *testing.T) {
 	ctx := context.Background()
 	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
@@ -272,13 +273,14 @@ func TestSetInstanceEnabled_RefusesARemovedInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := a.SetInstanceEnabled(ctx, "user:test", "echo", true)
-	if err == nil || !strings.Contains(err.Error(), "restore") {
-		t.Fatalf("error = %v, want a refusal that names the restore", err)
+	if err == nil || !strings.Contains(err.Error(), "add it back first") {
+		t.Fatalf("error = %v, want a refusal that names the way back", err)
 	}
 }
 
 // The name is still the file's. Adding a second instance under it would leave
-// two answers to what it means, one of which returns on a restore.
+// two answers to what it means, one of which returns the moment somebody adds
+// the declared one back.
 func TestAddInstance_RefusesTheNameOfARemovedFilePlugin(t *testing.T) {
 	ctx := context.Background()
 	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
@@ -288,8 +290,8 @@ func TestAddInstance_RefusesTheNameOfARemovedFilePlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := a.AddInstance(ctx, "user:test", "echo", "echo")
-	if err == nil || !strings.Contains(err.Error(), "restore") {
-		t.Fatalf("error = %v, want a refusal that points at the restore", err)
+	if err == nil || !strings.Contains(err.Error(), "Add it back from that listing") {
+		t.Fatalf("error = %v, want a refusal that points at the file's listing", err)
 	}
 }
 
@@ -377,6 +379,199 @@ func TestRemoveInstance_ForgetsItsSettings(t *testing.T) {
 		if inst.Name == "gone" {
 			t.Error("the instance is still listed")
 		}
+	}
+}
+
+// The same promise for a plugin the configuration file declares, which used to
+// be the exception: its settings were kept so that a restore came back "as it
+// was", which left a credential alive after the decision to stop using it. The
+// rows of a table setting go with the scalars, since that is where a plugin's
+// per-customer passwords are.
+func TestRemoveInstance_ForgetsAFileDefinedPluginsSettings(t *testing.T) {
+	ctx := context.Background()
+	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
+		map[string]config.PluginConfig{"gone": {Type: "threecx", Enabled: true}})
+
+	key := "plugins.gone.max_items"
+	if err := a.settings.Apply(ctx, "user:test", settingsChange(key, "25")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.pluginRows.Create(ctx, "user:test", "gone", "customers", "Acme",
+		map[string]any{"name": "Acme", "host": "pbx.acme.test"},
+		map[string]string{"password": "hunter2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err != nil {
+		t.Fatalf("RemoveInstance: %v", err)
+	}
+	if _, ok, _ := a.settings.Get(ctx, key); ok {
+		t.Error("the plugin's settings outlived the removal")
+	}
+	rows, err := a.pluginRows.List(ctx, "gone", "customers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("rows = %d, want the removal to have taken them and their credentials", len(rows))
+	}
+
+	// Added again from the declaration that is still in the file: back,
+	// enabled, and holding nothing.
+	if err := a.RestoreInstance(ctx, "user:test", "gone"); err != nil {
+		t.Fatalf("RestoreInstance: %v", err)
+	}
+	got := instanceNamed(t, a, "gone")
+	if got.Removed || !got.Enabled {
+		t.Fatalf("instance = %+v, want it back and enabled as the file declares", got)
+	}
+	if _, ok, _ := a.settings.Get(ctx, key); ok {
+		t.Error("adding it back brought its old settings with it")
+	}
+	if rows, err := a.pluginRows.List(ctx, "gone", "customers"); err != nil || len(rows) != 0 {
+		t.Errorf("rows = %v (error %v), want it added back empty", rows, err)
+	}
+}
+
+// A value stored under a key the type no longer declares -- a renamed field, or
+// a whole type this build does not have -- used to survive a removal, because
+// the wipe walked the type's field list. An encrypted credential outliving the
+// plugin under a name somebody can use again is the failure the removal exists
+// to prevent, so it goes by namespace instead.
+func TestRemoveInstance_ForgetsAKeyTheTypeNoLongerDeclares(t *testing.T) {
+	a := instanceApp(t)
+	ctx := context.Background()
+
+	if err := a.AddInstance(ctx, "user:test", "gone", "cnmaestro"); err != nil {
+		t.Fatal(err)
+	}
+	declared := "plugins.gone.base_url"
+	orphan := "plugins.gone.legacy_token"
+	// Injected into every instance's group by the catalog rather than by the
+	// type, so a wipe that walked the type's fields never saw it.
+	purpose := settings.PluginSettingKey("gone", settings.PluginPurposeKey)
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: declared, Value: `"https://x.test"`},
+		{Key: orphan, Value: `"a credential nothing declares any more"`},
+		{Key: purpose, Value: `"what this one is for"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The neighbour whose name merely starts the same way stays: without the
+	// trailing dot the prefix would take it too.
+	if err := a.AddInstance(ctx, "user:test", "gone-two", "cnmaestro"); err != nil {
+		t.Fatal(err)
+	}
+	neighbour := "plugins.gone-two.base_url"
+	if err := a.settings.Apply(ctx, "user:test", settingsChange(neighbour, `"https://y.test"`)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err != nil {
+		t.Fatalf("RemoveInstance: %v", err)
+	}
+	for _, key := range []string{declared, orphan, purpose} {
+		if _, ok, _ := a.settings.Get(ctx, key); ok {
+			t.Errorf("%s outlived the removal", key)
+		}
+	}
+	if _, ok, _ := a.settings.Get(ctx, neighbour); !ok {
+		t.Error("the removal took a setting belonging to another plugin")
+	}
+}
+
+// The wipe runs before the override, so a failure leaves the plugin exactly as
+// it was rather than removed with its credentials still stored -- which is a
+// state whose only route out is a second removal that the old code refused.
+func TestRemoveInstance_AFailedWipeRemovesNothing(t *testing.T) {
+	ctx := context.Background()
+	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
+		map[string]config.PluginConfig{"gone": {Type: "cnmaestro", Enabled: true}})
+
+	key := "plugins.gone.base_url"
+	if err := a.settings.Apply(ctx, "user:test", settingsChange(key, `"https://x.test"`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reads still answer from the loaded caches; every write fails.
+	a.db.Close()
+
+	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err == nil {
+		t.Fatal("a removal whose wipe failed must not report success")
+	}
+	if got := instanceNamed(t, a, "gone"); got.Removed {
+		t.Error("the plugin was removed even though its settings could not be forgotten")
+	}
+	if _, ok, _ := a.settings.Get(ctx, key); !ok {
+		t.Error("the setting went even though the removal failed")
+	}
+}
+
+// Half a removal -- the override written, the wipe never run -- is finished by
+// removing again. Refusing with "already removed" left the credentials where
+// they were with nothing an operator could do about it from here.
+func TestRemoveInstance_FinishesAHalfDoneRemoval(t *testing.T) {
+	ctx := context.Background()
+	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
+		map[string]config.PluginConfig{"gone": {Type: "cnmaestro", Enabled: true, Required: true}})
+
+	key := "plugins.gone.base_url"
+	if err := a.settings.Apply(ctx, "user:test", settingsChange(key, `"https://x.test"`)); err != nil {
+		t.Fatal(err)
+	}
+	// The override alone, as an interrupted removal would have left it.
+	declared := instanceNamed(t, a, "gone")
+	if err := a.pluginOverrides.Remove(ctx, "user:test", "gone", a.declaredAs(declared)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.loadOverrides(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// No acknowledgement, though the file marks it required: the decision it
+	// guards was taken when the override was written.
+	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err != nil {
+		t.Fatalf("removing an already-removed plugin must finish the job: %v", err)
+	}
+	if _, ok, _ := a.settings.Get(ctx, key); ok {
+		t.Error("the leftover setting survived the second removal")
+	}
+	if got := instanceNamed(t, a, "gone"); !got.Removed {
+		t.Error("the second removal put the plugin back")
+	}
+	if got := instanceNamed(t, a, "gone"); got.StoredSettings {
+		t.Error("the instance still reports settings it no longer has")
+	}
+}
+
+// The dashboard cannot offer to finish a half-done removal without being told
+// there is one, and the Remove card is not drawn for something already removed.
+// So a removed instance says whether anything is still stored under its name.
+func TestInstances_ARemovedPluginReportsSettingsItStillHolds(t *testing.T) {
+	ctx := context.Background()
+	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
+		map[string]config.PluginConfig{"gone": {Type: "cnmaestro", Enabled: true}})
+
+	if err := a.settings.Apply(ctx, "user:test",
+		settingsChange("plugins.gone.base_url", `"https://x.test"`)); err != nil {
+		t.Fatal(err)
+	}
+	declared := instanceNamed(t, a, "gone")
+	if err := a.pluginOverrides.Remove(ctx, "user:test", "gone", a.declaredAs(declared)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.loadOverrides(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := instanceNamed(t, a, "gone"); !got.Removed || !got.StoredSettings {
+		t.Fatalf("instance = %+v, want it removed and reporting what it still holds", got)
+	}
+	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := instanceNamed(t, a, "gone"); got.StoredSettings {
+		t.Error("finishing the removal did not clear the report")
 	}
 }
 
