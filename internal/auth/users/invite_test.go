@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/spoked/mcpd/internal/auth"
 )
 
 // invite is what an administrator does on the Users page: an account with no
@@ -312,5 +314,149 @@ func TestInvite_IsNotSubjectToClosedRegistrationOrTheDomainList(t *testing.T) {
 	}
 	if got.ID != invited.ID || got.Status != StatusActive {
 		t.Errorf("claimed account = %+v; want the invited one, active", got)
+	}
+}
+
+// An invitation that lapsed is offered again by saving the account, which is
+// what the comment on InviteTTL has always claimed and nothing implemented:
+// UpdateRequest had no invite field, so the sentence telling somebody to ask
+// an administrator named an action the administrator could not perform.
+func TestInvite_ALapsedInvitationIsOfferedAgain(t *testing.T) {
+	s, setClock := newStore(t)
+	ctx := context.Background()
+	claim(t, s)
+	invited := invite(t, s, "alice@example.com", ProviderGoogle)
+
+	setClock(testClock.Add(InviteTTL + time.Hour))
+	arrival := Identity{Provider: ProviderGoogle, Subject: "google-subject-1", Email: "alice@example.com"}
+	if _, err := s.ClaimInvite(ctx, arrival); !errors.Is(err, ErrInviteExpired) {
+		t.Fatalf("claim = %v; want ErrInviteExpired before the re-invite", err)
+	}
+
+	google := ProviderGoogle
+	again, err := s.Update(ctx, invited.ID, UpdateRequest{InviteProvider: &google})
+	if err != nil {
+		t.Fatalf("re-invite: %v", err)
+	}
+	if !again.Invited() {
+		t.Fatal("the account is no longer invited after being invited again")
+	}
+	// Stamped from now rather than extended from the old one, so an invitation
+	// re-issued a year later is good for the same fortnight as a fresh one.
+	if again.InviteExpiresAt == nil ||
+		!again.InviteExpiresAt.After(testClock.Add(InviteTTL+time.Hour)) {
+		t.Fatalf("expiry = %v; want a fresh window from now", again.InviteExpiresAt)
+	}
+
+	got, err := s.ClaimInvite(ctx, arrival)
+	if err != nil {
+		t.Fatalf("claim after re-invite: %v", err)
+	}
+	if got.ID != invited.ID || got.Invited() {
+		t.Errorf("claimed = %+v; want the invited account, with the marker cleared", got)
+	}
+}
+
+// The re-invite is a guarded statement, and what it guards against is an
+// invitation being put onto an account somebody is already using: whoever
+// holds the address at the provider could then claim it.
+func TestInvite_CannotBeOfferedToAnAccountThatAlreadySignsIn(t *testing.T) {
+	ctx := context.Background()
+	google := ProviderGoogle
+
+	t.Run("an account with a password", func(t *testing.T) {
+		s, _ := newStore(t)
+		claim(t, s)
+		u := mustCreate(t, s, "alice@example.com", "role_operator")
+		if _, err := s.Update(ctx, u.ID, UpdateRequest{InviteProvider: &google}); !errors.Is(err, ErrAlreadySignsIn) {
+			t.Errorf("re-invite = %v; want ErrAlreadySignsIn", err)
+		}
+		after, err := s.ByID(ctx, u.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Invited() {
+			t.Error("a password account came away invited")
+		}
+	})
+
+	t.Run("an account that has linked a provider", func(t *testing.T) {
+		s, _ := newStore(t)
+		claim(t, s)
+		invited := invite(t, s, "alice@example.com", ProviderGoogle)
+		if _, err := s.ClaimInvite(ctx, Identity{
+			Provider: ProviderGoogle, Subject: "google-subject-1", Email: invited.Email,
+		}); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if _, err := s.Update(ctx, invited.ID, UpdateRequest{InviteProvider: &google}); !errors.Is(err, ErrAlreadySignsIn) {
+			t.Errorf("re-invite = %v; want ErrAlreadySignsIn", err)
+		}
+	})
+
+	t.Run("a disabled account", func(t *testing.T) {
+		s, _ := newStore(t)
+		claim(t, s)
+		invited := invite(t, s, "alice@example.com", ProviderGoogle)
+		off := true
+		if _, err := s.Update(ctx, invited.ID, UpdateRequest{Disabled: &off}); err != nil {
+			t.Fatalf("disable: %v", err)
+		}
+		if _, err := s.Update(ctx, invited.ID, UpdateRequest{InviteProvider: &google}); !errors.Is(err, ErrAlreadySignsIn) {
+			t.Errorf("re-invite = %v; want ErrAlreadySignsIn for a switched-off account", err)
+		}
+	})
+
+	t.Run("a provider this build does not know", func(t *testing.T) {
+		s, _ := newStore(t)
+		claim(t, s)
+		invited := invite(t, s, "alice@example.com", ProviderGoogle)
+		unknown := Provider("nothing-this-build-knows")
+		if _, err := s.Update(ctx, invited.ID, UpdateRequest{InviteProvider: &unknown}); err == nil {
+			t.Error("an invitation named a provider this build does not know")
+		}
+	})
+}
+
+// An administrator who has never signed in is not somebody who can put things
+// right, so counting them let the last real administrator demote or delete
+// themselves and leave a host nobody can administer -- with the guard
+// satisfied by an address typed on the Users page and an invitation that may
+// already have lapsed.
+func TestInvite_AnUnclaimedAdministratorDoesNotStandInForTheLastOne(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := context.Background()
+	owner := claim(t, s)
+
+	if _, err := s.Create(ctx, CreateRequest{
+		Email:          "successor@example.com",
+		RoleID:         auth.RoleAdministrator,
+		InviteProvider: ProviderGoogle,
+		Actor:          "user:" + owner.Email,
+	}); err != nil {
+		t.Fatalf("invite an administrator: %v", err)
+	}
+
+	// The invited administrator cannot sign in, so it must not be what lets
+	// the only one who can stop being one.
+	operator := auth.RoleOperator
+	if _, err := s.Update(ctx, owner.ID, UpdateRequest{RoleID: &operator}); !errors.Is(err, ErrLastAdmin) {
+		t.Errorf("demoting the last administrator = %v; want ErrLastAdmin", err)
+	}
+	if err := s.Delete(ctx, owner.ID); !errors.Is(err, ErrLastAdmin) {
+		t.Errorf("deleting the last administrator = %v; want ErrLastAdmin", err)
+	}
+
+	// The control: once the invitation is taken up, the account can sign in
+	// and does count, so the guard above is the invitation and not the query
+	// refusing everything.
+	if _, err := s.ClaimInvite(ctx, Identity{
+		Provider: ProviderGoogle, Subject: "google-subject-1",
+		Email: "successor@example.com",
+	}); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := s.Update(ctx, owner.ID, UpdateRequest{RoleID: &operator}); err != nil {
+		t.Errorf("demoting with a signed-in administrator beside them = %v; want it allowed", err)
 	}
 }
