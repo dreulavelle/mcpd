@@ -18,6 +18,7 @@ import (
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/plugins/bandwidth"
+	"github.com/spoked/mcpd/internal/plugins/bookstack"
 	"github.com/spoked/mcpd/internal/plugins/cnmaestro"
 	"github.com/spoked/mcpd/internal/plugins/echoplugin"
 	"github.com/spoked/mcpd/internal/plugins/external"
@@ -130,6 +131,7 @@ func builtinTypes() (*plugins.Catalog, error) {
 	return plugins.NewCatalog(
 		echoplugin.Type(),
 		bandwidth.Type(),
+		bookstack.Type(),
 		cnmaestro.Type(),
 		extremecloudiq.Type(),
 		flowroute.Type(),
