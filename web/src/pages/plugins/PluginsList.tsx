@@ -8,7 +8,7 @@ import {
   type StaleRemoval,
   problemText,
 } from "@/lib/api";
-import { when } from "@/lib/format";
+import { principalWords, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
 import { parseHealth, statusTone, statusWords } from "@/lib/health";
@@ -422,8 +422,8 @@ function StaleRemovals({ rows, mayManage, onChanged }: {
           <p key={r.name} className="flex flex-wrap items-center gap-x-2 text-sm">
             <strong className="font-medium">{r.name}</strong>
             <span className="text-muted-foreground">
-              was a {r.declared_type}, removed by {r.removed_by} on{" "}
-              {when(r.removed_at)}
+              was a {r.declared_type}, removed by {principalWords(r.removed_by)}{" "}
+              on {when(r.removed_at)}
             </span>
             {mayManage && (
               <AddDeclaredButton
@@ -506,7 +506,7 @@ function AddPlugin({ types, declared, open, onOpenChange, onAdded }: {
             </p>
             <p className="text-xs text-muted-foreground">
               These were removed from this host. Adding one back brings it in as
-              the file lists it, with nothing set up.
+              the file lists it, with only what the file provides.
             </p>
             {declared.map((i) => (
               <div
@@ -517,7 +517,7 @@ function AddPlugin({ types, declared, open, onOpenChange, onAdded }: {
                   <strong className="font-medium">{i.name}</strong>
                   {i.removed_by && (
                     <span className="text-muted-foreground">
-                      {" "}— {i.removed_by} removed it
+                      {" "}— {principalWords(i.removed_by)} removed it
                       {i.removed_at ? ` on ${when(i.removed_at)}` : ""}
                     </span>
                   )}

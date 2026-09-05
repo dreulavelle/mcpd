@@ -241,21 +241,25 @@ describe("a plugin the configuration file declares", () => {
 
   /**
    * The settings used to be kept for a file-declared removal so that a restore
-   * came back "as it was", and the confirmation said so. They go now, and a
-   * confirmation that does not say a credential is about to be forgotten is
-   * the wrong one to have shown.
+   * came back "as it was", and the confirmation said so. What the dashboard
+   * holds goes now -- but a declaration may carry its own `settings:` block,
+   * which this host does not write and cannot forget, so the sentence has to
+   * carry both halves or it is wrong in one direction or the other.
    */
-  it("says the settings go with a file-declared removal too", async () => {
+  it("says which settings go with a file-declared removal", async () => {
     declared();
     const remove = vi.spyOn(api, "removeInstance").mockResolvedValue({ status: "removed" });
 
     renderWith(<PluginDetail name="weather" />);
-    expect(await screen.findByText(/forgets its settings, including any credentials/))
+    expect(await screen.findByText(/Settings entered here, including credentials, are forgotten/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/the configuration file itself provides stays/))
       .toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog.textContent).toMatch(/forgets its settings, including any credentials/);
+    expect(dialog.textContent).toMatch(/Settings entered here, including credentials, are forgotten/);
+    expect(dialog.textContent).toMatch(/configuration file itself provides stays/);
     expect(dialog.textContent).toMatch(/added again later/);
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
@@ -279,8 +283,9 @@ describe("a plugin the configuration file declares", () => {
 
   /**
    * The words are add and remove. What the page offers is not the plugin as it
-   * was -- the removal took its settings -- so it says what it is: the file
-   * still lists it, and it can be added again and set up from scratch.
+   * was -- the removal took what the dashboard held -- so it says what comes
+   * back: the file's listing, and only what the file provides. Who removed it
+   * reads as a name, not as the `user:` id the API sends.
    */
   it("offers to add it again, and says who took it away", async () => {
     declared({
@@ -292,8 +297,9 @@ describe("a plugin the configuration file declares", () => {
     renderWith(<PluginDetail name="weather" />);
 
     expect(await screen.findByText(/This plugin is not on this host/)).toBeInTheDocument();
-    expect(screen.getByText(/user:alice removed it/)).toBeInTheDocument();
-    expect(screen.getByText(/added again and set up from scratch/)).toBeInTheDocument();
+    expect(screen.getByText(/alice removed it/)).toBeInTheDocument();
+    expect(screen.queryByText(/user:alice/)).not.toBeInTheDocument();
+    expect(screen.getByText(/with only what the file provides/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
     // One control, not two: removing something already removed is a button
     // with nothing to do.

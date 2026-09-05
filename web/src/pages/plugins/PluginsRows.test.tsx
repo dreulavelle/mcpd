@@ -64,8 +64,9 @@ describe("a plugin removed while the file still lists it", () => {
       name: "Listed in the configuration file",
     });
     expect(within(declared).getByText("echo")).toBeInTheDocument();
-    expect(declared.textContent).toMatch(/user:alice removed it/);
-    expect(declared.textContent).toMatch(/with nothing set up/);
+    // A name, not the `user:` id the API sends.
+    expect(declared.textContent).toMatch(/— alice removed it/);
+    expect(declared.textContent).toMatch(/with only what the file provides/);
   });
 
   it("adds it back from the dialog", async () => {
@@ -158,6 +159,7 @@ describe("removals with nothing left to remove", () => {
 
     expect(await screen.findByText("gone")).toBeInTheDocument();
     expect(screen.getByText(/no longer lists them/)).toBeInTheDocument();
+    expect(screen.getByText(/removed by alice on/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Forget" }));
     await waitFor(() => expect(forget).toHaveBeenCalledWith("gone"));

@@ -229,7 +229,8 @@ func (s *Server) handleRestoreInstance(w http.ResponseWriter, r *http.Request) {
 	// adds an empty one rather than bringing anything back.
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"status": "restored",
-		"note": "It is back as the configuration file declares it, with nothing " +
-			"set up. It starts serving as soon as it has what it needs.",
+		"note": "It comes back as the configuration file lists it, with only " +
+			"what the file provides. It starts serving as soon as it has what " +
+			"it needs.",
 	})
 }

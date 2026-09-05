@@ -9,7 +9,7 @@ import {
   type TunnelStatus,
   problemText,
 } from "@/lib/api";
-import { unprefixed, when } from "@/lib/format";
+import { principalWords, unprefixed, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link, useRouter } from "@/lib/router";
 import { parseHealth, statusTone, statusWords } from "@/lib/health";
@@ -338,12 +338,12 @@ function RemovedNotice({ name, instance, mayManage, onChanged }: {
         <p>
           This plugin is not on this host.{" "}
           {instance.removed_by && (
-            <>{instance.removed_by} removed it
+            <>{principalWords(instance.removed_by)} removed it
               {instance.removed_at ? ` on ${when(instance.removed_at)}` : ""}.{" "}
             </>
           )}
-          The configuration file still lists it, so it can be added again and
-          set up from scratch.
+          The configuration file still lists it, so it can be added again — as
+          the file lists it, with only what the file provides.
         </p>
         {mayManage && (
           <AddDeclaredButton
@@ -442,11 +442,13 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
 
   async function remove() {
     // The settings go either way, so both confirmations say so. What differs
-    // is the file: it still lists a declared plugin afterwards, which is the
-    // one thing somebody would otherwise assume this had changed.
+    // is the file: it still lists a declared plugin afterwards, and a value it
+    // supplies itself comes back with the plugin -- so the file's version says
+    // which settings are forgotten rather than claiming all of them are.
     const question = fromFile
-      ? "This takes it off this host, now and after every restart, and forgets "
-        + "its settings, including any credentials. Your configuration file "
+      ? "This takes it off this host, now and after every restart. Settings "
+        + "entered here, including credentials, are forgotten; anything the "
+        + "configuration file itself provides stays. Your configuration file "
         + "does not change, and it can be added again later."
         + (required
           ? "\n\nThe file marks it required: true, so this host is not meant "
@@ -457,7 +459,9 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
     setBusy(true);
     try {
       await api.removeInstance(name, required);
-      notify("good", `Removed ${name}. Its settings are forgotten.`);
+      // "The settings entered here" rather than "its settings": a declared
+      // plugin's file may supply some of its own, and those are still there.
+      notify("good", `Removed ${name}. The settings entered here are forgotten.`);
       // A plugin the file lists still has a page -- it is removed, not gone --
       // and that page is where it can be added again. Leaving for the list
       // would hide the way back behind the Add dialog.
@@ -478,15 +482,16 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
             <>
               <p>
                 This plugin is listed in the configuration file. Removing it
-                takes it off this host, now and after every restart, and forgets
-                its settings, including any credentials.
+                takes it off this host, now and after every restart, and it can
+                be added again later.
               </p>
               <p>
+                Settings entered here, including credentials, are forgotten.
+                Anything the configuration file itself provides stays.{" "}
                 <strong className="text-foreground">
                   The file is unchanged
                 </strong>{" "}
-                — if you redeploy from it, the removal still holds. It can be
-                added again later.
+                — if you redeploy from it, the removal still holds.
               </p>
               {required && (
                 <p className="text-attention">
