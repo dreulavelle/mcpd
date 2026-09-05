@@ -5,7 +5,6 @@
 
 ### Fixes
 
-* **auth:** an existing account is offered the link before the registration policy is asked ([5a36594](https://github.com/dreulavelle/mcpd/commit/5a3659432477c8a33430f64c93b7e45adb954ccc))
 * **auth:** an existing account is offered the link before the registration policy is asked ([7ec71ad](https://github.com/dreulavelle/mcpd/commit/7ec71ad3a14977494a61ccd6503d4ea5c944838d))
 
 ## [0.19.0](https://github.com/dreulavelle/mcpd/compare/v0.18.0...v0.19.0) (2026-09-05)
