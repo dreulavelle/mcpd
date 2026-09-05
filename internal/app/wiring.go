@@ -22,6 +22,7 @@ import (
 	"github.com/spoked/mcpd/internal/plugins/echoplugin"
 	"github.com/spoked/mcpd/internal/plugins/external"
 	"github.com/spoked/mcpd/internal/plugins/extremecloudiq"
+	"github.com/spoked/mcpd/internal/plugins/flowroute"
 	"github.com/spoked/mcpd/internal/plugins/graylog"
 	"github.com/spoked/mcpd/internal/plugins/observium"
 	"github.com/spoked/mcpd/internal/plugins/textable"
@@ -131,6 +132,7 @@ func builtinTypes() (*plugins.Catalog, error) {
 		bandwidth.Type(),
 		cnmaestro.Type(),
 		extremecloudiq.Type(),
+		flowroute.Type(),
 		graylog.Type(),
 		observium.Type(),
 		textable.Type(),
