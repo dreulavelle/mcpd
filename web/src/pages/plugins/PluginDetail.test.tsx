@@ -233,7 +233,7 @@ describe("a plugin the configuration file declares", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog.textContent).toMatch(/required: true/);
-    expect(dialog.textContent).toMatch(/configuration file is not changed/);
+    expect(dialog.textContent).toMatch(/configuration file does not change/);
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", true));

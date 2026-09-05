@@ -36,13 +36,16 @@ export function StatusDot({ tone, className }: { tone: Tone; className?: string 
   );
 }
 
-export function Chip({ tone = "neutral", className, children }: {
+export function Chip({ tone = "neutral", className, title, children }: {
   tone?: Tone;
   className?: string;
+  /** Evidence a chip's words stand in for -- an HTTP status, say. */
+  title?: string;
   children: ReactNode;
 }) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5",
         "text-xs font-medium whitespace-nowrap",
