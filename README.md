@@ -14,9 +14,9 @@
 
 <p align="center">
   <a href="https://github.com/dreulavelle/mcpd/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dreulavelle/mcpd/ci.yml?branch=main&amp;style=flat&amp;label=CI" alt="CI status on main"></a>
-  <a href="https://github.com/dreulavelle/mcpd/releases/latest"><img src="https://img.shields.io/github/v/release/dreulavelle/mcpd?style=flat&amp;color=0e6d5b" alt="Latest release"></a>
+  <a href="https://github.com/dreulavelle/mcpd/releases/latest"><img src="https://img.shields.io/github/v/release/dreulavelle/mcpd?style=flat&amp;color=357d7b" alt="Latest release"></a>
   <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/dreulavelle/mcpd?style=flat&amp;logo=go&amp;logoColor=white" alt="Go version required to build from source"></a>
-  <a href="https://github.com/dreulavelle/mcpd/pkgs/container/mcpd"><img src="https://img.shields.io/badge/container-GHCR-0e6d5b?style=flat&amp;logo=docker&amp;logoColor=white" alt="Container image on GitHub Container Registry"></a>
+  <a href="https://github.com/dreulavelle/mcpd/pkgs/container/mcpd"><img src="https://img.shields.io/badge/container-GHCR-357d7b?style=flat&amp;logo=docker&amp;logoColor=white" alt="Container image on GitHub Container Registry"></a>
   <a href="https://buymeacoffee.com/dreulavelle"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-ffdd00?style=flat&amp;logo=buymeacoffee&amp;logoColor=white" alt="Support mcpd on Buy Me a Coffee"></a>
 </p>
 
