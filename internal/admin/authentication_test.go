@@ -45,11 +45,15 @@ type fakeIdentities struct {
 	invited    *users.User
 	inviteErr  error
 
-	// The offer, and what happened to it.
-	offered    *users.PendingLink
-	offerToken string
-	offerErr   error
-	discarded  int
+	// The offer, and what happened to it. The binding is kept because these
+	// tests care that it is compared at all: a fake that ignored it would
+	// assert nothing about the one thing that makes an offer useless to a
+	// browser it was not made to.
+	offered      *users.PendingLink
+	offerToken   string
+	offerBinding string
+	offerErr     error
+	discarded    int
 }
 
 func (f *fakeIdentities) Register(context.Context, users.RegisterRequest) (*users.User, error) {
@@ -95,21 +99,28 @@ func (f *fakeIdentities) OfferLink(_ context.Context, link users.PendingLink, bi
 		return "", errors.New("an offered link needs a browser to be bound to")
 	}
 	f.offered = &link
+	f.offerBinding = binding
 	if f.offerToken == "" {
 		f.offerToken = "an-offer-token"
 	}
 	return f.offerToken, nil
 }
 
+// held reports whether this pair names the live offer.
+func (f *fakeIdentities) held(token, binding string) bool {
+	return f.offered != nil && token != "" && token == f.offerToken &&
+		binding != "" && binding == f.offerBinding
+}
+
 func (f *fakeIdentities) PendingLinkFor(_ context.Context, token, binding string) (*users.PendingLinkView, error) {
-	if f.offered == nil || token != f.offerToken || binding == "" {
+	if !f.held(token, binding) {
 		return nil, users.ErrNotFound
 	}
 	return &users.PendingLinkView{Provider: f.offered.Provider, Email: f.offered.Email}, nil
 }
 
 func (f *fakeIdentities) ClaimPendingLink(_ context.Context, token, binding, password string) (*users.User, error) {
-	if f.offered == nil || token != f.offerToken || binding == "" {
+	if !f.held(token, binding) {
 		return nil, users.ErrNotFound
 	}
 	if password != "a-sufficiently-long-passphrase" {
@@ -118,9 +129,11 @@ func (f *fakeIdentities) ClaimPendingLink(_ context.Context, token, binding, pas
 	return f.byEmail, nil
 }
 
-func (f *fakeIdentities) DiscardPendingLink(context.Context, string, string) error {
+func (f *fakeIdentities) DiscardPendingLink(_ context.Context, token, binding string) error {
 	f.discarded++
-	f.offered = nil
+	if f.held(token, binding) {
+		f.offered = nil
+	}
 	return nil
 }
 
