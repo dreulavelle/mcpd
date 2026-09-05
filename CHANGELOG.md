@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/dreulavelle/mcpd/compare/v0.17.0...v0.17.1) (2026-09-05)
+
+
+### Documentation
+
+* polish README and introduce matching mcpd branding ([#129](https://github.com/dreulavelle/mcpd/issues/129)) ([779756b](https://github.com/dreulavelle/mcpd/commit/779756b5dc3134690fa954d840e386cbcddc7e20))
+
 ## [0.17.0](https://github.com/dreulavelle/mcpd/compare/v0.16.0...v0.17.0) (2026-09-05)
 
 
