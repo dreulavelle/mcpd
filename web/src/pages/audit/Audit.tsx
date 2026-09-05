@@ -50,7 +50,7 @@ export function Audit() {
 
   // In the address, so a link can arrive filtered: "everything Sam did on
   // echo" is a thing one person sends another.
-  const [actorWord, setActorWord] = useQueryParam("who");
+  const [actor, setActor] = useQueryParam("who");
   const [category, setCategory] = useQueryParam("what");
   const [system, setSystem] = useQueryParam("system");
   const [needle, setNeedle] = useQueryParam("q");
@@ -71,8 +71,7 @@ export function Audit() {
         }
       })
       // A check that could not run is not a check that failed.
-      .catch(() => { if (live) setChain(null); })
-      .finally(() => undefined);
+      .catch(() => { if (live) setChain(null); });
     return () => { live = false; };
   }, [mayVerify, checks]);
 
@@ -81,36 +80,56 @@ export function Audit() {
   // Over what is loaded, not a query the server answers: the endpoint takes a
   // count and nothing else, and a filter that quietly narrowed the window it
   // asked for would hide the entries somebody was looking for.
+  // The principal, not the words: two accounts can share a display name, and
+  // a filtered link has to mean the same thing to whoever opens it as it did
+  // to whoever sent it.
   const actors = useMemo(
-    () => [...new Set(records.map((r) => describeActor(r.actor, book).word))].sort(),
+    () => [...new Set(records.map((r) => r.actor))]
+      .sort((a, b) => actorLabel(a, book).localeCompare(actorLabel(b, book))),
     [records, book],
   );
   const categories = useMemo(
     () => [...new Set(records.map(auditCategory))].sort(),
     [records],
   );
+  // Only from entries whose subject really is a system. Everywhere else that
+  // column carries whatever the writer had to hand -- a role's name, a
+  // certificate's, an account id -- and offering those as systems to filter by
+  // is offering a filter that matches one entry and means nothing.
   const systems = useMemo(
-    () => [...new Set(records.map((r) => r.plugin).filter((p): p is string => !!p))]
-      .filter((p) => !p.startsWith("key_") && !p.startsWith("byp_"))
-      .sort(),
+    () => [...new Set(records.filter(namesASystem).map((r) => r.plugin!))].sort(),
     [records],
   );
 
-  const filtering = actorWord !== "" || category !== "" || system !== "" || needle.trim() !== "";
+  // Built once per load rather than per keystroke: the search runs over every
+  // loaded record on every character typed, and each haystack is a sentence
+  // built from scratch.
+  const haystacks = useMemo(() => {
+    const bySeq = new Map<number, string>();
+    for (const r of records) bySeq.set(r.seq, haystack(r, book));
+    return bySeq;
+  }, [records, book]);
+
+  const filtering = actor !== "" || category !== "" || system !== "" || needle.trim() !== "";
   const shown = useMemo(() => {
     const q = needle.trim().toLowerCase();
     // A step of a change matching is the change matching: filtering by the
     // person who proposed something must not drop the step where mcpd applied
     // it, or the thread would claim nothing came of it.
     const matches = (r: AuditRecord) =>
-      (!actorWord || describeActor(r.actor, book).word === actorWord) &&
+      (!actor || r.actor === actor) &&
       (!category || auditCategory(r) === category) &&
-      (!system || r.plugin === system) &&
-      (!q || haystack(r, book).includes(q));
+      (!system || (namesASystem(r) && r.plugin === system)) &&
+      (!q || (haystacks.get(r.seq) ?? "").includes(q));
     return items.filter((item) => item.records.some(matches));
-  }, [items, actorWord, category, system, needle, book]);
+  }, [items, actor, category, system, needle, haystacks]);
 
   const days = useMemo(() => byDay(shown), [shown]);
+  const gaps = useMemo(() => gapsBelow(shown, records), [shown, records]);
+  const matched = useMemo(
+    () => shown.reduce((n, item) => n + item.records.length, 0),
+    [shown],
+  );
 
   return (
     <>
@@ -140,8 +159,8 @@ export function Audit() {
       {chain?.brokenAt != null && (
         <Notice tone="problem" icon={<ShieldAlert />}>
           <strong>Something changed the record directly.</strong> Entry
-          {" "}{chain.brokenAt} does not follow the one before it. Nothing older
-          than that can be trusted.
+          {" "}{chain.brokenAt} does not follow the one before it. Nothing from
+          that entry on can be trusted.
         </Notice>
       )}
 
@@ -155,10 +174,12 @@ export function Audit() {
       ) : (
         <>
           <div className="mt-4 flex flex-wrap items-end gap-2">
-            <NativeSelect aria-label="Who" className="w-44" value={actorWord}
-                          onChange={(e) => setActorWord(e.target.value)}>
+            <NativeSelect aria-label="Who" className="w-52" value={actor}
+                          onChange={(e) => setActor(e.target.value)}>
               <option value="">Anyone</option>
-              {actors.map((a) => <option key={a} value={a}>{a}</option>)}
+              {actors.map((a) => (
+                <option key={a} value={a}>{actorLabel(a, book)}</option>
+              ))}
             </NativeSelect>
             <NativeSelect aria-label="What happened" className="w-52" value={category}
                           onChange={(e) => setCategory(e.target.value)}>
@@ -187,7 +208,7 @@ export function Audit() {
             broken={chain?.brokenAt != null}
             checkedAt={chain?.at ?? null}
             filtering={filtering}
-            shown={shown.length}
+            shown={matched}
             loaded={records.length}
           />
 
@@ -212,15 +233,8 @@ export function Audit() {
                       item={item}
                       book={book}
                       day={day.key}
-                      // The page reads newest first, so the severed link is
-                      // below the entry the check named.
-                      severed={item.records.some((r) => r.seq === chain?.brokenAt)}
-                      // A thread's entries are interleaved with everything
-                      // else, so a difference of seq across it says nothing;
-                      // this under-reports a hole rather than inventing one.
-                      // Pruning announces itself with an entry of its own, and
-                      // the chain check is what proves nothing was altered.
-                      missing={filtering ? 0 : gapBelow(day.items, i)}
+                      brokenAt={chain?.brokenAt ?? null}
+                      missing={filtering ? 0 : gaps.get(item.key) ?? 0}
                       last={i === day.items.length - 1}
                     />
                   ))}
@@ -236,14 +250,18 @@ export function Audit() {
 
 /* -- one entry, or one change --------------------------------------------- */
 
-function Entry({ item, book, day, severed, missing, last }: {
+function Entry({ item, book, day, brokenAt, missing, last }: {
   item: Item;
   book: NameBook;
   day: string;
-  severed: boolean;
+  /** The seq the chain check named, or null. */
+  brokenAt: number | null;
   missing: number;
   last: boolean;
 }) {
+  // A break at one of a change's own later entries belongs on that step. Only
+  // a break at the entry this item is headed by is the item's own.
+  const severed = item.head.seq === brokenAt;
   const { head, steps } = item;
   const actor = describeActor(head.actor, book);
   const words = auditWords(head, book);
@@ -263,7 +281,7 @@ function Entry({ item, book, day, severed, missing, last }: {
   const facts = words.facts.length > 0 && (
     <TimelineFacts mark={tone !== "neutral" ? <StatusDot tone={tone} /> : undefined}>
       {words.facts.map((f, i) => (
-        <span key={f} className="flex items-center gap-2">
+        <span key={i} className="flex items-center gap-2">
           {i > 0 && <FactDot />}
           {f}
         </span>
@@ -292,7 +310,13 @@ function Entry({ item, book, day, severed, missing, last }: {
           {steps.length > 0 && (
             <Thread>
               {steps.map((s, i) => (
-                <Step key={s.seq} record={s} book={book} last={i === steps.length - 1} />
+                <Step
+                  key={s.seq}
+                  record={s}
+                  book={book}
+                  severed={s.seq === brokenAt}
+                  last={i === steps.length - 1}
+                />
               ))}
             </Thread>
           )}
@@ -314,17 +338,18 @@ function Entry({ item, book, day, severed, missing, last }: {
 }
 
 /** One later entry of a change, under the proposal it belongs to. */
-function Step({ record, book, last }: {
+function Step({ record, book, severed, last }: {
   record: AuditRecord;
   book: NameBook;
+  severed: boolean;
   last: boolean;
 }) {
   const words = stepWords(record, book);
   return (
-    <ThreadStep tone={words.tone} at={record.at} last={last}>
+    <ThreadStep tone={words.tone} at={record.at} severed={severed} last={last}>
       {words.line}
-      {words.facts.map((f) => (
-        <span key={f} className="text-muted-foreground"> · {f}</span>
+      {words.facts.map((f, i) => (
+        <span key={i} className="text-muted-foreground"> · {f}</span>
       ))}
     </ThreadStep>
   );
@@ -524,18 +549,62 @@ function dayLabel(iso: string): string {
 }
 
 /**
- * How many entries are absent between this item and the older one below it.
+ * How many entries are missing below each item, by item key.
  *
- * Computed across a whole item rather than a row, so a change whose entries
- * are interleaved with everything else reports nothing rather than reporting a
- * hole that is not there.
+ * Counted against every sequence number that was loaded, and worked out before
+ * the items are split into days. Both halves matter. A change's later entries
+ * are drawn inside its card but still occupy numbers between it and its
+ * neighbours, so comparing one item's lowest number against the next item's
+ * highest invents holes that are not there. And a hole that happens to fall on
+ * a day boundary is still a hole: the split into days is presentation, and a
+ * gap counted per day would never see across one.
  */
-function gapBelow(items: Item[], i: number): number {
-  const older = items[i + 1];
-  if (!older) return 0;
-  const mine = Math.min(...items[i]!.records.map((r) => r.seq));
-  const theirs = Math.max(...older.records.map((r) => r.seq));
-  return Math.max(0, mine - theirs - 1);
+function gapsBelow(items: Item[], records: AuditRecord[]): Map<string, number> {
+  const loaded = [...new Set(records.map((r) => r.seq))].sort((a, b) => a - b);
+  const missingBelow = new Map<number, number>();
+  for (let i = 1; i < loaded.length; i++) {
+    missingBelow.set(loaded[i]!, loaded[i]! - loaded[i - 1]! - 1);
+  }
+
+  const gaps = new Map<string, number>();
+  for (const item of items) {
+    const lowest = Math.min(...item.records.map((r) => r.seq));
+    const missing = missingBelow.get(lowest) ?? 0;
+    if (missing > 0) gaps.set(item.key, missing);
+  }
+  return gaps;
+}
+
+/**
+ * Whether an entry's subject is a system this host serves.
+ *
+ * The column is the subject of whatever the entry is about, so for a role it
+ * holds a role's name, for a key an identifier, for a closed approval window
+ * the word "all". Only these three families put a plugin or a remote server
+ * there, and only they belong in a filter that says "every system".
+ */
+function namesASystem(r: AuditRecord): boolean {
+  return !!r.plugin && /^(operation|mcpserver|plugin)\./.test(r.kind);
+}
+
+/**
+ * What to call an actor in the filter, as opposed to in a sentence.
+ *
+ * A sentence calls the executor, the reaper and the rediscovery pass all
+ * "mcpd", which is true and is what a reader wants to read. A list of choices
+ * cannot: three options reading "mcpd" is a control that cannot be used. So
+ * the parts of mcpd say which part they are, in the words somebody would use
+ * for what that part does.
+ */
+const SYSTEM_LABELS: Record<string, string> = {
+  "system:executor": "mcpd, applying changes",
+  "system:reaper": "mcpd, closing changes nobody decided",
+  "system:retention": "mcpd, tidying the record",
+  "system:rediscovery": "mcpd, re-reading systems",
+};
+
+function actorLabel(actor: string, book: NameBook): string {
+  return SYSTEM_LABELS[actor] ?? describeActor(actor, book).word;
 }
 
 /** Everything about an entry a search should reach, lowercased once. */

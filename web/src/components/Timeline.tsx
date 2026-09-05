@@ -174,9 +174,15 @@ const STEP_DOT: Record<Tone, string> = {
  * drawn as one thing that happened. The steps keep their own times: how long a
  * change waited for a decision is a question somebody asks.
  */
-export function ThreadStep({ tone = "neutral", at, children, last = false }: {
+export function ThreadStep({ tone = "neutral", at, severed = false, children, last = false }: {
   tone?: Tone;
   at?: string;
+  /**
+   * The chain does not hold at this step. Drawn here rather than on the card,
+   * because a break inside a change is between two of its own entries and
+   * saying so against the whole card would name the wrong neighbour.
+   */
+  severed?: boolean;
   children: ReactNode;
   last?: boolean;
 }) {
@@ -190,10 +196,18 @@ export function ThreadStep({ tone = "neutral", at, children, last = false }: {
         aria-hidden="true"
         className={cn(
           "absolute top-[0.4375rem] left-0 size-1.5 rounded-full ring-2 ring-card",
-          STEP_DOT[tone],
+          severed ? "bg-problem" : STEP_DOT[tone],
         )}
       />
-      <span className="min-w-0 flex-1 text-xs leading-5">{children}</span>
+      <span className="min-w-0 flex-1 text-xs leading-5">
+        {children}
+        {severed && (
+          <span className="mt-1 flex items-center gap-1.5 font-medium text-problem">
+            <Unlink className="size-3.5 shrink-0" aria-hidden="true" />
+            The entry at this point does not follow the one before it.
+          </span>
+        )}
+      </span>
       {at && <TimelineTime at={at} />}
     </li>
   );
@@ -281,12 +295,12 @@ export function SeveredNote() {
   );
 }
 
-/** Entries that are no longer in the table between this one and the next. */
+/** Entries that were between this one and the next, and are not there now. */
 export function GapNote({ missing }: { missing: number }) {
   return (
     <p className="mt-1.5 text-xs text-muted-foreground">
-      {missing} {missing === 1 ? "entry is" : "entries are"} no longer in the
-      table between here and the next one.
+      {missing} {missing === 1 ? "entry" : "entries"} between here and the next
+      one {missing === 1 ? "has" : "have"} been removed.
     </p>
   );
 }

@@ -296,8 +296,70 @@ describe("the audit trail", () => {
       record(9, { operation_id: undefined, kind: "apikey.revoked", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
       record(4, { operation_id: undefined, kind: "apikey.created", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
     ]);
-    expect(await screen.findByText(/4 entries are no longer in the table/))
+    expect(await screen.findByText(/4 entries between here and the next one have been removed/))
       .toBeInTheDocument();
+  });
+
+  /**
+   * A change's later entries are drawn inside its card but still hold sequence
+   * numbers between it and its neighbours. Counting one item's lowest number
+   * against the next item's highest invented a hole that was never there:
+   * seqs 10, 9, 5 and 3 are loaded, so only 4, 6, 7 and 8 are gone.
+   */
+  it("does not invent a gap out of a change's own entries", async () => {
+    mount([
+      record(10, { at: today(9, 0), operation_id: "op_1", kind: "operation.succeeded", plugin: "echo", action: "label.set", detail: { verified: true } }),
+      record(9, { at: today(8, 30), operation_id: undefined, kind: "apikey.revoked", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
+      record(5, { at: today(8, 0), operation_id: "op_1", kind: "operation.proposed", plugin: "echo", action: "label.set" }),
+      record(3, { at: today(7, 0), operation_id: undefined, kind: "apikey.created", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
+    ]);
+    await screen.findByText("Today");
+
+    const notes = screen.getAllByText(/between here and the next one ha(s|ve) been removed/);
+    const total = notes.reduce((n, el) => n + Number(el.textContent!.match(/^(\d+)/)![1]), 0);
+    expect(total).toBe(4);
+  });
+
+  /**
+   * The split into days is presentation. A hole that falls across one is still
+   * a hole, and counting per day would never see it.
+   */
+  it("reports a gap that falls across a day boundary", async () => {
+    mount([
+      record(20, { at: today(9, 0), operation_id: undefined, kind: "apikey.revoked", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
+      record(14, { at: yesterday(9, 0), operation_id: undefined, kind: "apikey.created", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
+    ]);
+    expect(await screen.findByText(/5 entries between here and the next one have been removed/))
+      .toBeInTheDocument();
+  });
+
+  /**
+   * Verification validates the entries older than the break and fails at it,
+   * so the bad link taints that entry and everything newer. Saying it the
+   * other way round tells somebody the altered half is the trustworthy one.
+   */
+  it("says the break taints that entry and everything newer", async () => {
+    mount(BUSY_DAY, { intact: false, broken_at: 7 });
+    const notice = await screen.findByText(/changed the record directly/);
+    expect(notice.closest("div")).toHaveTextContent(
+      "Nothing from that entry on can be trusted",
+    );
+  });
+
+  /**
+   * A break at one of a change's own later entries is between two entries
+   * inside the card. Promoting it to the card put the marker at the change's
+   * newest position, where it named a neighbour it does not sit beside.
+   */
+  it("draws a break inside a change on the step it happened at", async () => {
+    mount(BUSY_DAY, { intact: false, broken_at: 10 });
+    await screen.findByText("Today");
+
+    const step = screen.getByText(/^being applied by mcpd/).closest("li")!;
+    expect(within(step).getByText(/The entry at this point does not follow the one before it/))
+      .toBeInTheDocument();
+    // And not against the card, which would name the wrong neighbour.
+    expect(screen.queryByText(/does not follow the one below it/)).not.toBeInTheDocument();
   });
 
   /**
@@ -329,12 +391,33 @@ describe("the audit trail", () => {
     mount(BUSY_DAY);
     await screen.findByText("Today");
 
-    await userEvent.selectOptions(screen.getByLabelText("Who"), "Sam Vimes");
+    await userEvent.selectOptions(screen.getByLabelText("Who"), "user:sam@example.com");
     expect(await screen.findByText(line("asked to set the label on echo"))).toBeInTheDocument();
     expect(screen.getByText(/^applied by mcpd/)).toBeInTheDocument();
     expect(screen.getByText(/approved by an open approval window/)).toBeInTheDocument();
     // mcpd's own tidying is not Sam's doing, and goes.
     expect(screen.queryByText(/removed 16 entries older than/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The subject column holds whatever the entry is about -- a role's name, a
+   * certificate's, an account id, the word "all". Offering those as systems
+   * gave a filter that matched one entry and meant nothing.
+   */
+  it("offers only real systems to filter by", async () => {
+    mount([
+      record(6, { operation_id: undefined, kind: "role.created", plugin: "Auditor", detail: { role: "role_x1" } }),
+      record(5, { operation_id: undefined, kind: "account.identity_unlinked", plugin: "u_7", detail: { provider: "google" } }),
+      record(4, { operation_id: undefined, kind: "approval.bypass.revoked", plugin: "all", detail: { closed: 1 } }),
+      record(3, { operation_id: undefined, kind: "certificate.added", plugin: "corp root", detail: {} }),
+      record(2, { operation_id: undefined, kind: "mcpserver.enabled", plugin: "graylog", detail: { enabled: true } }),
+      record(1, { plugin: "cnmaestro" }),
+    ]);
+    await screen.findByText("Today");
+
+    const options = Array.from(screen.getByLabelText("System").querySelectorAll("option"))
+      .map((o) => o.textContent);
+    expect(options).toEqual(["Every system", "cnmaestro", "graylog"]);
   });
 
   it("says what to do when a filter matches nothing", async () => {
