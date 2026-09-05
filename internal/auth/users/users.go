@@ -79,6 +79,11 @@ var (
 	// ErrDomainNotAllowed reports an address outside the configured
 	// allow-list.
 	ErrDomainNotAllowed = errors.New("users: that email domain is not allowed to register here")
+	// ErrInviteExpired reports an invitation whose window has closed. Kept
+	// apart from ErrNotFound because an administrator can act on it -- the
+	// invitation is re-issued by saving the account again -- while "no such
+	// invitation" is not something they can do anything about.
+	ErrInviteExpired = errors.New("users: that invitation has expired")
 	// ErrAddressTaken reports a provider identity whose address already
 	// belongs to an account it is not linked to.
 	//
@@ -145,16 +150,30 @@ type User struct {
 	Disabled bool
 	// Status is active, or pending when a registration is waiting for an
 	// administrator. Not the same axis as Disabled; see Status.
-	Status      Status
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	LastLoginAt *time.Time
+	Status Status
+	// InviteProvider is the one provider an administrator said this person
+	// would sign in with, and is empty for every account that is not waiting
+	// for a first sign-in. It is not a credential: what it does is let a
+	// verified identity from that provider claim this row once, which is the
+	// second acceptable proof of ownership beside the account's own password.
+	InviteProvider Provider
+	// InviteExpiresAt is when the invitation stops being claimable, or nil for
+	// one with no expiry. An address can be reassigned to somebody else, so an
+	// invitation that never lapses is an account handed to whoever holds the
+	// address next.
+	InviteExpiresAt *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	LastLoginAt     *time.Time
 }
 
 // HasPassword reports whether an account can be signed in to with a password.
 func (u *User) HasPassword() bool {
 	return u.PasswordHash != NoPassword && u.PasswordHash != ""
 }
+
+// Invited reports an account waiting for its first sign-in through a provider.
+func (u *User) Invited() bool { return u.InviteProvider != "" }
 
 // Pending reports an account waiting for an administrator's decision.
 func (u *User) Pending() bool { return u.Status == StatusPending }

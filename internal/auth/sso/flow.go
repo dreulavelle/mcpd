@@ -349,9 +349,20 @@ func (s *Service) completeOIDC(ctx context.Context, c Config, st *State, code st
 // stronger guarantee than `email_verified`, not a weaker one -- but it is a
 // different guarantee, so it is written down here rather than left to be
 // inferred from the absence of a check.
+//
+// Where Entra will say more, it is believed. `xms_edov` is an optional claim
+// saying whether the directory owns the domain of the address, and a directory
+// can hold a member whose address is at a domain it never verified -- so a
+// token that carries the claim and sets it false is refused, exactly as an
+// unverified Google address is. Absent leaves the tenant standing on its own,
+// because an app registration made before the claim existed will not have it
+// and turning that into a refusal would break every Entra sign-in on upgrade.
 func addressFrom(c Config, claims *idClaims) (string, error) {
 	candidate := strings.TrimSpace(claims.Email)
 	if c.Provider == users.ProviderEntra {
+		if claims.EmailDomainOwnerVerified != nil && !bool(*claims.EmailDomainOwnerVerified) {
+			return "", ErrNoVerifiedEmail
+		}
 		if candidate == "" {
 			candidate = strings.TrimSpace(claims.PreferredUsername)
 		}

@@ -3,12 +3,30 @@ package admin
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/groups"
+	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
 )
+
+// providerConfigured reports whether a provider is set up and ready here.
+//
+// The same list the sign-in page's buttons come from, so an administrator
+// cannot invite somebody through a provider the page will not offer them.
+func (s *Server) providerConfigured(r *http.Request, p users.Provider) bool {
+	if s.opts.SSO == nil {
+		return false
+	}
+	for _, d := range s.opts.SSO.Available(r.Context()) {
+		if d.Provider == string(p) {
+			return true
+		}
+	}
+	return false
+}
 
 // userView is what the dashboard sees. The password hash is never in it: the
 // page has no use for it and every serialisation is a chance to leak it.
@@ -48,8 +66,17 @@ type userView struct {
 	// HasPassword is false for an account that only signs in through a
 	// provider, which the Users page shows so that "why can I not reset this
 	// password" has an answer on the page.
-	HasPassword bool   `json:"has_password"`
-	CreatedAt   string `json:"created_at"`
+	HasPassword bool `json:"has_password"`
+	// InviteProvider names the provider an invited account is waiting for a
+	// first sign-in through, and is empty for every other account.
+	// InviteLabel is the same fact in the words the button uses.
+	InviteProvider string `json:"invite_provider,omitempty"`
+	InviteLabel    string `json:"invite_label,omitempty"`
+	// InviteExpiresAt is when the invitation stops being claimable. A row that
+	// has one, and an administrator wondering why somebody cannot get in,
+	// meet here.
+	InviteExpiresAt string `json:"invite_expires_at,omitempty"`
+	CreatedAt       string `json:"created_at"`
 	LastLoginAt string `json:"last_login_at,omitempty"`
 	// Self marks the account making the request, so the page can warn before
 	// someone edits themselves out of their own access.
@@ -79,6 +106,13 @@ func viewOfUser(u *users.User, self bool, access groups.Resolved, memberOf []gro
 	}
 	if u.LastLoginAt != nil {
 		v.LastLoginAt = u.LastLoginAt.Format(time.RFC3339)
+	}
+	if u.Invited() {
+		v.InviteProvider = string(u.InviteProvider)
+		v.InviteLabel = sso.Label(u.InviteProvider)
+		if u.InviteExpiresAt != nil {
+			v.InviteExpiresAt = u.InviteExpiresAt.Format(time.RFC3339)
+		}
 	}
 	return v
 }
@@ -139,11 +173,17 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 type createUserRequest struct {
-	Email       string       `json:"email"`
+	Email string `json:"email"`
+	// Password is what this account signs in with, and is required unless
+	// InviteProvider names a provider instead.
 	Password    string       `json:"password"`
 	DisplayName string       `json:"display_name"`
 	Role        string       `json:"role"`
 	Grants      []auth.Grant `json:"grants"`
+	// InviteProvider invites the person to sign in with that provider rather
+	// than with a password an administrator has to invent and then hand over
+	// by some channel neither of them chose.
+	InviteProvider string `json:"invite_provider"`
 	// Groups the account joins as it is created. An empty list is the default
 	// and reaches nothing, which is what an account with no direct grants and
 	// no group has always been.
@@ -159,14 +199,25 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &req) {
 		return
 	}
+	invite := users.Provider(strings.TrimSpace(req.InviteProvider))
+	if invite != "" && !s.providerConfigured(r, invite) {
+		// Refused here rather than at the store, because "is this provider set
+		// up on this host" is a question about settings the store cannot see.
+		// An invitation naming a provider nobody configured is an account
+		// nobody can ever sign in to.
+		s.writeError(w, r, http.StatusBadRequest,
+			"that sign-in provider is not set up on this host")
+		return
+	}
 	user, err := s.opts.Accounts.Create(r.Context(), users.CreateRequest{
-		Email:       req.Email,
-		Password:    req.Password,
-		DisplayName: req.DisplayName,
-		RoleID:      req.Role,
-		Grants:      req.Grants,
-		Groups:      req.Groups,
-		Actor:       auth.FromContext(r.Context()).ID,
+		Email:          req.Email,
+		Password:       req.Password,
+		DisplayName:    req.DisplayName,
+		RoleID:         req.Role,
+		Grants:         req.Grants,
+		Groups:         req.Groups,
+		InviteProvider: invite,
+		Actor:          auth.FromContext(r.Context()).ID,
 	})
 	switch {
 	case errors.Is(err, users.ErrDuplicateEmail):
@@ -187,8 +238,9 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.opts.Log.Info("account created", "email", user.Email,
-		"role", user.RoleID, "by", auth.FromContext(r.Context()).ID)
+	s.opts.Log.InfoContext(r.Context(), "account created", "email", user.Email,
+		"role", user.RoleID, "invited_with", string(user.InviteProvider),
+		"by", auth.FromContext(r.Context()).ID)
 	s.writeJSON(w, r, http.StatusCreated, s.viewUser(r, user, false))
 }
 
