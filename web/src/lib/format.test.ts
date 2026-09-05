@@ -964,7 +964,7 @@ describe("describing an outcome", () => {
 describe("the confirmation word", () => {
   it("keeps unchecked apart from confirmed and from mismatched", () => {
     expect(confirmationWord(true)).toBe("confirmed");
-    expect(confirmationWord(false)).toBe("did not match");
+    expect(confirmationWord(false)).toBe("could not be confirmed");
     expect(confirmationWord(null)).toBe("not checked");
     expect(confirmationWord(undefined)).toBe("not checked");
   });

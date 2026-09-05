@@ -290,7 +290,7 @@ describe("what became of the rest", () => {
     const failed = within(lately).getByText(/Restart the device on cnmaestro/)
       .closest("li")!;
     expect(failed.textContent).toContain("didn't run");
-    expect(failed.textContent).toContain("did not match");
+    expect(failed.textContent).toContain("could not be confirmed");
   });
 
   /**

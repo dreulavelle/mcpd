@@ -1287,9 +1287,15 @@ export function describeOutcome(op: ChangeLike, now: number = Date.now()): strin
 /**
  * The three values of `verified` as three different words. Absent is "not
  * checked", and must never render as the word for a confirmed outcome.
+ *
+ * False is "could not be confirmed" rather than "did not match". `Executor.verify`
+ * returns false both for a re-read that came back and disagreed and for one
+ * where every attempt errored, and it settles either with `CodeVerificationFailed`
+ * -- so naming a mismatch asserts a comparison that may never have happened.
+ * The audit trail says the same thing in its own longer form.
  */
 export function confirmationWord(verified?: boolean | null): string {
   if (verified === true) return "confirmed";
-  if (verified === false) return "did not match";
+  if (verified === false) return "could not be confirmed";
   return "not checked";
 }
