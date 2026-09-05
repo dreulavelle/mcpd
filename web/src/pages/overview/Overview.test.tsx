@@ -3,19 +3,22 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   api, type CallBucket, type CallSummary, type HealthReport, type Plugin,
-  type TunnelStatus,
+  type PluginInstance, type TunnelStatus,
 } from "@/lib/api";
 import type { Item } from "@/components/Attention";
 import { renderWith } from "@/test/render";
 import { Overview, verdict } from "./Overview";
 
 const hour = 3_600_000;
-const noon = Date.UTC(2026, 7, 29, 12, 0, 0);
+// Anchored where the endpoint anchors it: the last bucket is the hour in
+// progress. A fixture stuck in the past reads as a day nobody has called in
+// for months, which is a different sentence.
+const top = Math.floor(Date.now() / hour) * hour;
 
-/** A day of buckets, `calls` of them in the last hour and none before it. */
+/** A day of hourly buckets, shaped by `perHour`. */
 function day(perHour: (i: number) => Partial<CallBucket> = () => ({})): CallSummary {
   const buckets: CallBucket[] = Array.from({ length: 24 }, (_, i) => ({
-    at: new Date(noon - (23 - i) * hour).toISOString(),
+    at: new Date(top - (23 - i) * hour).toISOString(),
     ok: 0, error: 0, denied: 0, rate_limited: 0,
     ...perHour(i),
   }));
@@ -39,6 +42,7 @@ const plugin = (p: Partial<Plugin>): Plugin => ({
 interface Stub {
   health?: HealthReport | null;
   plugins?: Plugin[];
+  instances?: PluginInstance[];
   tunnels?: TunnelStatus[];
   summary?: CallSummary;
 }
@@ -48,12 +52,13 @@ function stub({
   // One system and one connector, so the page is not the "nothing is set up
   // yet" case unless a test asks for it.
   plugins = [plugin({})],
+  instances = [],
   tunnels = [{ state: "connected", tunnel_id: "tun_1", requests: 4 }],
   summary = day(),
 }: Stub = {}) {
   vi.spyOn(api, "operations").mockResolvedValue({ operations: [], count: 0 });
   vi.spyOn(api, "plugins").mockResolvedValue({ plugins, count: plugins.length });
-  vi.spyOn(api, "instances").mockResolvedValue({ instances: [], count: 0 });
+  vi.spyOn(api, "instances").mockResolvedValue({ instances, count: instances.length });
   vi.spyOn(api, "tunnel").mockResolvedValue({
     tunnels, can_manage: false, plugins: [], workspaces: [], assignments: {}, accounts: [],
   });
@@ -90,74 +95,124 @@ const item = (tone: Item["tone"]): Item =>
  * nothing about whether any of it was well.
  */
 describe("the verdict", () => {
-  const base = { items: [], connected: 1, summary: day((i) => (i === 23 ? { ok: 5 } : {})), healthUnread: false };
+  const well: HealthReport = { status: "up", checks: [] };
+  const base = {
+    items: [], connected: 1, health: well, readAnything: true,
+    summary: day((i) => (i === 23 ? { ok: 5 } : {})),
+  };
+  const say = (over: Partial<Parameters<typeof verdict>[0]>) =>
+    verdict({ ...base, systems: 2, connectors: 1, ...over })!;
 
   it("says everything is working when nothing needs anybody", () => {
-    expect(verdict({ ...base, systems: 2, connectors: 1 }).text)
-      .toBe("Everything is working.");
+    expect(say({}).text).toBe("Everything is working.");
   });
 
   it("counts what needs somebody, in words", () => {
-    const one = verdict({ ...base, systems: 2, connectors: 1, items: [item("attention")] });
+    const one = say({ items: [item("attention")] });
     expect(one.text).toBe("Everything is working. One thing needs you.");
     expect(one.tone).toBe("attention");
 
-    const two = verdict({
-      ...base, systems: 2, connectors: 1, items: [item("attention"), item("info")],
-    });
-    expect(two.text).toBe("Everything is working. Two things need you.");
+    expect(say({ items: [item("attention"), item("info")] }).text)
+      .toBe("Everything is working. Two things need you.");
   });
 
-  // "Everything is working" beside a broken plugin is the sentence somebody
+  /**
+   * A change waiting on a decision is exactly a thing that needs the reader,
+   * and it sat in its own card being counted by nothing. The sentence said
+   * "Everything is working." over two proposals about to run out of time.
+   */
+  it("counts a change waiting on a decision as a thing that needs you", () => {
+    expect(say({ waiting: 1 }).text)
+      .toBe("Everything is working. One thing needs you.");
+    expect(say({ waiting: 2, items: [item("attention")] }).text)
+      .toBe("Everything is working. Three things need you.");
+  });
+
+  // "Everything is working" beside a broken system is the sentence somebody
   // reads instead of the list under it.
   it("says something is wrong when one of them is a problem", () => {
-    const v = verdict({
-      ...base, systems: 2, connectors: 1, items: [item("problem"), item("attention")],
-    });
+    const v = say({ items: [item("problem"), item("attention")] });
     expect(v.text).toBe("Something is wrong. Two things need you.");
     expect(v.tone).toBe("problem");
   });
 
   /**
-   * A host nobody has called for hours is not a host that is failing, and it is
-   * not one that is fine either. Saying only "Everything is working" over a
+   * The host's own checks were not in the sentence at all, so a host whose
+   * critical check was down led with "Everything is working." above a Host
+   * card reading "1 of 3 checks is not passing". Nothing in the attention list
+   * covers them; they are a separate fact and they have to be read.
+   */
+  it("reads the host's own checks", () => {
+    const down = say({ health: { status: "down", checks: [] } });
+    expect(down.text).toBe("Something is wrong.");
+    expect(down.tone).toBe("problem");
+
+    const degraded = say({ health: { status: "degraded", checks: [] } });
+    expect(degraded.text)
+      .toBe("Everything is working. A check on this host is not passing.");
+    expect(degraded.tone).toBe("attention");
+
+    // Beside something else that needs somebody, both are said.
+    expect(say({ health: { status: "degraded", checks: [] }, waiting: 1 }).text)
+      .toBe("Everything is working. One thing needs you. A check on this host is not passing.");
+  });
+
+  /**
+   * A host nobody has called for hours is not a host that is failing, and it
+   * is not one that is fine either. Saying only "Everything is working" over a
    * connector that has served nothing since breakfast is the reassurance that
    * costs somebody an afternoon.
+   *
+   * The moment, not a count of empty bars: an hour of bars is anywhere between
+   * a minute and two hours of real time, and "for 3 hours" over a call made
+   * two hours ago is a number somebody will check.
    */
-  it("says how long it has been quiet, once quiet is long enough to mean something", () => {
-    const twoHours = day((i) => (i <= 21 ? { ok: 4 } : {}));
-    expect(verdict({ ...base, systems: 2, connectors: 1, summary: twoHours }).text)
+  it("says when the last call came in, once quiet is long enough to mean something", () => {
+    expect(say({ summary: day((i) => (i <= 21 ? { ok: 4 } : {})) }).text)
       .toBe("Everything is working.");
 
     const six = day((i) => (i <= 17 ? { ok: 4 } : {}));
-    expect(verdict({ ...base, systems: 2, connectors: 1, summary: six }).text)
-      .toBe("Everything is working. Nothing has come through for 6 hours.");
+    const lastCall = new Date(six.buckets[17]!.at)
+      .toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    expect(say({ summary: six }).text)
+      .toBe(`Everything is working. Nothing has come through since ${lastCall}.`);
   });
 
   // No connector is up, so nothing coming through is the arrangement rather
   // than a fault.
   it("does not call it quiet when no connector is up", () => {
     const six = day((i) => (i <= 17 ? { ok: 4 } : {}));
-    expect(verdict({ ...base, systems: 2, connectors: 1, connected: 0, summary: six }).text)
-      .toBe("Everything is working.");
+    expect(say({ connected: 0, summary: six }).text).toBe("Everything is working.");
   });
 
   it("says when there is nothing set up at all", () => {
-    const v = verdict({ ...base, systems: 0, connectors: 0 });
+    const v = say({ systems: 0, connectors: 0 });
     expect(v.text).toBe("Nothing is set up yet.");
     expect(v.tone).toBe("neutral");
   });
 
-  // Nothing read is not nothing there: a person who may not list the plugins
+  // Nothing read is not nothing there: a person who may not list the systems
   // must not be told this host has none.
   it("does not call an unread host empty", () => {
-    expect(verdict({ ...base, systems: undefined, connectors: undefined }).text)
+    expect(say({ systems: undefined, connectors: undefined }).text)
       .toBe("Everything is working.");
   });
 
   it("says when the host's health could not be read", () => {
-    expect(verdict({ ...base, systems: 2, connectors: 1, healthUnread: true }).text)
+    expect(say({ health: null }).text)
       .toBe("Everything is working. This host's health could not be read.");
+  });
+
+  /**
+   * A custom role holding none of the read permissions gets a page with
+   * nothing on it. A cheerful sentence over nothing is a claim about a host
+   * this account cannot see, so there is no sentence.
+   */
+  it("says nothing at all when nothing could be read", () => {
+    expect(verdict({
+      items: [], connected: 0, health: undefined, readAnything: false,
+      summary: undefined,
+    })).toBeNull();
   });
 });
 
@@ -175,15 +230,22 @@ describe("the overview", () => {
       .toHaveAttribute("href", "/clients");
   });
 
-  // The chart is a picture. The totals behind it have to be readable without
-  // one, and a screen reader gets them from the label.
-  it("names the totals on the chart", async () => {
-    stub({ summary: day((i) => (i === 23 ? { ok: 10, error: 2, denied: 1 } : {})) });
+  /**
+   * The chart is a picture. The totals behind it have to be readable without
+   * one, and a screen reader gets them from the label.
+   *
+   * Refused counts both the gate's refusals and the rate limiter's, because
+   * the bars stack both. It read only the first, so the number under the chart
+   * disagreed with the chart.
+   */
+  it("names the totals on the chart, counting every refusal", async () => {
+    stub({ summary: day((i) => (i === 23 ? { ok: 10, error: 2, denied: 1, rate_limited: 1 } : {})) });
     renderWith(<Overview />);
 
     expect(await screen.findByRole("img", {
-      name: "13 calls in the last 24 hours, 2 failed and 1 refused.",
+      name: "14 calls in the last 24 hours, 2 failed and 2 refused.",
     })).toBeInTheDocument();
+    expect(screen.getByText("· 2 refused")).toBeInTheDocument();
   });
 
   it("says so when a day has gone by with no calls", async () => {
@@ -223,6 +285,39 @@ describe("the overview", () => {
     expect(within(systems).getByText("working")).toBeInTheDocument();
     expect(within(systems).getByText("not working")).toBeInTheDocument();
     expect(within(systems).getByText("812 calls")).toBeInTheDocument();
+  });
+
+  /**
+   * A system somebody switched off is in the instance list and not the serving
+   * one, so it had no row at all -- and a host whose systems are every one of
+   * them switched off read "Nothing is set up yet.", which is a different
+   * thing and a different afternoon.
+   */
+  it("keeps a row for a system that is switched off", async () => {
+    stub({
+      plugins: [],
+      instances: [{
+        name: "observium", type: "observium", from_file: false,
+        enabled: false, mounted: false,
+      }],
+      tunnels: [],
+    });
+    renderWith(<Overview />);
+
+    const systems = (await screen.findByText("Systems")).closest("section")!;
+    expect(within(systems).getByText("observium")).toBeInTheDocument();
+    expect(within(systems).getByText("switched off")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing is set up yet.")).not.toBeInTheDocument();
+  });
+
+  it("says where to set a connector up when there is none", async () => {
+    stub({ tunnels: [] });
+    renderWith(<Overview />);
+
+    expect(await screen.findByText(/No connector is set up yet/)).toBeInTheDocument();
+    const connectors = screen.getByText("Connectors").closest("section")!;
+    expect(within(connectors).getByRole("link", { name: "Tunnels" }))
+      .toHaveAttribute("href", "/tunnels");
   });
 });
 

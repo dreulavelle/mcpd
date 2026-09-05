@@ -56,7 +56,7 @@ describe("what needs attention", () => {
     expect(attention({ ...input, admin: false })).toEqual([]);
   });
 
-  it("points at a remote server whose tools nobody has classified", () => {
+  it("points at a remote server whose tools nobody has allowed", () => {
     const items = attention({
       ...nothing,
       servers: [{ name: "remote", enabled: true, pending: 3, discovery: {} } as MCPServer],

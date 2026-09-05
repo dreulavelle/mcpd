@@ -20,6 +20,11 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 
+/** How long a window is, in the words a sentence needs. */
+function windowWords(hours: number): string {
+  return hours === 1 ? "hour" : `${hours} hours`;
+}
+
 /**
  * Everything the first screen knows.
  *
@@ -40,6 +45,9 @@ interface Snapshot {
   summary?: CallSummary;
 }
 
+/** How many hours of calls the chart draws. */
+const WINDOW_HOURS = 24;
+
 /**
  * The first screen: is anything waiting on me, is everything working, what has
  * been happening -- in that order, and nothing else.
@@ -54,8 +62,12 @@ export function Overview() {
   const [callers, setCallers] = useState<Caller[]>();
   const [loaded, setLoaded] = useState(false);
 
+  const set = useCallback(
+    (patch: Partial<Snapshot>) => setSnap((s) => ({ ...s, ...patch })),
+    [],
+  );
+
   const load = useCallback(() => {
-    const set = (patch: Partial<Snapshot>) => setSnap((s) => ({ ...s, ...patch }));
     const jobs: Promise<unknown>[] = [];
     // Each question only where the answer would be given, and each failure
     // kept to its own card. A page that asks for what it cannot see is a page
@@ -74,13 +86,21 @@ export function Overview() {
       (h) => set({ health: h }), () => set({ health: null }));
     ask(can("system:read"), () => api.resources(), (r) => set({ resources: r }));
     ask(can("history:read"), () => api.audit(6), (r) => set({ audit: r.records ?? [] }));
-    ask(can("history:read"), () => api.callSummary(24), (s) => set({ summary: s }));
 
     Promise.allSettled(jobs).finally(() => setLoaded(true));
-  }, [can]);
+  }, [can, set]);
   usePoll(load, 15_000);
 
-  // A week does not change in fifteen seconds, so this is asked once.
+  // A day of hourly buckets does not change meaningfully in fifteen seconds,
+  // and it is the most expensive thing on the page: two aggregates over the
+  // busiest table this host writes.
+  const loadSummary = useCallback(() => {
+    if (!can("history:read")) return;
+    api.callSummary(WINDOW_HOURS).then((s) => set({ summary: s })).catch(() => undefined);
+  }, [can, set]);
+  usePoll(loadSummary, 60_000);
+
+  // A week does not change while somebody reads a screen, so this is asked once.
   useEffect(() => {
     if (!can("history:read")) return;
     api.callers(7).then((r) => setCallers(r.callers ?? [])).catch(() => undefined);
@@ -104,11 +124,18 @@ export function Overview() {
 
   const sentence = verdict({
     items,
+    waiting: snap.waiting?.length,
     systems: snap.plugins && snap.instances ? systems.length : undefined,
     connectors: snap.tunnels?.length,
     connected: tunnels.filter((t) => t.state === "connected").length,
     summary: snap.summary,
-    healthUnread: snap.health === null,
+    health: snap.health,
+    // A custom role holding none of these reads a page with nothing on it, and
+    // a cheerful sentence over nothing is a claim about a host this account
+    // cannot see.
+    readAnything: snap.plugins !== undefined || snap.instances !== undefined
+      || snap.tunnels !== undefined || snap.health !== undefined
+      || snap.waiting !== undefined || snap.summary !== undefined,
   });
 
   // Only when the account has a name of its own: `name` falls back to the
@@ -135,12 +162,15 @@ export function Overview() {
         }
       />
 
-      {/* The one line worth reading before anything else. Everything below it
-          is the working out. */}
-      <p className="mb-8 flex items-start gap-2.5 text-base leading-snug font-medium sm:text-lg">
-        <StatusDot tone={sentence.tone} className="mt-2 sm:mt-2.5" />
-        <span>{sentence.text}</span>
-      </p>
+      {/* The one line worth reading before anything else; everything below it
+          is the working out. Size carries it rather than weight, which at this
+          length would read as shouting. */}
+      {sentence && (
+        <p className="mb-8 flex items-start gap-3 text-xl leading-snug text-balance sm:text-2xl">
+          <StatusDot tone={sentence.tone} className="mt-2.5 sm:mt-3" />
+          <span>{sentence.text}</span>
+        </p>
+      )}
 
       <div className="space-y-8">
         <Attention items={items} />
@@ -150,14 +180,14 @@ export function Overview() {
           <Waiting operations={waiting} className="lg:col-span-2" />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Systems rows={systems} counted={snap.summary !== undefined} />
+        <div className="grid gap-x-10 gap-y-6 sm:grid-cols-2">
+          <Systems rows={systems} hours={snap.summary?.hours} />
           <Connectors tunnels={snap.tunnels} />
         </div>
 
         <Host health={snap.health} resources={snap.resources} />
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-x-10 gap-y-6 sm:grid-cols-2">
           <WhoIsCalling callers={callers} />
           <Lately records={snap.audit} />
         </div>
@@ -173,21 +203,36 @@ const NUMBERS = [
   "no", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
 ];
 
+/** All the calls in one bucket, however they ended. */
+const busy = (b: { ok: number; error: number; denied: number; rate_limited: number }) =>
+  b.ok + b.error + b.denied + b.rate_limited;
+
 /**
- * How many trailing hours nobody called in, or null when the window is unknown.
+ * When the last call came in, if the run of empty hours since is long enough
+ * to be worth saying. Null when the window is unknown, still busy, or only
+ * briefly idle -- three hours is the smallest gap that cannot be a lull.
  *
- * The last bucket is the hour in progress and is empty for most of it, so this
- * counts it. Three is the smallest number that cannot be an ordinary lull.
+ * The moment, not the count of buckets: an hour's worth of bars is anywhere
+ * between one minute and two hours of real time, and "for 3 hours" over a call
+ * made 121 minutes ago is a number somebody will check.
  */
-function quietHours(summary?: CallSummary): number | null {
+function quietSince(summary?: CallSummary): string | null {
   if (!summary || summary.buckets.length === 0) return null;
-  let quiet = 0;
+  let empty = 0;
   for (let i = summary.buckets.length - 1; i >= 0; i--) {
     const b = summary.buckets[i]!;
-    if (b.ok + b.error + b.denied + b.rate_limited > 0) break;
-    quiet++;
+    if (busy(b) > 0) return empty >= 3 ? b.at : null;
+    empty++;
   }
-  return quiet;
+  return null;
+}
+
+/** A moment in the last half day is a time; older than that needs the date. */
+function moment(iso: string, now: number = Date.now()): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  if (now - at.getTime() > 12 * 3_600_000) return when(iso);
+  return at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
 /**
@@ -198,16 +243,24 @@ function quietHours(summary?: CallSummary): number | null {
  * every branch of it is a claim about the host and each one is worth a test.
  *
  * An undefined count means the answer was never read, and is not zero: a
- * person who may not list the plugins must not be told there are none.
+ * person who may not list the systems must not be told there are none. Null
+ * for the whole sentence means nothing at all was readable, and a claim about
+ * a host this account cannot see is worse than no claim.
  */
 export function verdict(input: {
   items: Item[];
+  /** Changes waiting on a decision. One of those is a thing that needs the reader. */
+  waiting?: number;
   systems?: number;
   connectors?: number;
   connected: number;
   summary?: CallSummary;
-  healthUnread: boolean;
-}): { text: string; tone: Tone } {
+  /** Undefined when it was never asked; null when it was asked and did not answer. */
+  health?: HealthReport | null;
+  readAnything: boolean;
+}): { text: string; tone: Tone } | null {
+  if (!input.readAnything) return null;
+
   const parts: string[] = [];
   let tone: Tone;
 
@@ -215,24 +268,34 @@ export function verdict(input: {
     parts.push("Nothing is set up yet.");
     tone = "neutral";
   } else {
-    const wrong = input.items.some((i) => i.tone === "problem");
+    // A critical check that is down makes the host wrong whatever the plugin
+    // list says. "Everything is working" over a Host card reading "1 of 3
+    // checks is not passing" is the sentence somebody believes instead of the
+    // card.
+    const down = input.health?.status === "down";
+    const degraded = input.health?.status === "degraded";
+    const wrong = down || input.items.some((i) => i.tone === "problem");
     parts.push(wrong ? "Something is wrong." : "Everything is working.");
 
-    if (input.items.length > 0) {
-      const n = input.items.length;
-      const count = NUMBERS[n] ?? String(n);
-      parts.push(`${count} ${n === 1 ? "thing needs" : "things need"} you.`);
-      tone = wrong ? "problem" : "attention";
-    } else {
-      tone = "good";
-      const quiet = quietHours(input.summary);
-      if (quiet !== null && quiet >= 3 && input.connected > 0) {
-        parts.push(`Nothing has come through for ${quiet} hours.`);
-      }
+    const needing = input.items.length + (input.waiting ?? 0);
+    if (needing > 0) {
+      const count = NUMBERS[needing] ?? String(needing);
+      parts.push(`${count} ${needing === 1 ? "thing needs" : "things need"} you.`);
+    }
+
+    if (degraded) parts.push("A check on this host is not passing.");
+
+    tone = wrong ? "problem" : (needing > 0 || degraded) ? "attention" : "good";
+
+    // Only when nothing else has been said. A host with something waiting on
+    // it has a more useful next sentence than how long it has been quiet.
+    if (parts.length === 1 && input.connected > 0) {
+      const since = quietSince(input.summary);
+      if (since) parts.push(`Nothing has come through since ${moment(since)}.`);
     }
   }
 
-  if (input.healthUnread) parts.push("This host's health could not be read.");
+  if (input.health === null) parts.push("This host's health could not be read.");
   return { text: parts.join(" "), tone };
 }
 
@@ -261,6 +324,9 @@ function Activity({ summary, className }: { summary?: CallSummary; className?: s
         hour: at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
         ok: b.ok,
         error: b.error,
+        // A call turned away by the gate and one turned away by a rate limit
+        // are the same answer to the person reading this: it did not run and
+        // nobody's system was touched.
         refused: b.denied + b.rate_limited,
       };
     }),
@@ -276,18 +342,21 @@ function Activity({ summary, className }: { summary?: CallSummary; className?: s
     ? [rows[0]!.hour, rows[Math.floor(rows.length / 2)]!.hour, rows[rows.length - 1]!.hour]
     : rows.map((r) => r.hour);
 
+  // Refused is counted from the buckets rather than taken from `denied`, which
+  // is the gate's refusals alone. The bars stack both, and a total under the
+  // chart that disagreed with it would be the one somebody quotes.
+  const refused = summary.buckets.reduce((t, b) => t + b.denied + b.rate_limited, 0);
+  const span = windowWords(summary.hours);
   const label = summary.total === 0
-    ? "No calls in the last 24 hours."
-    : `${number(summary.total)} calls in the last 24 hours, ${number(summary.errors)} failed and ${number(summary.denied)} refused.`;
-
-  const busiest = summary.plugins.slice(0, 3);
+    ? `No calls in the last ${span}.`
+    : `${number(summary.total)} calls in the last ${span}, ${number(summary.errors)} failed and ${number(refused)} refused.`;
 
   return (
-    <Section title="Last 24 hours" className={className}>
+    <Section title={`Last ${span}`} className={className}>
       <Card>
         <CardContent className="space-y-3">
           {summary.total === 0 ? (
-            <p className="text-sm text-muted-foreground">No calls in the last 24 hours.</p>
+            <p className="text-sm text-muted-foreground">No calls in the last {span}.</p>
           ) : (
             <p className="flex flex-wrap items-baseline gap-x-2 text-sm text-muted-foreground">
               <span className="text-xl font-semibold text-foreground tabular-nums">
@@ -297,8 +366,8 @@ function Activity({ summary, className }: { summary?: CallSummary; className?: s
               {summary.errors > 0 && (
                 <span className="text-problem tabular-nums">· {number(summary.errors)} failed</span>
               )}
-              {summary.denied > 0 && (
-                <span className="text-attention tabular-nums">· {number(summary.denied)} refused</span>
+              {refused > 0 && (
+                <span className="text-attention tabular-nums">· {number(refused)} refused</span>
               )}
             </p>
           )}
@@ -319,23 +388,13 @@ function Activity({ summary, className }: { summary?: CallSummary; className?: s
                 className="text-[10px]"
               />
               <ChartTooltip content={<ChartTooltipContent />} />
-              <Bar dataKey="ok" stackId="calls" fill="var(--color-ok)" />
-              <Bar dataKey="error" stackId="calls" fill="var(--color-error)" />
-              <Bar dataKey="refused" stackId="calls" fill="var(--color-refused)" />
+              {/* Animation off: the page polls, and bars that grow from zero on
+                  every answer read as a day that just started. */}
+              <Bar dataKey="ok" stackId="calls" fill="var(--color-ok)" isAnimationActive={false} />
+              <Bar dataKey="error" stackId="calls" fill="var(--color-error)" isAnimationActive={false} />
+              <Bar dataKey="refused" stackId="calls" fill="var(--color-refused)" isAnimationActive={false} />
             </BarChart>
           </ChartContainer>
-
-          {busiest.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              Busiest:{" "}
-              {busiest.map((p, i) => (
-                <span key={p.plugin}>
-                  {i > 0 && " · "}
-                  {p.plugin} {number(p.calls)}
-                </span>
-              ))}
-            </p>
-          )}
         </CardContent>
       </Card>
     </Section>
@@ -396,18 +455,21 @@ interface SystemRow {
 /**
  * One row per system, whether or not it is serving.
  *
- * A plugin switched on and waiting for a setting appears in the instance list
- * and not the plugin list, and leaving it out is how somebody spends an
- * afternoon wondering where it went.
+ * A system that is switched on and waiting for a setting, or switched off
+ * outright, is in the instance list and not the serving one. Leaving either
+ * out is how somebody spends an afternoon wondering where it went -- and how a
+ * host whose systems are all switched off came to read "Nothing is set up
+ * yet." A removal waiting to be restored is the one thing left out; it is
+ * gone, and the Plugins page is where it comes back.
  */
 function systemRows(
-  plugins?: Plugin[],
+  serving?: Plugin[],
   instances?: PluginInstance[],
   summary?: CallSummary,
 ): SystemRow[] {
-  if (!plugins && !instances) return [];
+  if (!serving && !instances) return [];
   const calls = new Map((summary?.plugins ?? []).map((p) => [p.plugin, p.calls]));
-  const rows: SystemRow[] = (plugins ?? []).map((p) => ({
+  const rows: SystemRow[] = (serving ?? []).map((p) => ({
     name: p.name,
     tone: healthTone(p.health),
     state: p.health === "healthy" ? "working"
@@ -417,65 +479,67 @@ function systemRows(
 
   const listed = new Set(rows.map((r) => r.name));
   for (const i of instances ?? []) {
-    if (listed.has(i.name) || !i.enabled || i.mounted || i.removed) continue;
-    rows.push({ name: i.name, tone: "attention", state: "waiting on settings" });
+    if (listed.has(i.name) || i.mounted || i.removed) continue;
+    rows.push(i.enabled
+      ? { name: i.name, tone: "attention", state: "waiting on settings" }
+      : { name: i.name, tone: "neutral", state: "switched off" });
   }
 
   const rank: Record<Tone, number> = { problem: 0, attention: 1, info: 2, neutral: 3, good: 4 };
   return rows.sort((a, b) => rank[a.tone] - rank[b.tone] || a.name.localeCompare(b.name));
 }
 
-function Systems({ rows, counted }: { rows: SystemRow[]; counted: boolean }) {
+function Systems({ rows, hours }: { rows: SystemRow[]; hours?: number }) {
   if (rows.length === 0) return null;
 
   return (
     <Section
       title="Systems"
-      description={counted ? "Calls counted over the last 24 hours." : undefined}
+      description={hours ? `Calls counted over the last ${windowWords(hours)}.` : undefined}
     >
-      <Card className="h-full">
-        <CardContent>
-          <ul className="space-y-2.5">
-            {rows.map((r) => (
-              <li key={r.name} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
-                <StatusDot tone={r.tone} />
-                <Link
-                  to={`/plugins/${encodeURIComponent(r.name)}`}
-                  className="font-medium hover:underline"
-                >
-                  {r.name}
-                </Link>
-                <span className="text-muted-foreground">{r.state}</span>
-                {r.calls !== undefined && (
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-                    {number(r.calls)} calls
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </CardContent>
-      </Card>
+      <ul className="space-y-2.5">
+        {rows.map((r) => (
+          <li key={r.name} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+            <StatusDot tone={r.tone} />
+            <Link
+              to={`/plugins/${encodeURIComponent(r.name)}`}
+              className="font-medium hover:underline"
+            >
+              {r.name}
+            </Link>
+            <span className="text-muted-foreground">{r.state}</span>
+            {r.calls !== undefined && (
+              <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
+                {number(r.calls)} calls
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
     </Section>
   );
 }
 
 /* -------------------------------------------------------------------------- */
 
-/** What one connector is doing, in the words the Tunnels page uses. */
+/**
+ * What one connector is doing, in the same lower-case shorthand the systems
+ * beside it use. These are labels in a list rather than sentences; the whole
+ * reading, with what to do about it, is on the Tunnels page.
+ */
 function connectorState(t: TunnelStatus): { tone: Tone; state: string } {
-  if (t.upstream === "missing") return { tone: "problem", state: "Pointing at a tunnel it cannot use" };
+  if (t.upstream === "missing") return { tone: "problem", state: "not in this account" };
   if (t.state === "failed") {
     return t.next_retry_at
-      ? { tone: "attention", state: "Down, trying again" }
-      : { tone: "problem", state: "Stopped" };
+      ? { tone: "attention", state: "down, trying again" }
+      : { tone: "problem", state: "stopped" };
   }
-  if (t.degraded) return { tone: "attention", state: "Nothing getting through" };
+  if (t.degraded) return { tone: "attention", state: "nothing getting through" };
   switch (t.state) {
-    case "connected": return { tone: "good", state: "Ready" };
-    case "starting": return { tone: "info", state: "Connecting" };
-    case "disabled": return { tone: "neutral", state: "Switched off" };
-    default: return { tone: "neutral", state: "Stopped" };
+    case "connected": return { tone: "good", state: "ready" };
+    case "starting": return { tone: "info", state: "connecting" };
+    case "disabled": return { tone: "neutral", state: "off" };
+    default: return { tone: "neutral", state: "stopped" };
   }
 }
 
@@ -484,38 +548,35 @@ function Connectors({ tunnels }: { tunnels?: TunnelStatus[] }) {
 
   return (
     <Section title="Connectors">
-      <Card className="h-full">
-        <CardContent>
-          {tunnels.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No connector is set up. ChatGPT reaches this host through one.
-            </p>
-          ) : (
-            <ul className="space-y-2.5">
-              {tunnels.map((t) => {
-                const reading = connectorState(t);
-                return (
-                  <li
-                    key={t.tunnel_id ?? t.plugin ?? "all"}
-                    className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm"
-                  >
-                    <StatusDot tone={reading.tone} />
-                    <Link to="/tunnels" className="font-medium hover:underline">
-                      {t.plugin || "everything"}
-                    </Link>
-                    <span className="text-muted-foreground">{reading.state}</span>
-                    {t.requests !== undefined && t.requests > 0 && (
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-                        {number(t.requests)} requests
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+      {tunnels.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No connector is set up yet. Set one up on{" "}
+          <Link to="/tunnels" className="text-primary hover:underline">Tunnels</Link>.
+        </p>
+      ) : (
+        <ul className="space-y-2.5">
+          {tunnels.map((t) => {
+            const reading = connectorState(t);
+            return (
+              <li
+                key={t.tunnel_id ?? t.plugin ?? "all"}
+                className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm"
+              >
+                <StatusDot tone={reading.tone} />
+                <Link to="/tunnels" className="font-medium hover:underline">
+                  {t.plugin || "everything"}
+                </Link>
+                <span className="text-muted-foreground">{reading.state}</span>
+                {t.requests !== undefined && t.requests > 0 && (
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
+                    {number(t.requests)} requests
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </Section>
   );
 }
@@ -649,35 +710,31 @@ function WhoIsCalling({ callers }: { callers?: Caller[] }) {
 
   return (
     <Section title="Who has been calling" description="The last seven days.">
-      <Card className="h-full">
-        <CardContent>
-          {callers.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nobody has called yet.</p>
-          ) : (
-            <ul className="space-y-2.5">
-              {callers.slice(0, 5).map((c) => (
-                <li key={c.principal} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
-                  {/* The principal as it is stored, not prettied: it is what
-                      somebody types into a filter and what a key is revoked
-                      by, and the Activity page names it the same way. */}
-                  <Link
-                    to={`/activity?principal=${encodeURIComponent(c.principal)}`}
-                    className="min-w-0 truncate font-medium hover:underline"
-                  >
-                    {c.principal}
-                  </Link>
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-                    {number(c.calls)} calls
-                    {c.errors > 0 && (
-                      <span className="text-problem"> · {number(c.errors)} failed</span>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+      {callers.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Nobody has called yet.</p>
+      ) : (
+        <ul className="space-y-2.5">
+          {callers.slice(0, 5).map((c) => (
+            <li key={c.principal} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+              {/* The principal as it is stored, not prettied: it is what
+                  somebody types into a filter and what a key is revoked by,
+                  and the Activity page names it the same way. */}
+              <Link
+                to={`/activity?principal=${encodeURIComponent(c.principal)}`}
+                className="min-w-0 truncate font-medium hover:underline"
+              >
+                {c.principal}
+              </Link>
+              <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
+                {number(c.calls)} calls
+                {c.errors > 0 && (
+                  <span className="text-problem"> · {number(c.errors)} failed</span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </Section>
   );
 }
@@ -695,25 +752,21 @@ function Lately({ records }: { records?: AuditRecord[] }) {
         </Link>
       }
     >
-      <Card className="h-full">
-        <CardContent>
-          {records.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nothing recorded yet.</p>
-          ) : (
-            <ul className="space-y-2">
-              {records.map((r) => (
-                <li key={r.seq} className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                  <span className="w-28 shrink-0 text-xs text-muted-foreground tabular-nums">
-                    {when(r.at)}
-                  </span>
-                  <span className="min-w-0 flex-1">{describeEvent(r)}</span>
-                  <span className="text-xs text-muted-foreground">{who(r.actor)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+      {records.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Nothing recorded yet.</p>
+      ) : (
+        <ul className="space-y-2">
+          {records.map((r) => (
+            <li key={r.seq} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+              <span className="w-28 shrink-0 text-xs text-muted-foreground tabular-nums">
+                {when(r.at)}
+              </span>
+              <span className="min-w-0 flex-1">{describeEvent(r)}</span>
+              <span className="text-xs text-muted-foreground">{who(r.actor)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </Section>
   );
 }

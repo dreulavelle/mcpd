@@ -58,7 +58,7 @@ export function attention(input: {
   if (input.unknown.length > 0) {
     out.push({
       key: "unknown", tone: "attention",
-      text: `${plural(input.unknown.length, "change", "changes")} ended in an unknown state. Each may have landed; read the target before proposing it again.`,
+      text: `${plural(input.unknown.length, "change", "changes")} ended in an unknown state. Each may have landed; check the system before proposing it again.`,
       to: "/approvals?state=indeterminate", linkLabel: "See them",
     });
   }
@@ -115,7 +115,7 @@ export function attention(input: {
     if (s.pending > 0) {
       out.push({
         key: `pending:${s.name}`, tone: "attention",
-        text: `${s.name} offers ${plural(s.pending, "tool", "tools")} nobody has classified yet. Unclassified tools are not served.`,
+        text: `${s.name} offers ${plural(s.pending, "tool", "tools")} nobody has allowed yet. Tools that are not allowed are not served.`,
         to: `/plugins/${encodeURIComponent(s.name)}`, linkLabel: s.name,
       });
     }
