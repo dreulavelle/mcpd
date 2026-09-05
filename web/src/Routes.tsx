@@ -151,7 +151,7 @@ function Gate({ path, children }: { path: string; children: ReactNode }) {
     <>
       <PageHeader title="Not for this account" />
       <Notice tone="problem">
-        This part of the console needs the <code className="font-mono">{required}</code>{" "}
+        This part of the dashboard needs the <code className="font-mono">{required}</code>{" "}
         permission, which your account does not hold. Ask whoever manages
         access here if you need it.
       </Notice>
@@ -164,7 +164,7 @@ function NotFound() {
     <>
       <PageHeader title="Nothing here" />
       <Notice tone="neutral">
-        That address does not match anything in this console. Pick a section
+        That address does not match anything in this dashboard. Pick a section
         from the sidebar.
       </Notice>
     </>
