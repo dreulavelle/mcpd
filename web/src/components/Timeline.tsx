@@ -68,17 +68,25 @@ export function TimelineItem({ mark, severed = false, muted = false, last = fals
     <li className={cn("grid gap-x-3", RAIL_COLUMN)}>
       <div className="relative flex justify-center" aria-hidden="true">
         {!last && (
-          <span
-            className={cn(
-              "absolute top-4 bottom-0 left-1/2 -translate-x-1/2",
-              severed
-                ? "border-l border-dashed border-problem"
-                : "w-px bg-border",
-            )}
-          />
+          <span className="absolute top-4 bottom-0 left-1/2 w-px -translate-x-1/2 bg-border" />
         )}
-        {/* On the page's own ground, so the line reads as passing behind it. */}
-        <span className={cn("relative rounded-full bg-background p-0.5", muted && "opacity-70")}>
+        {/*
+          On the page's own ground, so the line reads as passing behind it.
+
+          A break is drawn on the mark rather than on the segment beneath it. A
+          change is one card at its newest entry's position, so the item below
+          any given one is not reliably the record's previous entry, and a
+          dashed length of rail between them would be pointing at a neighbour
+          it cannot vouch for. The ring names the entry, which is the thing the
+          check actually found.
+        */}
+        <span
+          className={cn(
+            "relative rounded-full bg-background p-0.5",
+            severed && "ring-2 ring-problem",
+            muted && "opacity-70",
+          )}
+        >
           {mark}
         </span>
       </div>
@@ -282,25 +290,32 @@ export function ChangeFields({ changes }: {
 }
 
 /**
- * The break in the chain, drawn where the check found it.
+ * The break in the chain, drawn against the entry the check named.
  *
  * Tamper-evidence that is only a sentence at the top of the page is a claim.
+ *
+ * It says "the one before it" -- meaning the entry before it in the record --
+ * and never "the one below it". A change is drawn as one card at its newest
+ * entry's position, so what is below any given item on screen is not reliably
+ * the record's own previous entry, and a note that pointed at the screen would
+ * name the wrong neighbour. The marker stays on the exact entry; only the
+ * spatial claim goes.
  */
 export function SeveredNote() {
   return (
     <p className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-problem">
-      <Unlink className="size-3.5" aria-hidden="true" />
-      This entry does not follow the one below it.
+      <Unlink className="size-3.5 shrink-0" aria-hidden="true" />
+      This entry does not follow the one before it.
     </p>
   );
 }
 
-/** Entries that were between this one and the next, and are not there now. */
+/** Entries that were in the record between this one and the one before it. */
 export function GapNote({ missing }: { missing: number }) {
   return (
     <p className="mt-1.5 text-xs text-muted-foreground">
-      {missing} {missing === 1 ? "entry" : "entries"} between here and the next
-      one {missing === 1 ? "has" : "have"} been removed.
+      {missing} {missing === 1 ? "entry" : "entries"} between this one and the
+      one before it {missing === 1 ? "has" : "have"} been removed.
     </p>
   );
 }

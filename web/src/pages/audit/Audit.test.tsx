@@ -240,7 +240,7 @@ describe("the audit trail", () => {
   it("shows the break where it happened, as well as saying so", async () => {
     mount(BUSY_DAY, { intact: false, broken_at: 7 });
     expect(await screen.findByText(/changed the record directly/)).toBeInTheDocument();
-    expect(screen.getByText(/does not follow the one below it/)).toBeInTheDocument();
+    expect(screen.getByText(/^This entry does not follow the one before it/)).toBeInTheDocument();
     expect(screen.queryByText(/Every entry follows the one before it/))
       .not.toBeInTheDocument();
   });
@@ -296,7 +296,7 @@ describe("the audit trail", () => {
       record(9, { operation_id: undefined, kind: "apikey.revoked", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
       record(4, { operation_id: undefined, kind: "apikey.created", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
     ]);
-    expect(await screen.findByText(/4 entries between here and the next one have been removed/))
+    expect(await screen.findByText(/4 entries between this one and the one before it have been removed/))
       .toBeInTheDocument();
   });
 
@@ -315,7 +315,7 @@ describe("the audit trail", () => {
     ]);
     await screen.findByText("Today");
 
-    const notes = screen.getAllByText(/between here and the next one ha(s|ve) been removed/);
+    const notes = screen.getAllByText(/between this one and the one before it ha(s|ve) been removed/);
     const total = notes.reduce((n, el) => n + Number(el.textContent!.match(/^(\d+)/)![1]), 0);
     expect(total).toBe(4);
   });
@@ -329,7 +329,7 @@ describe("the audit trail", () => {
       record(20, { at: today(9, 0), operation_id: undefined, kind: "apikey.revoked", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
       record(14, { at: yesterday(9, 0), operation_id: undefined, kind: "apikey.created", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
     ]);
-    expect(await screen.findByText(/5 entries between here and the next one have been removed/))
+    expect(await screen.findByText(/5 entries between this one and the one before it have been removed/))
       .toBeInTheDocument();
   });
 
@@ -359,7 +359,7 @@ describe("the audit trail", () => {
     expect(within(step).getByText(/The entry at this point does not follow the one before it/))
       .toBeInTheDocument();
     // And not against the card, which would name the wrong neighbour.
-    expect(screen.queryByText(/does not follow the one below it/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^This entry does not follow the one before it/)).not.toBeInTheDocument();
   });
 
   /**
@@ -418,6 +418,111 @@ describe("the audit trail", () => {
     const options = Array.from(screen.getByLabelText("System").querySelectorAll("option"))
       .map((o) => o.textContent);
     expect(options).toEqual(["Every system", "cnmaestro", "graylog"]);
+  });
+
+  /**
+   * Threading moves a change's records to its newest position, so what sits
+   * below any item on screen is not reliably the record's previous entry. No
+   * note may point at a neighbour: the marker names the entry the check
+   * found, and the words say "the one before it" -- meaning in the record.
+   */
+  it("makes no spatial claim about a break in a change among other entries", async () => {
+    mount([
+      record(30, { at: today(10, 0), operation_id: undefined, kind: "apikey.revoked", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
+      record(29, { at: today(9, 40), operation_id: "op_1", kind: "operation.succeeded", plugin: "echo", action: "label.set", detail: { verified: true } }),
+      record(28, { at: today(9, 30), operation_id: undefined, kind: "mcpserver.enabled", plugin: "graylog", detail: { enabled: true } }),
+      record(27, { at: today(9, 20), operation_id: "op_1", kind: "operation.proposed", plugin: "echo", action: "label.set" }),
+      record(26, { at: today(9, 10), operation_id: undefined, kind: "apikey.created", plugin: "key_993f", detail: { name: "ledger-refusal-test" } }),
+    ], { intact: false, broken_at: 27 });
+    await screen.findByText("Today");
+
+    expect(screen.getByText(/^This entry does not follow the one before it/))
+      .toBeInTheDocument();
+    // Nothing anywhere on the page points down the screen.
+    expect(screen.queryByText(/below it/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/the next one/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The filters live in the address so a link can be shared, which means one
+   * can arrive set to something this window holds no entry about. Filtering
+   * everything away with no control to undo it is a dead end.
+   */
+  it("draws a filter it arrived with, even when nothing in the window matches", async () => {
+    vi.spyOn(api, "audit").mockResolvedValue({ records: BUSY_DAY, count: BUSY_DAY.length });
+    vi.spyOn(api, "verifyAudit").mockResolvedValue({ intact: true, broken_at: 0 });
+    vi.spyOn(api, "users").mockResolvedValue(USERS as never);
+    vi.spyOn(api, "keys").mockResolvedValue(KEYS as never);
+    renderWith(<Audit />, {
+      session: sessionFor("admin"),
+      path: "/audit?system=graylog",
+    });
+
+    expect(await screen.findByText("Nothing matches")).toBeInTheDocument();
+    const select = screen.getByLabelText("System") as HTMLSelectElement;
+    expect(select.value).toBe("graylog");
+
+    await userEvent.selectOptions(select, "");
+    expect(await screen.findByText("Today")).toBeInTheDocument();
+  });
+
+  /**
+   * Several parts of mcpd write to the trail and a sentence calls them all
+   * "mcpd", which is what a reader wants to read. A list of choices cannot:
+   * two options with one label is a control that cannot be used.
+   */
+  it("gives every Who option a label of its own", async () => {
+    mount([
+      record(6, { operation_id: undefined, kind: "audit.pruned", actor: "system:retention", plugin: undefined, detail: {} }),
+      record(5, { operation_id: "op_1", kind: "operation.executing", actor: "system:executor", plugin: "echo", action: "label.set", detail: {} }),
+      record(4, { operation_id: "op_2", kind: "operation.expired", actor: "system:reaper", plugin: "echo", action: "label.set", detail: {} }),
+      record(3, { operation_id: undefined, kind: "chatgpt.account.added", actor: "system:account-seed", plugin: undefined, detail: { account: "Field ops" } }),
+      record(2, { operation_id: undefined, kind: "chatgpt.account.updated", actor: "system:tunnel-reconcile", plugin: undefined, detail: { account: "Field ops" } }),
+      record(1, { operation_id: undefined, kind: "mcpserver.discovered", actor: "system:rediscovery", plugin: "graylog", detail: { added: [], changed: [], removed: [] } }),
+    ]);
+    await screen.findByText("Today");
+
+    const labels = Array.from(screen.getByLabelText("Who").querySelectorAll("option"))
+      .map((o) => o.textContent);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels).toContain("mcpd, setting up an account");
+    expect(labels).toContain("mcpd, keeping tunnels in step");
+    expect(labels).not.toContain("mcpd");
+  });
+
+  /**
+   * The seal is the quietest thing on the page until it is the loudest. With
+   * nothing to seal and nothing filtered it is a rule across the page with no
+   * words in it, which reads as something missing.
+   */
+  it("draws no empty strip when the check could not run", async () => {
+    vi.spyOn(api, "audit").mockResolvedValue({ records: BUSY_DAY, count: BUSY_DAY.length });
+    vi.spyOn(api, "verifyAudit").mockRejectedValue(new Error("nope"));
+    vi.spyOn(api, "users").mockResolvedValue(USERS as never);
+    vi.spyOn(api, "keys").mockResolvedValue(KEYS as never);
+    const { container } = renderWith(<Audit />, { session: sessionFor("admin") });
+    await screen.findByText("Today");
+
+    expect(screen.queryByText(/Every entry follows the one before it/))
+      .not.toBeInTheDocument();
+    expect(container.querySelector(".border-b")).toBeNull();
+  });
+
+  /**
+   * A window that reaches back far enough to hold a change's later entries but
+   * not its proposal heads the card with its oldest loaded entry. Calling that
+   * the proposal dates the request to when somebody approved or applied it.
+   */
+  it("does not call a later step the proposal", async () => {
+    mount([
+      record(9, { at: today(9, 0), operation_id: "op_1", kind: "operation.succeeded", plugin: "echo", action: "label.set", actor: "system:executor", detail: { verified: true } }),
+      record(8, { at: yesterday(23, 50), operation_id: "op_1", kind: "operation.executing", plugin: "echo", action: "label.set", actor: "system:executor", detail: { drift: "none" } }),
+    ]);
+    await screen.findByText("Today");
+
+    expect(screen.queryByText(/Proposed on/)).not.toBeInTheDocument();
+    expect(screen.getByText(/This is the oldest entry loaded for it/))
+      .toBeInTheDocument();
   });
 
   it("says what to do when a filter matches nothing", async () => {

@@ -6,7 +6,7 @@ import { api, type AuditRecord, problemText } from "@/lib/api";
 import {
   auditCategory, auditTone, auditWords, changeRows, describeActor, EVENT_CATEGORIES,
   phraseText, pretty, relative, stepWords, when,
-  type NameBook, type Phrase,
+  type EventCategory, type NameBook, type Phrase,
 } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { Link, useQueryParam } from "@/lib/router";
@@ -174,9 +174,20 @@ export function Audit() {
       ) : (
         <>
           <div className="mt-4 flex flex-wrap items-end gap-2">
+            {/*
+              Each of these carries whatever it is set to, whether or not this
+              window holds an entry matching it. A shared link is the point of
+              keeping the filters in the address, and one that arrives filtered
+              to something outside the loaded window has to show a control that
+              says so and can be cleared -- not an empty page and a select
+              displaying "Anyone" while it filters on somebody.
+            */}
             <NativeSelect aria-label="Who" className="w-52" value={actor}
                           onChange={(e) => setActor(e.target.value)}>
               <option value="">Anyone</option>
+              {actor !== "" && !actors.includes(actor) && (
+                <option value={actor}>{actorLabel(actor, book)}</option>
+              )}
               {actors.map((a) => (
                 <option key={a} value={a}>{actorLabel(a, book)}</option>
               ))}
@@ -184,14 +195,28 @@ export function Audit() {
             <NativeSelect aria-label="What happened" className="w-52" value={category}
                           onChange={(e) => setCategory(e.target.value)}>
               <option value="">Everything</option>
+              {category !== "" && !categories.includes(category as EventCategory) && (
+                <option value={category}>
+                  {EVENT_CATEGORIES[category as EventCategory] ?? category}
+                </option>
+              )}
               {categories.map((c) => (
                 <option key={c} value={c}>{EVENT_CATEGORIES[c]}</option>
               ))}
             </NativeSelect>
-            {systems.length > 0 && (
+            {/*
+              Drawn whenever it is set, even when this window holds no entry
+              about that system. A link arriving with ?system=echo against a
+              window that reaches back no further than this morning would
+              otherwise filter everything away with no control to undo it.
+            */}
+            {(systems.length > 0 || system !== "") && (
               <NativeSelect aria-label="System" className="w-44" value={system}
                             onChange={(e) => setSystem(e.target.value)}>
                 <option value="">Every system</option>
+                {!systems.includes(system) && system !== "" && (
+                  <option value={system}>{system}</option>
+                )}
                 {systems.map((p) => <option key={p} value={p}>{p}</option>)}
               </NativeSelect>
             )}
@@ -300,7 +325,7 @@ function Entry({ item, book, day, brokenAt, missing, last }: {
       mark={<ActorMark actor={head.actor} book={book} />}
       severed={severed}
       muted={actor.housekeeping}
-      last={last && missing === 0 && !severed}
+      last={last && missing === 0}
     >
       {item.change ? (
         <ThreadCard tone={tone}>
@@ -356,14 +381,23 @@ function Step({ record, book, severed, last }: {
 }
 
 /**
- * Said only when it needs saying: a change proposed before the day it finished
- * on would otherwise show a bare time from another day under today's heading.
+ * Said only when it needs saying: a change that started before the day it
+ * finished on would otherwise show a bare time from another day under today's
+ * heading.
+ *
+ * "Proposed on" only when the entry heading the card really is the proposal.
+ * A window that reaches back far enough to hold a change's later entries but
+ * not its proposal heads the card with whatever its oldest loaded entry is,
+ * and calling that the proposal would date the request to when somebody
+ * approved or applied it.
  */
 function DayCrossing({ head, day }: { head: AuditRecord; day: string }) {
   if (dayKey(head.at) === day) return null;
   return (
     <p className="mt-1 text-xs text-muted-foreground">
-      Proposed on {when(head.at)}.
+      {head.kind === "operation.proposed"
+        ? `Proposed on ${when(head.at)}.`
+        : `This is the oldest entry loaded for it, from ${when(head.at)}.`}
     </p>
   );
 }
@@ -433,9 +467,15 @@ function ChainSeal({ broken, checkedAt, filtering, shown, loaded }: {
   shown: number;
   loaded: number;
 }) {
+  const sealed = checkedAt !== null && !broken;
+  // With nothing to seal and nothing filtered there is nothing to say, and a
+  // bordered strip with no words in it is a rule across the page that means
+  // something is missing.
+  if (!sealed && !filtering) return null;
+
   return (
     <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-b pb-3 text-xs text-muted-foreground">
-      {checkedAt && !broken && (
+      {sealed && (
         <span className="flex items-center gap-1.5">
           <ShieldCheck className="size-3.5 text-good" aria-hidden="true" />
           Every entry follows the one before it. Checked {relative(checkedAt)}.
@@ -601,6 +641,8 @@ const SYSTEM_LABELS: Record<string, string> = {
   "system:reaper": "mcpd, closing changes nobody decided",
   "system:retention": "mcpd, tidying the record",
   "system:rediscovery": "mcpd, re-reading systems",
+  "system:account-seed": "mcpd, setting up an account",
+  "system:tunnel-reconcile": "mcpd, keeping tunnels in step",
 };
 
 function actorLabel(actor: string, book: NameBook): string {
