@@ -232,8 +232,8 @@ function UsageBody({ r }: { r: Resources }) {
           help="Asked for from the host, and not always handed back."
         />
         <Stat
-          label="Jobs running" value={String(r.goroutines)}
-          help="Pieces of work mcpd is doing at once."
+          label="Concurrent tasks" value={String(r.goroutines)}
+          help="How many exist right now, including ones waiting. Not a measure of load."
         />
         <Stat label="Threads" value={r.os_threads ? String(r.os_threads) : "—"} />
         <Stat
@@ -246,7 +246,7 @@ function UsageBody({ r }: { r: Resources }) {
           label="Memory clean-ups" value={String(r.gc_cycles)}
           help={`${r.gc_pause_total_ms.toFixed(0)}ms paused in total, ${r.gc_cpu_percent.toFixed(2)}% of CPU.`}
         />
-        <Stat label="CPUs in use" value={`${r.gomaxprocs} of ${r.num_cpu}`} />
+        <Stat label="CPUs it may use" value={`${r.gomaxprocs} of ${r.num_cpu}`} />
         <Stat
           label="Memory allocated in total" value={bytes(r.total_alloc_bytes)}
           help="Every allocation since it started, including memory long since given back. It only ever goes up."
