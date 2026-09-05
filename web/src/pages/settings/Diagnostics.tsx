@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, ApiError } from "@/lib/api";
+import { api, problemText } from "@/lib/api";
 import { SettingsSection } from "./SettingsSection";
 import { Section } from "@/components/chrome";
 import { useNotify } from "@/components/toast";
@@ -37,7 +37,7 @@ function TestNotification() {
       await api.testNotification();
       notify("good", "Sent. If nothing arrives, the address answered but delivered nowhere.");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't send it.");
+      notify("problem", problemText(e, "Couldn't send it."));
     } finally {
       setBusy(false);
     }

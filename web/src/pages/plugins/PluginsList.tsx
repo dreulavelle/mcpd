@@ -1,8 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
 import { Boxes } from "lucide-react";
 import {
-  api, ApiError, type Plugin, type PluginInstance, type PluginType,
+  api,
+  type Plugin,
+  type PluginInstance,
+  type PluginType,
   type StaleRemoval,
+  problemText,
 } from "@/lib/api";
 import { when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
@@ -388,7 +392,7 @@ export function RestoreButton({ name, label, onChanged }: {
       const result = await api.restoreInstance(name);
       notify("good", result.note ?? `Restored ${name}.`);
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't restore it.");
+      notify("problem", problemText(e, "Couldn't restore it."));
     } finally {
       setBusy(false);
       onChanged();
@@ -477,7 +481,7 @@ function AddPlugin({ types, open, onOpenChange, onAdded }: {
       close(false);
       onAdded();
     } catch (e) {
-      setProblem(e instanceof ApiError ? e.detail : "Couldn't add it.");
+      setProblem(problemText(e, "Couldn't add it."));
     } finally {
       setBusy(false);
     }

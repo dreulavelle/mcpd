@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { KeyRound, MoreHorizontal } from "lucide-react";
-import {
-  api, ApiError, type ApiKey, type Grant, type Group, type Caller,
-} from "@/lib/api";
+import { api, type ApiKey, type Grant, type Group, type Caller, problemText } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { collect, describe } from "@/lib/permissions";
 import { Link } from "@/lib/router";
@@ -221,7 +219,7 @@ function KeyRow({ apiKey, activity, notify, mayWrite, onChanged, onEdit, onRotat
       onChanged();
       notify("good", "Key revoked.");
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+      setError(problemText(e, "That didn't work."));
     }
   }
 
@@ -334,7 +332,7 @@ function RotateKey({ apiKey, onClose, onRotated }: {
       const { secret } = await api.rotateKey(apiKey.id, grace);
       onRotated(secret);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't rotate that key.");
+      setError(problemText(err, "Couldn't rotate that key."));
     } finally {
       setBusy(false);
     }
@@ -407,7 +405,7 @@ function EditKey({ apiKey, groups, onClose, onSaved }: {
       });
       onSaved();
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't save that key.");
+      setError(problemText(err, "Couldn't save that key."));
     } finally {
       setBusy(false);
     }
@@ -529,7 +527,7 @@ function AddKey({ groups, onClose, onAdded }: {
       });
       onAdded(name.trim(), secret);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't add that key.");
+      setError(problemText(err, "Couldn't add that key."));
     } finally {
       setBusy(false);
     }

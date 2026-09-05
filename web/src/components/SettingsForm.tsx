@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  api, ApiError, type SettingField, type SettingGroup, type SettingsPayload,
+  api, ApiError, problemText, type SettingField, type SettingGroup, type SettingsPayload,
 } from "@/lib/api";
 import { Notice, Out } from "@/components/chrome";
 import { Chip } from "@/components/status";
@@ -62,13 +62,10 @@ export function SettingsForm({ groups, settings, links, placeholders, onSaved, r
       setClearing([]);
       onSaved();
     } catch (e) {
-      if (e instanceof ApiError) {
-        // A bad value comes back as `problems` with no `detail` at all, so
-        // falling through would show "invalid_settings" and name no field.
-        setProblems(e.problems?.length ? e.problems : [e.detail]);
-      } else {
-        setProblems(["Couldn't save. Is mcpd still running?"]);
-      }
+      // A bad value comes back as `problems` with no `detail` at all, so
+      // falling through would show "invalid_settings" and name no field.
+      if (e instanceof ApiError && e.problems?.length) setProblems(e.problems);
+      else setProblems([problemText(e, "Couldn't save. Is mcpd still running?")]);
       notify("problem", "Nothing was saved.");
     } finally {
       setBusy(false);

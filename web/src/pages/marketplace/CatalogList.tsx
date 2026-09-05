@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LayoutGrid, List, RefreshCw, Search, Store } from "lucide-react";
-import { ApiError } from "@/lib/api";
+import { problemText } from "@/lib/api";
 import { relative, when } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Link } from "@/lib/router";
@@ -732,5 +732,5 @@ const EntryRow = memo(function EntryRow({ entry, addedAs, picking, disabled, onA
 });
 
 function message(e: unknown, fallback: string): string {
-  return e instanceof ApiError ? e.detail : fallback;
+  return problemText(e, fallback);
 }

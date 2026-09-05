@@ -4,8 +4,14 @@ import {
   isOpenAIReason, OpenAIPermissionDialog, type OpenAIReason,
 } from "@/components/openai-permission";
 import {
-  api, ApiError,
-  type ChatGPTAccount, type OpenAITunnel, type ToolCall, type TunnelInfo, type TunnelStatus,
+  api,
+  ApiError,
+  type ChatGPTAccount,
+  type OpenAITunnel,
+  type ToolCall,
+  type TunnelInfo,
+  type TunnelStatus,
+  problemText,
 } from "@/lib/api";
 import { relative, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
@@ -680,7 +686,7 @@ export function showFailure(
     onRefused({ reason: e.code, detail: e.detail });
     return;
   }
-  notify("problem", e instanceof ApiError ? e.detail : fallback);
+  notify("problem", problemText(e, fallback));
 }
 
 /**

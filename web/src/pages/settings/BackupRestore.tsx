@@ -1,7 +1,11 @@
 import { useCallback, useRef, useState, type FormEvent } from "react";
 import {
-  api, ApiError, downloadBackup, stageRestore,
-  type BackupPending, type BackupStatus,
+  api,
+  downloadBackup,
+  stageRestore,
+  type BackupPending,
+  type BackupStatus,
+  problemText,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
@@ -36,7 +40,7 @@ export function BackupRestore() {
     api.backupStatus()
       .then((s) => { setStatus(s); setError(""); })
       .catch((e) => setError(
-        e instanceof ApiError ? e.detail : "Couldn't read the backup status."));
+        problemText(e, "Couldn't read the backup status.")));
   }, []);
   usePoll(load, 60_000);
 
@@ -84,7 +88,7 @@ function Staged({ pending, onChanged }: {
       notify("good", done);
       onChanged();
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "That didn't work.");
+      notify("problem", problemText(e, "That didn't work."));
     } finally {
       setBusy(false);
     }
@@ -146,7 +150,7 @@ function TakeBackup({ status }: { status: BackupStatus }) {
       notify("good", "Backup downloaded.");
     } catch (e) {
       notify("problem",
-        e instanceof ApiError ? e.detail : "Couldn't write the backup.");
+        problemText(e, "Couldn't write the backup."));
     } finally {
       setBusy(false);
     }
@@ -284,7 +288,7 @@ function Restore({ status, onStaged }: {
       onStaged();
     } catch (e) {
       notify("problem",
-        e instanceof ApiError ? e.detail : "Couldn't read that archive.");
+        problemText(e, "Couldn't read that archive."));
     } finally {
       setBusy(false);
     }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScrollText, ShieldAlert, Unlink } from "lucide-react";
-import { api, ApiError, type AuditRecord } from "@/lib/api";
+import { api, type AuditRecord, problemText } from "@/lib/api";
 import { describeEvent, pretty, when, who } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { Link } from "@/lib/router";
@@ -317,7 +317,7 @@ function ClearHistory({ disabled, onCleared }: {
       const r = await api.clearAudit();
       notify("good", `Cleared ${r.removed} ${r.removed === 1 ? "entry" : "entries"}.`);
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't clear it.");
+      notify("problem", problemText(e, "Couldn't clear it."));
     } finally {
       setBusy(false);
       onCleared();

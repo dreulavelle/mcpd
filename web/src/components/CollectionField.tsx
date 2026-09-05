@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, type SettingField, type SettingRow } from "@/lib/api";
+import { api, ApiError, type SettingField, type SettingRow, problemText } from "@/lib/api";
 import { Notice } from "@/components/chrome";
 import { useConfirm } from "@/components/confirm";
 import { Chip } from "@/components/status";
@@ -37,7 +37,7 @@ export function CollectionField({ field, readOnly }: { field: SettingField; read
   const load = useCallback(() => {
     api.settingRows(field.key)
       .then((r) => { setRows(r.rows); setProblem(null); })
-      .catch((e) => setProblem(e instanceof ApiError ? e.detail : "Couldn't load the rows."));
+      .catch((e) => setProblem(problemText(e, "Couldn't load the rows.")));
   }, [field.key]);
   useEffect(load, [load]);
 
@@ -54,7 +54,7 @@ export function CollectionField({ field, readOnly }: { field: SettingField; read
       notify("good", `Removed ${name}.`);
       load();
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't remove it.");
+      notify("problem", problemText(e, "Couldn't remove it."));
     }
   }
 
@@ -190,8 +190,8 @@ function RowDialog({ field, row, onClose, onSaved }: {
       notify("good", "Saved.");
       onSaved();
     } catch (e) {
-      if (e instanceof ApiError) setProblems(e.problems?.length ? e.problems : [e.detail]);
-      else setProblems(["Couldn't save. Is mcpd still running?"]);
+      if (e instanceof ApiError && e.problems?.length) setProblems(e.problems);
+      else setProblems([problemText(e, "Couldn't save. Is mcpd still running?")]);
     } finally {
       setBusy(false);
     }

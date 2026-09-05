@@ -1,6 +1,11 @@
 import { useState, type ReactNode } from "react";
 import {
-  api, ApiError, type AuthOptions, type ProviderName, type Session,
+  api,
+  ApiError,
+  type AuthOptions,
+  type ProviderName,
+  type Session,
+  problemText,
 } from "@/lib/api";
 import { consumeSSOOutcome } from "@/lib/sso";
 import { Notice } from "@/components/chrome";
@@ -127,7 +132,7 @@ function ProviderButtons({ providers, onProblem }: {
       window.location.assign(authorization_url);
     } catch (e) {
       setBusy("");
-      onProblem(e instanceof ApiError ? e.detail : "Couldn't start that sign-in.");
+      onProblem(problemText(e, "Couldn't start that sign-in."));
     }
   }
 
@@ -285,7 +290,7 @@ function SignUp({ onDone, onCancel }: {
     try {
       onDone(await api.register(email.trim(), password));
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't reach mcpd. Is it running?");
+      setError(problemText(err, "Couldn't reach mcpd. Is it running?"));
     } finally {
       setBusy(false);
     }
