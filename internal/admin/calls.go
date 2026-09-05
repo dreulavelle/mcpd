@@ -61,7 +61,8 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 
 	calls, err := s.opts.Calls.Calls(r.Context(), filter)
 	if err != nil {
-		s.writeError(w, r, http.StatusInternalServerError, err.Error())
+		s.writeProblem(w, r, http.StatusInternalServerError, err,
+			"the record of tool calls could not be read")
 		return
 	}
 
@@ -99,7 +100,8 @@ func (s *Server) handleListCallers(w http.ResponseWriter, r *http.Request) {
 
 	callers, err := s.opts.Calls.Callers(r.Context(), since)
 	if err != nil {
-		s.writeError(w, r, http.StatusInternalServerError, err.Error())
+		s.writeProblem(w, r, http.StatusInternalServerError, err,
+			"the record of tool calls could not be read")
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
@@ -129,7 +131,8 @@ func (s *Server) handleCallSummary(w http.ResponseWriter, r *http.Request) {
 
 	summary, err := s.opts.Calls.Summary(r.Context(), since, time.Hour, hours)
 	if err != nil {
-		s.writeError(w, r, http.StatusInternalServerError, err.Error())
+		s.writeProblem(w, r, http.StatusInternalServerError, err,
+			"the record of tool calls could not be read")
 		return
 	}
 

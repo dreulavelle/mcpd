@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -20,6 +21,8 @@ type fakeCalls struct {
 	calls   []sqlite.ToolCall
 	callers []sqlite.CallerSummary
 	summary sqlite.CallSummary
+	// err, when set, is what every read answers with.
+	err error
 	// filter records what the handler passed through, so a test can check the
 	// query string was read rather than only that a response came back.
 	filter  sqlite.ToolCallFilter
@@ -30,17 +33,17 @@ type fakeCalls struct {
 
 func (f *fakeCalls) Calls(_ context.Context, filter sqlite.ToolCallFilter) ([]sqlite.ToolCall, error) {
 	f.filter = filter
-	return f.calls, nil
+	return f.calls, f.err
 }
 
 func (f *fakeCalls) Callers(_ context.Context, since time.Time) ([]sqlite.CallerSummary, error) {
 	f.since = since
-	return f.callers, nil
+	return f.callers, f.err
 }
 
 func (f *fakeCalls) Summary(_ context.Context, since time.Time, step time.Duration, buckets int) (sqlite.CallSummary, error) {
 	f.since, f.step, f.buckets = since, step, buckets
-	return f.summary, nil
+	return f.summary, f.err
 }
 
 func newCallsServer(t *testing.T, accounts Accounts, ledger CallLedger) *Server {
@@ -250,6 +253,29 @@ func TestCallSummaryPassesTheBucketsThrough(t *testing.T) {
 	for _, want := range []string{`"total":4`, `"errors":1`, `"denied":0`, `"plugin":"graylog"`, `"ok":3`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body has no %s: %s", want, body)
+		}
+	}
+}
+
+// A wrapped storage error is a sentence for a log, not for a browser. It said
+// "sqlite: summarise calls by hour: database is locked" to whoever asked.
+func TestCallsAnswerAFailedReadWithASentence(t *testing.T) {
+	accounts := newFakeAccounts()
+	ledger := &fakeCalls{err: errors.New("sqlite: summarise calls by hour: database is locked")}
+	s := newCallsServer(t, accounts, ledger)
+
+	for _, path := range []string{"/api/calls", "/api/calls/callers", "/api/calls/summary"} {
+		w := asAdmin(t, s, accounts, http.MethodGet, path, "")
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("GET %s = %d, want 500", path, w.Code)
+			continue
+		}
+		body := w.Body.String()
+		if strings.Contains(body, "sqlite:") || strings.Contains(body, "database is locked") {
+			t.Errorf("GET %s put the storage error in the body: %s", path, body)
+		}
+		if !strings.Contains(body, "the record of tool calls could not be read") {
+			t.Errorf("GET %s = %s, want the handler's own sentence", path, body)
 		}
 	}
 }

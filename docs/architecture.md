@@ -901,11 +901,13 @@ cache and its own upstream latency and nothing else, so an integration cannot
 invent series this host then has to carry.
 
 `GET /api/calls/summary?hours=24` is the one series the dashboard draws for
-itself: the tool-call ledger counted by wall-clock hour and by system, zero
-filled so the window always has as many buckets as it asked for. The buckets
-are aligned to the clock rather than to now, so a bar labelled 14:00 holds the
-same calls whenever the page is opened; `hours` is capped at a week, because a
-year of hourly buckets is not a shape anything draws.
+itself: the tool-call ledger counted by hour and by system, zero filled so the
+window always has as many buckets as it asked for. The buckets are aligned to
+the clock rather than to now, so a bar holds the same calls whenever the page
+is opened rather than shifting on every reload. They are whole UTC hours, which
+is the reader's own hour wherever the offset from UTC is a whole number of them
+and half an hour out in the few places it is not. `hours` is capped at a week,
+because a year of hourly buckets is not a shape anything draws.
 
 ## Where configuration lives
 
