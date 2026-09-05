@@ -433,6 +433,110 @@ func TestRemoveInstance_ForgetsAFileDefinedPluginsSettings(t *testing.T) {
 	}
 }
 
+// A value stored under a key the type no longer declares -- a renamed field, or
+// a whole type this build does not have -- used to survive a removal, because
+// the wipe walked the type's field list. An encrypted credential outliving the
+// plugin under a name somebody can use again is the failure the removal exists
+// to prevent, so it goes by namespace instead.
+func TestRemoveInstance_ForgetsAKeyTheTypeNoLongerDeclares(t *testing.T) {
+	a := instanceApp(t)
+	ctx := context.Background()
+
+	if err := a.AddInstance(ctx, "user:test", "gone", "cnmaestro"); err != nil {
+		t.Fatal(err)
+	}
+	declared := "plugins.gone.base_url"
+	orphan := "plugins.gone.legacy_token"
+	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
+		{Key: declared, Value: `"https://x.test"`},
+		{Key: orphan, Value: `"a credential nothing declares any more"`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The neighbour whose name merely starts the same way stays: without the
+	// trailing dot the prefix would take it too.
+	if err := a.AddInstance(ctx, "user:test", "gone-two", "cnmaestro"); err != nil {
+		t.Fatal(err)
+	}
+	neighbour := "plugins.gone-two.base_url"
+	if err := a.settings.Apply(ctx, "user:test", settingsChange(neighbour, `"https://y.test"`)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err != nil {
+		t.Fatalf("RemoveInstance: %v", err)
+	}
+	for _, key := range []string{declared, orphan} {
+		if _, ok, _ := a.settings.Get(ctx, key); ok {
+			t.Errorf("%s outlived the removal", key)
+		}
+	}
+	if _, ok, _ := a.settings.Get(ctx, neighbour); !ok {
+		t.Error("the removal took a setting belonging to another plugin")
+	}
+}
+
+// The wipe runs before the override, so a failure leaves the plugin exactly as
+// it was rather than removed with its credentials still stored -- which is a
+// state whose only route out is a second removal that the old code refused.
+func TestRemoveInstance_AFailedWipeRemovesNothing(t *testing.T) {
+	ctx := context.Background()
+	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
+		map[string]config.PluginConfig{"gone": {Type: "cnmaestro", Enabled: true}})
+
+	key := "plugins.gone.base_url"
+	if err := a.settings.Apply(ctx, "user:test", settingsChange(key, `"https://x.test"`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reads still answer from the loaded caches; every write fails.
+	a.db.Close()
+
+	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err == nil {
+		t.Fatal("a removal whose wipe failed must not report success")
+	}
+	if got := instanceNamed(t, a, "gone"); got.Removed {
+		t.Error("the plugin was removed even though its settings could not be forgotten")
+	}
+	if _, ok, _ := a.settings.Get(ctx, key); !ok {
+		t.Error("the setting went even though the removal failed")
+	}
+}
+
+// Half a removal -- the override written, the wipe never run -- is finished by
+// removing again. Refusing with "already removed" left the credentials where
+// they were with nothing an operator could do about it from here.
+func TestRemoveInstance_FinishesAHalfDoneRemoval(t *testing.T) {
+	ctx := context.Background()
+	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
+		map[string]config.PluginConfig{"gone": {Type: "cnmaestro", Enabled: true, Required: true}})
+
+	key := "plugins.gone.base_url"
+	if err := a.settings.Apply(ctx, "user:test", settingsChange(key, `"https://x.test"`)); err != nil {
+		t.Fatal(err)
+	}
+	// The override alone, as an interrupted removal would have left it.
+	declared := instanceNamed(t, a, "gone")
+	if err := a.pluginOverrides.Remove(ctx, "user:test", "gone", a.declaredAs(declared)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.loadOverrides(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// No acknowledgement, though the file marks it required: the decision it
+	// guards was taken when the override was written.
+	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err != nil {
+		t.Fatalf("removing an already-removed plugin must finish the job: %v", err)
+	}
+	if _, ok, _ := a.settings.Get(ctx, key); ok {
+		t.Error("the leftover setting survived the second removal")
+	}
+	if got := instanceNamed(t, a, "gone"); !got.Removed {
+		t.Error("the second removal put the plugin back")
+	}
+}
+
 // A disabled instance stays configured and stops being mounted.
 func TestSetInstanceEnabled(t *testing.T) {
 	a := instanceApp(t)

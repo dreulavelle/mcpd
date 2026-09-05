@@ -246,11 +246,17 @@ func (a *App) AddInstance(ctx context.Context, actor, name, typeName string) err
 
 // RemoveInstance takes a plugin off this host and forgets what it held.
 //
-// However it was defined, the removal keeps nothing: every setting its type
-// declares and every row of its table settings goes, credentials included. A
-// name that comes back is set up from scratch. Keeping them so that a later
-// restore came back "as it was" meant a credential outliving the decision to
-// stop using it, and that a name reused later could silently inherit it.
+// However it was defined, the removal keeps nothing this host stored: every
+// setting under the instance's name and every row of its table settings goes,
+// credentials included. Keeping them so that a later restore came back "as it
+// was" meant a credential outliving the decision to stop using it, and a name
+// reused later could silently inherit it.
+//
+// What the configuration file itself supplies under `settings:` is the
+// exception, and it is not one this host can make: that file is not written
+// here, so a value in it comes back with the plugin. Everything a person typed
+// into the dashboard is gone. Anything saying otherwise to an operator is
+// wrong in one direction or the other, so both halves are said.
 //
 // What differs by origin is the record, not the wipe. An instance added in the
 // dashboard is deleted outright. One declared in the configuration file cannot
@@ -260,7 +266,11 @@ func (a *App) AddInstance(ctx context.Context, actor, name, typeName string) err
 // declaration is overridden instead: a row records the removal, every read
 // from now on ignores the file's entry for that name, and a restart changes
 // nothing. The file still lists it, so it can be added again from that
-// declaration -- empty.
+// declaration, carrying only what the file itself provides.
+//
+// Removing something already removed is not an error. It re-runs the wipe and
+// returns, so a removal interrupted between its two halves is finished by
+// doing it again rather than refused.
 func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledgeRequired bool) error {
 	var found *Instance
 	for _, inst := range a.instances(ctx) {
@@ -282,34 +292,45 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 			"and its settings with it", name, name)
 	}
 	if found.FromFile || found.FromPluginsDir {
-		if found.Removed {
-			return fmt.Errorf("%q is already removed; add it again if you want it back", name)
-		}
 		// `required: true` is the deployment saying the host should not run
 		// without this integration, and a removal here means the next start
 		// comes up without it and reports itself healthy. That is a decision
 		// an operator is allowed to make -- the file may be declaring
 		// something that no longer exists -- but not one to make by clicking
 		// through a confirmation about something else, so it takes a second,
-		// explicit yes.
-		if found.Required && !acknowledgeRequired {
+		// explicit yes. Not asked again of something already removed: that
+		// call finishes a decision already taken.
+		if found.Required && !found.Removed && !acknowledgeRequired {
 			return fmt.Errorf("%q is marked `required: true` in the configuration "+
 				"file, which means this host is meant not to run without it. "+
 				"Removing it here overrides that, and the next start comes up "+
 				"without it. Confirm that you mean to", name)
 		}
+		// The wipe first, the override second, and the order is the recovery
+		// story. If the wipe fails nothing is removed and the operator can try
+		// again; if the override fails the plugin is still listed with nothing
+		// set up, which is visible and safe. The other order leaves a plugin
+		// removed with its credentials still stored -- the state this change
+		// exists to prevent -- and a retry with nothing to retry.
+		//
+		// The cost is that the plugin is briefly still mounted while its
+		// settings go, so a reconcile may rebuild it against an empty
+		// configuration and mark it unhealthy. The override lands immediately
+		// after and unmounts it; every reconcile reads the instance fresh, so
+		// they converge whichever order the detached ones run in.
+		if err := a.forgetInstance(ctx, actor, name); err != nil {
+			a.log.ErrorContext(ctx, "a plugin's settings could not be forgotten, so it was not removed",
+				"plugin", name, "error", err)
+			return err
+		}
+		if found.Removed {
+			// A second removal of something already removed. The override is
+			// there, so the wipe above was the whole of what was left -- which
+			// is how a removal interrupted between the two halves is finished,
+			// rather than by a refusal that leaves the settings in place.
+			return nil
+		}
 		if err := a.pluginOverrides.Remove(ctx, actor, name, a.declaredAs(*found)); err != nil {
-			return err
-		}
-		// The cache is refreshed before the wipe rather than only after it.
-		// Every read of an instance goes through it, and forgetting the
-		// settings first would have the settings watcher rebuild a plugin the
-		// store already calls removed, against the empty configuration it has
-		// just been left with.
-		if err := a.loadOverrides(ctx); err != nil {
-			return err
-		}
-		if err := a.forgetInstance(ctx, actor, *found); err != nil {
 			return err
 		}
 		return a.overridesChanged(ctx, name)
@@ -318,29 +339,30 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 	// Its own record goes in the same write as its settings: two writes could
 	// be interrupted between, leaving settings under a name with no instance
 	// for the next plugin called that to inherit.
-	return a.forgetInstance(ctx, actor, *found,
+	return a.forgetInstance(ctx, actor, name,
 		settings.Change{Key: instanceKeyPrefix + name, Delete: true})
 }
 
-// forgetInstance wipes what an instance held -- every scalar setting its type
-// declares, and every row of its table settings -- along with any further
-// changes the caller needs made in the same write.
+// forgetInstance wipes what an instance held -- every setting stored under its
+// name, and every row of its table settings -- along with any further changes
+// the caller needs made in the same write.
 //
-// One helper for both origins, because a removal keeps nothing either way: a
-// name that comes back, reused by somebody else or added again from the file's
-// declaration, must not inherit the credentials or the customers the last one
-// was given.
-func (a *App) forgetInstance(ctx context.Context, actor string, inst Instance, also ...settings.Change) error {
+// By namespace rather than by the fields the type declares today. A type this
+// build does not have has no field list to walk, and a field renamed or
+// dropped since a value was stored is in nobody's list -- either way an
+// encrypted credential would be left behind under a name that can be used
+// again, which is the whole of what a removal promises not to do.
+//
+// One helper for both origins, because a removal keeps nothing either way.
+// What the configuration file itself supplies under `settings:` is not here to
+// wipe: it is in a file mcpd does not write, and it comes back with the plugin.
+func (a *App) forgetInstance(ctx context.Context, actor, name string, also ...settings.Change) error {
 	changes := also
-	if t, ok := a.types.Lookup(inst.Type); ok {
-		for _, f := range t.Settings {
-			changes = append(changes, settings.Change{
-				Key: settings.PluginSettingKey(inst.Name, f.Key), Delete: true,
-			})
-		}
+	for key := range a.settings.WithPrefix(ctx, settings.PluginSettingPrefix(name)) {
+		changes = append(changes, settings.Change{Key: key, Delete: true})
 	}
 	if a.pluginRows != nil {
-		if err := a.pluginRows.DeleteAll(ctx, inst.Name); err != nil {
+		if err := a.pluginRows.DeleteAll(ctx, name); err != nil {
 			return err
 		}
 	}
@@ -354,9 +376,9 @@ func (a *App) forgetInstance(ctx context.Context, actor string, inst Instance, a
 // this host, empty.
 //
 // The name is what the method and its endpoint have always been called, and
-// callers depend on both, but what it does is an add: the removal forgot the
-// plugin's settings, so nothing comes back with it and it arrives needing to
-// be set up.
+// callers depend on both, but what it does is an add: the removal forgot
+// everything this host had stored for the plugin, so it comes back with only
+// what the configuration file itself provides.
 //
 // It comes back under the file's declaration, not under what the file said
 // when it was removed: the override is forgotten entirely, so whatever

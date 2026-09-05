@@ -2081,14 +2081,34 @@ that editing the entry silently resurrects the plugin, which is the failure
 this exists to prevent. A tool approval is a statement about a descriptor; a
 removal is a statement about a name.
 
-**A removal keeps nothing, whichever way the plugin was defined.** Every
-setting its type declares and every row of its table settings goes with it,
-credentials included. The settings used to be kept across a file-declared
-removal, so that a restore came back "as it was" — which meant a credential
-outliving the decision to stop using it, and a name that could silently
-inherit it. The vocabulary is add and remove rather than remove and restore:
-what a file-declared plugin gets is a way to be added again, from the
-declaration that is still in the file, and set up from scratch.
+**A removal keeps nothing this host stored, whichever way the plugin was
+defined.** Every setting under the instance's name and every row of its table
+settings goes with it, credentials included. The settings used to be kept
+across a file-declared removal, so that a restore came back "as it was" — which
+meant a credential outliving the decision to stop using it, and a name that
+could silently inherit it. The vocabulary is add and remove rather than remove
+and restore: what a file-declared plugin gets is a way to be added again, from
+the declaration that is still in the file.
+
+**By namespace, not by the type's field list.** The wipe deletes every key
+under `plugins.<name>.` rather than walking the fields the type declares today.
+A type this build does not have declares nothing, and a field renamed or
+dropped since a value was stored is in nobody's list — either way an encrypted
+credential would be left under a name that can be used again, which is the one
+thing the removal promises not to do. The trailing dot is what keeps
+`plugins.nas.` off `nas-backup`.
+
+**The wipe commits before the override.** A failure then leaves the plugin
+exactly as it was, and the operator can try again. The other order leaves it
+removed with its credentials still stored — the state this exists to prevent —
+so removing something already removed is not refused: it re-runs the wipe and
+returns, which is how a removal interrupted between its two halves is finished.
+
+**What the file itself supplies is not this host's to forget.** A declaration
+may carry a `settings:` block, and `resolveFields` falls back to it, so a
+plugin added back from the file comes back with whatever that block provides.
+Every sentence an operator reads says both halves: what was entered here is
+forgotten, and what the file provides stays.
 
 **Added back to the file, not to a snapshot.** Adding one back forgets the
 override entirely, so what returns is whatever the file declares now rather
