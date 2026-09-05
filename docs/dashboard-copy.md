@@ -67,6 +67,7 @@ One word per thing, everywhere. Where two were in use, the left column won.
 | system | upstream, target, the far end |
 | working / having trouble / not working | healthy, degraded, unhealthy |
 | serving | mounted |
+| allow (a tool) | classify, sort, approve, review |
 | connection | tunnel client |
 | dashboard | console |
 | what was sent | payload |
@@ -74,5 +75,6 @@ One word per thing, everywhere. Where two were in use, the left column won.
 | read the system again | re-read the target |
 | what the tool accepts | input schema |
 | how it connects | transport |
+| refused | denied |
 | address | endpoint, connect URL |
-| Refused / Not found / No answer / Their side failed | HTTP 401, 404, 408, 5xx |
+| Bad answer / Refused / Not found / No answer / Their side failed | HTTP 2xx, 401, 404, 408, 5xx |
