@@ -344,6 +344,11 @@ const (
 	// do something about, and "an account already uses that address" would
 	// send the person to look for a password the account does not have.
 	outcomeInviteExpired ssoOutcome = "invite_expired"
+	// outcomeInviteOther reports an invitation naming a different provider.
+	// Also its own code: the account has no password and has never been signed
+	// in to, so both of the other sentences here would send somebody to a
+	// credential and a page that do not exist for them.
+	outcomeInviteOther ssoOutcome = "invite_other_provider"
 )
 
 // handleSSOCallback completes a flow.
@@ -583,6 +588,15 @@ func (s *Server) offerLink(w http.ResponseWriter, r *http.Request, identity *sso
 		s.opts.Log.WarnContext(ctx, "a disabled account was met at a provider sign-in",
 			"provider", identity.Provider, "account", account.Email)
 		s.finish(w, r, "/", outcomeDisabled)
+		return
+	}
+	if account.Invited() {
+		// An invitation is still open on this row and ClaimInvite did not take
+		// it, and an expired one was answered before this. So it names a
+		// different provider -- and this account has no password and has never
+		// been signed in to, which makes both of the other sentences here
+		// instructions the person cannot carry out.
+		s.finish(w, r, "/", outcomeInviteOther)
 		return
 	}
 	if !account.HasPassword() {

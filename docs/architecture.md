@@ -475,11 +475,12 @@ the claim refuses rather than links against a hash nobody holds any more.
 already connected to this provider gets no offer at all.** The first has
 nothing to type; linking is an act by the signed-in account, and telling
 somebody to use a password the account does not have is an instruction they
-cannot carry out — so it is sent to the provider it does use. The second is the
-case this whole feature exists to notice: a subject that changed under an
-address that did not is an address reassigned at the provider, and offering to
-re-link would be adopting the account on the strength of the address by a
-slower route.
+cannot carry out — so it is sent to the provider it does use, or, when the row
+is an invitation naming another provider, to that one. The second is the case
+this whole feature exists to notice: a subject that changed under an address
+that did not is an address reassigned at the provider, and offering to re-link
+would be adopting the account on the strength of the address by a slower
+route.
 
 The key is the provider's subject, never the address. A `sub` is immutable and
 a login or an email is not — GitHub releases a login when it is changed, and

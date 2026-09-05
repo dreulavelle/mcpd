@@ -31,6 +31,9 @@ export const SSO_MESSAGES: Record<string, string> = {
     + "Sign in with the one it uses, or ask an administrator.",
   invite_expired:
     "That invitation has run out. Ask an administrator to invite you again.",
+  invite_other_provider:
+    "You were invited to sign in with a different provider. Use that one, or "
+    + "ask an administrator.",
 };
 
 /**

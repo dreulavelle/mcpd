@@ -44,6 +44,14 @@ describe("the outcome a provider round trip leaves behind", () => {
     expect(takeSSOOutcome().message).toMatch(/signs in with a different provider/i);
   });
 
+  // An invited account has never been signed in to and has no password, so
+  // both of the other sentences would name a credential and a page that do not
+  // exist for the person reading them.
+  it("sends an invited person to the provider they were invited with", () => {
+    window.history.replaceState(null, "", "/?sso_error=invite_other_provider");
+    expect(takeSSOOutcome().message).toMatch(/invited to sign in with a different provider/i);
+  });
+
   it("removes the parameter and keeps the rest of the address", () => {
     window.history.replaceState(null, "", "/profile?sso_error=state&tab=links");
     takeSSOOutcome();

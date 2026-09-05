@@ -142,6 +142,17 @@ func TestSSOCallback_WhatATakenAddressIsToldDependsOnTheAccount(t *testing.T) {
 			},
 			want: "/?sso_error=other_identity",
 		},
+		{
+			// It has no password and has never been signed in to, so both of
+			// the other sentences here would send this person to a credential
+			// and a page that do not exist for them.
+			name: "invited to sign in with a different provider",
+			account: func(u *users.User) {
+				u.PasswordHash = users.NoPassword
+				u.InviteProvider = users.ProviderEntra
+			},
+			want: "/?sso_error=invite_other_provider",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			accounts := newFakeAccounts()
