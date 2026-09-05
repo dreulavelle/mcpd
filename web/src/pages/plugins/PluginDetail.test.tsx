@@ -90,7 +90,7 @@ describe("a remote MCP server's plugin page", () => {
   it("says plainly that a pending tool is not being served", async () => {
     renderWith(<PluginDetail name="weather" />);
 
-    expect(await screen.findByText(/waiting to be\s+classified/)).toBeInTheDocument();
+    expect(await screen.findByText(/waiting for you to\s+review/)).toBeInTheDocument();
     // Twice: the filter offers the state, and the row is in it.
     expect(screen.getAllByText("Waiting on you")).toHaveLength(2);
   });

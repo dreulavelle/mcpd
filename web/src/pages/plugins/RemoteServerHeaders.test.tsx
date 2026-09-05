@@ -70,7 +70,7 @@ describe("headers an operator adds to a remote server", () => {
     renderWith(<PluginDetail name="weather" />);
 
     expect(
-      await screen.findByText(/declares no credential/i),
+      await screen.findByText(/does not name a credential/i),
     ).toBeInTheDocument();
     // The distinction the whole change exists for: offered, never asserted.
     expect(screen.getByText(/some servers need none/i)).toBeInTheDocument();
@@ -81,7 +81,7 @@ describe("headers an operator adds to a remote server", () => {
     renderWith(<PluginDetail name="weather" />);
 
     expect(await screen.findByRole("button", { name: "Add a header" })).toBeInTheDocument();
-    expect(screen.queryByText(/declares no credential/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/does not name a credential/i)).not.toBeInTheDocument();
   });
 
   it("declares a header and asks for its value elsewhere", async () => {
