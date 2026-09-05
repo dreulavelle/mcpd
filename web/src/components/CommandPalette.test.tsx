@@ -38,7 +38,22 @@ describe("the command palette", () => {
     renderWith(<CommandPalette open onOpenChange={() => undefined} onSignOut={() => undefined} />);
     expect(await screen.findByRole("option", { name: /Approvals/ })).toBeInTheDocument();
     expect(await screen.findByRole("option", { name: /graylog/ })).toBeInTheDocument();
-    expect(await screen.findByRole("option", { name: /device reboot/ })).toBeInTheDocument();
+    // The change as a sentence, the same words the approvals page uses. The
+    // palette is where somebody reaches for a proposal by name, so "device
+    // reboot" was the one name they had not been taught.
+    expect(await screen.findByRole("option", { name: /Restart the device on cnmaestro/ }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /device reboot/ })).not.toBeInTheDocument();
+  });
+
+  // The raw action is still searchable, because somebody who knows it should
+  // find the change by it; it is just not what they are shown.
+  it("still finds a change by the machine's name for it", async () => {
+    renderWith(<CommandPalette open onOpenChange={() => undefined} onSignOut={() => undefined} />);
+    await screen.findByRole("option", { name: /Restart the device on cnmaestro/ });
+    await userEvent.type(screen.getByRole("combobox"), "device.reboot");
+    expect(await screen.findByRole("option", { name: /Restart the device on cnmaestro/ }))
+      .toBeInTheDocument();
   });
 
   // A result the account cannot open is worse than no result: it would

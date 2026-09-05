@@ -35,9 +35,18 @@ export interface Operation {
   desired?: unknown;
   observed?: unknown;
   requested_by: string;
+  /**
+   * The same identity resolved against the accounts, server-side, for every
+   * session -- `renderName` falls back to the identifier itself, so a value
+   * equal to `requested_by` means nothing was resolved and the client's own
+   * words are the better answer.
+   */
+  requested_by_name?: string;
   requested_at: string;
   expires_at: string;
   approved_by?: string;
+  /** As `requested_by_name`. `system:policy` never resolves, and must not. */
+  approved_by_name?: string;
   approved_at?: string;
   /**
    * The rule that approved this with nobody asked, and the discriminator for
