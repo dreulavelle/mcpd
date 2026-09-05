@@ -83,7 +83,7 @@ const MaxNameRunes = auth.MaxLabelRunes
 // it is two keys.
 const MaxGrace = 7 * 24 * time.Hour
 
-// maxGraceWords is MaxGrace for the person who just typed too large a number.
+// maxGraceWords is MaxGrace for the person who just typed a number outside it.
 // A time.Duration prints itself as "168h0m0s", which is the same fact in a
 // form nobody says out loud. Derived rather than written twice, so a change to
 // MaxGrace carries; it is a whole number of days and the wording assumes so.
@@ -492,7 +492,7 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 // secrets ever open a key.
 func (s *Store) Rotate(ctx context.Context, actor, id string, grace time.Duration) (*Key, string, error) {
 	if grace < 0 || grace > MaxGrace {
-		return nil, "", fmt.Errorf("the grace period must be no longer than %s", maxGraceWords)
+		return nil, "", fmt.Errorf("the grace period must be between none and %s", maxGraceWords)
 	}
 	secret, err := GenerateSecret()
 	if err != nil {
