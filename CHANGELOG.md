@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0](https://github.com/dreulavelle/mcpd/compare/v0.14.1...v0.15.0) (2026-09-05)
+
+
+### Features
+
+* **flowroute:** read your customers' carrier accounts, one key each ([5ce30fc](https://github.com/dreulavelle/mcpd/commit/5ce30fc067778df67a4e29ad9d3ea7753029ce66))
+
+
+### Documentation
+
+* write down the customer roster design, and table it ([e0f0516](https://github.com/dreulavelle/mcpd/commit/e0f05166aa94ce4329d6e26e910af6c60cc21afa))
+
 ## [0.14.1](https://github.com/dreulavelle/mcpd/compare/v0.14.0...v0.14.1) (2026-09-04)
 
 
