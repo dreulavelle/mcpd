@@ -124,7 +124,7 @@ describe("the diagram", () => {
    */
   it("offers observation rather than a retry on an indeterminate outcome", () => {
     mount(operation({ state: "indeterminate", attempts: 1 }));
-    expect(screen.getByText(/Reading the target upstream settles it as:/))
+    expect(screen.getByText(/Reading the system settles it as:/))
       .toBeInTheDocument();
   });
 });
@@ -166,14 +166,14 @@ describe("the outcome proof", () => {
  * snapshots comparing equal is the shape of the bug.
  */
 describe("the drift proof", () => {
-  it("says a snapshot is held", () => {
+  it("says how it looked before was recorded", () => {
     mount(operation({ drift_checked: true }));
-    expect(screen.getByText("Snapshot held")).toBeInTheDocument();
+    expect(screen.getByText("Recorded")).toBeInTheDocument();
   });
 
   it("says nothing was compared when none was declared", () => {
     mount(operation({ drift_checked: false, assurance: "gated_call" }));
-    expect(screen.getByText("None declared")).toBeInTheDocument();
+    expect(screen.getByText("Not recorded")).toBeInTheDocument();
     expect(screen.getByText(/never ran/)).toBeInTheDocument();
   });
 });

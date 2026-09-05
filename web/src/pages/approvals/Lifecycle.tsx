@@ -276,7 +276,7 @@ function Remaining({ state, remaining }: {
       <p className="text-sm text-muted-foreground">
         {state === "indeterminate"
           // Reconciliation, not a retry.
-          ? "Still open. Reading the target upstream settles it as:"
+          ? "Still open. Reading the system settles it as:"
           : "What can still happen:"}
       </p>
       {remaining.map((s) => <Chip key={s}>{stateLabel(s)}</Chip>)}
@@ -290,15 +290,15 @@ function Proofs({ operation: op }: { operation: Operation }) {
   return (
     <dl className="grid gap-3 sm:grid-cols-2">
       <Proof
-        label="Drift"
+        label="Compared with before"
         tone={op.drift_checked ? "good" : "neutral"}
-        mark={op.drift_checked ? "Snapshot held" : "None declared"}
+        mark={op.drift_checked ? "Recorded" : "Not recorded"}
       >
         {op.drift_checked
-          ? "The plan carries a precondition snapshot, so a change underneath it is detectable."
-          : "Nothing was compared. Two absent snapshots matching is not a check that passed — it is one that never ran."}
+          ? "How the system looked beforehand was recorded, so a change made in the meantime would show up."
+          : "Nothing was compared. This is a check that never ran, not one that passed."}
       </Proof>
-      <Proof label="Outcome" tone={outcome.tone} mark={outcome.mark}>
+      <Proof label="Result" tone={outcome.tone} mark={outcome.mark}>
         {outcome.detail}
       </Proof>
     </dl>
@@ -318,28 +318,28 @@ function outcomeProof(op: Operation): {
     return {
       tone: "good",
       mark: "Confirmed",
-      detail: "mcpd re-read the target afterwards and found what was asked for.",
+      detail: "The system was read again afterwards, and it showed the change.",
     };
   }
   if (op.verified === false) {
     return {
       tone: "problem",
       mark: "Did not match",
-      detail: "mcpd re-read the target afterwards and what it found was not what was asked for.",
+      detail: "The system was read again afterwards, and it did not show the change.",
     };
   }
   if (!op.outcome_verifiable) {
     return {
       tone: "neutral",
       mark: "Not provable",
-      detail: "This kind of change declares that re-reading the target would prove nothing, so nothing was read back.",
+      detail: "Reading the system again would prove nothing for this kind of change, so nothing was read back.",
     };
   }
   return {
     tone: "neutral",
     mark: "Never checked",
     detail: op.terminal
-      ? "Nobody re-read the target, so this record says nothing either way about whether the change is in place."
+      ? "Nobody read the system again, so this record does not say whether the change is in place."
       : "It has not run yet, so there is nothing to read back.",
   };
 }
