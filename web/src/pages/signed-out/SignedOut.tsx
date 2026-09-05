@@ -10,12 +10,14 @@ import {
 import { consumeSSOOutcome } from "@/lib/sso";
 import { Notice } from "@/components/chrome";
 import { Brand } from "@/components/shell";
+import { Mark } from "@/components/mark";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ProviderMark } from "@/components/provider-mark";
+import { NetworkField } from "./NetworkField";
 
 /**
  * What this host is, for somebody who has arrived at it and is deciding
@@ -23,12 +25,13 @@ import { ProviderMark } from "@/components/provider-mark";
  *
  * Three statements rather than a description, and each one is a thing mcpd
  * actually does — the sign-in page is the first screen anybody sees, and it
- * should not be the one place that oversells.
+ * should not be the one place that oversells. Short enough to sit on one
+ * line each, so they read as a set.
  */
 const FACTS = [
-  "Each assistant reaches only the systems you allow it to.",
-  "Reads go straight through. Changes wait for you, or for a rule you wrote.",
-  "Every call is recorded, and the record cannot be edited.",
+  "Assistants reach only the systems you allow.",
+  "Reads go straight through. Changes wait for approval.",
+  "Every call is recorded, and the record can't be changed.",
 ];
 
 /**
@@ -37,8 +40,12 @@ const FACTS = [
  * Two columns on a wide window and one on a narrow. The left is decoration
  * with a job: a card alone in the middle of a 27-inch display reads as an
  * unfinished page, and the person arriving here often has not been told what
- * mcpd is. It is plain CSS — a gradient and a grid — because nothing on the
- * sign-in path should wait on a script to finish before it can be read.
+ * mcpd is. The panel is the brand's own night in both themes, with a field of
+ * linked systems behind the words that lights up where the pointer goes.
+ *
+ * The words are DOM and the panel has its colour from CSS. The field is a
+ * canvas underneath them that is allowed not to draw, so nothing on the
+ * sign-in path waits on a script to finish before it can be read.
  */
 function SignedOutCard({ error, title, children }: {
   error?: string;
@@ -46,51 +53,38 @@ function SignedOutCard({ error, title, children }: {
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-2">
+    <div className="min-h-screen lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)]">
       <aside
-        className="relative hidden overflow-hidden bg-primary p-10 text-primary-foreground lg:flex lg:flex-col lg:justify-center"
+        className="relative hidden overflow-hidden bg-panel text-panel-foreground lg:flex lg:flex-col lg:justify-between lg:border-r lg:p-12"
       >
-        {/* A grid that fades out, drawn in the foreground colour so it holds
-            up in both themes without a second definition. */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 opacity-[0.07]"
-          style={{
-            backgroundImage:
-              "linear-gradient(currentColor 1px, transparent 1px), linear-gradient(90deg, currentColor 1px, transparent 1px)",
-            backgroundSize: "44px 44px",
-            maskImage: "radial-gradient(ellipse at 30% 20%, #000 0%, transparent 75%)",
-            WebkitMaskImage: "radial-gradient(ellipse at 30% 20%, #000 0%, transparent 75%)",
-          }}
-        />
+        <NetworkField />
 
-        <div className="absolute top-10 left-10 flex items-center gap-2">
-          <span
-            aria-hidden="true"
-            className="grid size-7 place-items-center rounded-md bg-primary-foreground font-mono text-sm font-bold text-primary"
-          >
-            m
-          </span>
+        <div className="relative flex items-center gap-2.5">
+          <Mark className="size-7 text-panel-accent" />
           <span className="text-lg font-semibold tracking-tight">mcpd</span>
         </div>
 
-        <div className="relative max-w-md space-y-6">
-          <h2 className="text-2xl font-semibold leading-snug tracking-tight">
-            One way in for the assistants that reach your systems.
+        <div className="relative max-w-md space-y-3">
+          <h2 className="text-3xl font-semibold leading-tight tracking-tight text-balance">
+            Private infrastructure, connected to AI.
           </h2>
-          <ul className="space-y-3 text-sm/relaxed opacity-90">
-            {FACTS.map((fact) => (
-              <li key={fact} className="flex gap-3">
-                <span aria-hidden="true" className="mt-2 size-1.5 shrink-0 rounded-full bg-current" />
-                {fact}
-              </li>
-            ))}
-          </ul>
+          <p className="text-[15px]/relaxed text-panel-muted">
+            One gateway between your assistants and the systems inside your network.
+          </p>
         </div>
+
+        <ul className="relative max-w-md space-y-2.5 text-[15px]/relaxed text-panel-muted">
+          {FACTS.map((fact) => (
+            <li key={fact} className="flex items-baseline gap-3">
+              <span aria-hidden="true" className="size-1.5 shrink-0 translate-y-[-1px] rounded-full bg-panel-accent" />
+              {fact}
+            </li>
+          ))}
+        </ul>
       </aside>
 
-      <div className="grid place-items-center px-4 py-12">
-        <div className="w-full max-w-sm space-y-5">
+      <div className="grid place-items-center bg-background px-4 py-12">
+        <div className="w-full max-w-sm space-y-6">
           {/* The mark belongs on every window narrow enough to have lost the
               panel that carries it. */}
           <div className="flex justify-center lg:hidden">
@@ -99,7 +93,7 @@ function SignedOutCard({ error, title, children }: {
 
           <Card>
             <CardContent className="space-y-4">
-              {title && <h1 className="text-base font-semibold">{title}</h1>}
+              {title && <h1 className="text-lg font-semibold tracking-tight">{title}</h1>}
               {error && <Notice tone="problem">{error}</Notice>}
               {children}
             </CardContent>

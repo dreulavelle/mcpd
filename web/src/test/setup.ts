@@ -36,3 +36,8 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// jsdom has no canvas: its getContext logs "not implemented" and returns
+// nothing. The sign-in field asks for a context and draws only if it gets
+// one, so a null here is the supported path, minus the noise.
+HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;

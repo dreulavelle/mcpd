@@ -11,6 +11,7 @@ import { Link } from "@/lib/router";
 import { hasOwnName, signedInAs, useCanFn, useSession } from "@/lib/session";
 import { Attention, useAttention, type Item } from "@/components/Attention";
 import { Loading, Notice, PageHeader, Section } from "@/components/chrome";
+import { Masthead } from "@/components/masthead";
 import { Chip, healthTone, StatusDot, type Tone } from "@/components/status";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -148,6 +149,7 @@ export function Overview() {
   if (!loaded) {
     return (
       <>
+        <Masthead />
         <PageHeader title="Overview" />
         <Loading rows={5} />
       </>
@@ -156,6 +158,7 @@ export function Overview() {
 
   return (
     <>
+      <Masthead version={snap.resources?.version} />
       <PageHeader
         title={greeting ? `Hello, ${greeting}` : "Overview"}
         actions={can("plugins:read") && (
