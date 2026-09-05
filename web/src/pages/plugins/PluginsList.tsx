@@ -264,7 +264,12 @@ export function PluginsList() {
 function HealthSummary({ message }: { message: string }) {
   const h = parseHealth(message);
   if (h.status !== undefined) {
-    const tone = h.status >= 200 && h.status < 300 ? "good" : "problem";
+    // Never "good": this only renders for a plugin that is not healthy, so a
+    // green chip beside a broken one was the status being read on its own
+    // rather than as part of the sentence that quoted it. A 2xx there means
+    // the far end answered and the body was wrong, which is worth attention
+    // and is not a failure of theirs.
+    const tone = h.status >= 200 && h.status < 300 ? "attention" : "problem";
     // The words say what happened; the number is evidence, so it goes in the
     // title rather than into the chip a person is meant to read at a glance.
     return (
