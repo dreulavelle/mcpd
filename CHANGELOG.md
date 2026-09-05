@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.16.0](https://github.com/dreulavelle/mcpd/compare/v0.15.0...v0.16.0) (2026-09-05)
+
+
+### Features
+
+* **bookstack:** read the knowledge base, and write to it under approval ([d6f5a6a](https://github.com/dreulavelle/mcpd/commit/d6f5a6a646e52c8c4bbae9f915f329f8cb1cea78))
+
+
+### Fixes
+
+* **threecx:** two customers spelt the same are refused ([fe9ac3c](https://github.com/dreulavelle/mcpd/commit/fe9ac3c9893afb232a7ee29e0162800ef6bffbf7))
+
 ## [0.15.0](https://github.com/dreulavelle/mcpd/compare/v0.14.1...v0.15.0) (2026-09-05)
 
 
