@@ -60,7 +60,7 @@ describe("classifying a remote tool", () => {
     expect(screen.getByText("What the server says about it")).toBeInTheDocument();
     expect(screen.getByText("Read-only: yes")).toBeInTheDocument();
     expect(
-      screen.getByText(/must not rely on them/i),
+      screen.getByText(/Nothing here relies on them/i),
     ).toBeInTheDocument();
   });
 
@@ -189,7 +189,7 @@ describe("when the descriptor changed underneath", () => {
     await userEvent.click(screen.getByRole("button", { name: "Serve this tool" }));
 
     expect(
-      await screen.findByText(/it is no longer in the snapshot/i),
+      await screen.findByText(/the server no longer offers it/i),
     ).toBeInTheDocument();
   });
 });

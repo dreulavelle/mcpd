@@ -21,8 +21,8 @@ function Annotations({ tool }: { tool: MCPTool }) {
   const claims: [string, boolean | undefined][] = [
     ["Read-only", a?.readOnlyHint],
     ["Destructive", a?.destructiveHint],
-    ["Idempotent", a?.idempotentHint],
-    ["Reaches the open world", a?.openWorldHint],
+    ["Safe to repeat", a?.idempotentHint],
+    ["Can reach the internet", a?.openWorldHint],
   ];
   const stated = claims.filter(([, v]) => v !== undefined);
 
@@ -33,7 +33,7 @@ function Annotations({ tool }: { tool: MCPTool }) {
       </p>
       {stated.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          The server offered no annotations for this tool.
+          The server said nothing about this tool.
         </p>
       ) : (
         <div className="flex flex-wrap gap-1.5">
@@ -45,10 +45,9 @@ function Annotations({ tool }: { tool: MCPTool }) {
         </div>
       )}
       <p className="text-xs text-muted-foreground">
-        These are the remote server's own claims about its tool, not findings.
-        The MCP specification says a client must not rely on them, and nothing
-        in mcpd branches on them. Read the description and the schema below and
-        decide from those.
+        These are the server's own claims, not checks anybody has made. Nothing
+        here relies on them. Read the description and what the tool accepts,
+        below, and decide from those.
       </p>
     </div>
   );
@@ -134,16 +133,15 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
 
         {changed && (
           <Notice tone="attention" icon={<TriangleAlert />}>
-            <strong>This tool changed while you were reading it.</strong> The
-            decision was not recorded, because it would have been a decision
-            about the description and schema below rather than the ones the
-            server is offering now. Close this, re-read the tool, and decide
-            again.
+            <strong>This tool changed while you were reading it.</strong> Your
+            decision was not saved: it would have been about the old version,
+            not the one the server is offering now. Close this, read it again,
+            and decide.
             <span className="mt-2 block font-mono text-xs">
               was {tool.descriptor_hash.slice(0, 16)}…
               {current
                 ? ` · now ${current.descriptor_hash.slice(0, 16)}…`
-                : " · it is no longer in the snapshot"}
+                : " · the server no longer offers it"}
             </span>
             {current && <StaleDiff was={tool} now={current} />}
           </Notice>
@@ -157,8 +155,8 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
             <p className="text-sm">
               {tool.descriptor.description || (
                 <span className="text-muted-foreground">
-                  The server gave none. A tool a model is expected to choose,
-                  with nothing saying when to choose it.
+                  The server gave none, so nothing says when an assistant should
+                  use this.
                 </span>
               )}
             </p>
@@ -168,13 +166,13 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
 
           <div className="space-y-1.5">
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              Input schema
+              What the tool accepts
             </p>
             {tool.descriptor.inputSchema
               ? <CodeBlock>{pretty(tool.descriptor.inputSchema)}</CodeBlock>
               : (
                 <p className="text-sm text-muted-foreground">
-                  None given. This is the only argument validation there is.
+                  The server said nothing, so nothing checks what is sent to it.
                 </p>
               )}
           </div>
@@ -190,10 +188,10 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
           <p className="flex items-start gap-2 text-xs text-muted-foreground">
             <ShieldQuestionMark className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>
-              Your decision is recorded against this exact descriptor
+              Your decision covers this exact version of the tool
               (<code className="font-mono">{tool.descriptor_hash.slice(0, 16)}…</code>).
-              If the server changes the tool later it returns to pending and has
-              to be read again.
+              If the server changes it later, the tool comes back here to be
+              read again.
             </span>
           </p>
         </div>
@@ -234,17 +232,17 @@ function StaleDiff({ was, now }: { was: MCPTool; now: MCPTool }) {
   }
   const wasSchema = pretty(was.descriptor.inputSchema);
   const nowSchema = pretty(now.descriptor.inputSchema);
-  if (wasSchema !== nowSchema) rows.push(["Input schema", wasSchema, nowSchema]);
+  if (wasSchema !== nowSchema) rows.push(["What it accepts", wasSchema, nowSchema]);
 
   const wasNotes = pretty(was.descriptor.annotations);
   const nowNotes = pretty(now.descriptor.annotations);
-  if (wasNotes !== nowNotes) rows.push(["Annotations", wasNotes, nowNotes]);
+  if (wasNotes !== nowNotes) rows.push(["What the server says", wasNotes, nowNotes]);
 
   if (rows.length === 0) {
     return (
       <p className="mt-2 text-xs">
-        The parts shown here read the same, so the difference is elsewhere in
-        the descriptor. Re-read it from the list.
+        The parts shown here read the same, so something else about the tool
+        changed. Open it again from the list.
       </p>
     );
   }
