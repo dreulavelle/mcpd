@@ -210,7 +210,7 @@ function Body({ server, tools, toolsError, onChanged }: {
       {pending > 0 && (
         <Notice tone="attention">
           {pending} {pending === 1 ? "tool is" : "tools are"} waiting for you to
-          review, and{" "}
+          allow {pending === 1 ? "it" : "them"}, and{" "}
           {pending === 1 ? "it is not being served" : "they are not being served"}{" "}
           until you decide.
         </Notice>

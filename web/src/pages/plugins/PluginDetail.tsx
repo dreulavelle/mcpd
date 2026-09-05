@@ -159,7 +159,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
         {runtime === "mcp" && (
           <Notice tone="info">
             This server is run by somebody else. It cannot suggest changes, and
-            only the tools an administrator has sorted are served.
+            only the tools an administrator has allowed are served.
           </Notice>
         )}
 

@@ -120,7 +120,7 @@ export function ImportDialog({
           <DialogDescription>
             {seedDocument === undefined
               ? <>Paste the server's published <code className="font-mono">server.json</code>, or the <code className="font-mono">mcpServers</code> block from an editor's <code className="font-mono">mcp.json</code>. Any server in it that runs a local command is named and skipped — this host reaches servers over the network rather than running them itself.</>
-              : <>Give it a name on this host. Nothing is served until you approve its tools.</>}
+              : <>Give it a name on this host. Nothing is served until you allow its tools.</>}
           </DialogDescription>
         </DialogHeader>
 

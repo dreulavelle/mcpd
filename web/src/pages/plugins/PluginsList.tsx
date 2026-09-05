@@ -242,7 +242,7 @@ export function PluginsList() {
           {remote.length > 0 && (
             <Section
               title="Remote MCP servers"
-              description="Servers somebody else runs, added here and managed like any other plugin. They cannot suggest changes, and only the tools an administrator has sorted are served."
+              description="Servers somebody else runs, added here and managed like any other plugin. They cannot suggest changes, and only the tools an administrator has allowed are served."
               actions={mayAdd
                 ? (
                   <Link to="/marketplace" className="text-sm text-primary hover:underline">
