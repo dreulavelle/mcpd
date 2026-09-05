@@ -589,7 +589,7 @@ function Chart({ values, errors }: { values: number[]; errors: number[] }) {
       </div>
       <div className="mt-1 flex gap-3 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1"><span className="inline-block size-2 rounded-sm bg-good" />requests</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block size-2 rounded-sm bg-problem" />errors</span>
+        <span className="inline-flex items-center gap-1"><span className="inline-block size-2 rounded-sm bg-problem" />connection errors</span>
       </div>
     </div>
   );
@@ -726,7 +726,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
       <Chart values={activity} errors={errors} />
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
         <div><dt className="text-muted-foreground">Requests</dt><dd className="font-mono">{activity.reduce((a, b) => a + b, 0)}</dd></div>
-        <div><dt className="text-muted-foreground">Errors</dt><dd className="font-mono">{errors.reduce((a, b) => a + b, 0)}</dd></div>
+        <div><dt className="text-muted-foreground">Connection errors</dt><dd className="font-mono">{errors.reduce((a, b) => a + b, 0)}</dd></div>
         <div><dt className="text-muted-foreground">Last request</dt><dd>{s.last_request_at ? relative(s.last_request_at) : "none since mcpd last started"}</dd></div>
         <div><dt className="text-muted-foreground">Connected</dt><dd>{s.connected_at ? relative(s.connected_at) : "—"}</dd></div>
         <div><dt className="text-muted-foreground">Restarts since it worked</dt><dd className="font-mono">{s.attempts ?? 0}</dd></div>
