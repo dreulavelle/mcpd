@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.17.0](https://github.com/dreulavelle/mcpd/compare/v0.16.0...v0.17.0) (2026-09-05)
+
+
+### Features
+
+* **approvals:** a queue you can read, and the record behind it ([#124](https://github.com/dreulavelle/mcpd/issues/124)) ([70d838e](https://github.com/dreulavelle/mcpd/commit/70d838ed81469a4bcd0a3117d88374b96b4d27ea))
+* **audit:** a timeline of who did what ([#125](https://github.com/dreulavelle/mcpd/issues/125)) ([878793e](https://github.com/dreulavelle/mcpd/commit/878793ec9e22c7403fac1ac194af24d58e78e581))
+* **dashboard:** say what happened in plain words ([#120](https://github.com/dreulavelle/mcpd/issues/120)) ([1e8dc16](https://github.com/dreulavelle/mcpd/commit/1e8dc163021332d9a76fa73abc1a6319d0a412ad))
+* **overview:** a first screen that says what is happening ([#123](https://github.com/dreulavelle/mcpd/issues/123)) ([98c129e](https://github.com/dreulavelle/mcpd/commit/98c129eb1ad72558563187809f65483281c2c7b1))
+
+
+### Fixes
+
+* **plugins:** removing a plugin forgets its settings ([#126](https://github.com/dreulavelle/mcpd/issues/126)) ([9ab22b0](https://github.com/dreulavelle/mcpd/commit/9ab22b09df7b0da1449f95b43bce7228467e9f1c))
+* **web:** a plugin is enabled or disabled with a switch, and removed in one line ([#127](https://github.com/dreulavelle/mcpd/issues/127)) ([ea0b930](https://github.com/dreulavelle/mcpd/commit/ea0b9307df4345692f72764a83ad73457c813d21))
+
+
+### Refactoring
+
+* **dashboard:** plain words on every page ([#122](https://github.com/dreulavelle/mcpd/issues/122)) ([83bf8ce](https://github.com/dreulavelle/mcpd/commit/83bf8ce07bfc42e43c3d771e8993d228cf857098))
+
 ## [0.16.0](https://github.com/dreulavelle/mcpd/compare/v0.15.0...v0.16.0) (2026-09-05)
 
 
