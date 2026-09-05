@@ -24,6 +24,24 @@ type Registrations interface {
 	UserByIdentity(ctx context.Context, provider users.Provider, subject string) (*users.User, error)
 	IdentitiesFor(ctx context.Context, userID string) ([]users.Identity, error)
 	LinkIdentity(ctx context.Context, actor string, i users.Identity) error
+
+	// ByEmail is what the collision branch needs in order to say anything
+	// useful. It never decides who somebody is -- a matching address is the
+	// thing this whole feature refuses to treat as an identity -- it decides
+	// which of three refusals the person is shown.
+	ByEmail(ctx context.Context, email string) (*users.User, error)
+	// ClaimInvite takes up an invitation an administrator left for this
+	// address, and is refused for everything else.
+	ClaimInvite(ctx context.Context, i users.Identity) (*users.User, error)
+
+	// The half-finished offer to link a provider with the account's own
+	// password. Made at the callback, held against the browser, and completed
+	// on a route of its own.
+	OfferLink(ctx context.Context, link users.PendingLink) (token, binding string, err error)
+	PendingLinkFor(ctx context.Context, token, binding string) (*users.PendingLinkView, error)
+	ClaimPendingLink(ctx context.Context, token, binding, password string) (*users.User, error)
+	DiscardPendingLink(ctx context.Context, token, binding string) error
+
 	UnlinkIdentity(ctx context.Context, actor, userID string, provider users.Provider) error
 	PendingRegistrations(ctx context.Context) ([]*users.User, error)
 	ApproveRegistration(ctx context.Context, actor, id string, groupIDs []string) (*users.User, error)
@@ -37,6 +55,24 @@ type Registrations interface {
 // own site, which Strict would drop -- and dropping it presents as every
 // sign-in being refused for a state this host did issue.
 const ssoCookie = "mcpd_sso"
+
+// ssoLinkCookie and ssoLinkBindingCookie carry the offer to link a provider to
+// an account that already holds the address.
+//
+// Names of their own rather than a second use of ssoCookie, and that is the
+// whole point: finish() retires the flow's binding on every exit from the
+// callback, including the exit that makes this offer. An offer bound to that
+// cookie is one no browser can present -- the row is written, the screen is
+// drawn, and every request for it answers "there is nothing waiting".
+//
+// Same path and same attributes as the flow's, and SameSite=Lax is what closes
+// login CSRF on the claim: there is no session yet, so there is no CSRF token,
+// and a browser will not send either of these on a cross-site POST. Nothing
+// here checks a content type, so the JSON body is not part of that.
+const (
+	ssoLinkCookie        = "mcpd_sso_link"
+	ssoLinkBindingCookie = "mcpd_sso_link_binding"
+)
 
 // ssoCookiePath scopes the binding to the flow. It is not the session cookie
 // and has no business travelling with every request to the dashboard.
@@ -66,8 +102,57 @@ func (s *Server) clearSSOCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) setLinkCookies(w http.ResponseWriter, r *http.Request, token, binding string) {
+	for _, c := range []struct{ name, value string }{
+		{ssoLinkCookie, token}, {ssoLinkBindingCookie, binding},
+	} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     c.name,
+			Value:    c.value,
+			Path:     ssoCookiePath,
+			MaxAge:   int(users.PendingLinkTTL / time.Second),
+			HttpOnly: true,
+			Secure:   s.secureCookies(r),
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+}
+
+// clearLinkCookies retires both halves. Leaving one behind would have the next
+// request present a token with no binding, which is refused -- correctly, and
+// with a sentence about an offer the person can see no trace of.
+func (s *Server) clearLinkCookies(w http.ResponseWriter, r *http.Request) {
+	for _, name := range []string{ssoLinkCookie, ssoLinkBindingCookie} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     ssoCookiePath,
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   s.secureCookies(r),
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+}
+
 func ssoBinding(r *http.Request) string {
 	c, err := r.Cookie(ssoCookie)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+func linkToken(r *http.Request) string {
+	c, err := r.Cookie(ssoLinkCookie)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+func linkBinding(r *http.Request) string {
+	c, err := r.Cookie(ssoLinkBindingCookie)
 	if err != nil {
 		return ""
 	}
@@ -267,6 +352,27 @@ const (
 	outcomeLinked       ssoOutcome = "already_linked"
 	outcomeDisabled     ssoOutcome = "disabled"
 	outcomeWrongAccount ssoOutcome = "wrong_account"
+	// outcomeLinkPassword is not a refusal, and it is the one code here that
+	// is not. It says a screen is waiting: the address belongs to a password
+	// account, and the offer to link this provider to it is held against a
+	// cookie this callback set. It rides the same sso_error parameter because
+	// the callback is a redirect and that is the only channel it has.
+	outcomeLinkPassword ssoOutcome = "link_password"
+	// outcomeOtherIdentity reports an account already connected to a different
+	// account at this provider. Deliberately not offered a re-link: an address
+	// that has been reassigned at the provider is exactly the case where the
+	// subject differing is the whole of the warning.
+	outcomeOtherIdentity ssoOutcome = "other_identity"
+	// outcomeInviteExpired reports an invitation whose window has closed. It
+	// is its own code because it is the one refusal here an administrator can
+	// do something about, and "an account already uses that address" would
+	// send the person to look for a password the account does not have.
+	outcomeInviteExpired ssoOutcome = "invite_expired"
+	// outcomeInviteOther reports an invitation naming a different provider.
+	// Also its own code: the account has no password and has never been signed
+	// in to, so both of the other sentences here would send somebody to a
+	// credential and a page that do not exist for them.
+	outcomeInviteOther ssoOutcome = "invite_other_provider"
 )
 
 // handleSSOCallback completes a flow.
@@ -398,24 +504,58 @@ func (s *Server) completeSignIn(w http.ResponseWriter, r *http.Request, state *s
 			return
 		}
 	case errors.Is(err, users.ErrNotFound):
-		user, err = s.opts.Identities.Register(ctx, users.RegisterRequest{
-			Email:       identity.Email,
-			DisplayName: identity.Name,
-			Identity: &users.Identity{
-				Provider: identity.Provider,
-				Subject:  identity.Subject,
-				Email:    identity.Email,
-			},
-			Policy: s.registrationPolicy(ctx),
+		// An invitation first. An administrator who wrote this address down in
+		// advance has already decided the thing Register would be deciding, so
+		// asking Register would refuse an arrival the host was waiting for --
+		// with ErrAddressTaken, on a row that has no password to offer.
+		//
+		// Every condition is in the store's guarded statement, so this is a
+		// call rather than a check: anything that is not an unexpired
+		// invitation for this provider comes back ErrNotFound and falls
+		// through to the ordinary path.
+		user, err = s.opts.Identities.ClaimInvite(ctx, users.Identity{
+			Provider: identity.Provider,
+			Subject:  identity.Subject,
+			Email:    identity.Email,
 		})
-		if err != nil {
-			s.opts.Log.Warn("a provider sign-in was refused an account",
+		switch {
+		case err == nil:
+			s.opts.Log.InfoContext(ctx, "an invitation was claimed",
+				"provider", identity.Provider, "account", user.Email)
+		case errors.Is(err, users.ErrInviteExpired):
+			s.opts.Log.WarnContext(ctx, "an expired invitation was presented",
+				"provider", identity.Provider)
+			s.finish(w, r, "/", outcomeInviteExpired)
+			return
+		case !errors.Is(err, users.ErrNotFound):
+			s.opts.Log.ErrorContext(ctx, "could not claim an invitation",
 				"provider", identity.Provider, "error", err)
 			s.finish(w, r, "/", registrationOutcome(err))
 			return
+		default:
+			user, err = s.opts.Identities.Register(ctx, users.RegisterRequest{
+				Email:       identity.Email,
+				DisplayName: identity.Name,
+				Identity: &users.Identity{
+					Provider: identity.Provider,
+					Subject:  identity.Subject,
+					Email:    identity.Email,
+				},
+				Policy: s.registrationPolicy(ctx),
+			})
+			if err != nil {
+				s.opts.Log.WarnContext(ctx, "a provider sign-in was refused an account",
+					"provider", identity.Provider, "error", err)
+				if errors.Is(err, users.ErrAddressTaken) {
+					s.offerLink(w, r, identity)
+					return
+				}
+				s.finish(w, r, "/", registrationOutcome(err))
+				return
+			}
+			s.opts.Log.InfoContext(ctx, "account registered through a provider",
+				"provider", identity.Provider, "email", user.Email, "status", user.Status)
 		}
-		s.opts.Log.Info("account registered through a provider",
-			"provider", identity.Provider, "email", user.Email, "status", user.Status)
 	default:
 		s.opts.Log.Error("could not resolve a provider identity",
 			"provider", identity.Provider, "error", err)
@@ -437,6 +577,94 @@ func (s *Server) completeSignIn(w http.ResponseWriter, r *http.Request, state *s
 
 	s.setSessionCookie(w, r, token, sess.ExpiresAt)
 	s.finish(w, r, state.ReturnTo, "")
+}
+
+// offerLink decides what an arrival at a taken address is shown.
+//
+// The rule does not move: a provider identity still does not sign in as an
+// account on the strength of a matching address. What changes is that the
+// refusal is no longer a dead end where the account has a password, because a
+// password is a proof of ownership the person can give here and now.
+//
+// Three answers, and which one depends on the account rather than on the
+// provider:
+//
+//   - It has a password. An offer is recorded against this browser and the
+//     screen asks for that password once.
+//   - It has none, so it signs in through some other provider. There is
+//     nothing to type; linking is an act by the signed-in account, from the
+//     profile page.
+//   - It already has an identity from this provider, and the subject differs.
+//     Refused with no offer at all: a subject that changed under an address
+//     that did not is the reassignment this feature exists to notice.
+//
+// Every failure falls back to the refusal that was already there. An offer
+// that cannot be recorded must not leave somebody looking at a screen asking
+// for a password against a row that does not exist.
+func (s *Server) offerLink(w http.ResponseWriter, r *http.Request, identity *sso.Identity) {
+	ctx := r.Context()
+	account, err := s.opts.Identities.ByEmail(ctx, identity.Email)
+	if err != nil {
+		s.finish(w, r, "/", outcomeAddressTaken)
+		return
+	}
+	if account.Disabled {
+		s.opts.Log.WarnContext(ctx, "a disabled account was met at a provider sign-in",
+			"provider", identity.Provider, "account", account.Email)
+		s.finish(w, r, "/", outcomeDisabled)
+		return
+	}
+	if account.Invited() {
+		// An invitation is still open on this row and ClaimInvite did not take
+		// it, and an expired one was answered before this. So it names a
+		// different provider -- and this account has no password and has never
+		// been signed in to, which makes both of the other sentences here
+		// instructions the person cannot carry out.
+		s.finish(w, r, "/", outcomeInviteOther)
+		return
+	}
+	if !account.HasPassword() {
+		s.finish(w, r, "/", outcomeAddressTaken)
+		return
+	}
+	linked, err := s.opts.Identities.IdentitiesFor(ctx, account.ID)
+	if err != nil {
+		s.opts.Log.ErrorContext(ctx, "could not read an account's providers",
+			"account", account.ID, "error", err)
+		s.finish(w, r, "/", outcomeAddressTaken)
+		return
+	}
+	for _, l := range linked {
+		if l.Provider == identity.Provider {
+			s.finish(w, r, "/", outcomeOtherIdentity)
+			return
+		}
+	}
+
+	// Both secrets come from the store, and neither is the flow's binding.
+	// finish() retires that one in this very response, so a row bound to it
+	// would be a row this browser can never present again.
+	token, binding, err := s.opts.Identities.OfferLink(ctx, users.PendingLink{
+		Provider: identity.Provider,
+		Subject:  identity.Subject,
+		Email:    identity.Email,
+		Name:     identity.Name,
+		UserID:   account.ID,
+	})
+	if err != nil {
+		s.opts.Log.ErrorContext(ctx, "could not offer a provider link",
+			"provider", identity.Provider, "account", account.ID, "error", err)
+		s.finish(w, r, "/", outcomeAddressTaken)
+		return
+	}
+
+	// Before finish, which writes the redirect header. A Set-Cookie added after
+	// the header is written is never sent, and these two are the whole of what
+	// the next screen has to work with.
+	s.setLinkCookies(w, r, token, binding)
+	s.opts.Log.InfoContext(ctx, "offered to link a provider at sign-in",
+		"provider", identity.Provider, "account", account.ID)
+	s.finish(w, r, "/", outcomeLinkPassword)
 }
 
 // registrationOutcome maps a refusal to the code the page has words for.

@@ -33,6 +33,27 @@ type fakeIdentities struct {
 	approved []string
 	rejected []string
 	actor    string
+
+	// What the collision and invitation branches see. byEmail is the account
+	// an address resolves to, linked what it already signs in with, and
+	// inviteErr what claiming an invitation answers -- ErrNotFound by default,
+	// which is every account that was not invited.
+	byEmail    *users.User
+	byEmailErr error
+	linked     []users.Identity
+	linkedErr  error
+	invited    *users.User
+	inviteErr  error
+
+	// The offer, and what happened to it. Both secrets are kept because these
+	// tests care that both are compared: a fake that ignored either would
+	// assert nothing about what makes an offer useless to a browser it was not
+	// made to.
+	offered      *users.PendingLink
+	offerToken   string
+	offerBinding string
+	offerErr     error
+	discarded    int
 }
 
 func (f *fakeIdentities) Register(context.Context, users.RegisterRequest) (*users.User, error) {
@@ -47,7 +68,73 @@ func (f *fakeIdentities) UserByIdentity(context.Context, users.Provider, string)
 }
 
 func (f *fakeIdentities) IdentitiesFor(context.Context, string) ([]users.Identity, error) {
-	return nil, nil
+	return f.linked, f.linkedErr
+}
+
+func (f *fakeIdentities) ByEmail(context.Context, string) (*users.User, error) {
+	if f.byEmailErr != nil {
+		return nil, f.byEmailErr
+	}
+	if f.byEmail == nil {
+		return nil, users.ErrNotFound
+	}
+	return f.byEmail, nil
+}
+
+func (f *fakeIdentities) ClaimInvite(context.Context, users.Identity) (*users.User, error) {
+	if f.inviteErr != nil {
+		return nil, f.inviteErr
+	}
+	if f.invited == nil {
+		return nil, users.ErrNotFound
+	}
+	return f.invited, nil
+}
+
+// The store mints both secrets, so the fake does too. A fake that took the
+// binding from the caller would let a handler bind an offer to a cookie the
+// same response retires -- which is the bug these tests exist for.
+func (f *fakeIdentities) OfferLink(_ context.Context, link users.PendingLink) (string, string, error) {
+	if f.offerErr != nil {
+		return "", "", f.offerErr
+	}
+	f.offered = &link
+	if f.offerToken == "" {
+		f.offerToken = "an-offer-token"
+	}
+	f.offerBinding = "an-offer-binding"
+	return f.offerToken, f.offerBinding, nil
+}
+
+// held reports whether this pair names the live offer.
+func (f *fakeIdentities) held(token, binding string) bool {
+	return f.offered != nil && token != "" && token == f.offerToken &&
+		binding != "" && binding == f.offerBinding
+}
+
+func (f *fakeIdentities) PendingLinkFor(_ context.Context, token, binding string) (*users.PendingLinkView, error) {
+	if !f.held(token, binding) {
+		return nil, users.ErrNotFound
+	}
+	return &users.PendingLinkView{Provider: f.offered.Provider, Email: f.offered.Email}, nil
+}
+
+func (f *fakeIdentities) ClaimPendingLink(_ context.Context, token, binding, password string) (*users.User, error) {
+	if !f.held(token, binding) {
+		return nil, users.ErrNotFound
+	}
+	if password != "a-sufficiently-long-passphrase" {
+		return nil, users.ErrInvalidCredentials
+	}
+	return f.byEmail, nil
+}
+
+func (f *fakeIdentities) DiscardPendingLink(_ context.Context, token, binding string) error {
+	f.discarded++
+	if f.held(token, binding) {
+		f.offered = nil
+	}
+	return nil
 }
 
 func (f *fakeIdentities) LinkIdentity(context.Context, string, users.Identity) error { return nil }

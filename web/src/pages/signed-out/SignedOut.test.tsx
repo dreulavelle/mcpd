@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { api, type Meta, type Session } from "@/lib/api";
+import { api, ApiError, type Meta, type Session } from "@/lib/api";
 import { builtinPermissions } from "@/lib/permissions";
 import { consumeSSOOutcome, resetSSOOutcome } from "@/lib/sso";
 import App from "@/App";
@@ -134,6 +134,126 @@ describe("the sign-in screen", () => {
     />);
 
     expect(screen.getByText(/already uses that email address/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Connecting a provider to an account that already uses the address.
+ *
+ * The refusal this replaces was correct and was a dead end: mcpd will not hand
+ * an account over because an address matched, and the person meeting that
+ * sentence was usually its owner. The password is the proof the provider
+ * cannot give.
+ */
+describe("connecting a provider at sign-in", () => {
+  beforeEach(() => {
+    resetSSOOutcome();
+    window.history.replaceState(null, "", "/");
+    vi.restoreAllMocks();
+  });
+
+  const OFFER = { provider: "google" as const, label: "Google", email: "alice@example.com" };
+
+  // The code in the address bar is a parameter somebody can type. A password
+  // field drawn on the strength of one would be asking for a password against
+  // nothing, so the screen asks the server first.
+  it("draws the screen only once the server confirms an offer", async () => {
+    const pending = vi.spyOn(api, "pendingLink").mockResolvedValue(OFFER);
+
+    render(<SignIn auth={null} outcome="link_password" onDone={() => undefined} />);
+
+    expect(await screen.findByRole("heading", { name: "Connect Google to your account" }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/alice@example\.com/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect and sign in" })).toBeInTheDocument();
+    expect(pending).toHaveBeenCalled();
+  });
+
+  // Nothing is waiting: the offer expired, it belongs to another browser, or
+  // somebody typed the parameter. The sign-in form is the honest answer.
+  it("falls back to the sign-in form when nothing is waiting", async () => {
+    vi.spyOn(api, "pendingLink").mockRejectedValue(new Error("nothing here"));
+
+    render(<SignIn auth={null} outcome="link_password" onDone={() => undefined} />);
+
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connect and sign in" })).toBeNull();
+  });
+
+  it("signs in once the password confirms the account", async () => {
+    vi.spyOn(api, "pendingLink").mockResolvedValue(OFFER);
+    const connect = vi.spyOn(api, "connectPendingLink").mockResolvedValue(SESSION);
+    const onDone = vi.fn();
+
+    render(<SignIn auth={null} outcome="link_password" onDone={onDone} />);
+    await screen.findByRole("heading", { name: "Connect Google to your account" });
+
+    await userEvent.type(screen.getByLabelText("Password"), "a-sufficiently-long-passphrase");
+    await userEvent.click(screen.getByRole("button", { name: "Connect and sign in" }));
+
+    expect(connect).toHaveBeenCalledWith("a-sufficiently-long-passphrase");
+    expect(onDone).toHaveBeenCalledWith(SESSION);
+  });
+
+  // One sentence for a wrong password, and the screen stays: a typo must not
+  // mean starting the whole round trip again.
+  it("says a password did not match and stays on the screen", async () => {
+    vi.spyOn(api, "pendingLink").mockResolvedValue(OFFER);
+    vi.spyOn(api, "connectPendingLink").mockRejectedValue(new ApiError(401, "unauthorized", "that password did not match"));
+
+    render(<SignIn auth={null} outcome="link_password" onDone={() => undefined} />);
+    await screen.findByRole("heading", { name: "Connect Google to your account" });
+
+    await userEvent.type(screen.getByLabelText("Password"), "not-the-password");
+    await userEvent.click(screen.getByRole("button", { name: "Connect and sign in" }));
+
+    expect(await screen.findByText("That password did not match.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect and sign in" })).toBeInTheDocument();
+  });
+
+  // Several things retire an offer and the server does not say which, so the
+  // sentence names none of them: what to do is the same either way, and
+  // "too many attempts" is wrong for an offer that simply expired.
+  it("sends somebody back to the form once the offer has been retired", async () => {
+    vi.spyOn(api, "pendingLink").mockResolvedValue(OFFER);
+    vi.spyOn(api, "connectPendingLink").mockRejectedValue(new ApiError(404, "not_found", "there is nothing waiting to be connected"));
+
+    render(<SignIn auth={null} outcome="link_password" onDone={() => undefined} />);
+    await screen.findByRole("heading", { name: "Connect Google to your account" });
+
+    await userEvent.type(screen.getByLabelText("Password"), "not-the-password");
+    await userEvent.click(screen.getByRole("button", { name: "Connect and sign in" }));
+
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByText("That offer is no longer open. Start the sign-in again."))
+      .toBeInTheDocument();
+  });
+
+  // "Not now" retires the row rather than merely navigating away from it. An
+  // offer left live is one the next person at that browser is holding, and the
+  // screen it draws asks for a password.
+  it("retires the offer when somebody says not now", async () => {
+    vi.spyOn(api, "pendingLink").mockResolvedValue(OFFER);
+    const discard = vi.spyOn(api, "discardPendingLink").mockResolvedValue(undefined);
+
+    render(<SignIn auth={null} outcome="link_password" onDone={() => undefined} />);
+    await screen.findByRole("heading", { name: "Connect Google to your account" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Not now" }));
+
+    expect(discard).toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+  });
+
+  // Every other outcome is a refusal with a sentence, and none of them draws
+  // this screen.
+  it("is not drawn for an ordinary refusal", () => {
+    const pending = vi.spyOn(api, "pendingLink").mockResolvedValue(OFFER);
+
+    render(<SignIn auth={null} outcome="address_taken" onDone={() => undefined} />);
+
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(pending).not.toHaveBeenCalled();
   });
 });
 

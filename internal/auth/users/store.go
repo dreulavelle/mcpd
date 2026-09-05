@@ -43,17 +43,34 @@ func (s *Store) Resolve(ctx context.Context, userID string) (groups.Resolved, er
 }
 
 const userColumns = `id, email, password_hash, display_name, role_id, grants_json,
-	                 disabled, status, created_at, updated_at, last_login_at`
+	                 disabled, status, invite_provider, invite_expires_at,
+	                 created_at, updated_at, last_login_at`
 
 // --- accounts --------------------------------------------------------------
 
+// InviteTTL is how long an invitation stays claimable.
+//
+// Long enough for somebody starting on a Monday to arrive, short enough that a
+// row nobody used stops being a way in. One that lapsed is offered again
+// through UpdateRequest.InviteProvider, which re-stamps this from now -- the
+// same decision made a second time rather than a second concept.
+const InviteTTL = 14 * 24 * time.Hour
+
 // CreateRequest describes a new account.
 type CreateRequest struct {
-	Email       string
+	Email string
+	// Password is what the account signs in with, and is required unless
+	// InviteProvider names a provider instead.
 	Password    string
 	DisplayName string
 	RoleID      string
 	Grants      auth.Grants
+	// InviteProvider makes this an invited account: no password of its own,
+	// claimed by the first verified sign-in through that provider. An
+	// administrator asserting the address in advance is the second acceptable
+	// proof of ownership -- see Store.ClaimInvite -- and it is the only reason
+	// an account may be created with no credential at all.
+	InviteProvider Provider
 	// Groups the account joins, in the same transaction as it is created. An
 	// account created into a group and an account granted plugins directly are
 	// the same act from the administrator's side, so they are one write.
@@ -90,8 +107,21 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	hash, err := HashPassword(req.Password)
-	if err != nil {
+	// An invitation stands in place of a password, and it has to be one or the
+	// other: an account holding both would be one whose invitation can still
+	// be claimed by whoever holds the address, after somebody was given a
+	// password for it.
+	hash := NoPassword
+	if req.InviteProvider != "" {
+		if !req.InviteProvider.Valid() {
+			return nil, fmt.Errorf("users: %q is not a provider this build knows",
+				req.InviteProvider)
+		}
+		if req.Password != "" {
+			return nil, errors.New(
+				"an invited account signs in with the provider, so it takes no password")
+		}
+	} else if hash, err = HashPassword(req.Password); err != nil {
 		return nil, err
 	}
 	id, err := newID("usr_")
@@ -100,15 +130,22 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	}
 
 	u := &User{
-		ID:           id,
-		Email:        email,
-		PasswordHash: hash,
-		DisplayName:  displayName,
-		RoleID:       roleID,
-		Grants:       req.Grants.Normalize(),
+		ID:             id,
+		Email:          email,
+		PasswordHash:   hash,
+		DisplayName:    displayName,
+		RoleID:         roleID,
+		Grants:         req.Grants.Normalize(),
+		InviteProvider: req.InviteProvider,
 	}
 
 	now := s.now().UnixMilli()
+	var inviteExpires any
+	if u.Invited() {
+		expires := s.now().Add(InviteTTL)
+		u.InviteExpiresAt = &expires
+		inviteExpires = expires.UnixMilli()
+	}
 	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
 		// The role has to exist, and the check is inside the transaction so
 		// that a role deleted between the form and the write is a refusal
@@ -129,8 +166,9 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 		// without the other's row and both proceed.
 		affected, err := tx.ExecAffected(`
 			INSERT INTO users (id, email, password_hash, display_name, role_id,
-			                   grants_json, disabled, created_at, updated_at)
-			SELECT ?,?,?,?,?,?,0,?,?
+			                   grants_json, disabled, invite_provider,
+			                   invite_expires_at, created_at, updated_at)
+			SELECT ?,?,?,?,?,?,0,?,?,?,?
 			WHERE NOT EXISTS (
 				SELECT 1 FROM users WHERE lower(display_name) = ?
 			)
@@ -138,7 +176,8 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 				SELECT 1 FROM users WHERE email = lower(?)
 			))`,
 			u.ID, u.Email, u.PasswordHash, u.DisplayName, u.RoleID,
-			auth.EncodeGrants(u.Grants), now, now,
+			auth.EncodeGrants(u.Grants), string(u.InviteProvider), inviteExpires,
+			now, now,
 			u.Email, u.DisplayName, u.DisplayName)
 		if err != nil {
 			return err
@@ -301,6 +340,18 @@ type UpdateRequest struct {
 	RoleID      *string
 	Grants      *auth.Grants
 	Disabled    *bool
+	// InviteProvider re-issues an invitation, with a fresh expiry, on an
+	// account that is still waiting for its first sign-in. It is how an
+	// invitation that lapsed is offered again -- there is no separate concept,
+	// because from the administrator's side it is the same decision made a
+	// second time.
+	//
+	// It cannot create one on an account that already signs in some other way;
+	// that condition is in the WHERE clause. Empty is refused rather than read
+	// as "cancel", because an invited account with its invitation withdrawn is
+	// one nobody can ever sign in to -- a deletion wearing the appearance of
+	// an edit. Delete the account, or give it a password.
+	InviteProvider *Provider
 }
 
 // Update edits an account.
@@ -316,6 +367,10 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 		if err := req.Grants.Validate(); err != nil {
 			return nil, err
 		}
+	}
+	if req.InviteProvider != nil && !req.InviteProvider.Valid() {
+		return nil, fmt.Errorf("users: %q is not a provider this build knows",
+			*req.InviteProvider)
 	}
 	// An empty direct grant is legitimate; see Create. It denies everything on
 	// its own, and a group is how such an account reaches anything.
@@ -400,6 +455,34 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 			return ErrLastAdmin
 		}
 
+		// Its own guarded statement rather than another column in the one
+		// above, because its conditions are different ones and folding them in
+		// would make a zero-row result mean either of two unrelated things.
+		//
+		// Re-stamping the expiry is the whole of what this usually does: the
+		// account is already invited, the invitation lapsed, and somebody is
+		// offering it again. The conditions are what stop it becoming a way to
+		// put an invitation on an account somebody is already using.
+		if req.InviteProvider != nil {
+			expires := s.now().Add(InviteTTL)
+			affected, err := tx.ExecAffected(`
+				UPDATE users
+				   SET invite_provider = ?, invite_expires_at = ?, updated_at = ?
+				 WHERE id = ?
+				   AND password_hash = ?
+				   AND disabled = 0
+				   AND NOT EXISTS (
+				       SELECT 1 FROM user_identities WHERE user_id = users.id
+				   )`,
+				string(*req.InviteProvider), expires.UnixMilli(), now, id, NoPassword)
+			if err != nil {
+				return err
+			}
+			if affected == 0 {
+				return ErrAlreadySignsIn
+			}
+		}
+
 		// A disabled account must not keep browsing on a session it already
 		// holds, and a demoted one must not keep the rights its old session
 		// was resolved with. Sessions carry no capabilities themselves -- they
@@ -409,6 +492,8 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 		if req.Disabled != nil || req.RoleID != nil || req.Grants != nil {
 			return tx.Exec(`DELETE FROM user_sessions WHERE user_id = ?`, id)
 		}
+		// Not for an invitation: an account waiting for its first sign-in has
+		// no session to end, and re-issuing one takes nothing away.
 		return nil
 	})
 	if err != nil {
@@ -422,6 +507,12 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 // Ending the sessions is the point of a password change as often as not: the
 // person changing it may be doing so because they believe the old one leaked,
 // and leaving live sessions behind would defeat that.
+//
+// It retires any invitation in the same statement. An invited account is one
+// with no credential of its own, waiting for a provider to establish who holds
+// the address; giving it a password answers that question a different way, and
+// leaving the invitation live would let whoever holds the address at the
+// provider claim an account somebody is already using.
 func (s *Store) SetPassword(ctx context.Context, id, password string) error {
 	hash, err := HashPassword(password)
 	if err != nil {
@@ -429,8 +520,11 @@ func (s *Store) SetPassword(ctx context.Context, id, password string) error {
 	}
 	now := s.now().UnixMilli()
 	return s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		affected, err := tx.ExecAffected(
-			`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`,
+		affected, err := tx.ExecAffected(`
+			UPDATE users
+			   SET password_hash = ?, invite_provider = '',
+			       invite_expires_at = NULL, updated_at = ?
+			 WHERE id = ?`,
 			hash, now, id)
 		if err != nil {
 			return err
@@ -466,6 +560,11 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 			return err
 		}
 		if err := tx.Exec(`DELETE FROM user_identities WHERE user_id = ?`, id); err != nil {
+			return err
+		}
+		// And any half-finished offer to link a provider to it, for the same
+		// reason: the row names an account that is about to stop existing.
+		if err := tx.Exec(`DELETE FROM sso_pending_links WHERE user_id = ?`, id); err != nil {
 			return err
 		}
 		// Memberships too, and for the same reason: a row left behind would
@@ -539,16 +638,19 @@ type rowScanner interface{ Scan(...any) error }
 
 func (s *Store) scanUser(row rowScanner) (*User, error) {
 	var (
-		u          User
-		grantsJSON string
-		disabled   int
-		status     string
-		created    int64
-		updated    int64
-		lastLogin  sql.NullInt64
+		u             User
+		grantsJSON    string
+		disabled      int
+		status        string
+		inviteProv    string
+		inviteExpires sql.NullInt64
+		created       int64
+		updated       int64
+		lastLogin     sql.NullInt64
 	)
 	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.DisplayName, &u.RoleID,
-		&grantsJSON, &disabled, &status, &created, &updated, &lastLogin)
+		&grantsJSON, &disabled, &status, &inviteProv, &inviteExpires,
+		&created, &updated, &lastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -564,6 +666,19 @@ func (s *Store) scanUser(row rowScanner) (*User, error) {
 	u.Status = Status(status)
 	if !u.Status.Valid() {
 		u.Status = StatusPending
+	}
+	// An invitation naming a provider this build does not know is read as no
+	// invitation at all. The column's CHECK makes that unreachable through
+	// this process; what it covers is a row written by a later build and read
+	// by this one, where the safe reading of "I do not know what this means"
+	// is that nothing may claim the account.
+	u.InviteProvider = Provider(inviteProv)
+	if !u.InviteProvider.Valid() {
+		u.InviteProvider = ""
+	}
+	if inviteExpires.Valid {
+		t := time.UnixMilli(inviteExpires.Int64).UTC()
+		u.InviteExpiresAt = &t
 	}
 	u.CreatedAt = time.UnixMilli(created).UTC()
 	u.UpdatedAt = time.UnixMilli(updated).UTC()
@@ -685,11 +800,11 @@ func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
-// Housekeeper removes expired sessions.
+// Housekeeper removes expired sessions and expired offers to link a provider.
 //
 // Expiry is enforced on read, so this is hygiene rather than correctness: a
 // row past its expires_at stops resolving whether or not it has been deleted.
-// What it prevents is the table growing without bound in a deployment that
+// What it prevents is the tables growing without bound in a deployment that
 // signs in often and never restarts.
 type Housekeeper struct {
 	store    *Store
@@ -714,6 +829,9 @@ func (h *Housekeeper) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			if err := h.store.PurgeExpiredSessions(ctx); err != nil {
+				return fmt.Errorf("users: housekeeping: %w", err)
+			}
+			if err := h.store.PurgeExpiredPendingLinks(ctx); err != nil {
 				return fmt.Errorf("users: housekeeping: %w", err)
 			}
 		}

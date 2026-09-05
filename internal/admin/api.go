@@ -438,6 +438,14 @@ func (s *Server) routes() {
 	// cannot present both is refused.
 	s.mux.HandleFunc("POST /api/auth/sso/{provider}/start", s.handleSSOStart)
 	s.mux.HandleFunc("GET /api/auth/sso/{provider}/callback", s.handleSSOCallback)
+	// The offer a callback leaves behind when the address already belongs to a
+	// password account. Unauthenticated for the same reason the two above are,
+	// and bounded by the same kind of thing: a single-use expiring row bound
+	// to a cookie this host set on the browser that started the flow. Under
+	// /api/auth so that cookie's path covers them and nothing else.
+	s.mux.HandleFunc("GET /api/auth/sso/pending", s.handlePendingLink)
+	s.mux.HandleFunc("POST /api/auth/sso/pending", s.handleCompletePendingLink)
+	s.mux.HandleFunc("DELETE /api/auth/sso/pending", s.handleDiscardPendingLink)
 
 	// Unauthenticated by necessity and harmless by nature: a CA certificate is
 	// a public document, and requiring a sign-in to fetch it would mean

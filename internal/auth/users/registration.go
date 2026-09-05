@@ -729,3 +729,131 @@ func (s *Store) RejectRegistration(ctx context.Context, actor, id string) error 
 		})
 	})
 }
+
+// ClaimInvite turns an invitation into a linked identity, once.
+//
+// This is the second acceptable proof that somebody owns an account they did
+// not create: an administrator asserted the address in advance. It does not
+// weaken the rule an unlinked identity is judged by -- the identity still does
+// not sign in as an account on the strength of a matching address -- it names
+// the other thing that can stand in place of the account's own credential.
+//
+// It deliberately does not consult RegistrationPolicy. Closed registration,
+// the domain allow-list and the approval step are the rules for a stranger
+// asking for an account, and the person arriving here is not one: an
+// administrator already made that decision, on the Users page, in advance. A
+// host with registration off must still be able to invite people, or the
+// setting stops meaning "no strangers" and starts meaning "nobody new".
+//
+// One guarded statement decides it. The invitation is retired by an UPDATE
+// whose WHERE clause carries every condition -- the named provider, no
+// password of its own, not disabled, not expired, no identity already -- so
+// two callbacks arriving together produce one claim and one refusal rather
+// than two identities on one account. The identity is inserted only when that
+// statement affected a row; zero rows is ErrNotFound, and the caller falls
+// through to the ordinary refusal it would have given anyway.
+func (s *Store) ClaimInvite(ctx context.Context, i Identity) (*User, error) {
+	if !i.Provider.Valid() {
+		return nil, fmt.Errorf("users: %q is not a provider this build knows", i.Provider)
+	}
+	if strings.TrimSpace(i.Subject) == "" {
+		return nil, fmt.Errorf("users: a provider identity needs a subject")
+	}
+	email, err := NormalizeEmail(i.Email)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+
+	// Asked on the reader first, and only to decide whether there is anything
+	// to do. Every sign-in through a provider reaches here, and the ordinary
+	// answer is "no invitation" -- opening a write transaction for that would
+	// have every sign-in on the host queue for SQLite's single writer in order
+	// to learn nothing. It is not a check the claim relies on: the statement
+	// below restates it and every other condition, so a row that changes in
+	// between is refused there rather than acted on here.
+	var userID, invited string
+	if err := s.db.Reader().QueryRowContext(ctx,
+		`SELECT id, invite_provider FROM users WHERE email = ?`, email).
+		Scan(&userID, &invited); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if invited == "" {
+		return nil, ErrNotFound
+	}
+
+	now := s.now().UnixMilli()
+	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
+		affected, err := tx.ExecAffected(`
+			UPDATE users
+			   SET invite_provider = '', invite_expires_at = NULL, updated_at = ?
+			 WHERE id = ?
+			   AND invite_provider = ?
+			   AND password_hash = ?
+			   AND disabled = 0
+			   AND (invite_expires_at IS NULL OR invite_expires_at > ?)
+			   AND NOT EXISTS (
+			       SELECT 1 FROM user_identities WHERE user_id = users.id
+			   )`,
+			now, userID, string(i.Provider), NoPassword, now)
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			// Which condition failed is one read, and it is worth taking:
+			// "your invitation ran out" is something an administrator can act
+			// on, and every other refusal here is not.
+			var expiresAt sql.NullInt64
+			var provider string
+			if err := tx.QueryRow(
+				`SELECT invite_provider, invite_expires_at FROM users WHERE id = ?`,
+				userID).Scan(&provider, &expiresAt); err != nil {
+				return err
+			}
+			if Provider(provider) == i.Provider && expiresAt.Valid && expiresAt.Int64 <= now {
+				return ErrInviteExpired
+			}
+			return ErrNotFound
+		}
+
+		if err := insertIdentity(tx, Identity{
+			Provider: i.Provider,
+			Subject:  i.Subject,
+			UserID:   userID,
+			Email:    i.Email,
+			// Nobody performed this link in the sense an administrator or a
+			// signed-in account performs one: the person proved who they are
+			// at the provider and the row was already waiting for them. The
+			// actor says so, the way a registration does.
+			LinkedBy: "self:" + email,
+		}, now); err != nil {
+			return err
+		}
+
+		// Its own kind, not account.identity_linked. What happened here is
+		// that an invitation was taken up, and reading it as an ordinary link
+		// would lose the one fact worth keeping: this account had no
+		// credential until this moment.
+		return tx.AppendAudit(sqlite.AdminAct{
+			Kind:    "account.invitation_claimed",
+			Actor:   "self:" + email,
+			Subject: email,
+			Action:  "claim",
+			Detail: map[string]any{
+				"provider": string(i.Provider),
+				"account":  userID,
+			},
+		})
+	})
+	if isUniqueViolation(err) {
+		// The subject already belongs to an account here. The invitation is
+		// untouched -- the transaction rolled back -- and the caller refuses.
+		return nil, ErrIdentityLinked
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.ByID(ctx, userID)
+}
