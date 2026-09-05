@@ -29,27 +29,59 @@ func TestWriteProblem_HidesWhatOnlyALogCanCarry(t *testing.T) {
 			want: "That change could not be saved.",
 		},
 		{
-			name: "a wrapped store failure",
-			err:  fmt.Errorf("import: %w", errors.New("sqlite: import mcp server: constraint")),
-			want: "That change could not be saved.",
-		},
-		{
 			name: "a settings failure",
 			err:  errors.New("settings: openai.api_key is a secret and no encryption key is configured"),
 			want: "That change could not be saved.",
 		},
 		{
-			name: "a document that will not parse",
-			err:  errors.New("mcpservers: server.json is missing \"name\""),
+			// The denylist this replaced named neither, and both reach a 400.
+			name: "an archive that will not read",
+			err:  errors.New("backup: read the manifest: unexpected EOF"),
 			want: "That change could not be saved.",
+		},
+		{
+			name: "an account that will not validate",
+			err:  errors.New("chatgpt account: the rate limit cannot be negative"),
+			want: "That change could not be saved.",
+		},
+		{
+			name: "Go's own decoder",
+			err:  errors.New(`json: unknown field "enabld"`),
+			want: "That change could not be saved.",
+		},
+		{
+			// Every error this package returns is a statement about the
+			// document somebody just pasted, so the text is the answer and
+			// only the prefix was in the way.
+			name: "a document that will not parse",
+			err:  errors.New(`mcpservers: server.json is missing "name"`),
+			want: `server.json is missing "name"`,
+		},
+		{
+			name: "a header name the far end could not be sent",
+			err:  fmt.Errorf("%w", errors.New(`mcpservers: "X Foo" is not a usable HTTP header name`)),
+			want: `"X Foo" is not a usable HTTP header name`,
 		},
 		{
 			// Written for the person who made the request, so it is the
 			// answer. Substituting a fallback here would lose the only thing
 			// they could act on.
 			name: "a refusal a person can act on",
-			err:  errors.New("there is no system called \"graylog\""),
-			want: "there is no system called \"graylog\"",
+			err:  errors.New(`there is no system called "graylog"`),
+			want: `there is no system called "graylog"`,
+		},
+		{
+			// A colon after a lowercase word is what a wrapped error looks
+			// like, and a URL is not one. Matching "app:" anywhere in the
+			// text turned this into the fallback.
+			name: "a sentence carrying a URL",
+			err:  errors.New("http://app:8080 refused the connection"),
+			want: "http://app:8080 refused the connection",
+		},
+		{
+			name: "a sentence carrying an OAuth word",
+			err:  errors.New("oauth: the far end did not answer"),
+			want: "That change could not be saved.",
 		},
 	}
 

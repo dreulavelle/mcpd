@@ -291,7 +291,8 @@ func (s *Server) handleClassifyMCPTool(w http.ResponseWriter, r *http.Request) {
 		req.DescriptorHash, mcpservers.ToolState(req.State))
 	if err != nil {
 		s.writeProblem(w, r, http.StatusConflict, err,
-			"That tool could not be classified. Read it again -- its description or schema may have changed.")
+			"That tool could not be classified. Its description or schema has changed "+
+				"since you looked; refresh the tool list and try again.")
 		return
 	}
 	s.opts.Log.Info("remote MCP tool classified",

@@ -244,8 +244,8 @@ func (s *Server) stageFrom(w http.ResponseWriter, r *http.Request, body io.Reade
 				"key to the one that host used, restart, and restore again.")
 		return
 	default:
-		s.opts.Log.ErrorContext(r.Context(), "a restore could not be staged",
-			"principal", actor, "error", err)
+		// writeProblem logs it with the correlation id the caller was given;
+		// a second line here says the same thing without the id.
 		s.writeProblem(w, r, http.StatusBadRequest, err,
 			"That archive could not be read. Check it is a backup made by mcpd "+
 				"and that the download finished.")

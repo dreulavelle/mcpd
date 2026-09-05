@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -941,8 +942,10 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 			if list, err := s.listTunnels(r.Context(), acct.ID, dir); err != nil {
 				s.opts.Log.ErrorContext(r.Context(), "an account's tunnels could not be listed",
 					"account", acct.Name, "error", err)
-				view.Problem = "OpenAI did not answer with this account's tunnels. " +
-					"Check its admin key under Settings › ChatGPT."
+				// Not "check the admin key": a listing fails for reasons that
+				// have nothing to do with the key, and naming one sends
+				// people to change a setting that was right.
+				view.Problem = "This account's tunnels could not be listed, so this page may be incomplete."
 			} else {
 				list = ours(list, resp.Assignments)
 				for _, t := range list {
@@ -1552,17 +1555,30 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int, 
 	})
 }
 
-// internalPrefixes name the packages whose error text is written for whoever
-// is reading a stack trace, not for whoever made the request.
+// wrappedPrefix matches the `pkg: ` a Go error in this repository is wrapped
+// with -- "sqlite: begin: %w", "backup: read the manifest: %w", "chatgpt
+// account: %s". A sentence written for a person does not begin that way, and
+// that difference is the only mechanical signal there is for telling the two
+// apart.
 //
-// It is a list rather than a guess at the shape of a sentence: every one of
-// these is a deliberate `pkg: ` prefix in this repository, and the packages
-// that do write for a person -- the validation in users, roles, groups,
-// apikeys, trust -- are deliberately absent.
-var internalPrefixes = []string{
-	"sqlite:", "settings:", "app:", "plugins:", "mcpservers:", "auth:",
-	"storage:", "json:",
-}
+// Deliberately anchored. "http://app:8080 refused" is a URL, not a package.
+var wrappedPrefix = regexp.MustCompile(`^[a-z][a-z0-9]*(?: [a-z][a-z0-9]*)*: `)
+
+// personalPackages write every error they return for whoever made the
+// request, so their text is the answer and only the prefix is in the way.
+//
+// It is an allowlist, and short on purpose. The denylist it replaces was
+// wrong by construction: it had to name every package that might ever wrap an
+// error, and it missed backup, tunnel, registry, config, external, operations
+// and servertls on the first reading. Getting this list wrong now costs a
+// generic sentence and a log line rather than "backup: read the manifest:
+// unexpected EOF" in a toast.
+//
+// mcpservers is here because every error it returns is a specific statement
+// about the document somebody just pasted -- which field is missing, which
+// header name is not usable, which URL carries credentials -- and that is the
+// whole of what they can act on.
+var personalPackages = []string{"mcpservers: "}
 
 // writeProblem answers a 4xx with something the person who made the request
 // can act on.
@@ -1571,20 +1587,33 @@ var internalPrefixes = []string{
 // field. So an error that names an internal package is not an answer -- it is
 // "sqlite: begin: database is locked" in a toast, which tells the reader
 // nothing and the operator no more. That one is logged with the correlation
-// id the caller was also given, and the caller is told what the handler knows,
-// which is the fallback.
+// id the caller was also given, and the caller is told what the handler
+// knows, which is the fallback.
+//
+// Three outcomes, and the default is the safe one:
+//
+//   - text with no package prefix is a sentence somebody wrote for a reader,
+//     and is the answer;
+//   - text prefixed by a package on the allowlist is the answer without its
+//     prefix;
+//   - anything else prefixed is a wrapped error: logged, and answered with
+//     the fallback.
 //
 // A 5xx body is not shown at all, only its correlation id, so nothing here
 // applies to one.
 func (s *Server) writeProblem(w http.ResponseWriter, r *http.Request, status int, err error, fallback string) {
 	msg := err.Error()
-	for _, prefix := range internalPrefixes {
-		if strings.Contains(msg, prefix) {
-			s.opts.Log.ErrorContext(r.Context(), "a request failed for a reason only a log can carry",
-				"path", r.URL.Path, "status", status, "error", err)
-			s.writeError(w, r, status, fallback)
+	for _, prefix := range personalPackages {
+		if strings.HasPrefix(msg, prefix) {
+			s.writeError(w, r, status, strings.TrimPrefix(msg, prefix))
 			return
 		}
+	}
+	if wrappedPrefix.MatchString(msg) {
+		s.opts.Log.ErrorContext(r.Context(), "a request failed for a reason only a log can carry",
+			"path", r.URL.Path, "status", status, "error", err)
+		s.writeError(w, r, status, fallback)
+		return
 	}
 	s.writeError(w, r, status, msg)
 }
