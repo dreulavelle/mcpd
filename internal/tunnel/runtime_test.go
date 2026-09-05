@@ -92,7 +92,7 @@ func TestTransientFailuresAreNotTreatedAsRejection(t *testing.T) {
 // one rather than re-checking the id.
 func TestDiagnoseExplainsARevokedKey(t *testing.T) {
 	got := diagnose("sk-proj-whatever", "token_invalidated")
-	if !strings.Contains(got, "invalidated") || !strings.Contains(got, "new runtime key") {
+	if !strings.Contains(got, "no longer accepts") || !strings.Contains(got, "new runtime key") {
 		t.Fatalf("diagnose = %q, want it to say the key was revoked and a new one is needed", got)
 	}
 

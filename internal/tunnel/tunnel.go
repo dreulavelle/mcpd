@@ -176,9 +176,20 @@ type Status struct {
 	Plugins   []string `json:"plugins,omitempty"`
 	// Plugin names the system this tunnel serves, empty for all of them.
 	Plugin string `json:"plugin"`
-	// Message explains a failure in terms an operator can act on. It never
-	// quotes a credential.
-	Message     string     `json:"message,omitempty"`
+	// Message explains a failure in plain sentences: what happened, then what
+	// to do. It never quotes a credential, an error code or a log line --
+	// those are evidence, and evidence goes in Detail and Code, so that a
+	// dashboard, a phone notification and a person reading either of them get
+	// a sentence rather than a stack of prefixes.
+	Message string `json:"message,omitempty"`
+	// Detail is the wrapped error behind Message, for somebody who wants it.
+	// Redacted the same way Message is: it is shown in the dashboard.
+	Detail string `json:"detail,omitempty"`
+	// Code is the control plane's verdict on the credential, where it gave
+	// one -- tunnel_use_forbidden, token_invalidated, invalid_api_key. Empty
+	// for every other failure, because inventing a code for "the network was
+	// down" would be a vocabulary nobody else uses.
+	Code        string     `json:"code,omitempty"`
 	ConnectedAt *time.Time `json:"connected_at,omitempty"`
 
 	// Requests counts what ChatGPT has actually sent through this tunnel
@@ -359,9 +370,14 @@ type Manager struct {
 	// after that is of the snapshot, because the goroutines Start leaves
 	// behind outlive it and Reconfigure may have replaced it by the time they
 	// run.
-	cfg         Config
-	state       State
+	cfg   Config
+	state State
+	// message is the sentence a person reads; detail and code are the
+	// evidence behind it. Kept apart so that neither can be glued into the
+	// other by a caller that only has one string to render.
 	message     string
+	detail      string
+	code        string
 	connectedAt *time.Time
 	cancel      context.CancelFunc
 	running     sync.WaitGroup
@@ -407,6 +423,8 @@ func (m *Manager) Status() Status {
 	s := Status{
 		State:             m.state,
 		Message:           m.message,
+		Detail:            m.detail,
+		Code:              m.code,
 		ConnectedAt:       m.connectedAt,
 		Requests:          m.requests,
 		LastRequestAt:     m.lastRequest,
@@ -451,7 +469,7 @@ func (m *Manager) start(ctx context.Context) error {
 		return nil
 	}
 	m.state = StateStarting
-	m.message = ""
+	m.clearFailureLocked()
 	// Snapshotted here, under the lock, and used for the whole of this call
 	// and by every goroutine it leaves behind. Reading m.cfg after the unlock
 	// is what raced with Reconfigure writing it -- and the two goroutines
@@ -464,7 +482,7 @@ func (m *Manager) start(ctx context.Context) error {
 	// that does not validate and a server that cannot be built are for a
 	// person, not the supervisor.
 	if err := cfg.Validate(); err != nil {
-		m.fail(err, false)
+		m.fail(msgBadConfig, err, false)
 		return err
 	}
 
@@ -473,7 +491,7 @@ func (m *Manager) start(ctx context.Context) error {
 	principal := cfg.Principal
 	server, err := m.factory(&principal)
 	if err != nil {
-		m.fail(fmt.Errorf("tunnel: could not build the MCP server: %w", err), false)
+		m.fail(msgCannotBuild, fmt.Errorf("tunnel: could not build the MCP server: %w", err), false)
 		return err
 	}
 
@@ -490,7 +508,8 @@ func (m *Manager) start(ctx context.Context) error {
 		rejected: func(code string) {
 			rejectOnce.Do(func() {
 				// Not retried: the key will still be wrong in ten minutes.
-				m.fail(fmt.Errorf("tunnel: %s", diagnose(cfg.APIKey, code)), false)
+				m.failWithCode(code, diagnose(cfg.APIKey, code),
+					fmt.Errorf("tunnel: OpenAI refused this account's key (%s)", code), false)
 				// Halting is the point. The client would otherwise keep
 				// retrying a credential the control plane has already
 				// rejected, filling the log with a failure nobody is going
@@ -513,13 +532,13 @@ func (m *Manager) start(ctx context.Context) error {
 	client, err := newRuntime(cfg, server, runCtx, m.log, out, m.noteRequest)
 	if err != nil {
 		cancel()
-		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)), true)
+		m.fail(msgUnreachable, fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)), true)
 		return err
 	}
 
 	if err := client.Start(runCtx); err != nil {
 		cancel()
-		m.fail(fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)), true)
+		m.fail(msgUnreachable, fmt.Errorf("tunnel: %w", redactKey(err, cfg.APIKey)), true)
 		return err
 	}
 
@@ -556,7 +575,7 @@ func (m *Manager) start(ctx context.Context) error {
 			if m.state == StateStarting {
 				m.state = StateConnected
 				m.connectedAt = &now
-				m.message = ""
+				m.clearFailureLocked()
 				// Working again: the supervisor starts from the beginning
 				// next time, and whoever was told about the failure is told
 				// it is over.
@@ -717,7 +736,7 @@ func (m *Manager) Reconfigure(ctx context.Context, cfg Config) error {
 
 	m.mu.Lock()
 	m.cfg = cfg
-	m.message = ""
+	m.clearFailureLocked()
 	m.connectedAt = nil
 	if cfg.TunnelID == "" || !cfg.Enabled {
 		m.state = StateDisabled
@@ -756,18 +775,42 @@ func (m *Manager) Enabled() bool {
 	return m.state != StateDisabled
 }
 
+// clearFailureLocked forgets the last failure. The caller holds mu.
+//
+// One function rather than three assignments at three sites, because a
+// sentence left behind without its evidence -- or evidence without its
+// sentence -- is a status that contradicts itself.
+func (m *Manager) clearFailureLocked() {
+	m.message = ""
+	m.detail = ""
+	m.code = ""
+}
+
 // fail records a failure and, where retrying could help, schedules the next
 // attempt.
+//
+// msg is what a person reads: what happened, then what to do, in plain
+// sentences. err is the evidence behind it and is kept apart, because every
+// caller of this used to hand one string to both a dashboard and a phone,
+// and the string was a wrapped Go error.
 //
 // retryable is decided by the caller, because only it knows what failed: a
 // control plane that could not be reached is worth trying again, a rejected
 // credential or a configuration that does not validate is not. The
 // supervisor never guesses.
-func (m *Manager) fail(err error, retryable bool) {
+func (m *Manager) fail(msg string, err error, retryable bool) {
+	m.failWithCode("", msg, err, retryable)
+}
+
+// failWithCode is fail for the one path that has a code to record: the
+// control plane's verdict on the credential.
+func (m *Manager) failWithCode(code, msg string, err error, retryable bool) {
 	m.mu.Lock()
 	was := m.state
 	m.state = StateFailed
-	m.message = err.Error()
+	m.message = msg
+	m.detail = err.Error()
+	m.code = code
 	m.connectedAt = nil
 	plugin, tunnelID, account := m.cfg.Plugin, m.cfg.TunnelID, m.cfg.AccountName
 	first := !m.failedBefore
@@ -793,17 +836,21 @@ func (m *Manager) fail(err error, retryable bool) {
 	// rejected-credential path calls this twice deliberately -- Stop resets
 	// the state and would erase the explanation -- and nobody needs telling
 	// the same thing twice.
+	//
+	// The plain sentence is what is sent, never the wrapped error: this
+	// reaches a phone, where a package prefix and an error code are the whole
+	// screen and none of the meaning.
 	switch {
 	case was != StateFailed && first:
-		m.onFailure(plugin, tunnelID, account, err.Error(), retryable)
+		m.onFailure(plugin, tunnelID, account, msg, retryable)
 	case retryable && attempt == stillDownAfter:
 		m.onFailure(plugin, tunnelID, account,
-			fmt.Sprintf("still not connecting after %d attempts: %s", attempt, err.Error()), true)
+			fmt.Sprintf("Still not connecting after %d attempts. %s", attempt, msg), true)
 	case !retryable && was != StateFailed:
 		// A failure that was being retried and has now become final: the
 		// person who was told mcpd would keep trying needs to know it will
 		// not.
-		m.onFailure(plugin, tunnelID, account, err.Error(), false)
+		m.onFailure(plugin, tunnelID, account, msg, false)
 	}
 }
 
@@ -1004,33 +1051,56 @@ func shorten(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// diagnose names the likeliest cause of a failure to connect.
+// The sentences a person reads when a tunnel stops. Together with diagnose
+// they are every failure message this package can produce, which is what lets
+// one test hold them all to the same rules: what happened, then what to do; no
+// error code, no package prefix, no log line; a full stop at the end.
+//
+// None of them says whether mcpd will try again. The dashboard shows when the
+// next attempt is due and the notification says whether there will be one, so
+// a sentence that said it too would be the third copy on one screen.
+const (
+	// msgBadConfig: a tunnel ID or key that does not pass validation. Not
+	// retried -- it will not validate in two minutes either.
+	msgBadConfig = "This connector's settings are not valid. Check its tunnel ID " +
+		"and the account it uses."
+	// msgCannotBuild: the MCP server behind the tunnel could not be built.
+	msgCannotBuild = "mcpd could not set this connector up. Try restarting it."
+	// msgUnreachable: the tunnel could not be dialled. Worth retrying.
+	msgUnreachable = "mcpd could not reach OpenAI's tunnel service."
+)
+
+// diagnose names the likeliest cause of a failure to connect, in words a
+// person can act on.
 //
 // The two credentials involved look alike and are obtained from adjacent pages,
 // so the mistake is easy to make and nearly impossible to spot from a 401. An
 // admin key is recognisable by its prefix, which turns a guess into a
 // statement.
+//
+// The code stays out of the sentence and goes in Status.Code. This text is
+// read on the Tunnels page and on a phone, and neither reader can do anything
+// with tunnel_use_forbidden except be put off reading the rest.
 func diagnose(apiKey, code string) string {
-	// One sentence of cause and one of remedy. These reach a phone as a
-	// notification, where a paragraph is not read.
+	// What happened, then what to do -- two sentences, because these reach a
+	// phone as a notification, where a paragraph is not read.
 	if code == "tunnel_use_forbidden" {
 		// The same code for a tunnel that is gone and one in another
 		// organisation; only the upstream check can tell them apart, and
 		// the Tunnels page shows its answer.
-		return "OpenAI refused this account's key for this tunnel (tunnel_use_forbidden): " +
-			"the tunnel is not in this account's organisation. The Tunnels page names " +
-			"the account that owns it; assign the tunnel there, or forget it"
+		return "This tunnel belongs to a different ChatGPT organisation, so this " +
+			"account cannot use it. Move it to the account that owns it, or forget it."
 	}
 	if code == "token_invalidated" {
-		return "OpenAI has invalidated this account's key (token_invalidated). " +
-			"Paste a new runtime key into the account under Settings › ChatGPT"
+		return "OpenAI no longer accepts this account's key. Paste a new runtime " +
+			"key into the account under Settings › ChatGPT."
 	}
 	if strings.HasPrefix(apiKey, "sk-admin-") {
-		return "The account's key is an admin key (sk-admin-…), which cannot run a " +
-			"tunnel. Paste a runtime key into the account under Settings › ChatGPT"
+		return "This account's key is an admin key, which cannot run a tunnel. " +
+			"Paste a runtime key into the account under Settings › ChatGPT."
 	}
-	return "OpenAI rejected the key (invalid_api_key). Check the account's runtime " +
-		"key under Settings › ChatGPT has Tunnels Read and Use"
+	return "OpenAI did not accept this account's key. Check that the runtime key " +
+		"under Settings › ChatGPT has Tunnels Read and Use."
 }
 
 // Config returns the configuration this tunnel is running with, so a caller

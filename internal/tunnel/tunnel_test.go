@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -446,13 +447,15 @@ func TestFailReportsOncePerFailure(t *testing.T) {
 		got = append(got, plugin+"|"+tunnelID+"|"+reason)
 	}
 
-	m.fail(errors.New("the control plane rejected the key"), false)
-	m.fail(errors.New("the control plane rejected the key"), false)
+	m.fail("OpenAI did not accept this account's key.",
+		errors.New("tunnel: the control plane rejected the key"), false)
+	m.fail("OpenAI did not accept this account's key.",
+		errors.New("tunnel: the control plane rejected the key"), false)
 
 	if len(got) != 1 {
 		t.Fatalf("want one report, got %d: %v", len(got), got)
 	}
-	if want := "graylog|tunnel_abc|the control plane rejected the key"; got[0] != want {
+	if want := "graylog|tunnel_abc|OpenAI did not accept this account's key."; got[0] != want {
 		t.Errorf("reported %q, want %q", got[0], want)
 	}
 	if s := m.Status(); s.State != StateFailed {
@@ -477,7 +480,7 @@ func TestGroupPassesTheFailureHookToItsManagers(t *testing.T) {
 	if m == nil {
 		t.Fatal("the tunnel was not built")
 	}
-	m.fail(errors.New("boom"), false)
+	m.fail(msgCannotBuild, errors.New("boom"), false)
 	if called != 1 {
 		t.Fatalf("the group's hook was not given to the manager: called %d times", called)
 	}
@@ -495,7 +498,7 @@ func TestSupervisor_RetriesOnlyWhatCouldWork(t *testing.T) {
 	retryBase = time.Hour
 	t.Cleanup(func() { retryBase = restore })
 
-	m.fail(errors.New("the control plane could not be reached"), true)
+	m.fail(msgUnreachable, errors.New("tunnel: the control plane could not be reached"), true)
 	s := m.Status()
 	if s.Attempts != 1 || s.NextRetryAt == nil {
 		t.Fatalf("a retryable failure should schedule attempt 1: %+v", s)
@@ -503,7 +506,7 @@ func TestSupervisor_RetriesOnlyWhatCouldWork(t *testing.T) {
 
 	// A second failure while one is already scheduled does not stack a
 	// second timer.
-	m.fail(errors.New("still unreachable"), true)
+	m.fail(msgUnreachable, errors.New("tunnel: still unreachable"), true)
 	if s := m.Status(); s.Attempts != 1 {
 		t.Fatalf("attempts = %d, want the pending one only", s.Attempts)
 	}
@@ -517,7 +520,8 @@ func TestSupervisor_RetriesOnlyWhatCouldWork(t *testing.T) {
 	}
 
 	final := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
-	final.fail(errors.New("OpenAI did not recognise that key"), false)
+	final.fail(diagnose("sk-proj-x", "invalid_api_key"),
+		errors.New("tunnel: OpenAI did not recognise that key"), false)
 	if s := final.Status(); s.NextRetryAt != nil || s.State != StateFailed {
 		t.Fatalf("a final failure must not be retried: %+v", s)
 	}
@@ -547,7 +551,7 @@ func TestSupervisor_SaysWhenRetryingHasNotWorked(t *testing.T) {
 		reports = append(reports, fmt.Sprintf("%v:%s", retrying, reason))
 	}
 	for i := 0; i < stillDownAfter; i++ {
-		m.fail(errors.New("unreachable"), true)
+		m.fail(msgUnreachable, errors.New("tunnel: unreachable"), true)
 		// Each attempt is scheduled and, in the real thing, fires; here the
 		// timer is cleared by hand so the next failure counts as an attempt.
 		m.mu.Lock()
@@ -560,7 +564,7 @@ func TestSupervisor_SaysWhenRetryingHasNotWorked(t *testing.T) {
 	if len(reports) != 2 {
 		t.Fatalf("want the first failure and the still-down report, got %v", reports)
 	}
-	if !strings.HasPrefix(reports[0], "true:") || !strings.Contains(reports[1], "still not connecting after") {
+	if !strings.HasPrefix(reports[0], "true:") || !strings.Contains(reports[1], "Still not connecting after") {
 		t.Errorf("reports = %v", reports)
 	}
 }
@@ -614,6 +618,11 @@ func TestCredentialRejection_KnowsAForbiddenTunnel(t *testing.T) {
 	}
 	if !strings.Contains(diagnose("sk-proj-x", "tunnel_use_forbidden"), "organisation") {
 		t.Error("the diagnosis should say the tunnel is in another organisation")
+	}
+	// The code is a fact about the failure, not a word in the sentence: it
+	// travels in Status.Code so the page can show it under Technical details.
+	if strings.Contains(diagnose("sk-proj-x", "tunnel_use_forbidden"), "tunnel_use_forbidden") {
+		t.Error("the diagnosis should not quote the error code at a person")
 	}
 	if !pollFailure(line) {
 		t.Error("a poll backing off is trouble, whatever level the client filed it under")
@@ -726,16 +735,171 @@ func TestRejectedKey_IsReportedOnce(t *testing.T) {
 	m := NewManager(Config{Enabled: true, Plugin: "graylog", TunnelID: "tunnel_abc"}, nil, discardLogger())
 	m.onFailure = func(_, _, _, reason string, _ bool) { reports = append(reports, reason) }
 
-	m.fail(errors.New("tunnel: OpenAI rejected the key"), false)
+	m.fail("OpenAI did not accept this account's key.",
+		errors.New("tunnel: OpenAI rejected the key"), false)
 	if err := m.halt(t.Context()); err != nil {
 		t.Fatalf("halt: %v", err)
 	}
 	s := m.Status()
-	if s.State != StateFailed || !strings.Contains(s.Message, "rejected") {
+	if s.State != StateFailed || !strings.Contains(s.Message, "did not accept") {
 		t.Fatalf("halting must keep the failure and its reason: %+v", s)
 	}
 	// Nothing else to say: the failure is already recorded and reported.
 	if len(reports) != 1 {
 		t.Fatalf("want one report, got %d: %v", len(reports), reports)
+	}
+}
+
+// Every failure message this package produces is a sentence for a person.
+//
+// The bug: Message was `err.Error()` of a wrapped Go error, so the dashboard
+// and a phone notification both read "tunnel: OpenAI refused this account's
+// key for this tunnel (tunnel_use_forbidden): the tunnel is not in this
+// account's organisation. …" -- a package prefix, an error code and a colon
+// before anything a person could act on. The evidence now lives in Detail and
+// Code; this holds the sentences to the rules that were broken.
+func TestFailureMessages_AreSentencesNotErrors(t *testing.T) {
+	bracketedCode := regexp.MustCompile(`\([a-z]+(_[a-z]+)+\)`)
+
+	messages := map[string]string{
+		"bad config":           msgBadConfig,
+		"cannot build":         msgCannotBuild,
+		"unreachable":          msgUnreachable,
+		"tunnel_use_forbidden": diagnose("sk-proj-x", "tunnel_use_forbidden"),
+		"token_invalidated":    diagnose("sk-proj-x", "token_invalidated"),
+		"invalid_api_key":      diagnose("sk-proj-x", "invalid_api_key"),
+		"admin key by mistake": diagnose("sk-admin-x", "invalid_api_key"),
+	}
+	for name, msg := range messages {
+		t.Run(name, func(t *testing.T) {
+			if strings.HasPrefix(msg, "tunnel: ") {
+				t.Errorf("%q starts with a package prefix", msg)
+			}
+			if bracketedCode.MatchString(msg) {
+				t.Errorf("%q quotes an error code at a person", msg)
+			}
+			if !strings.HasSuffix(msg, ".") {
+				t.Errorf("%q does not end in a full stop", msg)
+			}
+			if strings.Contains(msg, "level=") || strings.Contains(msg, "error_code=") {
+				t.Errorf("%q carries a log line", msg)
+			}
+		})
+	}
+}
+
+// A failure keeps its sentence and its evidence apart, and the notification
+// gets the sentence.
+func TestFail_SeparatesTheSentenceFromTheEvidence(t *testing.T) {
+	tests := []struct {
+		name string
+		// provoke drives a real failure path and returns nothing; the
+		// assertions read Status afterwards.
+		provoke  func(t *testing.T, m *Manager)
+		wantMsg  string
+		wantCode string
+	}{
+		{
+			name: "settings that do not validate",
+			provoke: func(t *testing.T, m *Manager) {
+				t.Helper()
+				_ = m.Start(context.Background())
+			},
+			wantMsg: msgBadConfig,
+		},
+		{
+			name: "an MCP server that cannot be built",
+			provoke: func(t *testing.T, m *Manager) {
+				t.Helper()
+				_ = m.Start(context.Background())
+			},
+			wantMsg: msgCannotBuild,
+		},
+		{
+			name: "a tunnel that cannot be dialled",
+			provoke: func(t *testing.T, m *Manager) {
+				t.Helper()
+				_ = m.Start(context.Background())
+			},
+			wantMsg: msgUnreachable,
+		},
+		{
+			name: "a credential the control plane refuses",
+			provoke: func(t *testing.T, m *Manager) {
+				t.Helper()
+				m.failWithCode("tunnel_use_forbidden",
+					diagnose("sk-proj-x", "tunnel_use_forbidden"),
+					errors.New("tunnel: OpenAI refused this account's key (tunnel_use_forbidden)"),
+					false)
+			},
+			wantMsg:  diagnose("sk-proj-x", "tunnel_use_forbidden"),
+			wantCode: "tunnel_use_forbidden",
+		},
+	}
+
+	// One manager per case, built so that the named path is the one that
+	// fails: a malformed id fails validation, a factory that errors fails the
+	// build, and a factory returning no server fails the runtime.
+	factories := map[string]ServerFactory{
+		"an MCP server that cannot be built": func(*auth.Principal) (*mcp.Server, error) {
+			return nil, errors.New("no such plugin")
+		},
+		"a tunnel that cannot be dialled": func(*auth.Principal) (*mcp.Server, error) {
+			return nil, nil
+		},
+		"a credential the control plane refuses": nil,
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{
+				Enabled:   true,
+				Plugin:    "echo",
+				TunnelID:  "tunnel_0123456789abcdef0123456789abcdef",
+				APIKey:    "sk-proj-x",
+				Principal: testPrincipal(),
+			}
+			if tc.wantMsg == msgBadConfig {
+				cfg.TunnelID = "tunnel_not-hex"
+			}
+			var reported []string
+			m := NewManager(cfg, factories[tc.name], discardLog())
+			m.onFailure = func(_, _, _, reason string, _ bool) { reported = append(reported, reason) }
+			tc.provoke(t, m)
+			t.Cleanup(func() { _ = m.Stop(context.Background()) })
+
+			s := m.Status()
+			if s.Message != tc.wantMsg {
+				t.Errorf("Message = %q, want %q", s.Message, tc.wantMsg)
+			}
+			// Null would be "nothing failed"; every failure knows what it was.
+			if s.Detail == "" {
+				t.Error("the evidence behind the sentence was thrown away")
+			}
+			if s.Code != tc.wantCode {
+				t.Errorf("Code = %q, want %q", s.Code, tc.wantCode)
+			}
+			// The phone gets the sentence, not the wrapped error.
+			if len(reported) != 1 || reported[0] != tc.wantMsg {
+				t.Errorf("notified %q, want [%q]", reported, tc.wantMsg)
+			}
+		})
+	}
+}
+
+// A tunnel that connects forgets the failure whole: a sentence left without
+// its evidence, or evidence without its sentence, is a status that
+// contradicts itself.
+func TestClearFailure_ForgetsSentenceAndEvidenceTogether(t *testing.T) {
+	m := NewManager(Config{Enabled: true, TunnelID: "tunnel_abc"}, nil, discardLog())
+	m.failWithCode("invalid_api_key", diagnose("sk-proj-x", "invalid_api_key"),
+		errors.New("tunnel: refused"), false)
+
+	m.mu.Lock()
+	m.clearFailureLocked()
+	m.mu.Unlock()
+
+	if s := m.Status(); s.Message != "" || s.Detail != "" || s.Code != "" {
+		t.Fatalf("a cleared failure left something behind: %+v", s)
 	}
 }
