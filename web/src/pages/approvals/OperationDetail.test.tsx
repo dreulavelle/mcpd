@@ -29,9 +29,8 @@ function operationFixture(overrides: Partial<Operation> = {}): Operation {
 
 function mount(op: Operation, role: "user" | "admin", audit: AuditRecord[] = []) {
   vi.spyOn(api, "operation").mockResolvedValue({ operation: op, audit });
-  // The page names people rather than principals where the session may read
-  // the accounts, which an administrator's may.
-  vi.spyOn(api, "users").mockResolvedValue({ users: [], count: 0 });
+  // A person's name arrives on the record, resolved server-side. Only a key's
+  // name is looked up, and only where the session may read the accounts.
   vi.spyOn(api, "keys").mockResolvedValue({ keys: [], count: 0 });
   return renderWith(<OperationDetail id={op.id} />, { session: sessionFor(role) });
 }
@@ -184,6 +183,24 @@ describe("what the record will prove", () => {
    * Three values of `verified`, three sentences. The page must not have a
    * fourth reading in which two of them look the same.
    */
+  /**
+   * A change being applied right now has not been read back because there is
+   * nothing to read back yet.
+   *
+   * Fixing the indeterminate case by asking "has it run" swept `executing` in
+   * with it, and a change running at that moment reported "Never checked --
+   * nobody read the system again", which reads as a check that was skipped.
+   */
+  it("says a change running now has nothing to read back yet", async () => {
+    mount(operationFixture({ state: "executing", attempts: 1, verified: null }), "admin");
+
+    expect(await screen.findByText("Not yet")).toBeInTheDocument();
+    expect(screen.getByText(/It is running now, so nothing has been read back yet/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText("Never checked")).not.toBeInTheDocument();
+    expect(screen.queryByText(/has not run yet/i)).not.toBeInTheDocument();
+  });
+
   it("says something different for each of the three outcomes", async () => {
     const expected: [boolean | null, string, RegExp][] = [
       [true, "Confirmed", /read again afterwards, and it showed the change/i],

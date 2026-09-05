@@ -335,12 +335,21 @@ function outcomeProof(op: Operation): {
       detail: "Reading the system again would prove nothing for this kind of change, so nothing was read back.",
     };
   }
+  // A change being applied right now has not been read back because there is
+  // nothing to read back yet, which is not the same as nobody having looked.
+  if (op.state === "executing") {
+    return {
+      tone: "neutral",
+      mark: "Not yet",
+      detail: "It is running now, so nothing has been read back yet.",
+    };
+  }
   // Whether it ran, not whether it settled. `indeterminate` is not terminal --
   // it is exactly the state where something did run and nobody read it back --
   // so keying this on `terminal` told the one operator who most needs the truth
   // that it had not run yet.
-  const ran = op.state === "executing" || op.state === "succeeded" ||
-    op.state === "failed" || op.state === "indeterminate";
+  const ran = op.state === "succeeded" || op.state === "failed" ||
+    op.state === "indeterminate";
   return {
     tone: "neutral",
     mark: "Never checked",
