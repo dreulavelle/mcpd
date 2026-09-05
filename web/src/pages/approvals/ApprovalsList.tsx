@@ -134,9 +134,16 @@ export function ApprovalsList() {
       api.operations(undefined, 200),
       api.operations("pending_approval", 200),
     ]);
+    // The unfiltered answer wins where both carry a change. The two calls are
+    // concurrent, and a state only moves forward out of pending: a row that is
+    // pending in one answer and applied in the other has been applied, and
+    // letting the pending copy overwrite it would put a settled change back in
+    // the queue.
     const byId = new Map<string, Operation>();
     for (const op of all.operations ?? []) byId.set(op.id, op);
-    for (const op of pending.operations ?? []) byId.set(op.id, op);
+    for (const op of pending.operations ?? []) {
+      if (!byId.has(op.id)) byId.set(op.id, op);
+    }
     return { operations: [...byId.values()] };
   }, []);
   const { data, error } = useLoader(load, "Couldn't load proposed changes.", 10_000);
@@ -224,7 +231,9 @@ export function ApprovalsList() {
           No assistant has proposed anything yet.
         </EmptyState>
       ) : matching.length === 0 ? (
-        <EmptyState mark={<ClipboardCheck />} title="Nothing to decide">
+        // Not "Nothing to decide": changes may well be waiting, and the filter
+        // is the only reason none of them is on the screen.
+        <EmptyState mark={<ClipboardCheck />} title="Nothing here">
           No change matches that.{" "}
           <Button
             variant="link" className="h-auto p-0"
@@ -428,19 +437,26 @@ function SettledRow({ op, name }: {
   const tone = stateTone(op.state);
   const Mark = MARKS[op.state] ?? Check;
 
-  // Who the row names, and only where the record actually says.
+  // Who the row names, and only what the record actually says.
   //
+  // `approved_by` is whoever approved it, which on most rows is also whoever
+  // settled it. On these three it is not: approved -> cancelled and
+  // approved -> expired are both legal, and rejecting never writes the field
+  // at all. Naming the approver beside "withdrawn" put the wrong person on
+  // the act, so on these the name keeps its own verb and the outcome beside
+  // it stays subjectless.
+  const approverOnly = op.state === "rejected" || op.state === "cancelled" ||
+    op.state === "expired";
   // A rule is named as a rule: `approved_by` on one of those is
-  // `system:policy`, which is not an account. Where nobody is recorded as
-  // having settled it -- rejecting never writes `approved_by` -- the row says
-  // who proposed it and leaves the outcome subjectless. Falling back to the
-  // requester read as "ChatGPT turned its own change down", which is a
-  // sentence about something that did not happen.
-  const who = op.authorized_by_rule
+  // `system:policy`, which is not an account and must not read as one.
+  const decided = op.authorized_by_rule
     ? name("system:policy")
     : op.approved_by
       ? name(op.approved_by, op.approved_by_name)
-      : `proposed by ${name(op.requested_by, op.requested_by_name)}`;
+      : "";
+  const who = decided
+    ? approverOnly ? `approved by ${decided}` : decided
+    : `proposed by ${name(op.requested_by, op.requested_by_name)}`;
 
   // Before it ran, "not checked" is true of everything and says nothing.
   const ran = op.state === "succeeded" || op.state === "failed" ||

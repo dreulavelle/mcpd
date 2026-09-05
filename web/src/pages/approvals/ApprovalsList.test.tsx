@@ -186,6 +186,34 @@ describe("what is waiting", () => {
     expect(within(region).getAllByRole("heading", { level: 3 })).toHaveLength(2);
   });
 
+  /**
+   * The two calls are concurrent and either can be the older answer, but a
+   * state only moves forward out of pending. So a change the unfiltered call
+   * says is applied has been applied, and the pending copy of it is stale --
+   * letting it overwrite would put a settled change back in the queue and
+   * offer somebody a decision on something already done.
+   */
+  it("does not put a change back in the queue on a stale pending answer", async () => {
+    const id = "op-raced";
+    const settled = operation({ id, plugin: "echo", action: "label.set", state: "succeeded" });
+    const stale = operation({
+      id, plugin: "echo", action: "label.set", state: "pending_approval",
+      terminal: false, verified: undefined, terminal_at: undefined,
+    });
+
+    vi.spyOn(api, "operations").mockImplementation(async (state) =>
+      state === "pending_approval"
+        ? { operations: [stale], count: 1 }
+        : { operations: [settled], count: 1 });
+    vi.spyOn(api, "keys").mockResolvedValue({ keys: [], count: 0 });
+    renderWith(<ApprovalsList />, { session: sessionFor("admin") });
+
+    expect(await screen.findByText("Nothing is waiting on you.")).toBeInTheDocument();
+    const lately = screen.getByRole("region", { name: "Lately" });
+    expect(within(lately).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(lately).getByRole("listitem").textContent).toContain("applied");
+  });
+
   // Past the deadline, "Runs out 5 minutes ago" is arithmetic rather than the
   // fact, and the fact is that it is too late.
   it("says a lapsed proposal is out of time rather than counting backwards", async () => {
@@ -198,6 +226,18 @@ describe("what is waiting", () => {
     const region = await screen.findByRole("region", { name: /waiting on you/i });
     expect(within(region).getByText("Out of time")).toBeInTheDocument();
     expect(within(region).queryByText(/Runs out/)).not.toBeInTheDocument();
+  });
+
+  // "Nothing to decide" is a claim about the host. With two changes waiting
+  // and a filter hiding them it is a false one, and the reader is one click
+  // from seeing that it is.
+  it("does not say there is nothing to decide when a filter is what emptied the page", async () => {
+    mount(aBusyHost());
+    await screen.findByRole("region", { name: /waiting on you/i });
+
+    await userEvent.type(screen.getByLabelText("Find a change"), "zzzz");
+    expect(await screen.findByText("Nothing here")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing to decide")).not.toBeInTheDocument();
   });
 
   it("says a fresh host has had nothing proposed rather than showing an empty queue", async () => {
@@ -273,17 +313,55 @@ describe("what became of the rest", () => {
   });
 
   it("names the person where the record does say who decided", async () => {
+    // Succeeded, because a rejected change with an approver on it is a record
+    // the server never writes: rejecting leaves `approved_by` empty.
     mount([operation({
-      id: "op-r", plugin: "threecx", action: "password.reset",
-      state: "rejected", verified: undefined, changes: undefined,
+      id: "op-a", plugin: "threecx", action: "password.reset",
+      state: "succeeded", verified: true, changes: undefined,
       approved_by: "user:dreu@example.com", approved_by_name: "Dreu Lavelle",
     })]);
 
     const row = (await screen.findByText(/Reset the password on threecx/))
       .closest("li")!;
     // Resolved server-side for every session, so no request is made for it.
-    expect(row.textContent).toContain("Dreu Lavelle · turned down");
+    expect(row.textContent).toContain("Dreu Lavelle · applied");
     expect(row.textContent).not.toContain("proposed by");
+  });
+
+  /**
+   * Approved and then withdrawn is a legal path, and the two acts are not the
+   * same person's.
+   *
+   * `approved_by` records the approval. Printing it beside "withdrawn" put
+   * alice's name on an act that was somebody else's, so on the states where
+   * the field is only ever the approver -- rejected, cancelled, expired --
+   * the name keeps its own verb and the outcome stays subjectless.
+   */
+  it("does not put the approver's name on a withdrawal", async () => {
+    mount([operation({
+      id: "op-c", plugin: "echo", action: "label.set",
+      state: "cancelled", verified: undefined, changes: undefined,
+      approved_by: "user:alice@example.com", approved_by_name: "Alice Doe",
+      approved_at: at(-3300),
+    })]);
+
+    const row = (await screen.findByText(/Set the label on echo/)).closest("li")!;
+    // The fragment line itself, so "approved by" has to be the first thing on
+    // it rather than merely somewhere in the row.
+    expect(row.querySelectorAll("p")[1]!.textContent)
+      .toMatch(/^approved by Alice Doe · withdrawn/);
+  });
+
+  it("says the same of a change a rule approved and a clock then ran out on", async () => {
+    mount([operation({
+      id: "op-e", plugin: "echo", action: "label.set",
+      state: "expired", verified: undefined, changes: undefined,
+      approved_by: "system:policy", authorized_by_rule: "routine-labels",
+    })]);
+
+    const row = (await screen.findByText(/Set the label on echo/)).closest("li")!;
+    expect(row.querySelectorAll("p")[1]!.textContent)
+      .toMatch(/^approved by a standing rule · ran out of time/);
   });
 
   // A delete records no new value. Without the plugin's own sentence, two
