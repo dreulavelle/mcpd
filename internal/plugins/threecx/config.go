@@ -168,7 +168,18 @@ func (c Config) Configured() bool {
 // configuration that is present and wrong, because that fails later, further
 // away, and with a worse message.
 func (c Config) Validate() error {
-	seenName := map[string]string{}
+	// Keyed by row rather than by label: two customers both called "Acme" have
+	// the same label, so comparing labels lets the duplicate through -- which
+	// it did, until every call to either was refused as ambiguous at run time
+	// instead of the configuration being refused here. The row index is what
+	// distinguishes "this row's alias repeats its own name", which is
+	// harmless, from "two rows answer to one name", which is a call that
+	// cannot be resolved without guessing.
+	type owner struct {
+		row   int
+		label string
+	}
+	seenName := map[string]owner{}
 	seenHost := map[string]string{}
 	for i, cu := range c.Customers {
 		label := strings.TrimSpace(cu.Name)
@@ -182,10 +193,10 @@ func (c Config) Validate() error {
 		// resolved without guessing, and this integration does not guess.
 		for _, n := range cu.names() {
 			folded := strings.ToLower(n)
-			if other, taken := seenName[folded]; taken && other != label {
-				return fmt.Errorf("3cx: %q names both %s and %s; a name or alias has to point at one customer", n, other, label)
+			if other, taken := seenName[folded]; taken && other.row != i {
+				return fmt.Errorf("3cx: %q names both %s and %s; a name or alias has to point at one customer", n, other.label, label)
 			}
-			seenName[folded] = label
+			seenName[folded] = owner{row: i, label: label}
 		}
 		host := strings.TrimSpace(cu.Host)
 		if host == "" {

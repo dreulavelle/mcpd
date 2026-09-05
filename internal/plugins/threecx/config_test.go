@@ -98,9 +98,22 @@ func TestConfig_ConfiguredNeedsEveryCustomerComplete(t *testing.T) {
 // system: either is a call that could only be resolved by guessing.
 func TestConfig_RefusesCollidingCustomers(t *testing.T) {
 	cases := map[string]Config{
-		"same name": {Customers: []Customer{
+		"same name, folded": {Customers: []Customer{
 			{Name: "Acme", Host: "a.example", Extension: "100", Password: "p"},
 			{Name: "acme", Host: "b.example", Extension: "100", Password: "p"},
+		}},
+		// Two rows spelt identically. This slipped through until the guard
+		// stopped comparing labels: both labels are the string "Acme", so the
+		// check compared a value with itself and found no collision. Every
+		// call to either was then refused as ambiguous at run time, which is a
+		// worse place to learn about it than the settings page.
+		"same name, exactly": {Customers: []Customer{
+			{Name: "Acme", Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Acme", Host: "b.example", Extension: "101", Password: "p"},
+		}},
+		"same alias on two customers": {Customers: []Customer{
+			{Name: "Acme Dental", Aliases: []string{"acme"}, Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Acme Logistics", Aliases: []string{"acme"}, Host: "b.example", Extension: "101", Password: "p"},
 		}},
 		"alias is another's name": {Customers: []Customer{
 			{Name: "Acme Dental", Aliases: []string{"globex"}, Host: "a.example", Extension: "100", Password: "p"},
