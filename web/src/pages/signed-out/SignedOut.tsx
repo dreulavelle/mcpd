@@ -290,7 +290,10 @@ function SignUp({ onDone, onCancel }: {
     try {
       onDone(await api.register(email.trim(), password));
     } catch (err) {
-      setError(problemText(err, "Couldn't reach mcpd. Is it running?"));
+      // problemText covers a 500 mcpd itself answered, so this cannot claim
+      // mcpd is not running. The two sites that branch on ApiError themselves
+      // still can, because they only reach it when nothing answered.
+      setError(problemText(err, "Couldn't sign up. Try again in a moment."));
     } finally {
       setBusy(false);
     }

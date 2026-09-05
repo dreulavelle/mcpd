@@ -191,7 +191,7 @@ function RowDialog({ field, row, onClose, onSaved }: {
       onSaved();
     } catch (e) {
       if (e instanceof ApiError && e.problems?.length) setProblems(e.problems);
-      else setProblems([problemText(e, "Couldn't save. Is mcpd still running?")]);
+      else setProblems([problemText(e, "Couldn't save. Try again in a moment.")]);
     } finally {
       setBusy(false);
     }

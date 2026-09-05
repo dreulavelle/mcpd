@@ -989,16 +989,18 @@ export class ApiError extends Error {
  *
  * 500 is the exception, and the only one: it means something went wrong
  * inside, which the log has and the reader cannot use. That one gets the
- * page's own sentence, and the correlation id in the body is what somebody on
- * a machine you cannot reach quotes back. Anything that is not an ApiError
- * never reached the server at all.
+ * page's own sentence with the correlation id after it, because the id is the
+ * only thing somebody on a machine you cannot reach can quote back -- and
+ * without it here it was in the response body and on no screen. Anything that
+ * is not an ApiError never reached the server at all.
  *
  * Every toast and every loader goes through this, so the rule is decided once
  * rather than at sixty call sites that each read `e.detail`.
  */
 export function problemText(err: unknown, fallback: string): string {
-  if (err instanceof ApiError && err.status !== 500 && err.detail) return err.detail;
-  return fallback;
+  if (!(err instanceof ApiError)) return fallback;
+  if (err.status !== 500 && err.detail) return err.detail;
+  return err.correlationId ? `${fallback} Reference ${err.correlationId}.` : fallback;
 }
 
 // Only the CSRF token, never the session: that lives in an HttpOnly cookie

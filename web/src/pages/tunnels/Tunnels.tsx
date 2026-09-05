@@ -832,6 +832,11 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
               {r.kind === "gone" ? "Forget" : "Remove"}
             </Button>
           )}
+          {/* An action, and available for every reading. Inside the technical
+              details it vanished for a tunnel with no code, detail or client
+              line -- which is every working one, and every one whose problem
+              is its account. */}
+          <CopyDiagnostics row={row} reading={r} />
         </div>
       )}
 
@@ -935,14 +940,11 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
                 </p>
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-3">
-              {(admin || manages) && <CopyDiagnostics row={row} reading={r} />}
-              {admin && (
-                <Link to="/logs" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-                  Every line from this host, on Logs <ArrowRight className="size-3" aria-hidden="true" />
-                </Link>
-              )}
-            </div>
+            {admin && (
+              <Link to="/logs" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                Every line from this host, on Logs <ArrowRight className="size-3" aria-hidden="true" />
+              </Link>
+            )}
           </div>
         </details>
       )}

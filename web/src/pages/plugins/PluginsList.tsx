@@ -196,10 +196,11 @@ export function PluginsList() {
           <div className="space-y-1.5">
             {failing.map((i) => (
               <p key={i.name}>
-                {/* The name is here and not in the message: the host stopped
-                    putting it there when this line started reading "graylog
-                    graylog did not start". */}
-                <strong>{i.name}</strong> {i.problem}
+                {/* The message is a whole sentence about "this plugin", so
+                    the name labels it rather than starting it. Running the
+                    two together read "graylog This plugin could not start." */}
+                <strong className="block">{i.name}</strong>
+                {i.problem}
               </p>
             ))}
             <p className="text-xs">

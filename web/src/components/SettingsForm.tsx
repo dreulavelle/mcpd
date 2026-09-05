@@ -65,7 +65,7 @@ export function SettingsForm({ groups, settings, links, placeholders, onSaved, r
       // A bad value comes back as `problems` with no `detail` at all, so
       // falling through would show "invalid_settings" and name no field.
       if (e instanceof ApiError && e.problems?.length) setProblems(e.problems);
-      else setProblems([problemText(e, "Couldn't save. Is mcpd still running?")]);
+      else setProblems([problemText(e, "Couldn't save. Try again in a moment.")]);
       notify("problem", "Nothing was saved.");
     } finally {
       setBusy(false);

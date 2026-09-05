@@ -72,7 +72,7 @@ export function attention(input: {
       // happened, and the quote is somebody else speaking. The first sentence
       // only -- the whole diagnosis is on the plugin's page.
       text: `${p.name} is ${p.health === "degraded" ? "having trouble" : "not working"}.${
-        p.health_message ? ` It said: "${firstSentence(p.health_message)}"` : ""}`,
+        p.health_message?.trim() ? ` It said: “${firstSentence(p.health_message)}”` : ""}`,
       to: `/plugins/${encodeURIComponent(p.name)}`, linkLabel: p.name,
     });
   }
@@ -120,10 +120,10 @@ export function attention(input: {
         to: `/plugins/${encodeURIComponent(s.name)}`, linkLabel: s.name,
       });
     }
-    if (s.enabled && s.discovery.error) {
+    if (s.enabled && s.discovery.error?.trim()) {
       out.push({
         key: `discovery:${s.name}`, tone: "attention",
-        text: `${s.name} could not be asked what it offers. It said: "${firstSentence(s.discovery.error)}"`,
+        text: `${s.name} could not be asked what it offers. It said: “${firstSentence(s.discovery.error)}”`,
         to: `/plugins/${encodeURIComponent(s.name)}`, linkLabel: s.name,
       });
     }

@@ -96,7 +96,7 @@ describe("what needs attention", () => {
         health_message: "/health timed out inside Textable (HTTP 408). This is not transient: the whole list has to be built in one response. Do not retry." })],
     });
     expect(items[0]!.text).toBe(
-      `textable is having trouble. It said: "/health timed out inside Textable (HTTP 408). …"`);
+      "textable is having trouble. It said: “/health timed out inside Textable (HTTP 408). …”");
   });
 
   // The bug: a tunnel's raw client log line, its wrapped Go error and the
