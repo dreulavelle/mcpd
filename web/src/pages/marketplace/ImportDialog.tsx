@@ -154,8 +154,9 @@ export function ImportDialog({
               </p>
             )}
             <p id="mcp-name-help" className="text-xs text-muted-foreground">
-              What this server is called everywhere else in mcpd. Short and
-              lowercase, with no dots or slashes.
+              What this server is called everywhere else in mcpd. Lowercase
+              letters, digits, dashes or underscores, 2 to 32 characters,
+              starting with a letter — not the server's long published name.
             </p>
           </div>
 
