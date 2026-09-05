@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { Boxes } from "lucide-react";
 import {
   api,
@@ -133,14 +133,14 @@ export function PluginsList() {
     !q || [String(r.name ?? ""), String(r.title ?? ""), String(r.health ?? "")].join(" ").toLowerCase().includes(q);
   const builtin = rows?.filter((r) => r.runtime === "builtin" && matches(r)) ?? [];
   const remote = rows?.filter((r) => r.runtime === "mcp" && matches(r)) ?? [];
+  // Removed, and the file still lists them. They are not on this host, so they
+  // are not in the table; the Add dialog is where they can be added again.
+  const removed = instances.filter((i) => i.removed);
   // Two different things to say, so two different notices. An instance nobody
   // has finished filling in is waiting and will serve on its own; one that
   // tried and failed is not, and telling somebody it "starts as soon as it has
   // what it needs" underneath a certificate error reads as the host not having
   // noticed.
-  // Removed, and the file still lists them. They are not on this host, so they
-  // are not in the table; the Add dialog is where they can be brought back.
-  const removed = instances.filter((i) => i.removed);
   const notServing = instances.filter((i) => i.enabled && !i.mounted);
   const failing = notServing.filter((i) => !i.missing?.length && i.problem);
   const waiting = notServing.filter((i) => i.missing?.length || !i.problem);
@@ -363,7 +363,7 @@ function PluginTable({ rows }: { rows: PluginRow[] }) {
  * The server's own note is not used for the same reason -- it cannot tell the
  * two apart either.
  */
-export function AddDeclaredButton({ name, label, pending, done, failed, onChanged }: {
+export function ForgetRemovalButton({ name, label, pending, done, failed, onChanged }: {
   name: string;
   label: string;
   pending: string;
@@ -426,7 +426,7 @@ function StaleRemovals({ rows, mayManage, onChanged }: {
               on {when(r.removed_at)}
             </span>
             {mayManage && (
-              <AddDeclaredButton
+              <ForgetRemovalButton
                 name={r.name} label="Forget" pending="Forgetting…"
                 done={`Forgot the removal of ${r.name}.`}
                 failed="Couldn't forget it."
@@ -449,6 +449,9 @@ function AddPlugin({ types, declared, open, onOpenChange, onAdded }: {
   onAdded: () => void;
 }) {
   const notify = useNotify();
+  // Not a fixed string: a dialog is one instance today and there is nothing
+  // stopping a second, and two elements sharing an id give the wrong label.
+  const declaredHeading = useId();
   const [type, setType] = useState("");
   const [name, setName] = useState("");
   const [problem, setProblem] = useState("");
@@ -498,15 +501,15 @@ function AddPlugin({ types, declared, open, onOpenChange, onAdded }: {
 
         {declared.length > 0 && (
           <section
-            aria-labelledby="declared-heading"
+            aria-labelledby={declaredHeading}
             className="space-y-2 rounded-md border p-3"
           >
-            <p id="declared-heading" className="text-sm font-medium">
+            <p id={declaredHeading} className="text-sm font-medium">
               Listed in the configuration file
             </p>
             <p className="text-xs text-muted-foreground">
-              These were removed from this host. Adding one back brings it in as
-              the file lists it, with only what the file provides.
+              These were removed from this host. Adding one back brings it in
+              with nothing entered here.
             </p>
             {declared.map((i) => (
               <div
@@ -522,11 +525,11 @@ function AddPlugin({ types, declared, open, onOpenChange, onAdded }: {
                     </span>
                   )}
                 </span>
-                <AddDeclaredButton
+                <ForgetRemovalButton
                   name={i.name} label="Add" pending="Adding…"
                   done={`Added ${i.name}. Set it up on its page.`}
                   failed="Couldn't add it."
-                  onChanged={(ok) => { onAdded(); if (ok) close(false); }}
+                  onChanged={(added) => { onAdded(); if (added) close(false); }}
                 />
               </div>
             ))}

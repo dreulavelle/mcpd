@@ -296,10 +296,13 @@ describe("a plugin the configuration file declares", () => {
 
     renderWith(<PluginDetail name="weather" />);
 
-    expect(await screen.findByText(/This plugin is not on this host/)).toBeInTheDocument();
-    expect(screen.getByText(/alice removed it/)).toBeInTheDocument();
+    expect(await screen.findByText(/the settings entered here are gone/)).toBeInTheDocument();
+    expect(screen.getByText(/Removed by alice on/)).toBeInTheDocument();
     expect(screen.queryByText(/user:alice/)).not.toBeInTheDocument();
-    expect(screen.getByText(/with only what the file provides/)).toBeInTheDocument();
+    expect(screen.getByText(/so it can be added again/)).toBeInTheDocument();
+    // Nothing is left to take, so nothing offers to take it.
+    expect(screen.queryByRole("button", { name: "Forget its settings" }))
+      .not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
     // One control, not two: removing something already removed is a button
     // with nothing to do.
@@ -307,6 +310,28 @@ describe("a plugin the configuration file declares", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(add).toHaveBeenCalledWith("weather"));
+  });
+
+  /**
+   * A plugin removed by a build that kept its settings deliberately arrives
+   * here still holding credentials, and the Remove card is not drawn for
+   * something already removed -- so without this there is nowhere to take
+   * them. The removal is idempotent, so finishing it is the same call again.
+   */
+  it("offers to take the settings a removal left behind", async () => {
+    declared({
+      enabled: false, mounted: false, removed: true, stored_settings: true,
+      removed_by: "user:alice", removed_at: "2026-08-20T10:00:00Z",
+    });
+    const remove = vi.spyOn(api, "removeInstance").mockResolvedValue({ status: "removed" });
+
+    renderWith(<PluginDetail name="weather" />);
+
+    expect(await screen.findByText(/settings entered here are still stored/))
+      .toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Forget its settings" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", true));
   });
 });
 

@@ -66,7 +66,7 @@ describe("a plugin removed while the file still lists it", () => {
     expect(within(declared).getByText("echo")).toBeInTheDocument();
     // A name, not the `user:` id the API sends.
     expect(declared.textContent).toMatch(/— alice removed it/);
-    expect(declared.textContent).toMatch(/with only what the file provides/);
+    expect(declared.textContent).toMatch(/with nothing entered here/);
   });
 
   it("adds it back from the dialog", async () => {

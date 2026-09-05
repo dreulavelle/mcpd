@@ -22,7 +22,7 @@ import { Chip, healthTone, healthWords, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { AddDeclaredButton } from "./PluginsList";
+import { ForgetRemovalButton } from "./PluginsList";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useConfirm } from "@/components/confirm";
@@ -332,29 +332,79 @@ function RemovedNotice({ name, instance, mayManage, onChanged }: {
   mayManage: boolean;
   onChanged: () => void;
 }) {
+  // A removal made before the wipe existed, or one interrupted between its two
+  // halves. Saying the settings are gone here would be the one thing the
+  // operator most needs not to be told wrongly.
+  const leftover = instance.stored_settings === true;
   return (
     <Notice tone="attention">
       <div className="space-y-2">
         <p>
-          This plugin is not on this host.{" "}
-          {instance.removed_by && (
-            <>{principalWords(instance.removed_by)} removed it
-              {instance.removed_at ? ` on ${when(instance.removed_at)}` : ""}.{" "}
-            </>
-          )}
-          The configuration file still lists it, so it can be added again — as
-          the file lists it, with only what the file provides.
+          {leftover
+            ? "This plugin is not on this host, but settings entered here are still stored."
+            : "This plugin is not on this host, and the settings entered here are gone."}{" "}
+          The configuration file still lists it, so it can be added again.
         </p>
+        {instance.removed_by && (
+          <p className="text-sm">
+            Removed by {principalWords(instance.removed_by)}
+            {instance.removed_at ? ` on ${when(instance.removed_at)}` : ""}.
+          </p>
+        )}
         {mayManage && (
-          <AddDeclaredButton
-            name={name} label="Add" pending="Adding…"
-            done={`Added ${name}. Set it up below.`}
-            failed="Couldn't add it."
-            onChanged={onChanged}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <ForgetRemovalButton
+              name={name} label="Add" pending="Adding…"
+              done={`Added ${name}. Set it up below.`}
+              failed="Couldn't add it."
+              onChanged={onChanged}
+            />
+            {leftover && (
+              <FinishRemovalButton name={name} onChanged={onChanged} />
+            )}
+          </div>
         )}
       </div>
     </Notice>
+  );
+}
+
+/**
+ * Takes the settings a removal left behind.
+ *
+ * The removal endpoint is idempotent, so this is the same call again: it wipes
+ * and returns. Without it there is nowhere to reach that path, because the
+ * Remove card is not drawn for something already removed -- and every plugin
+ * removed by a build that kept its settings deliberately arrives here holding
+ * credentials with no way to take them.
+ */
+function FinishRemovalButton({ name, onChanged }: {
+  name: string;
+  onChanged: () => void;
+}) {
+  const notify = useNotify();
+  const [busy, setBusy] = useState(false);
+
+  async function finish() {
+    setBusy(true);
+    try {
+      await api.removeInstance(name, true);
+      notify("good", `The settings ${name} still had are forgotten.`);
+    } catch (e) {
+      notify("problem", problemText(e, "Couldn't forget them."));
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  }
+
+  return (
+    <Button
+      variant="outline" size="xs" className="mt-1.5"
+      disabled={busy} onClick={finish}
+    >
+      {busy ? "Forgetting…" : "Forget its settings"}
+    </Button>
   );
 }
 
