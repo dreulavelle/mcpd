@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="440" viewBox="0 0 1600 440" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">mcpd — private infrastructure, connected to AI.</title>
+  <desc id="desc">The mcpd wordmark and hub symbol on a light background, with a larger hub-and-spoke motif representing connected systems.</desc>
+  <defs>
+    <clipPath id="frame"><rect x="1" y="1" width="1598" height="438" rx="24"/></clipPath>
+  </defs>
+  <rect x="1" y="1" width="1598" height="438" rx="24" fill="#f7f8f7" stroke="#dde2e0" stroke-width="2"/>
+  <g clip-path="url(#frame)">
+    <g stroke="#e9edeb" stroke-width="2">
+      <path d="M874 0V440M0 396H1600"/>
+      <circle cx="1270" cy="218" r="276"/>
+      <circle cx="1270" cy="218" r="216"/>
+      <path d="M974 218H1600M1270 0V440"/>
+    </g>
+    <circle cx="1270" cy="218" r="160" fill="#ffffff" stroke="#dde2e0" stroke-width="2"/>
+    <g transform="translate(1062 10) scale(13)" color="#0e6d5b"><g stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+    <path d="M16 16 7 7M16 16 25 10M16 16 16 26"/>
+  </g>
+  <g fill="currentColor">
+    <circle cx="16" cy="16" r="5"/>
+    <circle cx="7" cy="7" r="3"/>
+    <circle cx="25" cy="10" r="3"/>
+    <circle cx="16" cy="26" r="3"/>
+  </g></g>
+    <circle cx="1270" cy="218" r="81" stroke="#0e6d5b" stroke-opacity=".28" stroke-width="2"/>
+    <circle cx="1153" cy="101" r="48" fill="#f7f8f7" stroke="#dde2e0" stroke-width="2"/>
+    <circle cx="1153" cy="101" r="15" fill="#0e6d5b"/>
+    <circle cx="1387" cy="140" r="48" fill="#f7f8f7" stroke="#dde2e0" stroke-width="2"/>
+    <circle cx="1387" cy="140" r="15" fill="#0e6d5b"/>
+    <circle cx="1270" cy="348" r="48" fill="#f7f8f7" stroke="#dde2e0" stroke-width="2"/>
+    <circle cx="1270" cy="348" r="15" fill="#0e6d5b"/>
+    <g fill="#0e6d5b">
+      <circle cx="874" cy="396" r="4"/>
+      <circle cx="1270" cy="2" r="4"/>
+    </g>
+  </g>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif">
+    <text x="88" y="85" fill="#0e6d5b" font-size="19" font-weight="600" letter-spacing="3">SELF-HOSTED MCP GATEWAY</text>
+    <g transform="translate(80 139) scale(4.5)" color="#0e6d5b"><g stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+    <path d="M16 16 7 7M16 16 25 10M16 16 16 26"/>
+  </g>
+  <g fill="currentColor">
+    <circle cx="16" cy="16" r="5"/>
+    <circle cx="7" cy="7" r="3"/>
+    <circle cx="25" cy="10" r="3"/>
+    <circle cx="16" cy="26" r="3"/>
+  </g></g>
+    <g transform="translate(300 185) scale(1.2)" color="#131a19"><g fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0 76V14M0 28C0 4 34 4 34 28V76M34 28C34 4 68 4 68 28V76"/>
+    <path d="M134 22C124 8 102 8 94 26C85 47 91 70 108 76C118 80 128 76 135 68"/>
+    <path d="M160 105V14M161 28C173 5 205 8 205 44C205 80 173 85 161 62"/>
+    <path d="M266 -8V76M265 28C253 5 221 8 221 44C221 80 253 85 265 62"/>
+  </g></g>
+    <text x="88" y="352" fill="#131a19" font-size="32" font-weight="500">Private infrastructure, connected to AI.</text>
+  </g>
+</svg>
