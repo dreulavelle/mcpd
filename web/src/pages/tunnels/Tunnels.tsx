@@ -146,7 +146,7 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
         detail: "Connecting to OpenAI." };
     case "connected":
       if (s.degraded) {
-        return { kind: "degraded", label: "Degraded", tone: "attention", rank: 2, bucket: "needs",
+        return { kind: "degraded", label: "Having trouble", tone: "attention", rank: 2, bucket: "needs",
           detail: "Connected, but nothing is getting through and the connection keeps reporting errors. It restarts on its own if this continues." };
       }
       if ((s.requests ?? 0) === 0 && !s.last_request_at && awaiting.has(row.id)) {
