@@ -48,7 +48,7 @@ var ErrNotRemoved = errors.New("sqlite: that plugin is not removed")
 
 // ErrPluginRemoved reports a change to a plugin whose declaration is
 // overridden by a removal. Enabling something that is removed is not a state
-// this represents: the answer is to restore it first.
+// this represents: the answer is to add it back first.
 var ErrPluginRemoved = errors.New("sqlite: that plugin is removed")
 
 // PluginOverrideStore holds the dashboard's overrides of the configuration
@@ -127,11 +127,17 @@ func (s *PluginOverrideStore) Remove(
 	})
 }
 
-// Restore puts a removed plugin back under the file's declaration.
+// Restore forgets a removal.
+//
+// Two acts wear it. When the configuration file still declares the name, the
+// plugin comes back under that declaration; when it does not, there is nothing
+// to come back and this only clears a record of a removal that now overrides
+// nothing. `declared` records which, because the trail is read long after
+// either the file or this host can be asked.
 //
 // The row goes when the removal was the only thing it carried, which is what
 // the table's CHECK requires of a row that overrides nothing.
-func (s *PluginOverrideStore) Restore(ctx context.Context, actor, name string) error {
+func (s *PluginOverrideStore) Restore(ctx context.Context, actor, name string, declared bool) error {
 	now := s.now().UnixMilli()
 	return s.db.WriteTx(ctx, now, func(u *UnitOfWork) error {
 		dropped, err := u.ExecAffected(`
@@ -150,13 +156,20 @@ func (s *PluginOverrideStore) Restore(ctx context.Context, actor, name string) e
 		if dropped+kept == 0 {
 			return ErrNotRemoved
 		}
-		return auditOverride(u, "plugin.restored", actor, name, "restore", map[string]any{
+		detail := map[string]any{
 			"source": "configuration file",
+			// Which of the two acts this was. Absent on rows written before
+			// the field existed, and anything reading the trail has to say
+			// only what it can prove of those.
+			"declared": declared,
+		}
+		if declared {
 			// Said explicitly because it is the question the entry answers:
 			// the plugin is back under whatever the file declares, not under
 			// what it declared when the removal happened.
-			"restored_to": "the configuration file's declaration",
-		})
+			detail["restored_to"] = "the configuration file's declaration"
+		}
+		return auditOverride(u, "plugin.restored", actor, name, "restore", detail)
 	})
 }
 

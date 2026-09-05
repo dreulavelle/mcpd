@@ -439,7 +439,14 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
     case "plugin.removed":
       return { phrase: ["removed the plugin ", ...serverName(subject)], facts };
     case "plugin.restored":
-      return { phrase: ["restored the plugin ", ...serverName(subject)], facts };
+      // One action name, two acts. With a declaration still in the file the
+      // plugin comes back -- holding nothing, so this is an add, not a
+      // restore. Without one there was nothing to come back and the entry
+      // records a removal being forgotten. An older row says which it was, so
+      // it gets the sentence true of both.
+      return d.declared === true
+        ? { phrase: ["added the plugin ", ...serverName(subject), " back"], facts }
+        : { phrase: ["forgot the removal of ", ...serverName(subject)], facts };
     case "plugin.enabled":
       return { phrase: ["switched on the plugin ", ...serverName(subject)], facts };
     case "plugin.disabled":

@@ -118,9 +118,12 @@ type Options struct {
 	// not run without the integration and clicking past it should be a
 	// deliberate act rather than a side effect of confirming something else.
 	//
-	// RestorePlugin undoes a removal that overrode the file. There is one
-	// because a one-way door an operator can only reopen over SSH is the
-	// problem this replaced, moved rather than solved.
+	// RestorePlugin forgets a removal that overrode the file. Where the file
+	// still declares the name that adds the plugin back -- empty, since the
+	// removal took what this host had stored -- and where it no longer does,
+	// it only clears a record. There is one because a one-way door an operator
+	// can only reopen over SSH is the problem this replaced, moved rather than
+	// solved.
 	AddPlugin        func(ctx context.Context, actor, name, typeName string) error
 	RemovePlugin     func(ctx context.Context, actor, name string, acknowledgeRequired bool) error
 	RestorePlugin    func(ctx context.Context, actor, name string) error

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { Boxes } from "lucide-react";
 import {
   api,
@@ -8,7 +8,7 @@ import {
   type StaleRemoval,
   problemText,
 } from "@/lib/api";
-import { when } from "@/lib/format";
+import { principalWords, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
 import { parseHealth, statusTone, statusWords } from "@/lib/health";
@@ -47,9 +47,6 @@ export interface PluginRow {
   healthMessage: string;
   reads: number;
   writes: number;
-  /** Removed here while the file still declares it. The row stays, to undo. */
-  removed: boolean;
-  removedBy: string;
 }
 
 /**
@@ -70,13 +67,15 @@ export function toRows(
     healthMessage: p.health_message ?? "",
     reads: p.tools.filter((t) => t.kind === "read").length,
     writes: p.tools.filter((t) => t.kind !== "read").length,
-    removed: false,
-    removedBy: "",
   }));
 
   const mounted = new Set(plugins.map((p) => p.name));
   for (const i of instances) {
     if (mounted.has(i.name)) continue;
+    // A removed plugin is not on this host, so it is not in the list of what
+    // is. The configuration file still lists it, and the way to bring it back
+    // is the Add dialog, beside every other plugin that can be added.
+    if (i.removed) continue;
     const type = types.find((t) => t.name === i.type);
     rows.push({
       name: i.name,
@@ -85,16 +84,11 @@ export function toRows(
       runtime: i.runtime ?? "builtin",
       running: false,
       health: "unhealthy",
-      // A removed plugin is neither waiting nor broken.
-      healthMessage: i.removed
-        ? "Removed here. The configuration file still declares it."
-        : i.missing?.length
-          ? `Waiting on ${i.missing.join(", ")}.`
-          : i.problem || (i.enabled ? "Not running yet." : "Switched off."),
+      healthMessage: i.missing?.length
+        ? `Waiting on ${i.missing.join(", ")}.`
+        : i.problem || (i.enabled ? "Not running yet." : "Switched off."),
       reads: 0,
       writes: 0,
-      removed: i.removed ?? false,
-      removedBy: i.removed_by ?? "",
     });
   }
 
@@ -139,6 +133,9 @@ export function PluginsList() {
     !q || [String(r.name ?? ""), String(r.title ?? ""), String(r.health ?? "")].join(" ").toLowerCase().includes(q);
   const builtin = rows?.filter((r) => r.runtime === "builtin" && matches(r)) ?? [];
   const remote = rows?.filter((r) => r.runtime === "mcp" && matches(r)) ?? [];
+  // Removed, and the file still lists them. They are not on this host, so they
+  // are not in the table; the Add dialog is where they can be added again.
+  const removed = instances.filter((i) => i.removed);
   // Two different things to say, so two different notices. An instance nobody
   // has finished filling in is waiting and will serve on its own; one that
   // tried and failed is not, and telling somebody it "starts as soon as it has
@@ -170,7 +167,8 @@ export function PluginsList() {
       />
 
       <AddPlugin
-        types={types} open={adding} onOpenChange={setAdding} onAdded={load}
+        types={types} declared={removed} open={adding}
+        onOpenChange={setAdding} onAdded={load}
       />
 
       {error && <Notice tone="problem">{error}</Notice>}
@@ -235,7 +233,7 @@ export function PluginsList() {
               title="Built in"
               description="Integrations that ship with mcpd. These can suggest changes for someone to approve."
             >
-              <PluginTable rows={builtin} mayManage={mayAdd} onChanged={load} />
+              <PluginTable rows={builtin} />
             </Section>
           )}
 
@@ -251,7 +249,7 @@ export function PluginsList() {
                 )
                 : undefined}
             >
-              <PluginTable rows={remote} mayManage={mayAdd} onChanged={load} />
+              <PluginTable rows={remote} />
             </Section>
           )}
 
@@ -279,11 +277,7 @@ function HealthSummary({ message }: { message: string }) {
   );
 }
 
-function PluginTable({ rows, mayManage, onChanged }: {
-  rows: PluginRow[];
-  mayManage: boolean;
-  onChanged: () => void;
-}) {
+function PluginTable({ rows }: { rows: PluginRow[] }) {
   return (
     <Card className="overflow-hidden p-0">
       <div className="scroll-x">
@@ -300,7 +294,7 @@ function PluginTable({ rows, mayManage, onChanged }: {
             {rows.map((row) => (
               /* The whole row is the click target, and this is its
                  positioning context. Wrapping the row in an anchor is invalid
-                 inside a table and would nest Restore inside a link. */
+                 inside a table and would swallow anything the row holds. */
               <TableRow
                 key={row.name}
                 className={cn(
@@ -309,7 +303,6 @@ function PluginTable({ rows, mayManage, onChanged }: {
                   // link's own outline is suppressed so there is only one.
                   "has-[a:focus-visible]:bg-muted/50 has-[a:focus-visible]:outline-2",
                   "has-[a:focus-visible]:-outline-offset-2 has-[a:focus-visible]:outline-ring",
-                  row.removed && "opacity-70",
                 )}
               >
                 <TableCell>
@@ -329,9 +322,7 @@ function PluginTable({ rows, mayManage, onChanged }: {
                   </div>
                 </TableCell>
                 <TableCell>
-                  {row.removed ? (
-                    <Chip>Removed</Chip>
-                  ) : row.running ? (
+                  {row.running ? (
                     <Chip tone={healthTone(row.health)}>
                       <StatusDot tone={healthTone(row.health)} />
                       {row.health === "healthy" ? "Serving" : healthWords(row.health)}
@@ -342,18 +333,8 @@ function PluginTable({ rows, mayManage, onChanged }: {
                   {/* The number, where the message names one: a table cell
                       has room for "408" and not for the paragraph that
                       explains it, which is on the plugin's page. */}
-                  {row.removed && row.healthMessage && (
-                    <div className="max-w-[40ch] text-xs text-muted-foreground">
-                      {row.healthMessage}
-                    </div>
-                  )}
-                  {!row.removed && row.health !== "healthy" && row.healthMessage && (
+                  {row.health !== "healthy" && row.healthMessage && (
                     <HealthSummary message={row.healthMessage} />
-                  )}
-                  {row.removed && mayManage && (
-                    <RestoreButton
-                      name={row.name} label="Restore" onChanged={onChanged}
-                    />
                   )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
@@ -374,27 +355,37 @@ function PluginTable({ rows, mayManage, onChanged }: {
 }
 
 /**
- * Undoes a removal. Raised above the row's click surface so it does not also
- * navigate, and a button rather than a link because it acts.
+ * Forgets a removal, which two different acts are made of: adding back a
+ * plugin the configuration file still lists, and forgetting a removal whose
+ * declaration has left the file. One endpoint, two things to say, so the
+ * caller brings its own words rather than the button guessing which it is.
+ *
+ * The server's own note is not used for the same reason -- it cannot tell the
+ * two apart either.
  */
-export function RestoreButton({ name, label, onChanged }: {
+export function ForgetRemovalButton({ name, label, pending, done, failed, onChanged }: {
   name: string;
   label: string;
-  onChanged: () => void;
+  pending: string;
+  done: string;
+  failed: string;
+  onChanged: (ok: boolean) => void;
 }) {
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
 
-  async function restore() {
+  async function act() {
     setBusy(true);
+    let ok = false;
     try {
-      const result = await api.restoreInstance(name);
-      notify("good", result.note ?? `Restored ${name}.`);
+      await api.restoreInstance(name);
+      ok = true;
+      notify("good", done);
     } catch (e) {
-      notify("problem", problemText(e, "Couldn't restore it."));
+      notify("problem", problemText(e, failed));
     } finally {
       setBusy(false);
-      onChanged();
+      onChanged(ok);
     }
   }
 
@@ -402,9 +393,9 @@ export function RestoreButton({ name, label, onChanged }: {
     <Button
       variant="outline" size="xs" disabled={busy}
       className="relative z-10 mt-1.5"
-      onClick={restore}
+      onClick={act}
     >
-      {busy ? "Restoring…" : label}
+      {busy ? pending : label}
     </Button>
   );
 }
@@ -431,11 +422,16 @@ function StaleRemovals({ rows, mayManage, onChanged }: {
           <p key={r.name} className="flex flex-wrap items-center gap-x-2 text-sm">
             <strong className="font-medium">{r.name}</strong>
             <span className="text-muted-foreground">
-              was a {r.declared_type}, removed by {r.removed_by} on{" "}
-              {when(r.removed_at)}
+              was a {r.declared_type}, removed by {principalWords(r.removed_by)}{" "}
+              on {when(r.removed_at)}
             </span>
             {mayManage && (
-              <RestoreButton name={r.name} label="Forget" onChanged={onChanged} />
+              <ForgetRemovalButton
+                name={r.name} label="Forget" pending="Forgetting…"
+                done={`Forgot the removal of ${r.name}.`}
+                failed="Couldn't forget it."
+                onChanged={onChanged}
+              />
             )}
           </p>
         ))}
@@ -444,13 +440,18 @@ function StaleRemovals({ rows, mayManage, onChanged }: {
   );
 }
 
-function AddPlugin({ types, open, onOpenChange, onAdded }: {
+function AddPlugin({ types, declared, open, onOpenChange, onAdded }: {
   types: PluginType[];
+  /** Removed here, still listed in the configuration file. */
+  declared: PluginInstance[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAdded: () => void;
 }) {
   const notify = useNotify();
+  // Not a fixed string: a dialog is one instance today and there is nothing
+  // stopping a second, and two elements sharing an id give the wrong label.
+  const declaredHeading = useId();
   const [type, setType] = useState("");
   const [name, setName] = useState("");
   const [problem, setProblem] = useState("");
@@ -497,6 +498,43 @@ function AddPlugin({ types, open, onOpenChange, onAdded }: {
         </DialogHeader>
 
         {problem && <Notice tone="problem">{problem}</Notice>}
+
+        {declared.length > 0 && (
+          <section
+            aria-labelledby={declaredHeading}
+            className="space-y-2 rounded-md border p-3"
+          >
+            <p id={declaredHeading} className="text-sm font-medium">
+              Listed in the configuration file
+            </p>
+            <p className="text-xs text-muted-foreground">
+              These were removed from this host. Adding one back brings it in
+              with nothing entered here.
+            </p>
+            {declared.map((i) => (
+              <div
+                key={i.name}
+                className="flex flex-wrap items-center justify-between gap-x-3"
+              >
+                <span className="text-sm">
+                  <strong className="font-medium">{i.name}</strong>
+                  {i.removed_by && (
+                    <span className="text-muted-foreground">
+                      {" "}— {principalWords(i.removed_by)} removed it
+                      {i.removed_at ? ` on ${when(i.removed_at)}` : ""}
+                    </span>
+                  )}
+                </span>
+                <ForgetRemovalButton
+                  name={i.name} label="Add" pending="Adding…"
+                  done={`Added ${i.name}. Set it up on its page.`}
+                  failed="Couldn't add it."
+                  onChanged={(added) => { onAdded(); if (added) close(false); }}
+                />
+              </div>
+            ))}
+          </section>
+        )}
 
         {types.length === 0 ? (
           <Notice tone="attention">

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type PluginInstance } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
@@ -30,13 +30,16 @@ function stub(
 }
 
 /**
- * A removal that hides the thing it removed is worse than no removal at all.
+ * Removing a plugin removes it, however it was defined: its settings and its
+ * credentials go, and it is no longer on this host. So it is not in the list of
+ * what this host serves, dimmed or otherwise.
  *
- * Somebody who removes the wrong plugin has to be able to find it again, so a
- * plugin removed here stays in the list saying what happened, with the way
- * back on the same row.
+ * A plugin the configuration file still lists can be added again, and the place
+ * for that is the Add dialog, beside every other plugin that can be added --
+ * "remove and restore" was two words for one act, and the restore promised
+ * settings that no longer exist.
  */
-describe("a plugin removed while the file still declares it", () => {
+describe("a plugin removed while the file still lists it", () => {
   beforeEach(() => {
     stub([instance({
       mounted: false, enabled: false, removed: true, removed_by: "user:alice",
@@ -44,34 +47,60 @@ describe("a plugin removed while the file still declares it", () => {
     })]);
   });
 
-  it("stays in the list rather than vanishing", async () => {
+  it("leaves the list rather than staying in it as removed", async () => {
     renderWith(<PluginsList />);
 
-    expect(await screen.findByRole("link", { name: "echo" })).toBeInTheDocument();
-    expect(screen.getByText("Removed")).toBeInTheDocument();
-    expect(
-      screen.getByText("Removed here. The configuration file still declares it."),
-    ).toBeInTheDocument();
-  });
-
-  it("offers the restore to an administrator and to nobody else", async () => {
-    const { unmount } = renderWith(<PluginsList />);
-    expect(await screen.findByRole("button", { name: "Restore" })).toBeInTheDocument();
-    unmount();
-
-    renderWith(<PluginsList />, { session: sessionFor("user") });
-    await screen.findByRole("link", { name: "echo" });
+    await screen.findByRole("button", { name: "Add plugin" });
+    expect(screen.queryByRole("link", { name: "echo" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Removed")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
   });
 
-  it("restores from the row", async () => {
-    const restore = vi.spyOn(api, "restoreInstance")
+  it("is offered in the add dialog, saying who took it away", async () => {
+    renderWith(<PluginsList />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add plugin" }));
+
+    const declared = await screen.findByRole("region", {
+      name: "Listed in the configuration file",
+    });
+    expect(within(declared).getByText("echo")).toBeInTheDocument();
+    // A name, not the `user:` id the API sends.
+    expect(declared.textContent).toMatch(/— alice removed it/);
+    expect(declared.textContent).toMatch(/with nothing entered here/);
+  });
+
+  it("adds it back from the dialog", async () => {
+    const add = vi.spyOn(api, "restoreInstance")
       .mockResolvedValue({ status: "restored" });
 
     renderWith(<PluginsList />, { path: "/plugins" });
-    await userEvent.click(await screen.findByRole("button", { name: "Restore" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Add plugin" }));
+    const declared = await screen.findByRole("region", {
+      name: "Listed in the configuration file",
+    });
+    await userEvent.click(within(declared).getByRole("button", { name: "Add" }));
 
-    await waitFor(() => expect(restore).toHaveBeenCalledWith("echo"));
+    await waitFor(() => expect(add).toHaveBeenCalledWith("echo"));
+  });
+
+  // A heading over nothing reads as a section that failed to load.
+  it("leaves the section out when the file lists nothing removed", async () => {
+    stub([instance()]);
+
+    renderWith(<PluginsList />);
+    await userEvent.click(await screen.findByRole("button", { name: "Add plugin" }));
+
+    await screen.findByRole("dialog");
+    expect(screen.queryByRole("region", {
+      name: "Listed in the configuration file",
+    })).not.toBeInTheDocument();
+  });
+
+  it("offers it to an administrator and to nobody else", async () => {
+    renderWith(<PluginsList />, { session: sessionFor("user") });
+
+    await waitFor(() => expect(api.instances).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Add plugin" })).not.toBeInTheDocument();
   });
 });
 
@@ -81,7 +110,7 @@ describe("a plugin removed while the file still declares it", () => {
  * The name alone is a few characters wide, and every row on this page leads
  * somewhere. The mechanism is a stretched link -- an overlay owned by the
  * anchor -- rather than an anchor wrapped around the row, which is invalid
- * inside a table and would swallow the row's own buttons.
+ * inside a table.
  */
 describe("the row as a click target", () => {
   it("opens the plugin when the row's surface is clicked", async () => {
@@ -107,27 +136,15 @@ describe("the row as a click target", () => {
     await userEvent.click(await screen.findByRole("link", { name: "echo" }));
     expect(window.location.pathname).toBe("/plugins/echo");
   });
-
-  it("does not navigate when a control in the row is used", async () => {
-    stub([instance({
-      mounted: false, enabled: false, removed: true, removed_by: "user:alice",
-      removed_at: "2026-08-20T10:00:00Z",
-    })]);
-    const restore = vi.spyOn(api, "restoreInstance")
-      .mockResolvedValue({ status: "restored" });
-
-    renderWith(<PluginsList />, { path: "/plugins" });
-    await userEvent.click(await screen.findByRole("button", { name: "Restore" }));
-
-    await waitFor(() => expect(restore).toHaveBeenCalled());
-    expect(window.location.pathname).toBe("/plugins");
-  });
 });
 
 /**
  * A removal outlives the declaration it overrode. Discarding one silently
  * would let a single start against a truncated configuration file forget every
  * removal an operator made.
+ *
+ * "Forget" is a different act from adding a declared plugin back, even though
+ * one endpoint serves both: there is no declaration left to add from.
  */
 describe("removals with nothing left to remove", () => {
   it("reports them, and offers to forget one", async () => {
@@ -135,15 +152,16 @@ describe("removals with nothing left to remove", () => {
       name: "gone", declared_type: "cnmaestro",
       removed_by: "user:alice", removed_at: "2026-08-20T10:00:00Z",
     }]);
-    const restore = vi.spyOn(api, "restoreInstance")
+    const forget = vi.spyOn(api, "restoreInstance")
       .mockResolvedValue({ status: "restored" });
 
     renderWith(<PluginsList />, { path: "/plugins" });
 
     expect(await screen.findByText("gone")).toBeInTheDocument();
     expect(screen.getByText(/no longer lists them/)).toBeInTheDocument();
+    expect(screen.getByText(/removed by alice on/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Forget" }));
-    await waitFor(() => expect(restore).toHaveBeenCalledWith("gone"));
+    await waitFor(() => expect(forget).toHaveBeenCalledWith("gone"));
   });
 });

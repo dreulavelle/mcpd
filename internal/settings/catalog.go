@@ -71,7 +71,18 @@ var pluginKeyPattern = regexp.MustCompile(`^plugins\.([a-z][a-z0-9_-]{1,31})\.([
 // integration have different credentials and that is the entire point of
 // having two.
 func PluginSettingKey(instance, field string) string {
-	return "plugins." + instance + "." + field
+	return PluginSettingPrefix(instance) + field
+}
+
+// PluginSettingPrefix is the namespace every one of an instance's settings
+// lives under, for a caller that wants all of them without knowing their
+// names -- a removal, which must leave nothing behind whether or not the
+// build still declares the field that stored it.
+//
+// The trailing dot is load-bearing: "plugins.nas" without it also matches
+// every key belonging to "nas-backup".
+func PluginSettingPrefix(instance string) string {
+	return "plugins." + instance + "."
 }
 
 // PluginFromSettingKey reverses PluginSettingKey, returning "" for anything

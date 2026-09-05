@@ -9,7 +9,7 @@ import {
   type TunnelStatus,
   problemText,
 } from "@/lib/api";
-import { unprefixed, when } from "@/lib/format";
+import { principalWords, unprefixed, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link, useRouter } from "@/lib/router";
 import { parseHealth, statusTone, statusWords } from "@/lib/health";
@@ -22,7 +22,7 @@ import { Chip, healthTone, healthWords, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { RestoreButton } from "./PluginsList";
+import { ForgetRemovalButton } from "./PluginsList";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useConfirm } from "@/components/confirm";
@@ -117,7 +117,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
   const health = plugin?.health ?? "unhealthy";
   const healthMessage = plugin?.health_message
     ?? (instance?.removed
-      ? "Removed here. The configuration file still declares it."
+      ? "Removed from this host. The configuration file still lists it."
       : instance?.missing?.length
         ? `Waiting on ${instance.missing.join(", ")}.`
         : instance?.problem
@@ -322,8 +322,9 @@ function Declaration({ instance }: { instance: PluginInstance | null }) {
 }
 
 /**
- * A plugin removed here that the file still declares. The wording is the point:
- * assuming the file changed leads to a surprise on the next deploy.
+ * A plugin removed here that the file still lists. The wording is the point:
+ * the removal took its settings, so what "add it again" offers is an empty
+ * plugin, and assuming the file changed leads to a surprise on the next deploy.
  */
 function RemovedNotice({ name, instance, mayManage, onChanged }: {
   name: string;
@@ -331,25 +332,79 @@ function RemovedNotice({ name, instance, mayManage, onChanged }: {
   mayManage: boolean;
   onChanged: () => void;
 }) {
+  // A removal made before the wipe existed, or one interrupted between its two
+  // halves. Saying the settings are gone here would be the one thing the
+  // operator most needs not to be told wrongly.
+  const leftover = instance.stored_settings === true;
   return (
     <Notice tone="attention">
       <div className="space-y-2">
         <p>
-          <strong>Removed.</strong> This plugin is not being served, now or
-          after a restart.{" "}
-          {instance.removed_by && (
-            <>Removed by {instance.removed_by}
-              {instance.removed_at ? ` on ${when(instance.removed_at)}` : ""}.{" "}
-            </>
-          )}
-          The configuration file is unchanged — if you redeploy from it, the
-          removal still holds.
+          {leftover
+            ? "This plugin is not on this host, but settings entered here are still stored."
+            : "This plugin is not on this host, and the settings entered here are gone."}{" "}
+          The configuration file still lists it, so it can be added again.
         </p>
+        {instance.removed_by && (
+          <p className="text-sm">
+            Removed by {principalWords(instance.removed_by)}
+            {instance.removed_at ? ` on ${when(instance.removed_at)}` : ""}.
+          </p>
+        )}
         {mayManage && (
-          <RestoreButton name={name} label="Restore" onChanged={onChanged} />
+          <div className="flex flex-wrap items-center gap-2">
+            <ForgetRemovalButton
+              name={name} label="Add" pending="Adding…"
+              done={`Added ${name}. Set it up below.`}
+              failed="Couldn't add it."
+              onChanged={onChanged}
+            />
+            {leftover && (
+              <FinishRemovalButton name={name} onChanged={onChanged} />
+            )}
+          </div>
         )}
       </div>
     </Notice>
+  );
+}
+
+/**
+ * Takes the settings a removal left behind.
+ *
+ * The removal endpoint is idempotent, so this is the same call again: it wipes
+ * and returns. Without it there is nowhere to reach that path, because the
+ * Remove card is not drawn for something already removed -- and every plugin
+ * removed by a build that kept its settings deliberately arrives here holding
+ * credentials with no way to take them.
+ */
+function FinishRemovalButton({ name, onChanged }: {
+  name: string;
+  onChanged: () => void;
+}) {
+  const notify = useNotify();
+  const [busy, setBusy] = useState(false);
+
+  async function finish() {
+    setBusy(true);
+    try {
+      await api.removeInstance(name, true);
+      notify("good", `The settings ${name} still had are forgotten.`);
+    } catch (e) {
+      notify("problem", problemText(e, "Couldn't forget them."));
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  }
+
+  return (
+    <Button
+      variant="outline" size="xs" className="mt-1.5"
+      disabled={busy} onClick={finish}
+    >
+      {busy ? "Forgetting…" : "Forget its settings"}
+    </Button>
   );
 }
 
@@ -436,12 +491,15 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
   const required = fromFile && instance.required === true;
 
   async function remove() {
-    // Two different acts, so two different confirmations. Telling somebody
-    // their credentials are about to be forgotten when they are not is as
-    // wrong as not telling them when they are.
+    // The settings go either way, so both confirmations say so. What differs
+    // is the file: it still lists a declared plugin afterwards, and a value it
+    // supplies itself comes back with the plugin -- so the file's version says
+    // which settings are forgotten rather than claiming all of them are.
     const question = fromFile
-      ? "This stops it being served, now and after every restart. "
-        + "Your configuration file does not change, and you can restore it here."
+      ? "This takes it off this host, now and after every restart. Settings "
+        + "entered here, including credentials, are forgotten; anything the "
+        + "configuration file itself provides stays. Your configuration file "
+        + "does not change, and it can be added again later."
         + (required
           ? "\n\nThe file marks it required: true, so this host is not meant "
             + "to run without it. Removing it overrides that."
@@ -451,12 +509,12 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
     setBusy(true);
     try {
       await api.removeInstance(name, required);
-      notify("good", fromFile
-        ? `Removed ${name}. The configuration file is unchanged.`
-        : `Removed ${name}.`);
-      // A file-declared plugin still has a page -- it is removed, not gone --
-      // and that page is where the restore is. Leaving for the list would hide
-      // the undo behind a search.
+      // "The settings entered here" rather than "its settings": a declared
+      // plugin's file may supply some of its own, and those are still there.
+      notify("good", `Removed ${name}. The settings entered here are forgotten.`);
+      // A plugin the file lists still has a page -- it is removed, not gone --
+      // and that page is where it can be added again. Leaving for the list
+      // would hide the way back behind the Add dialog.
       if (fromFile) onChanged();
       else navigate("/plugins");
     } catch (e) {
@@ -474,14 +532,16 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
             <>
               <p>
                 This plugin is listed in the configuration file. Removing it
-                here stops it being served, now and on every restart.{" "}
+                takes it off this host, now and after every restart, and it can
+                be added again later.
+              </p>
+              <p>
+                Settings entered here, including credentials, are forgotten.
+                Anything the configuration file itself provides stays.{" "}
                 <strong className="text-foreground">
                   The file is unchanged
                 </strong>{" "}
                 — if you redeploy from it, the removal still holds.
-              </p>
-              <p>
-                Its settings are kept, so restoring it brings it back as it was.
               </p>
               {required && (
                 <p className="text-attention">

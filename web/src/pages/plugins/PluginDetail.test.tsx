@@ -203,7 +203,7 @@ describe("a plugin the configuration file declares", () => {
     renderWith(<PluginDetail name="weather" />);
 
     expect(await screen.findByText(/The file is unchanged/)).toBeInTheDocument();
-    expect(screen.getByText(/on every restart/)).toBeInTheDocument();
+    expect(screen.getByText(/after every restart/)).toBeInTheDocument();
     // The old dead end: "remove it there rather than here".
     expect(screen.queryByText(/Remove it there/)).not.toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Remove" })).toBeInTheDocument();
@@ -239,14 +239,28 @@ describe("a plugin the configuration file declares", () => {
     await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", true));
   });
 
-  it("does not claim the credentials go with a file-declared removal", async () => {
+  /**
+   * The settings used to be kept for a file-declared removal so that a restore
+   * came back "as it was", and the confirmation said so. What the dashboard
+   * holds goes now -- but a declaration may carry its own `settings:` block,
+   * which this host does not write and cannot forget, so the sentence has to
+   * carry both halves or it is wrong in one direction or the other.
+   */
+  it("says which settings go with a file-declared removal", async () => {
     declared();
     const remove = vi.spyOn(api, "removeInstance").mockResolvedValue({ status: "removed" });
 
     renderWith(<PluginDetail name="weather" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    expect(await screen.findByText(/Settings entered here, including credentials, are forgotten/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/the configuration file itself provides stays/))
+      .toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog.textContent).not.toMatch(/credentials/);
+    expect(dialog.textContent).toMatch(/Settings entered here, including credentials, are forgotten/);
+    expect(dialog.textContent).toMatch(/configuration file itself provides stays/);
+    expect(dialog.textContent).toMatch(/added again later/);
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", false));
@@ -267,23 +281,57 @@ describe("a plugin the configuration file declares", () => {
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith("weather", false));
   });
 
-  it("offers the way back, and says who took it away", async () => {
+  /**
+   * The words are add and remove. What the page offers is not the plugin as it
+   * was -- the removal took what the dashboard held -- so it says what comes
+   * back: the file's listing, and only what the file provides. Who removed it
+   * reads as a name, not as the `user:` id the API sends.
+   */
+  it("offers to add it again, and says who took it away", async () => {
     declared({
       enabled: false, mounted: false, removed: true,
       removed_by: "user:alice", removed_at: "2026-08-20T10:00:00Z",
     });
-    const restore = vi.spyOn(api, "restoreInstance").mockResolvedValue({ status: "restored" });
+    const add = vi.spyOn(api, "restoreInstance").mockResolvedValue({ status: "restored" });
 
     renderWith(<PluginDetail name="weather" />);
 
-    expect(await screen.findByText(/Removed by user:alice/)).toBeInTheDocument();
-    expect(screen.getByText(/redeploy from it, the removal still holds/)).toBeInTheDocument();
+    expect(await screen.findByText(/the settings entered here are gone/)).toBeInTheDocument();
+    expect(screen.getByText(/Removed by alice on/)).toBeInTheDocument();
+    expect(screen.queryByText(/user:alice/)).not.toBeInTheDocument();
+    expect(screen.getByText(/so it can be added again/)).toBeInTheDocument();
+    // Nothing is left to take, so nothing offers to take it.
+    expect(screen.queryByRole("button", { name: "Forget its settings" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
     // One control, not two: removing something already removed is a button
     // with nothing to do.
     expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
-    await waitFor(() => expect(restore).toHaveBeenCalledWith("weather"));
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(add).toHaveBeenCalledWith("weather"));
+  });
+
+  /**
+   * A plugin removed by a build that kept its settings deliberately arrives
+   * here still holding credentials, and the Remove card is not drawn for
+   * something already removed -- so without this there is nowhere to take
+   * them. The removal is idempotent, so finishing it is the same call again.
+   */
+  it("offers to take the settings a removal left behind", async () => {
+    declared({
+      enabled: false, mounted: false, removed: true, stored_settings: true,
+      removed_by: "user:alice", removed_at: "2026-08-20T10:00:00Z",
+    });
+    const remove = vi.spyOn(api, "removeInstance").mockResolvedValue({ status: "removed" });
+
+    renderWith(<PluginDetail name="weather" />);
+
+    expect(await screen.findByText(/settings entered here are still stored/))
+      .toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Forget its settings" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", true));
   });
 });
 

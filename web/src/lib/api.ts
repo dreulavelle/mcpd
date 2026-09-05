@@ -398,10 +398,12 @@ export interface PluginInstance {
   missing?: string[];
   /** Why a fully configured instance still is not serving. */
   problem?: string;
-  /** Removed here while the file still declares it. Listed, so it can be restored. */
+  /** Removed here while the file still lists it. Listed, so it can be added again. */
   removed?: boolean;
   removed_by?: string;
   removed_at?: string;
+  /** A removed plugin that still holds settings: removing it again takes them. */
+  stored_settings?: boolean;
   /** What the configuration file says about it, when it says anything. */
   declaration?: PluginDeclaration;
 }
@@ -1882,7 +1884,11 @@ export const api = {
       { method: "DELETE" },
     ),
 
-  /** Undoes a removal, putting the plugin back under the file's declaration. */
+  /**
+   * Forgets a removal. Where the configuration file still lists the name that
+   * adds the plugin back under its declaration, holding nothing; where it no
+   * longer does, it only clears the record. The route keeps its old name.
+   */
   restoreInstance: (name: string) =>
     request<{ status: string; note?: string }>(
       `/api/instances/${encodeURIComponent(name)}/restore`, { method: "POST" }),
