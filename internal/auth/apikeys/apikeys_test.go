@@ -833,3 +833,81 @@ func TestUpdate_GroupsSetsWholeMembership(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// The secret is shown once and stored as a digest, and the trail is where that
+// promise is easiest to break: an entry naming the credential it just issued
+// would put a live key into a record that is append-only, widely readable and
+// impossible to correct afterwards.
+//
+// Every act that handles a secret is exercised -- issuing one, issuing a second
+// by rotating, re-scoping the key afterwards and revoking it -- and the whole
+// trail is searched rather than the entries these calls are known to write,
+// because an entry written elsewhere in the same transaction is exactly the one
+// nobody would think to check.
+func TestAudit_NeverCarriesTheSecret(t *testing.T) {
+	s, gs, db, _ := newStore(t)
+	ctx := context.Background()
+
+	group, err := gs.Create(ctx, admin, groups.CreateRequest{
+		Name: "operators", RoleID: auth.RoleOperator,
+	})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	key, first := mustCreate(t, s, CreateRequest{
+		Name: "ledger", RoleID: auth.RoleOperator, Grants: writes("echo"),
+	})
+	_, second, err := s.Rotate(ctx, admin, key.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if _, err := s.Update(ctx, admin, key.ID, UpdateRequest{
+		Name:   ptr("ledger-rescoped"),
+		Grants: ptr(writes("echo", "netbox")),
+		Groups: &[]string{group.ID},
+	}); err != nil {
+		t.Fatalf("rescope: %v", err)
+	}
+	if err := s.Revoke(ctx, admin, key.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	// A secret that did not come out looking like one would leave every
+	// assertion below passing while proving nothing.
+	for _, secret := range []string{first, second} {
+		if !strings.HasPrefix(secret, SecretPrefix) || len(secret) <= len(SecretPrefix) {
+			t.Fatalf("issued secret %q is not a %s… credential", secret, SecretPrefix)
+		}
+	}
+	if first == second {
+		t.Fatal("rotating handed back the secret it replaced")
+	}
+
+	records, err := sqlite.NewAuditStore(db).Recent(ctx, 100)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	if len(records) == 0 {
+		t.Fatal("nothing was recorded, so nothing was checked")
+	}
+	for _, r := range records {
+		detail := string(r.Entry.Detail)
+		for _, secret := range []string{first, second} {
+			if strings.Contains(detail, secret) {
+				t.Errorf("%s (seq %d) carries the key's secret", r.Entry.Kind, r.Seq)
+			}
+		}
+		// Not only the two this test holds: any mcpd_… string in a detail is a
+		// credential somebody put there.
+		if strings.Contains(detail, SecretPrefix) {
+			t.Errorf("%s (seq %d) carries a %s… credential: %s",
+				r.Entry.Kind, r.Seq, SecretPrefix, detail)
+		}
+		// A digest is not the secret, but it is what a secret is checked
+		// against, so it has no business in the trail either.
+		if strings.Contains(detail, digest(first)) || strings.Contains(detail, digest(second)) {
+			t.Errorf("%s (seq %d) carries a secret's digest", r.Entry.Kind, r.Seq)
+		}
+	}
+}
