@@ -1253,6 +1253,13 @@ export interface CallSummary {
   total: number;
   errors: number;
   denied: number;
+  /**
+   * When the most recent call came in, absent when none did. A bucket's own
+   * `at` is the hour it opened, so it cannot answer this to better than an
+   * hour -- and a sentence saying nothing has come through since 09:00 about a
+   * call made at 09:59 is wrong by that hour.
+   */
+  last_at?: string;
 }
 
 /** One window in which this host approves changes without asking. */

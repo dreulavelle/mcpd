@@ -279,3 +279,21 @@ func TestCallsAnswerAFailedReadWithASentence(t *testing.T) {
 		}
 	}
 }
+
+// Absent means there was no last call. Sent as a zero time it would reach the
+// browser as a date in year one, which is a thing a reader has to know to
+// ignore.
+func TestCallSummaryOmitsTheLastCallWhenThereWasNone(t *testing.T) {
+	accounts := newFakeAccounts()
+	at := time.Date(2026, 8, 29, 12, 34, 0, 0, time.UTC)
+
+	s := newCallsServer(t, accounts, &fakeCalls{summary: sqlite.CallSummary{LastAt: at, Total: 1}})
+	if body := asAdmin(t, s, accounts, http.MethodGet, "/api/calls/summary", "").Body.String(); !strings.Contains(body, `"last_at":"2026-08-29T12:34:00Z"`) {
+		t.Errorf("the body does not carry the last call: %s", body)
+	}
+
+	quiet := newCallsServer(t, accounts, &fakeCalls{})
+	if body := asAdmin(t, quiet, accounts, http.MethodGet, "/api/calls/summary", "").Body.String(); strings.Contains(body, "last_at") {
+		t.Errorf("a window with no calls carries a last call: %s", body)
+	}
+}

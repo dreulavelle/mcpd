@@ -136,12 +136,19 @@ func (s *Server) handleCallSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"hours":   hours,
 		"buckets": summary.Buckets,
 		"plugins": summary.Plugins,
 		"total":   summary.Total,
 		"errors":  summary.Errors,
 		"denied":  summary.Denied,
-	})
+	}
+	// Left out entirely when nothing was called, rather than sent as a zero
+	// time: absent is "there was no last call", and a date in year one is a
+	// thing a reader would have to know to ignore.
+	if !summary.LastAt.IsZero() {
+		body["last_at"] = summary.LastAt
+	}
+	s.writeJSON(w, r, http.StatusOK, body)
 }

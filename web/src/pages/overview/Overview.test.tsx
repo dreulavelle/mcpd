@@ -6,7 +6,7 @@ import {
   type PluginInstance, type TunnelStatus,
 } from "@/lib/api";
 import type { Item } from "@/components/Attention";
-import { renderWith } from "@/test/render";
+import { renderWith, sessionFor } from "@/test/render";
 import { Overview, verdict } from "./Overview";
 
 const hour = 3_600_000;
@@ -22,7 +22,10 @@ function day(perHour: (i: number) => Partial<CallBucket> = () => ({})): CallSumm
     ok: 0, error: 0, denied: 0, rate_limited: 0,
     ...perHour(i),
   }));
-  const sum = (k: keyof Omit<CallBucket, "at">) => buckets.reduce((t, b) => t + b[k], 0);
+  const sum = (k: keyof Omit<CallBucket, "at" | "last_at">) =>
+    buckets.reduce((t, b) => t + (b[k] as number), 0);
+  const busiest = [...buckets].reverse()
+    .find((b) => b.ok + b.error + b.denied + b.rate_limited > 0);
   return {
     hours: 24,
     buckets,
@@ -30,6 +33,9 @@ function day(perHour: (i: number) => Partial<CallBucket> = () => ({})): CallSumm
     total: sum("ok") + sum("error") + sum("denied") + sum("rate_limited"),
     errors: sum("error"),
     denied: sum("denied"),
+    // The host answers with the moment of the last call; the fixture puts it
+    // where a bucket that had something in it opened.
+    last_at: busiest?.at,
   };
 }
 
@@ -97,7 +103,7 @@ const item = (tone: Item["tone"]): Item =>
 describe("the verdict", () => {
   const well: HealthReport = { status: "up", checks: [] };
   const base = {
-    items: [], connected: 1, health: well, readAnything: true,
+    items: [], connected: 1, health: well,
     summary: day((i) => (i === 23 ? { ok: 5 } : {})),
   };
   const say = (over: Partial<Parameters<typeof verdict>[0]>) =>
@@ -112,8 +118,8 @@ describe("the verdict", () => {
     expect(one.text).toBe("Everything is working. One thing needs you.");
     expect(one.tone).toBe("attention");
 
-    expect(say({ items: [item("attention"), item("info")] }).text)
-      .toBe("Everything is working. Two things need you.");
+    expect(say({ items: [item("attention"), item("problem")] }).text)
+      .toBe("Something is wrong. Two things need you.");
   });
 
   /**
@@ -126,6 +132,17 @@ describe("the verdict", () => {
       .toBe("Everything is working. One thing needs you.");
     expect(say({ waiting: 2, items: [item("attention")] }).text)
       .toBe("Everything is working. Three things need you.");
+  });
+
+  /**
+   * "mcpd 0.17 is available" is worth reading and is not a thing anybody has
+   * to do today. Counted, it turned the headline amber every time a release
+   * shipped, and an amber headline that means nothing is one nobody reads.
+   */
+  it("does not let a line that is only news turn the headline amber", () => {
+    const v = say({ items: [item("info")] });
+    expect(v.text).toBe("Everything is working.");
+    expect(v.tone).toBe("good");
   });
 
   // "Everything is working" beside a broken system is the sentence somebody
@@ -141,6 +158,9 @@ describe("the verdict", () => {
    * critical check was down led with "Everything is working." above a Host
    * card reading "1 of 3 checks is not passing". Nothing in the attention list
    * covers them; they are a separate fact and they have to be read.
+   *
+   * A degraded check replaces the state word rather than following it: a
+   * sentence should not be contradicted by the one after it.
    */
   it("reads the host's own checks", () => {
     const down = say({ health: { status: "down", checks: [] } });
@@ -148,13 +168,11 @@ describe("the verdict", () => {
     expect(down.tone).toBe("problem");
 
     const degraded = say({ health: { status: "degraded", checks: [] } });
-    expect(degraded.text)
-      .toBe("Everything is working. A check on this host is not passing.");
+    expect(degraded.text).toBe("A check on this host is not passing.");
     expect(degraded.tone).toBe("attention");
 
-    // Beside something else that needs somebody, both are said.
     expect(say({ health: { status: "degraded", checks: [] }, waiting: 1 }).text)
-      .toBe("Everything is working. One thing needs you. A check on this host is not passing.");
+      .toBe("A check on this host is not passing. One thing needs you.");
   });
 
   /**
@@ -163,19 +181,23 @@ describe("the verdict", () => {
    * connector that has served nothing since breakfast is the reassurance that
    * costs somebody an afternoon.
    *
-   * The moment, not a count of empty bars: an hour of bars is anywhere between
-   * a minute and two hours of real time, and "for 3 hours" over a call made
-   * two hours ago is a number somebody will check.
+   * The moment the host reported, not a count of empty bars: an hour of bars
+   * is anywhere between a minute and two hours of real time, and the hour a
+   * bucket opened is not when the call inside it was made.
    */
   it("says when the last call came in, once quiet is long enough to mean something", () => {
     expect(say({ summary: day((i) => (i <= 21 ? { ok: 4 } : {})) }).text)
       .toBe("Everything is working.");
 
+    // The host says the call landed at 41 minutes past, not on the hour its
+    // bucket opened, and that is the time in the sentence.
     const six = day((i) => (i <= 17 ? { ok: 4 } : {}));
-    const lastCall = new Date(six.buckets[17]!.at)
-      .toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    const lastCall = new Date(new Date(six.buckets[17]!.at).getTime() + 41 * 60_000);
+    six.last_at = lastCall.toISOString();
+    const shown = lastCall.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
     expect(say({ summary: six }).text)
-      .toBe(`Everything is working. Nothing has come through since ${lastCall}.`);
+      .toBe(`Everything is working. Nothing has come through since ${shown}.`);
   });
 
   // No connector is up, so nothing coming through is the arrangement rather
@@ -191,6 +213,19 @@ describe("the verdict", () => {
     expect(v.tone).toBe("neutral");
   });
 
+  /**
+   * An empty deployment is the last thing considered, not the first. It used
+   * to return before the host's checks, the attention list and the approvals
+   * were looked at, so a host with nothing mounted and a failing check read
+   * "Nothing is set up yet."
+   */
+  it("does not let an empty deployment hide what is wrong with it", () => {
+    expect(say({ systems: 0, connectors: 0, health: { status: "down", checks: [] } }).text)
+      .toBe("Something is wrong.");
+    expect(say({ systems: 0, connectors: 0, waiting: 1 }).text)
+      .toBe("Nothing is set up yet. One thing needs you.");
+  });
+
   // Nothing read is not nothing there: a person who may not list the systems
   // must not be told this host has none.
   it("does not call an unread host empty", () => {
@@ -198,21 +233,36 @@ describe("the verdict", () => {
       .toBe("Everything is working.");
   });
 
-  it("says when the host's health could not be read", () => {
-    expect(say({ health: null }).text)
+  /**
+   * The bug this pair exists for: with the server unreachable on a first load,
+   * every request failed, and health failing was the only thing that counted
+   * as an answer. The page led with a green "Everything is working." over an
+   * empty screen -- a claim made from an absence of answers.
+   */
+  it("does not call a host well on the strength of a failed read", () => {
+    const blind = verdict({
+      items: [], connected: 0, health: null, summary: undefined,
+    })!;
+    expect(blind.text).toBe("This host's health could not be read.");
+    expect(blind.tone).not.toBe("good");
+    expect(blind.tone).toBe("attention");
+  });
+
+  it("still says how the host is when something else answered", () => {
+    const v = say({ health: null });
+    expect(v.text)
       .toBe("Everything is working. This host's health could not be read.");
+    expect(v.tone).toBe("attention");
   });
 
   /**
-   * A custom role holding none of the read permissions gets a page with
-   * nothing on it. A cheerful sentence over nothing is a claim about a host
-   * this account cannot see, so there is no sentence.
+   * A custom role holding none of the read permissions gets nothing to say a
+   * sentence about. A claim about a host this account cannot see is worse than
+   * no claim.
    */
   it("says nothing at all when nothing could be read", () => {
-    expect(verdict({
-      items: [], connected: 0, health: undefined, readAnything: false,
-      summary: undefined,
-    })).toBeNull();
+    expect(verdict({ items: [], connected: 0, health: undefined, summary: undefined }))
+      .toBeNull();
   });
 });
 
@@ -246,6 +296,16 @@ describe("the overview", () => {
       name: "14 calls in the last 24 hours, 2 failed and 2 refused.",
     })).toBeInTheDocument();
     expect(screen.getByText("· 2 refused")).toBeInTheDocument();
+  });
+
+  // "1 calls" is the sort of thing a person notices and nobody fixes.
+  it("counts one call as a call", async () => {
+    stub({ summary: day((i) => (i === 23 ? { ok: 1 } : {})) });
+    renderWith(<Overview />);
+
+    expect(await screen.findByRole("img", {
+      name: "1 call in the last 24 hours, 0 failed and 0 refused.",
+    })).toBeInTheDocument();
   });
 
   it("says so when a day has gone by with no calls", async () => {
@@ -318,6 +378,45 @@ describe("the overview", () => {
     const connectors = screen.getByText("Connectors").closest("section")!;
     expect(within(connectors).getByRole("link", { name: "Tunnels" }))
       .toHaveAttribute("href", "/tunnels");
+  });
+
+  /**
+   * Overview is the one route every signed-in account can open, and a custom
+   * role can hold none of the read permissions behind it. A header over a
+   * blank page reads as a dashboard that is broken rather than one this
+   * account may not see.
+   */
+  it("says so to an account that may read none of it", async () => {
+    stub();
+    const blind = sessionFor("admin", { permissions: [] });
+    renderWith(<Overview />, { session: blind });
+
+    expect(await screen.findByText(/Nothing on this host is visible to your account/))
+      .toBeInTheDocument();
+    expect(screen.queryByText("Systems")).not.toBeInTheDocument();
+    // And nothing offers a page that would refuse them.
+    expect(screen.queryByRole("link", { name: "Connect a client" }))
+      .not.toBeInTheDocument();
+  });
+
+  /**
+   * A system that stopped serving still took the calls it took, and the count
+   * is half the reason somebody looks at the row.
+   */
+  it("keeps the call count on a system that is no longer serving", async () => {
+    stub({
+      plugins: [],
+      instances: [{
+        name: "graylog", type: "graylog", from_file: false,
+        enabled: true, mounted: false,
+      }],
+      summary: { ...day(), plugins: [{ plugin: "graylog", calls: 812, errors: 0 }] },
+    });
+    renderWith(<Overview />);
+
+    const systems = (await screen.findByText("Systems")).closest("section")!;
+    expect(within(systems).getByText("waiting on settings")).toBeInTheDocument();
+    expect(within(systems).getByText("812 calls")).toBeInTheDocument();
   });
 });
 

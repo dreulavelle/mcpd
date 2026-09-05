@@ -906,7 +906,11 @@ window always has as many buckets as it asked for. The buckets are aligned to
 the clock rather than to now, so a bar holds the same calls whenever the page
 is opened rather than shifting on every reload. They are whole UTC hours, which
 is the reader's own hour wherever the offset from UTC is a whole number of them
-and half an hour out in the few places it is not. `hours` is capped at a week,
+and half an hour out in the few places it is not. Both counts come from one
+read snapshot, so a call that arrives mid-answer cannot be in the per-system
+tally and missing from the total. `last_at` is the moment of the most recent
+call and is absent when there was none, because the hour a bucket opened
+cannot answer that to better than an hour. `hours` is capped at a week,
 because a year of hourly buckets is not a shape anything draws.
 
 ## Where configuration lives

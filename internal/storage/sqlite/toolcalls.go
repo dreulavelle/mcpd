@@ -244,6 +244,11 @@ type CallSummary struct {
 	Total   int64         `json:"total"`
 	Errors  int64         `json:"errors"`
 	Denied  int64         `json:"denied"`
+	// LastAt is when the most recent call in the window came in, zero when
+	// none did. A bucket's own At is the hour it opened, so a reader told
+	// "nothing since 09:00" about a call made at 09:59 is being told the wrong
+	// thing by up to an hour.
+	LastAt time.Time `json:"last_at,omitzero"`
 }
 
 // Summary counts the calls in [since, since+step*buckets) by step and by plugin.
@@ -267,64 +272,87 @@ func (s *ToolCallStore) Summary(ctx context.Context, since time.Time, step time.
 		out.Buckets[i].At = since.Add(time.Duration(i) * step)
 	}
 
-	// Integer division on the millisecond stamp puts each call in a step. The
-	// range is bounded at both ends so the totals below are the sum of the
-	// bars: a row from a clock that ran ahead would otherwise be counted once
-	// and drawn nowhere.
-	rows, err := s.db.Reader().QueryContext(ctx, `
-		SELECT (at - ?) / ? AS bucket,
-		       SUM(CASE WHEN outcome = 'ok' THEN 1 ELSE 0 END),
-		       SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END),
-		       SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END),
-		       SUM(CASE WHEN outcome = 'rate_limited' THEN 1 ELSE 0 END)
-		  FROM tool_calls
-		 WHERE at >= ? AND at < ?
-		 GROUP BY bucket`, from, width, from, until)
+	// Both queries read one snapshot. Run apart, a call inserted between them
+	// is counted by the second and not the first, and the answer says a system
+	// took a call the totals underneath do not know about.
+	err := s.db.ReadTx(ctx, func(tx *sql.Tx) error {
+		// Integer division on the millisecond stamp puts each call in a step.
+		// The range is bounded at both ends so the totals below are the sum of
+		// the bars: a row from a clock that ran ahead would otherwise be
+		// counted once and drawn nowhere.
+		rows, err := tx.QueryContext(ctx, `
+			SELECT (at - ?) / ? AS bucket,
+			       SUM(CASE WHEN outcome = 'ok' THEN 1 ELSE 0 END),
+			       SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END),
+			       SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END),
+			       SUM(CASE WHEN outcome = 'rate_limited' THEN 1 ELSE 0 END),
+			       MAX(at)
+			  FROM tool_calls
+			 WHERE at >= ? AND at < ?
+			 GROUP BY bucket`, from, width, from, until)
+		if err != nil {
+			return fmt.Errorf("sqlite: summarise calls by hour: %w", err)
+		}
+		defer rows.Close()
+
+		var last int64
+		for rows.Next() {
+			var (
+				index                       int64
+				ok, failed, denied, limited int64
+				latest                      int64
+			)
+			if err := rows.Scan(&index, &ok, &failed, &denied, &limited, &latest); err != nil {
+				return fmt.Errorf("sqlite: scan call bucket: %w", err)
+			}
+			if index < 0 || index >= int64(buckets) {
+				continue
+			}
+			b := &out.Buckets[index]
+			b.OK, b.Error, b.Denied, b.RateLimited = ok, failed, denied, limited
+			out.Total += ok + failed + denied + limited
+			out.Errors += failed
+			out.Denied += denied
+			if latest > last {
+				last = latest
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("sqlite: summarise calls by hour: %w", err)
+		}
+		if last > 0 {
+			out.LastAt = time.UnixMilli(last)
+		}
+
+		byPlugin, err := tx.QueryContext(ctx, `
+			SELECT plugin,
+			       COUNT(*),
+			       SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END)
+			  FROM tool_calls
+			 WHERE at >= ? AND at < ?
+			 GROUP BY plugin
+			 ORDER BY COUNT(*) DESC, plugin`, from, until)
+		if err != nil {
+			return fmt.Errorf("sqlite: summarise calls by plugin: %w", err)
+		}
+		defer byPlugin.Close()
+
+		for byPlugin.Next() {
+			var p PluginCalls
+			if err := byPlugin.Scan(&p.Plugin, &p.Calls, &p.Errors); err != nil {
+				return fmt.Errorf("sqlite: scan plugin summary: %w", err)
+			}
+			out.Plugins = append(out.Plugins, p)
+		}
+		// Wrapped like the iterator above it, because the sentence a browser
+		// gets is chosen by whether the error names a package.
+		if err := byPlugin.Err(); err != nil {
+			return fmt.Errorf("sqlite: summarise calls by plugin: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return CallSummary{}, fmt.Errorf("sqlite: summarise calls by hour: %w", err)
+		return CallSummary{}, err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			index                       int64
-			ok, failed, denied, limited int64
-		)
-		if err := rows.Scan(&index, &ok, &failed, &denied, &limited); err != nil {
-			return CallSummary{}, fmt.Errorf("sqlite: scan call bucket: %w", err)
-		}
-		if index < 0 || index >= int64(buckets) {
-			continue
-		}
-		b := &out.Buckets[index]
-		b.OK, b.Error, b.Denied, b.RateLimited = ok, failed, denied, limited
-		out.Total += ok + failed + denied + limited
-		out.Errors += failed
-		out.Denied += denied
-	}
-	if err := rows.Err(); err != nil {
-		return CallSummary{}, fmt.Errorf("sqlite: summarise calls by hour: %w", err)
-	}
-
-	byPlugin, err := s.db.Reader().QueryContext(ctx, `
-		SELECT plugin,
-		       COUNT(*),
-		       SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END)
-		  FROM tool_calls
-		 WHERE at >= ? AND at < ?
-		 GROUP BY plugin
-		 ORDER BY COUNT(*) DESC, plugin`, from, until)
-	if err != nil {
-		return CallSummary{}, fmt.Errorf("sqlite: summarise calls by plugin: %w", err)
-	}
-	defer byPlugin.Close()
-
-	for byPlugin.Next() {
-		var p PluginCalls
-		if err := byPlugin.Scan(&p.Plugin, &p.Calls, &p.Errors); err != nil {
-			return CallSummary{}, fmt.Errorf("sqlite: scan plugin summary: %w", err)
-		}
-		out.Plugins = append(out.Plugins, p)
-	}
-	return out, byPlugin.Err()
+	return out, nil
 }

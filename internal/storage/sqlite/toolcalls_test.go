@@ -413,3 +413,42 @@ func TestSummary_RefusesAnEmptyWindow(t *testing.T) {
 		t.Errorf("got %d buckets, want none", len(sum.Buckets))
 	}
 }
+
+// A bucket's own time is the hour it opened. The overview says "nothing has
+// come through since ..." from this, and a call made at 09:59 reported as
+// 09:00 is wrong by an hour in the sentence somebody acts on.
+func TestSummary_ReportsWhenTheLastCallCameIn(t *testing.T) {
+	ctx := context.Background()
+	s := newCallStore(t)
+	since := base.Add(-2 * time.Hour)
+	last := since.Add(time.Hour + 59*time.Minute)
+
+	record(t, s, ToolCall{At: since.Add(time.Minute), Principal: "key:a", Plugin: "p", Tool: "t", Outcome: "ok"})
+	record(t, s, ToolCall{At: last, Principal: "key:a", Plugin: "p", Tool: "t", Outcome: "ok"})
+
+	sum, err := s.Summary(ctx, since, time.Hour, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sum.LastAt.Equal(last) {
+		t.Errorf("last call at %v, want %v", sum.LastAt, last)
+	}
+	// Which is not the hour its bucket opened.
+	if sum.LastAt.Equal(sum.Buckets[1].At) {
+		t.Error("the last call is being reported as the start of its hour")
+	}
+}
+
+// Nothing called means there is no last call, not a call at the zero time.
+func TestSummary_HasNoLastCallInAnEmptyWindow(t *testing.T) {
+	ctx := context.Background()
+	s := newCallStore(t)
+
+	sum, err := s.Summary(ctx, base.Add(-23*time.Hour), time.Hour, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sum.LastAt.IsZero() {
+		t.Errorf("last call at %v, want none", sum.LastAt)
+	}
+}

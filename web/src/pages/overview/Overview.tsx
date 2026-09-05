@@ -130,13 +130,16 @@ export function Overview() {
     connected: tunnels.filter((t) => t.state === "connected").length,
     summary: snap.summary,
     health: snap.health,
-    // A custom role holding none of these reads a page with nothing on it, and
-    // a cheerful sentence over nothing is a claim about a host this account
-    // cannot see.
-    readAnything: snap.plugins !== undefined || snap.instances !== undefined
-      || snap.tunnels !== undefined || snap.health !== undefined
-      || snap.waiting !== undefined || snap.summary !== undefined,
   });
+
+  // Whether any card below drew anything. A custom role can hold none of the
+  // read permissions, and a header over an empty page reads as a dashboard
+  // that is broken rather than one this account may not see.
+  const anything = items.length > 0 || snap.summary !== undefined
+    || snap.waiting !== undefined || systems.length > 0
+    || snap.tunnels !== undefined || snap.health !== undefined
+    || snap.resources !== undefined || callers !== undefined
+    || snap.audit !== undefined;
 
   // Only when the account has a name of its own: `name` falls back to the
   // address, and "Hello, ops@example.com" is worse than no greeting.
@@ -155,11 +158,11 @@ export function Overview() {
     <>
       <PageHeader
         title={greeting ? `Hello, ${greeting}` : "Overview"}
-        actions={
+        actions={can("plugins:read") && (
           <Link to="/clients" className="text-sm text-primary hover:underline">
             Connect a client
           </Link>
-        }
+        )}
       />
 
       {/* The one line worth reading before anything else; everything below it
@@ -169,6 +172,13 @@ export function Overview() {
         <p className="mb-8 flex items-start gap-3 text-xl leading-snug text-balance sm:text-2xl">
           <StatusDot tone={sentence.tone} className="mt-2.5 sm:mt-3" />
           <span>{sentence.text}</span>
+        </p>
+      )}
+
+      {!anything && (
+        <p className="text-sm text-muted-foreground">
+          Nothing on this host is visible to your account. Ask an administrator
+          for the access you need.
         </p>
       )}
 
@@ -209,22 +219,21 @@ const busy = (b: { ok: number; error: number; denied: number; rate_limited: numb
 
 /**
  * When the last call came in, if the run of empty hours since is long enough
- * to be worth saying. Null when the window is unknown, still busy, or only
- * briefly idle -- three hours is the smallest gap that cannot be a lull.
+ * to be worth saying. Null when the window is unknown, still busy, only
+ * briefly idle, or empty end to end -- three hours is the smallest gap that
+ * cannot be a lull, and a window with no calls at all has no "since".
  *
- * The moment, not the count of buckets: an hour's worth of bars is anywhere
- * between one minute and two hours of real time, and "for 3 hours" over a call
- * made 121 minutes ago is a number somebody will check.
+ * The moment the host reported, not the hour its bucket opened: a call made at
+ * 09:59 reported as 09:00 is wrong by an hour in the sentence somebody acts on.
  */
 function quietSince(summary?: CallSummary): string | null {
-  if (!summary || summary.buckets.length === 0) return null;
+  if (!summary?.last_at || summary.buckets.length === 0) return null;
   let empty = 0;
   for (let i = summary.buckets.length - 1; i >= 0; i--) {
-    const b = summary.buckets[i]!;
-    if (busy(b) > 0) return empty >= 3 ? b.at : null;
+    if (busy(summary.buckets[i]!) > 0) break;
     empty++;
   }
-  return null;
+  return empty >= 3 ? summary.last_at : null;
 }
 
 /** A moment in the last half day is a time; older than that needs the date. */
@@ -242,10 +251,12 @@ function moment(iso: string, now: number = Date.now()): string {
  * there was and nothing about whether any of it was well. Exported because
  * every branch of it is a claim about the host and each one is worth a test.
  *
- * An undefined count means the answer was never read, and is not zero: a
- * person who may not list the systems must not be told there are none. Null
- * for the whole sentence means nothing at all was readable, and a claim about
- * a host this account cannot see is worse than no claim.
+ * Two rules hold it honest. An undefined count means the answer was never
+ * read, and is not zero: a person who may not list the systems must not be
+ * told there are none. And the lead -- "Everything is working." either way --
+ * is only said when something actually answered, because a host that could not
+ * be reached at all is not a host that is well. Null means there was nothing
+ * to say, which is better than a claim about a host nobody could see.
  */
 export function verdict(input: {
   items: Item[];
@@ -257,45 +268,60 @@ export function verdict(input: {
   summary?: CallSummary;
   /** Undefined when it was never asked; null when it was asked and did not answer. */
   health?: HealthReport | null;
-  readAnything: boolean;
 }): { text: string; tone: Tone } | null {
-  if (!input.readAnything) return null;
+  const down = input.health?.status === "down";
+  const degraded = input.health?.status === "degraded";
+  const unread = input.health === null;
+
+  // Something answered that speaks to the host's state. A refused or failed
+  // read is an absence of an answer, not one: with the server unreachable the
+  // page led with a green "Everything is working." over nothing at all.
+  const known = input.systems !== undefined || input.connectors !== undefined
+    || (input.health !== undefined && !unread);
+  const empty = input.systems === 0 && input.connectors === 0;
+
+  // A line saying a new version exists is worth reading and is not a thing
+  // anybody has to do today, so it does not turn the headline amber.
+  const needing = input.items.filter((i) => i.tone !== "info").length + (input.waiting ?? 0);
+  const wrong = down || input.items.some((i) => i.tone === "problem");
 
   const parts: string[] = [];
-  let tone: Tone;
-
-  if (input.systems === 0 && input.connectors === 0) {
-    parts.push("Nothing is set up yet.");
-    tone = "neutral";
-  } else {
-    // A critical check that is down makes the host wrong whatever the plugin
+  let well = false;
+  if (wrong) {
+    // A critical check that is down makes the host wrong whatever the system
     // list says. "Everything is working" over a Host card reading "1 of 3
     // checks is not passing" is the sentence somebody believes instead of the
     // card.
-    const down = input.health?.status === "down";
-    const degraded = input.health?.status === "degraded";
-    const wrong = down || input.items.some((i) => i.tone === "problem");
-    parts.push(wrong ? "Something is wrong." : "Everything is working.");
-
-    const needing = input.items.length + (input.waiting ?? 0);
-    if (needing > 0) {
-      const count = NUMBERS[needing] ?? String(needing);
-      parts.push(`${count} ${needing === 1 ? "thing needs" : "things need"} you.`);
-    }
-
-    if (degraded) parts.push("A check on this host is not passing.");
-
-    tone = wrong ? "problem" : (needing > 0 || degraded) ? "attention" : "good";
-
-    // Only when nothing else has been said. A host with something waiting on
-    // it has a more useful next sentence than how long it has been quiet.
-    if (parts.length === 1 && input.connected > 0) {
-      const since = quietSince(input.summary);
-      if (since) parts.push(`Nothing has come through since ${moment(since)}.`);
-    }
+    parts.push("Something is wrong.");
+  } else if (degraded) {
+    // Said instead of "Everything is working.", never after it: a sentence
+    // should not be contradicted by the one that follows it.
+    parts.push("A check on this host is not passing.");
+  } else if (empty) {
+    parts.push("Nothing is set up yet.");
+  } else if (known) {
+    parts.push("Everything is working.");
+    well = true;
   }
 
-  if (input.health === null) parts.push("This host's health could not be read.");
+  if (needing > 0) {
+    const count = NUMBERS[needing] ?? String(needing);
+    parts.push(`${count} ${needing === 1 ? "thing needs" : "things need"} you.`);
+  }
+
+  // Only when nothing else has been said. A host with something waiting on it
+  // has a more useful next sentence than how long it has been quiet.
+  if (well && needing === 0 && input.connected > 0) {
+    const since = quietSince(input.summary);
+    if (since) parts.push(`Nothing has come through since ${moment(since)}.`);
+  }
+
+  if (unread) parts.push("This host's health could not be read.");
+
+  if (parts.length === 0) return null;
+  const tone: Tone = wrong ? "problem"
+    : (degraded || needing > 0 || unread) ? "attention"
+      : empty ? "neutral" : "good";
   return { text: parts.join(" "), tone };
 }
 
@@ -347,9 +373,10 @@ function Activity({ summary, className }: { summary?: CallSummary; className?: s
   // chart that disagreed with it would be the one somebody quotes.
   const refused = summary.buckets.reduce((t, b) => t + b.denied + b.rate_limited, 0);
   const span = windowWords(summary.hours);
+  const calls = summary.total === 1 ? "call" : "calls";
   const label = summary.total === 0
     ? `No calls in the last ${span}.`
-    : `${number(summary.total)} calls in the last ${span}, ${number(summary.errors)} failed and ${number(refused)} refused.`;
+    : `${number(summary.total)} ${calls} in the last ${span}, ${number(summary.errors)} failed and ${number(refused)} refused.`;
 
   return (
     <Section title={`Last ${span}`} className={className}>
@@ -362,7 +389,7 @@ function Activity({ summary, className }: { summary?: CallSummary; className?: s
               <span className="text-xl font-semibold text-foreground tabular-nums">
                 {number(summary.total)}
               </span>
-              calls
+              {calls}
               {summary.errors > 0 && (
                 <span className="text-problem tabular-nums">· {number(summary.errors)} failed</span>
               )}
@@ -481,8 +508,8 @@ function systemRows(
   for (const i of instances ?? []) {
     if (listed.has(i.name) || i.mounted || i.removed) continue;
     rows.push(i.enabled
-      ? { name: i.name, tone: "attention", state: "waiting on settings" }
-      : { name: i.name, tone: "neutral", state: "switched off" });
+      ? { name: i.name, tone: "attention", state: "waiting on settings", calls: calls.get(i.name) }
+      : { name: i.name, tone: "neutral", state: "switched off", calls: calls.get(i.name) });
   }
 
   const rank: Record<Tone, number> = { problem: 0, attention: 1, info: 2, neutral: 3, good: 4 };
@@ -538,7 +565,7 @@ function connectorState(t: TunnelStatus): { tone: Tone; state: string } {
   switch (t.state) {
     case "connected": return { tone: "good", state: "ready" };
     case "starting": return { tone: "info", state: "connecting" };
-    case "disabled": return { tone: "neutral", state: "off" };
+    case "disabled": return { tone: "neutral", state: "switched off" };
     default: return { tone: "neutral", state: "stopped" };
   }
 }
