@@ -35,8 +35,11 @@ export function usePrincipalNames(): (actor: string, resolved?: string) => strin
         for (const k of page.keys ?? []) {
           const name = k.name?.trim();
           // "the api key key" is what appending the noun to a name that
-          // already ends in it produces.
-          if (name) found.set(`key:${k.id}`, /key$/i.test(name) ? `the ${name}` : `the ${name} key`);
+          // already ends in it produces. The word boundary is what keeps a
+          // key somebody called "Monkey" from losing its noun.
+          if (name) {
+            found.set(`key:${k.id}`, /\bkey$/i.test(name) ? `the ${name}` : `the ${name} key`);
+          }
         }
         if (live && found.size > 0) setKeys(found);
       },

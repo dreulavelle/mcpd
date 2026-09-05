@@ -191,6 +191,24 @@ describe("what the record will prove", () => {
    * with it, and a change running at that moment reported "Never checked --
    * nobody read the system again", which reads as a check that was skipped.
    */
+  /**
+   * The expiry sentence is about the decision, and once one has been taken it
+   * is answering a question nobody is asking any more -- "nobody can approve
+   * it" beside a change that is already running reads as a problem.
+   */
+  it("stops offering the approval deadline once the decision is taken", async () => {
+    const { unmount } = mount(operationFixture(), "admin");
+    expect(await screen.findByText(/The proposal runs out/i)).toBeInTheDocument();
+    unmount();
+
+    for (const state of ["approved", "executing", "indeterminate"] as const) {
+      const view = mount(operationFixture({ state, attempts: 1 }), "admin");
+      await screen.findByText(HEADING);
+      expect(screen.queryByText(/The proposal runs out/i)).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
   it("says a change running now has nothing to read back yet", async () => {
     mount(operationFixture({ state: "executing", attempts: 1, verified: null }), "admin");
 

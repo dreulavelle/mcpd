@@ -114,7 +114,14 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
         // reaches for a proposal by name, so the name has to be the one the
         // approvals page taught them.
         label: describeChange(op).headline,
-        hint: `proposed by ${principalWords(op.requested_by)}`,
+        // The name the record already carries, resolved server-side; equal to
+        // the identifier means nothing resolved, and then the words that need
+        // no lookup are the better answer.
+        hint: `proposed by ${
+          op.requested_by_name && op.requested_by_name !== op.requested_by
+            ? op.requested_by_name
+            : principalWords(op.requested_by)
+        }`,
         keywords: `${op.plugin} ${op.action} ${op.requested_by} ${op.id} ${op.risk}`,
         icon: ClipboardCheck,
         run: () => go(`/approvals/${encodeURIComponent(op.id)}`),

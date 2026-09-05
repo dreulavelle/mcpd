@@ -2,7 +2,7 @@ import { useCallback, useState, type ReactNode } from "react";
 import { CircleAlert, TriangleAlert } from "lucide-react";
 import { api, type AuditRecord, type Operation, problemText } from "@/lib/api";
 import {
-  describeChange, pretty, relative, riskLabel, when, whenExact,
+  changeDelta, describeChange, pretty, relative, riskLabel, when, whenExact,
 } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { Link, useRouter } from "@/lib/router";
@@ -17,7 +17,7 @@ import {
   AssuranceBadge, AuthorisedByRule, RiskBadge, StateBadge,
 } from "@/components/status";
 import { policyAuthorisation, type PolicyAuthorisation } from "./authorisation";
-import { FieldDelta, fieldDelta } from "./delta";
+import { FieldDelta } from "./delta";
 import { Lifecycle } from "./Lifecycle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -61,7 +61,7 @@ function Body({ operation: op, audit, onChanged }: {
   const authorisation = policyAuthorisation(op, audit);
   const name = usePrincipalNames();
   const { headline } = describeChange(op);
-  const delta = fieldDelta(op);
+  const delta = changeDelta(op);
 
   return (
     <>
@@ -247,8 +247,10 @@ function WhoAndWhen({ operation: op, audit, name }: {
     </>,
   );
 
-  // A deadline only means something while it can still be missed.
-  if (!op.terminal && op.expires_at) {
+  // A deadline only means something while it can still be missed, and once a
+  // change is approved nobody is going to approve it again -- the deadline
+  // that matters from there is `execute_by`, two sentences down.
+  if (op.state === "pending_approval" && op.expires_at) {
     lines.push(
       <>
         The proposal runs out <Moment iso={op.expires_at} />. After that nobody
