@@ -247,7 +247,10 @@ function UsageBody({ r }: { r: Resources }) {
           help={`${r.gc_pause_total_ms.toFixed(0)}ms paused in total, ${r.gc_cpu_percent.toFixed(2)}% of CPU.`}
         />
         <Stat label="CPUs in use" value={`${r.gomaxprocs} of ${r.num_cpu}`} />
-        <Stat label="Memory used since it started" value={bytes(r.total_alloc_bytes)} />
+        <Stat
+          label="Memory allocated in total" value={bytes(r.total_alloc_bytes)}
+          help="Every allocation since it started, including memory long since given back. It only ever goes up."
+        />
         <Stat label="Memory for running jobs" value={bytes(r.stack_in_use_bytes)} />
       </dl>
 
@@ -303,15 +306,16 @@ function Restart() {
       <CardHeader>
         <CardTitle className="text-base">Restart</CardTitle>
         <p className="text-sm text-muted-foreground">
-          mcpd stops and starts again. Some settings say they need this. Most
-          changes take effect without one.
+          mcpd stops, and whatever runs it starts it again. Some settings say
+          they need this. Most changes take effect without one.
         </p>
       </CardHeader>
       <CardContent>
         {sent ? (
           <Notice tone="neutral">
             Restarting. Connectors reconnect on their own. If this page does not
-            come back within a minute, mcpd did not start again.
+            come back within a minute, whatever runs mcpd did not start it
+            again.
           </Notice>
         ) : confirming ? (
           <div className="space-y-3">
