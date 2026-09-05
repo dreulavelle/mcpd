@@ -71,7 +71,7 @@ export function BypassControl() {
   return (
     <Section
       title="Stop asking, for a while"
-      description="Approves everything for a limited time, then closes on its own."
+      description="Approves reversible changes up to a risk level you choose, for a limited time, then closes on its own. Critical changes and always-ask rules are never covered."
     >
       <Card>
         <CardContent className="pt-6">
