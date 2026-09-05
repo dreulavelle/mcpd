@@ -328,7 +328,7 @@ function Body({ server, tools, toolsError, onChanged }: {
               <Detail label="How it connects">
                 <code className="font-mono text-xs">{server.transport || "—"}</code>
               </Detail>
-              <Detail label="Document version">
+              <Detail label="server.json version">
                 <code className="font-mono text-xs">{server.schema_version || "—"}</code>
               </Detail>
               <Detail label="Added">{whenExact(server.created_at)}</Detail>

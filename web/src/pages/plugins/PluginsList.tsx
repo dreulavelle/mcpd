@@ -431,7 +431,7 @@ function StaleRemovals({ rows, mayManage, onChanged }: {
       <div className="space-y-2">
         <p>
           These were removed here, and the configuration file no longer lists
-          them. Forget one to take it off this list.
+          them. Nothing is being held back. Forget one to take it off this list.
         </p>
         {rows.map((r) => (
           <p key={r.name} className="flex flex-wrap items-center gap-x-2 text-sm">
