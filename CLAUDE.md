@@ -185,6 +185,15 @@ wonder. Do not narrate what the code plainly does.
 Tests state the behaviour they defend, including the bug they exist for when
 there was one. Table-driven where it fits.
 
+**Anything a person reads is written for an ops manager.**
+[`docs/dashboard-copy.md`](docs/dashboard-copy.md) is the rule; the one-line
+version is that a sentence says what happened and what to do, and evidence --
+an error code, a status, a route, a log line -- goes under "Technical details"
+rather than into the sentence. A failure carries the three apart:
+`Status.Message` is the sentence, `Status.Detail` and `Status.Code` are the
+evidence, `Status.Trouble` is what the thing itself logged. Text somebody else
+wrote is quoted, never run in.
+
 Conventional commits, branch names `type/short-description`. Commit bodies
 explain the reasoning, not the diff.
 
