@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { attention } from "./Attention";
+import { screen } from "@testing-library/react";
+import { Attention, attention } from "./Attention";
 import type { Certificate, MCPServer, Operation, Plugin, PluginInstance } from "@/lib/api";
+import { renderWith } from "@/test/render";
 
 const nothing = {
   admin: true, plugins: [], instances: [], tunnels: [], unknown: [],
@@ -124,5 +126,34 @@ describe("what needs attention", () => {
       expect(item.text).not.toContain("tunnel: ");
       expect(item.text).not.toMatch(/\([a-z]+(_[a-z]+)+\)/);
     }
+  });
+});
+
+/**
+ * The list has to disappear when there is nothing in it.
+ *
+ * A card headed "Needs attention" whose body reads "nothing needs you" is the
+ * loudest way a page can report quiet: it takes the same room and the same
+ * eye as one holding a broken connector. The sentence at the top of the
+ * overview already says the same thing in a line.
+ */
+describe("the attention list", () => {
+  it("renders nothing at all when nothing needs anybody", () => {
+    renderWith(<Attention items={[]} />);
+    expect(screen.queryByText("Needs attention")).not.toBeInTheDocument();
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+  });
+
+  it("draws a line and a place to go for each item", () => {
+    renderWith(
+      <Attention
+        items={[{
+          key: "k", tone: "problem", text: "The echo connector has stopped.",
+          to: "/tunnels", linkLabel: "Tunnels",
+        }]}
+      />,
+    );
+    expect(screen.getByText("The echo connector has stopped.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Tunnels" })).toHaveAttribute("href", "/tunnels");
   });
 });
