@@ -63,9 +63,8 @@ type Instance struct {
 }
 
 // instanceRecord is what the store holds for an instance added in the
-// dashboard. Its settings live separately, under their own keys, so removing
-// an instance and re-adding it under the same name finds its old values --
-// which is what someone correcting a typo in a type expects.
+// dashboard. Its settings live separately, under their own keys, and a removal
+// deletes both -- see RemoveInstance.
 type instanceRecord struct {
 	Type    string `json:"type"`
 	Enabled bool   `json:"enabled"`
@@ -228,10 +227,10 @@ func (a *App) AddInstance(ctx context.Context, actor, name, typeName string) err
 			// The name is still taken: the file declares it, and the store
 			// only says to ignore that declaration. Adding a second instance
 			// under it would leave two answers to what the name means, one of
-			// which returns the moment somebody restores the other.
-			return fmt.Errorf("%q is declared in the configuration file and was "+
-				"removed here; restore it rather than adding a second one under "+
-				"the same name", name)
+			// which returns the moment somebody adds the other back.
+			return fmt.Errorf("%q is listed in the configuration file and was "+
+				"removed here. Add it back from that listing rather than adding "+
+				"a second plugin under the same name", name)
 		}
 		return fmt.Errorf("a plugin named %q already exists", name)
 	}
@@ -245,25 +244,23 @@ func (a *App) AddInstance(ctx context.Context, actor, name, typeName string) err
 	})
 }
 
-// RemoveInstance forgets an instance, or overrides the file's declaration of
-// one.
+// RemoveInstance takes a plugin off this host and forgets what it held.
 //
-// Which of the two it is depends on where the instance came from, and the
-// difference is worth stating because the promises are different.
+// However it was defined, the removal keeps nothing: every setting its type
+// declares and every row of its table settings goes, credentials included. A
+// name that comes back is set up from scratch. Keeping them so that a later
+// restore came back "as it was" meant a credential outliving the decision to
+// stop using it, and that a name reused later could silently inherit it.
 //
-// An instance added in the dashboard is deleted outright, and its settings go
-// with it: leaving them would mean a name reused later silently inheriting
-// someone else's credentials.
-//
-// One declared in the configuration file cannot be deleted, because mcpd does
-// not write that file -- it is mounted read-only in the container image, the
-// root filesystem is read-only, the systemd unit is ProtectSystem=strict, and
-// a deployment provisioned from configuration management would restore the
-// entry on the next deploy anyway. So the declaration is overridden instead:
-// a row records the removal, every read from now on ignores the file's entry
-// for that name, and a restart changes nothing. Its settings are kept, because
-// the removal is reversible and a restore that came back without the
-// credentials somebody typed in would be a restore in name only.
+// What differs by origin is the record, not the wipe. An instance added in the
+// dashboard is deleted outright. One declared in the configuration file cannot
+// be deleted, because mcpd does not write that file -- the systemd unit is
+// ProtectSystem=strict, and a deployment provisioned from configuration
+// management would put the entry back on the next deploy anyway. So the
+// declaration is overridden instead: a row records the removal, every read
+// from now on ignores the file's entry for that name, and a restart changes
+// nothing. The file still lists it, so it can be added again from that
+// declaration -- empty.
 func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledgeRequired bool) error {
 	var found *Instance
 	for _, inst := range a.instances(ctx) {
@@ -286,7 +283,7 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 	}
 	if found.FromFile || found.FromPluginsDir {
 		if found.Removed {
-			return fmt.Errorf("%q is already removed; restore it if you want it back", name)
+			return fmt.Errorf("%q is already removed; add it again if you want it back", name)
 		}
 		// `required: true` is the deployment saying the host should not run
 		// without this integration, and a removal here means the next start
@@ -304,35 +301,67 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 		if err := a.pluginOverrides.Remove(ctx, actor, name, a.declaredAs(*found)); err != nil {
 			return err
 		}
+		// The cache is refreshed before the wipe rather than only after it.
+		// Every read of an instance goes through it, and forgetting the
+		// settings first would have the settings watcher rebuild a plugin the
+		// store already calls removed, against the empty configuration it has
+		// just been left with.
+		if err := a.loadOverrides(ctx); err != nil {
+			return err
+		}
+		if err := a.forgetInstance(ctx, actor, *found); err != nil {
+			return err
+		}
 		return a.overridesChanged(ctx, name)
 	}
 
-	changes := []settings.Change{{Key: instanceKeyPrefix + name, Delete: true}}
-	if t, ok := a.types.Lookup(found.Type); ok {
+	// Its own record goes in the same write as its settings: two writes could
+	// be interrupted between, leaving settings under a name with no instance
+	// for the next plugin called that to inherit.
+	return a.forgetInstance(ctx, actor, *found,
+		settings.Change{Key: instanceKeyPrefix + name, Delete: true})
+}
+
+// forgetInstance wipes what an instance held -- every scalar setting its type
+// declares, and every row of its table settings -- along with any further
+// changes the caller needs made in the same write.
+//
+// One helper for both origins, because a removal keeps nothing either way: a
+// name that comes back, reused by somebody else or added again from the file's
+// declaration, must not inherit the credentials or the customers the last one
+// was given.
+func (a *App) forgetInstance(ctx context.Context, actor string, inst Instance, also ...settings.Change) error {
+	changes := also
+	if t, ok := a.types.Lookup(inst.Type); ok {
 		for _, f := range t.Settings {
 			changes = append(changes, settings.Change{
-				Key: settings.PluginSettingKey(name, f.Key), Delete: true,
+				Key: settings.PluginSettingKey(inst.Name, f.Key), Delete: true,
 			})
 		}
 	}
-	// The rows of its table settings go too, for the same reason its scalar
-	// settings do: a name reused later must not silently inherit somebody
-	// else's customers and their credentials.
 	if a.pluginRows != nil {
-		if err := a.pluginRows.DeleteAll(ctx, name); err != nil {
+		if err := a.pluginRows.DeleteAll(ctx, inst.Name); err != nil {
 			return err
 		}
+	}
+	if len(changes) == 0 {
+		return nil
 	}
 	return a.settings.Apply(ctx, actor, changes)
 }
 
-// RestoreInstance puts a removed file-defined instance back under the file's
-// declaration.
+// RestoreInstance adds a plugin the configuration file still declares back to
+// this host, empty.
 //
-// Under the file's, not under what the file said when it was removed: the
-// override is forgotten entirely, so whatever config.yaml declares today is
-// what comes back. Anything else would be this host holding a copy of an old
-// declaration and serving from it.
+// The name is what the method and its endpoint have always been called, and
+// callers depend on both, but what it does is an add: the removal forgot the
+// plugin's settings, so nothing comes back with it and it arrives needing to
+// be set up.
+//
+// It comes back under the file's declaration, not under what the file said
+// when it was removed: the override is forgotten entirely, so whatever
+// config.yaml declares today is what comes back. Anything else would be this
+// host holding a copy of an old declaration and serving from it.
 func (a *App) RestoreInstance(ctx context.Context, actor, name string) error {
 	if err := a.pluginOverrides.Restore(ctx, actor, name); err != nil {
 		if errors.Is(err, sqlite.ErrNotRemoved) {
@@ -365,7 +394,7 @@ func (a *App) SetInstanceEnabled(ctx context.Context, actor, name string, enable
 		if inst.FromFile || inst.FromPluginsDir {
 			if inst.Removed {
 				return fmt.Errorf("%q is removed, so there is nothing to switch "+
-					"on or off; restore it first", name)
+					"on or off; add it back first", name)
 			}
 			if err := a.pluginOverrides.SetEnabled(ctx, actor, name, a.declaredAs(inst), enabled); err != nil {
 				return err

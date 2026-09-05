@@ -2081,13 +2081,19 @@ that editing the entry silently resurrects the plugin, which is the failure
 this exists to prevent. A tool approval is a statement about a descriptor; a
 removal is a statement about a name.
 
-**Reversible, and reversible to the file.** Restoring forgets the override
-entirely, so what comes back is whatever the file declares now rather than a
-copy of what it declared then. The settings are kept across a removal, because
-a restore that came back without the credentials somebody typed in would be a
-restore in name only — which is also the difference from removing a
-dashboard-defined instance, where the settings do go, so that a name reused
-later cannot silently inherit them.
+**A removal keeps nothing, whichever way the plugin was defined.** Every
+setting its type declares and every row of its table settings goes with it,
+credentials included. The settings used to be kept across a file-declared
+removal, so that a restore came back "as it was" — which meant a credential
+outliving the decision to stop using it, and a name that could silently
+inherit it. The vocabulary is add and remove rather than remove and restore:
+what a file-declared plugin gets is a way to be added again, from the
+declaration that is still in the file, and set up from scratch.
+
+**Added back to the file, not to a snapshot.** Adding one back forgets the
+override entirely, so what returns is whatever the file declares now rather
+than a copy of what it declared then. The endpoint and `App.RestoreInstance`
+keep their old names because clients depend on them; what they do is an add.
 
 **Removing one is an administrative act and is audited.** It overrides the
 deployment's own configuration, so it appends to the hash-chained trail inside

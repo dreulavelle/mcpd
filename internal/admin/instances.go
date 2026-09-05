@@ -219,13 +219,17 @@ func (s *Server) handleRestoreInstance(w http.ResponseWriter, r *http.Request) {
 	actor := auth.FromContext(r.Context()).ID
 	name := r.PathValue("name")
 	if err := s.opts.RestorePlugin(r.Context(), actor, name); err != nil {
-		s.writeProblem(w, r, http.StatusBadRequest, err, "That plugin could not be brought back.")
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That plugin could not be added.")
 		return
 	}
-	s.opts.Log.Info("plugin instance restored", "instance", name, "by", actor)
+	s.opts.Log.Info("plugin instance added back from the configuration file",
+		"instance", name, "by", actor)
+	// The route and the status keep their old names, which clients depend on.
+	// The sentence does not: removing the plugin forgot its settings, so this
+	// adds an empty one rather than bringing anything back.
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"status": "restored",
-		"note": "It is back under whatever the configuration file declares. " +
-			"It starts serving as soon as it has what it needs.",
+		"note": "It is back as the configuration file declares it, with nothing " +
+			"set up. It starts serving as soon as it has what it needs.",
 	})
 }

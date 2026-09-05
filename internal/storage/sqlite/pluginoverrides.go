@@ -48,7 +48,7 @@ var ErrNotRemoved = errors.New("sqlite: that plugin is not removed")
 
 // ErrPluginRemoved reports a change to a plugin whose declaration is
 // overridden by a removal. Enabling something that is removed is not a state
-// this represents: the answer is to restore it first.
+// this represents: the answer is to add it back first.
 var ErrPluginRemoved = errors.New("sqlite: that plugin is removed")
 
 // PluginOverrideStore holds the dashboard's overrides of the configuration
