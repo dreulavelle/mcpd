@@ -63,7 +63,7 @@ describe("the tunnels page", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Details for mcpd: echo" }));
     const sheet = await screen.findByRole("dialog");
     expect(within(sheet).getByText("mcpd: echo")).toBeInTheDocument();
-    expect(within(sheet).getByText(/It will not restart on its own/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/This connector has stopped/)).toBeInTheDocument();
     expect(within(sheet).getByText(/connects as/)).toHaveTextContent("Lab");
     expect(window.location.search).toBe("?tunnel=tunnel_b");
   });
@@ -217,5 +217,34 @@ describe("what a tunnel is doing", () => {
     const two = [account(), account({ id: "acct_2", name: "Nick" })];
     const shared = row({ state: "connected" }, { account: "acct_2", owners: ["acct_1", "acct_2"] });
     expect(reading(shared, ["graylog"], two).kind).not.toBe("elsewhere");
+  });
+
+  // The bug: the sidebar read `It will not restart on its own. tunnel: OpenAI
+  // refused this account's key for this tunnel (tunnel_use_forbidden): …`
+  // with a raw `time=… level=WARN msg="poll failed; backing off"` line under
+  // it. The status carries all three separately now, and only the sentence is
+  // prose -- the rest is under Technical details.
+  it("never puts evidence in a reading", () => {
+    const carrying = {
+      message: "OpenAI no longer accepts this account's key. Paste a new runtime key into the account under Settings › ChatGPT.",
+      detail: "tunnel: OpenAI refused this account's key (token_invalidated)",
+      code: "token_invalidated",
+      trouble: `time=2026-09-04T03:37:01Z level=WARN msg="poll failed; backing off" client_instance_id=abc`,
+      trouble_at: new Date().toISOString(),
+    };
+    const states: Partial<TunnelStatus>[] = [
+      { state: "failed", ...carrying },
+      { state: "failed", attempts: 2, next_retry_at: new Date(Date.now() + 60_000).toISOString(), ...carrying },
+      { state: "connected", degraded: true, ...carrying },
+      { state: "starting", ...carrying },
+      { state: "connected", ...carrying },
+    ];
+    for (const s of states) {
+      const detail = reading(row(s), ["graylog"], one).detail;
+      expect(detail).not.toContain(carrying.trouble);
+      expect(detail).not.toContain("level=WARN");
+      expect(detail).not.toContain("tunnel: ");
+      expect(detail).not.toMatch(/\([a-z]+(_[a-z]+)+\)/);
+    }
   });
 });

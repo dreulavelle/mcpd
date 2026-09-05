@@ -133,18 +133,21 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
   }
   switch (s.state) {
     case "failed":
+      // s.message is a sentence for a person; the wrapped error behind it is
+      // s.detail and the code is s.code, and both stay under Technical
+      // details. Gluing either into this line is the bug this reads around.
       return s.next_retry_at
         ? { kind: "retrying", label: `Retrying · attempt ${s.attempts ?? 1}`, tone: "attention", rank: 1, bucket: "needs",
-            detail: `Next try ${relative(s.next_retry_at)}. ${s.message ?? ""}` }
+            detail: `Trying again ${relative(s.next_retry_at)}.${s.message ? ` ${s.message}` : ""}` }
         : { kind: "stopped", label: "Stopped", tone: "problem", rank: 0, bucket: "needs",
-            detail: `It will not restart on its own. ${s.message ?? ""}` };
+            detail: `This connector has stopped.${s.message ? ` ${s.message}` : ""}` };
     case "starting":
       return { kind: "connecting", label: "Connecting", tone: "info", rank: 5, bucket: "waiting",
-        detail: "Waiting for the first poll to complete." };
+        detail: "Connecting to OpenAI." };
     case "connected":
       if (s.degraded) {
         return { kind: "degraded", label: "Degraded", tone: "attention", rank: 2, bucket: "needs",
-          detail: "Connected, but the client has been reporting errors with nothing served since. mcpd restarts it if this goes on." };
+          detail: "Connected, but nothing is getting through and the connection keeps reporting errors. mcpd restarts it if this goes on." };
       }
       if ((s.requests ?? 0) === 0 && !s.last_request_at && awaiting.has(row.id)) {
         return { kind: "attach", label: "Waiting for ChatGPT", tone: "info", rank: 4, bucket: "waiting",
@@ -495,7 +498,7 @@ function TunnelRow({ row, reading: r, accounts, selected, onSelect, onDone, noti
         </button>
       </TableCell>
       <TableCell className="text-xs whitespace-nowrap text-muted-foreground">
-        {s?.last_request_at ? relative(s.last_request_at) : s?.trouble_at ? `error ${relative(s.trouble_at)}` : "—"}
+        {s?.last_request_at ? relative(s.last_request_at) : s?.trouble_at ? `Last error ${relative(s.trouble_at)}` : "—"}
       </TableCell>
       <TableCell className="whitespace-nowrap">
         <span className="flex items-center justify-end gap-1">
@@ -646,8 +649,9 @@ function CopyDiagnostics({ row, reading: r }: { row: Row; reading: Reading }) {
   async function copy() {
     const s = row.status;
     const lines = [
-      `tunnel: ${row.id}`, `name: ${row.name}`, `state: ${r.label}`, `detail: ${r.detail}`,
-      s?.message ? `message: ${s.message}` : "", s?.connected_at ? `connected_at: ${s.connected_at}` : "",
+      `tunnel: ${row.id}`, `name: ${row.name}`, `state: ${r.label}`, `reading: ${r.detail}`,
+      s?.message ? `message: ${s.message}` : "", s?.code ? `code: ${s.code}` : "",
+      s?.detail ? `detail: ${s.detail}` : "", s?.connected_at ? `connected_at: ${s.connected_at}` : "",
       `requests_since_connected: ${s?.requests ?? 0}`, s?.last_request_at ? `last_request_at: ${s.last_request_at}` : "",
       s?.activity ? `requests_by_hour: ${s.activity.join(",")}` : "", s?.errors ? `errors_by_hour: ${s.errors.join(",")}` : "",
       s?.attempts ? `restart_attempts: ${s.attempts}` : "", s?.next_retry_at ? `next_retry_at: ${s.next_retry_at}` : "",
@@ -804,12 +808,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
       {metricsFirst && metrics}
 
       {r.detail && (
-        <Notice tone={r.tone === "good" ? "neutral" : r.tone}>
-          {r.detail}
-          {s?.trouble && r.kind !== "ready" && (
-            <span className="mt-1 block font-mono text-[11px] break-all opacity-80">{s.trouble}</span>
-          )}
-        </Notice>
+        <Notice tone={r.tone === "good" ? "neutral" : r.tone}>{r.detail}</Notice>
       )}
 
       {(admin || manages) && (
@@ -833,7 +832,6 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
               {r.kind === "gone" ? "Forget" : "Remove"}
             </Button>
           )}
-          <CopyDiagnostics row={row} reading={r} />
         </div>
       )}
 
@@ -910,18 +908,43 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
 
       <RecentCalls principal={account?.principal} plugin={s?.plugin ?? row.assigned ?? ""} />
 
-      {s?.trouble && (
-        <div className="space-y-1.5 border-t pt-4">
-          <h3 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Last from the client</h3>
-          <p className="rounded-md border bg-muted/50 p-2 font-mono text-[11px] break-all text-muted-foreground">
-            {s.trouble_at ? `${when(s.trouble_at)} ` : ""}{s.trouble}
-          </p>
-          {admin && (
-            <Link to="/logs" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-              Every line from this host, on Logs <ArrowRight className="size-3" aria-hidden="true" />
-            </Link>
-          )}
-        </div>
+      {/* Everything a sentence deliberately leaves out, behind one click.
+          It is not hidden from anybody -- somebody raising a ticket needs
+          every line of it -- but it is not the first thing on the page
+          either, which is what it was when the log line sat under the
+          Notice. */}
+      {(s?.code || s?.detail || s?.trouble) && (
+        <details className="border-t pt-4">
+          <summary className="cursor-pointer text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+            Technical details
+          </summary>
+          <div className="mt-2 space-y-2">
+            {s?.code && (
+              <p className="font-mono text-[11px] break-all text-muted-foreground">{s.code}</p>
+            )}
+            {s?.detail && (
+              <p className="rounded-md border bg-muted/50 p-2 font-mono text-[11px] break-all text-muted-foreground">
+                {s.detail}
+              </p>
+            )}
+            {s?.trouble && (
+              <div className="space-y-1">
+                <p className="text-[11px] text-muted-foreground">Last line from the connection</p>
+                <p className="rounded-md border bg-muted/50 p-2 font-mono text-[11px] break-all text-muted-foreground">
+                  {s.trouble_at ? `${when(s.trouble_at)} ` : ""}{s.trouble}
+                </p>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-3">
+              {(admin || manages) && <CopyDiagnostics row={row} reading={r} />}
+              {admin && (
+                <Link to="/logs" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                  Every line from this host, on Logs <ArrowRight className="size-3" aria-hidden="true" />
+                </Link>
+              )}
+            </div>
+          </div>
+        </details>
       )}
     </div>
   );

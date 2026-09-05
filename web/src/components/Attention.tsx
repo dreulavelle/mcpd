@@ -67,9 +67,12 @@ export function attention(input: {
     if (p.health === "healthy") continue;
     out.push({
       key: `plugin:${p.name}`, tone: p.health === "degraded" ? "attention" : "problem",
-      // The first sentence only: the whole diagnosis is on the plugin's
-      // page, and a digest line is one line.
-      text: `${p.name} is ${p.health}${p.health_message ? ` — ${firstSentence(p.health_message)}` : "."}`,
+      // The message is written by the plugin or by whatever it talks to, so
+      // it is quoted rather than run into this line: the dashboard says what
+      // happened, and the quote is somebody else speaking. The first sentence
+      // only -- the whole diagnosis is on the plugin's page.
+      text: `${p.name} is ${p.health === "degraded" ? "having trouble" : "not working"}.${
+        p.health_message ? ` It said: "${firstSentence(p.health_message)}"` : ""}`,
       to: `/plugins/${encodeURIComponent(p.name)}`, linkLabel: p.name,
     });
   }
@@ -86,25 +89,25 @@ export function attention(input: {
     if (t.upstream === "missing") {
       out.push({
         key: `tunnel-gone:${t.tunnel_id}`, tone: "problem",
-        text: `${name(t)} points at a tunnel that is not in its account's organisation. Its client will poll for it for ever; move it to the account that owns it, or forget it.`,
+        text: `${name(t)} points at a tunnel this account cannot use. Move it to the account that owns it, or forget it.`,
         to: "/tunnels", linkLabel: "Tunnels",
       });
     } else if (t.state === "failed" && !t.next_retry_at) {
       out.push({
         key: `tunnel-failed:${t.tunnel_id}`, tone: "problem",
-        text: `${name(t)} has stopped and will not restart on its own${t.message ? `: ${t.message}` : "."}`,
+        text: `${name(t)} has stopped.${t.message ? ` ${t.message}` : ""}`,
         to: "/tunnels", linkLabel: "Tunnels",
       });
     } else if (t.state === "failed") {
       out.push({
         key: `tunnel-retrying:${t.tunnel_id}`, tone: "attention",
-        text: `${name(t)} is down; mcpd is retrying (attempt ${t.attempts ?? 1})${t.message ? `: ${t.message}` : "."}`,
+        text: `${name(t)} is down. mcpd is trying again (attempt ${t.attempts ?? 1}).${t.message ? ` ${t.message}` : ""}`,
         to: "/tunnels", linkLabel: "Tunnels",
       });
     } else if (t.degraded) {
       out.push({
         key: `tunnel-degraded:${t.tunnel_id}`, tone: "attention",
-        text: `${name(t)} says connected but its client has been reporting errors with nothing served${t.trouble ? `: ${t.trouble}` : "."}`,
+        text: `${name(t)} is connected but nothing is getting through, and the connection keeps reporting errors.`,
         to: "/tunnels", linkLabel: "Tunnels",
       });
     }
@@ -120,7 +123,7 @@ export function attention(input: {
     if (s.enabled && s.discovery.error) {
       out.push({
         key: `discovery:${s.name}`, tone: "attention",
-        text: `${s.name} could not be asked what it offers: ${s.discovery.error}`,
+        text: `${s.name} could not be asked what it offers. It said: "${firstSentence(s.discovery.error)}"`,
         to: `/plugins/${encodeURIComponent(s.name)}`, linkLabel: s.name,
       });
     }
@@ -138,7 +141,7 @@ export function attention(input: {
     out.push({
       key: "certificates", tone: expired > 0 ? "problem" : "attention",
       text: expired > 0
-        ? `${plural(expired, "trusted certificate has", "trusted certificates have")} expired; anything relying on it will fail its handshake.`
+        ? `${plural(expired, "trusted certificate has", "trusted certificates have")} expired. Anything that relies on it can no longer connect.`
         : `${plural(certs.length, "trusted certificate", "trusted certificates")} expiring soon.`,
       to: "/settings/certificates", linkLabel: "Certificates",
     });
