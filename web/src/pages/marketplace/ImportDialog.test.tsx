@@ -238,13 +238,13 @@ describe("the detail behind a catalogued entry", () => {
 
     expect(screen.queryByText("Version")).not.toBeInTheDocument();
     expect(screen.queryByText("Credential")).not.toBeInTheDocument();
-    expect(screen.getByText("Transport")).toBeInTheDocument();
+    expect(screen.getByText("How it connects")).toBeInTheDocument();
   });
 
   it("shows none of it for a pasted document, which has no catalogue entry", async () => {
     renderWith(<ImportDialog open onOpenChange={() => {}} onImported={() => {}} />);
 
-    expect(screen.queryByText("Transport")).not.toBeInTheDocument();
+    expect(screen.queryByText("How it connects")).not.toBeInTheDocument();
     expect(screen.queryByText("Catalogue")).not.toBeInTheDocument();
   });
 
