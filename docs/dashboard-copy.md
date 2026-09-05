@@ -57,3 +57,22 @@ cannot reach can quote back.
 | `sqlite: begin: database is locked` | That change could not be saved. |
 | `app: plugin "echo" has type "textable", which is enabled in configuration but not compiled into this binary` | This plugin's type is not in this build of mcpd, so it cannot start. Remove it, or run a build that includes it. |
 | `rule "x" names plugin "y", which is not mounted here, so it matches nothing` | rule "x" names "y", which is not a system on this host. It matches nothing. |
+
+## The words this dashboard uses
+
+One word per thing, everywhere. Where two were in use, the left column won.
+
+| Say | Not |
+| --- | --- |
+| system | upstream, target, the far end |
+| working / having trouble / not working | healthy, degraded, unhealthy |
+| serving | mounted |
+| connection | tunnel client |
+| dashboard | console |
+| what was sent | payload |
+| how it looked before | precondition snapshot |
+| read the system again | re-read the target |
+| what the tool accepts | input schema |
+| how it connects | transport |
+| address | endpoint, connect URL |
+| Refused / Not found / No answer / Their side failed | HTTP 401, 404, 408, 5xx |
