@@ -435,16 +435,51 @@ verification there rather than have mcpd stop looking.
 **An unlinked provider identity is not an account, whatever address it
 carries.** This is the decision the whole feature is shaped around. A Google
 sign-in for `alice@corp.com` arriving at a host that already has a password
-account for `alice@corp.com` does **not** sign in as that account. It is
-refused, and the refusal says what to do instead: sign in with the password and
-link the provider from the profile page. Adopting the account on the strength of
-the address would hand it to whoever controls that address at the provider —
-and addresses get recycled, domains lapse and get re-registered, and a personal
-account can be created for a company someone no longer works at. What the
-provider proves is control of an address; what has to be proved is ownership of
-the mcpd account, and only signing in here proves that. So linking is an act by
-the already-signed-in account and it writes a row in `user_identities`, which is
-the only thing that ever turns a subject into an account.
+account for `alice@corp.com` does **not** sign in as that account. Adopting the
+account on the strength of the address would hand it to whoever controls that
+address at the provider — and addresses get recycled, domains lapse and get
+re-registered, and a personal account can be created for a company someone no
+longer works at. What the provider proves is control of an address; what has to
+be proved is ownership of the mcpd account. Linking writes a row in
+`user_identities`, which is the only thing that ever turns a subject into an
+account.
+
+**Three proofs turn an address into that row, and no other.** The rule above
+says what is *not* a proof; these are what is. The first is signing in here and
+linking from the profile page — the original one, and the only one that needs
+no new state. The second is the account's own password, presented once at the
+collision: the refusal used to be a dead end, and the person meeting it was
+usually the account's owner, so the sign-in now lands on a screen asking for
+that password and links the provider when it matches. The third is that **an
+administrator asserted the address in advance** — an invited account, made with
+no credential at all, which the first verified sign-in through the named
+provider claims. Each is a statement about the mcpd account rather than about
+the address, which is what the first paragraph asks for; what differs is who
+makes it.
+
+**The offer at a collision is a row, and it is bounded like a state.**
+`sso_pending_links` carries a digest for a key, the browser binding beside it,
+an expiry and a failure count, and every one of them is in the `WHERE` clause
+of the claim. It has a cookie name of its own because the callback clears the
+flow's binding cookie on every exit, including the exit that makes the offer,
+and it is set before the redirect header is written for the reason every
+`Set-Cookie` in that handler is. Three wrong passwords retire it: the row names
+one account, so without a ceiling it is a password oracle with a ten-minute
+life against an address somebody has already proved they can read mail at. The
+password is compared outside the write transaction — bcrypt at this cost holds
+the single writer for a quarter of a second — and the hash it was compared
+against is carried into the `WHERE` clause, so a password changed underneath
+the claim refuses rather than links against a hash nobody holds any more.
+
+**An account with no password of its own gets a different sentence, and one
+already connected to this provider gets no offer at all.** The first has
+nothing to type; linking is an act by the signed-in account, and telling
+somebody to use a password the account does not have is an instruction they
+cannot carry out — so it is sent to the provider it does use. The second is the
+case this whole feature exists to notice: a subject that changed under an
+address that did not is an address reassigned at the provider, and offering to
+re-link would be adopting the account on the strength of the address by a
+slower route.
 
 The key is the provider's subject, never the address. A `sub` is immutable and
 a login or an email is not — GitHub releases a login when it is changed, and
@@ -536,6 +571,16 @@ from Google's, not a weaker one, and it is written down rather than left to be
 inferred from an absent check. Mapping roles from group claims is a follow-up
 and is deliberately not started.
 
+**Where Entra will say more, it is believed.** A directory can hold a member
+whose address is at a domain nobody verified, so the tenant does not establish
+the domain on its own. `xms_edov` is the optional claim that says whether it
+does, and its three states are three different answers: absent leaves the
+tenant standing alone, present and true is the directory vouching, and present
+and false is the directory saying it cannot — which is refused exactly as an
+unverified Google address is. It is a pointer in the claims struct for that
+reason: absent and false would read the same as a zero value, and every token
+from an app registration made before the claim existed is absent.
+
 **Registration is off by default and an upgrade does not open it.** The zero
 value of the policy accepts nothing, for the same reason the approval policy's
 zero value asks about everything: a setting that loosens on upgrade is the wrong
@@ -544,6 +589,23 @@ ask. Every rule is applied in one function, so a password registration and a
 provider registration cannot diverge — one door that checks the policy and one
 that does not is how a host ends up refusing sign-ups on a form while accepting
 them through Google.
+
+**An invitation is deliberately outside that policy, and that is not a hole in
+it.** `ClaimInvite` does not consult `RegistrationPolicy` at all: closed
+registration, the domain allow-list and the approval step are the rules for a
+stranger asking for an account, and somebody an administrator wrote down on the
+Users page is not one. A host with registration off must still be able to add
+people, or the setting stops meaning "no strangers" and starts meaning "nobody
+new". What stands in the policy's place is the row: one guarded `UPDATE` naming
+the provider, the sentinel password hash, the enabled flag, an expiry and the
+absence of any identity, so two callbacks arriving together produce one claim
+and one refusal. The invitation lapses after fourteen days because an address
+can be reassigned, and one that never lapses is an account handed to whoever
+holds the address next; setting a password clears it in the same statement,
+because an account holding both is one whose invitation is still claimable
+after somebody was given a password for it. An invited account is active rather
+than pending, and is not in the approval queue: it is one somebody already
+decided about.
 
 **The password door proves nothing, so it always waits.** Each provider
 establishes the address before this host sees it. A form establishes that
