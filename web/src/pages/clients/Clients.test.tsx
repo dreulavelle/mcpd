@@ -79,4 +79,21 @@ describe("the clients page", () => {
     expect(await screen.findByText(/An administrator issues keys/)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Issue a key/ })).not.toBeInTheDocument();
   });
+
+  /**
+   * The panel used to render nothing at all when the call failed, which looks
+   * exactly like a host that has no address. It said so on the overview
+   * instead; the overview no longer carries the address, so the sentence has
+   * to be here.
+   */
+  it("says the address could not be read rather than disappearing", async () => {
+    stub();
+    vi.spyOn(api, "endpoints").mockRejectedValue(new Error("down"));
+    renderWith(<Clients />, { path: "/clients" });
+
+    expect(await screen.findByText("Couldn't read this host's address."))
+      .toBeInTheDocument();
+    // And nothing goes on promising a panel that is not coming.
+    expect(screen.queryByLabelText("Loading")).not.toBeInTheDocument();
+  });
 });

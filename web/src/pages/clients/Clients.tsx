@@ -39,8 +39,11 @@ export function Clients() {
       <div className="space-y-8">
         {endpoints.error && <Notice tone="problem">{endpoints.error}</Notice>}
         {plugins.error && <Notice tone="problem">{plugins.error}</Notice>}
+        {/* The notice above is the whole answer once the address could not be
+            read. A skeleton left underneath it goes on promising a panel that
+            is not coming. */}
         {!endpoints.data ? (
-          <Loading rows={4} />
+          endpoints.error ? null : <Loading rows={4} />
         ) : (
           <Connect
             endpoints={endpoints.data}

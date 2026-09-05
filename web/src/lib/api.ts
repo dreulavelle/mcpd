@@ -1223,6 +1223,38 @@ export interface Caller {
   plugins?: string[];
 }
 
+/**
+ * One wall-clock hour of calls.
+ *
+ * The host sends an hour that nobody called in as a bucket of zeros rather
+ * than leaving it out, so a chart drawn from these has a bar per hour. Left
+ * out and drawn as a gap, a quiet night reads as a shorter day.
+ */
+export interface CallBucket {
+  at: string;
+  ok: number;
+  error: number;
+  denied: number;
+  rate_limited: number;
+}
+
+/** One system's share of a window, busiest first. */
+export interface PluginCalls {
+  plugin: string;
+  calls: number;
+  errors: number;
+}
+
+/** A recent window of the call ledger, counted by hour and by system. */
+export interface CallSummary {
+  hours: number;
+  buckets: CallBucket[];
+  plugins: PluginCalls[];
+  total: number;
+  errors: number;
+  denied: number;
+}
+
 /** One window in which this host approves changes without asking. */
 export interface Bypass {
   id: string;
@@ -1699,6 +1731,9 @@ export const api = {
   callers: (days = 7) =>
     request<{ callers: Caller[]; count: number; days: number }>(
       `/api/calls/callers?days=${days}`),
+
+  callSummary: (hours = 24) =>
+    request<CallSummary>(`/api/calls/summary?hours=${hours}`),
 
   backupStatus: () => request<BackupStatus>("/api/backup"),
 

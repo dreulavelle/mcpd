@@ -140,7 +140,7 @@ describe("the console", () => {
   it("lands on the overview and survives an empty deployment", async () => {
     render(<App />);
     expect(await screen.findByText("Hello, Smoke")).toBeInTheDocument();
-    expect(await screen.findByText("Nothing waiting")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing to decide.")).toBeInTheDocument();
   });
 
   it("navigates to a section and back without a reload", async () => {
@@ -393,7 +393,7 @@ describe("the getting-started checklist", () => {
 
     expect(screen.getByRole("button", { name: /get started/i })).toBeInTheDocument();
     // Nothing waiting on the overview is still what the page is about.
-    expect(screen.getByText("Nothing waiting")).toBeInTheDocument();
+    expect(screen.getByText("Nothing to decide.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.body).toHaveFocus();
   });
