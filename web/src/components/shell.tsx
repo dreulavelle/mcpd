@@ -1,5 +1,5 @@
 import { useCallback, useState, type ReactNode } from "react";
-import { LogOut, Menu, Search, X } from "lucide-react";
+import { Coffee, LogOut, Menu, Search, X } from "lucide-react";
 import { entryFor, visibleNav, type NavItem } from "@/lib/nav";
 import { Link, useRouter } from "@/lib/router";
 import { signedInAs, useCanFn, useSession } from "@/lib/session";
@@ -92,10 +92,22 @@ function Sidebar({ badges, onNavigate }: {
  */
 function Version({ version }: { version: string }) {
   return (
-    <div className="shrink-0 px-3 pb-2">
+    <div className="flex shrink-0 items-center justify-between px-3 pb-2">
       <p className="px-2.5 font-mono text-[11px] text-muted-foreground">
         mcpd {version}
       </p>
+      {/* The one thing in this rail that is about the author rather than the
+          host: a coffee, the size of the version beside it. */}
+      <a
+        href="https://buymeacoffee.com/dreulavelle"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Buy the author a coffee"
+        aria-label="Buy the author a coffee"
+        className="px-2.5 text-muted-foreground hover:text-foreground"
+      >
+        <Coffee className="size-3.5" aria-hidden="true" />
+      </a>
     </div>
   );
 }

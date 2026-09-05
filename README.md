@@ -153,3 +153,5 @@ Detailed configuration, security, plugin development, approvals, and architectur
 ---
 
 **mcpd — private infrastructure, connected to AI.**
+
+If mcpd saves you time, you can [buy me a coffee](https://buymeacoffee.com/dreulavelle).
