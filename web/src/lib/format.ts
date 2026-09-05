@@ -180,6 +180,17 @@ const CHANGE_VERBS: Record<string, string> = {
 /** Verbs that bring a thing into being take "a", not "the". */
 const INDEFINITE = new Set(["create", "add"]);
 
+/**
+ * Resources whose segment name is not what the change acts on.
+ *
+ * `recycle_bin.destroy` destroys one item in the bin, not the bin; it is also
+ * the one action bookstack declares irreversible and the one nobody should
+ * ever be able to read as routine housekeeping.
+ */
+const RESOURCE_WORDS: Record<string, string> = {
+  recycle_bin: "item in the recycle bin",
+};
+
 /** Machine casing to words: `radio_channel` and `radioChannel` both read out. */
 function words(segment: string): string {
   return segment
@@ -249,44 +260,91 @@ export function describeChange(op: ChangeLike): ChangeWords {
   return {
     headline,
     detail: fields.text || impact,
-    // A "from" clause is an aside and takes a comma; a bare "to" finishes the
-    // same clause and does not.
+    // An aside takes a comma; a continuation finishes the same clause and
+    // does not.
     sentence: fields.text
-      ? `${headline}${fields.hadFrom ? "," : ""} ${fields.text}.`
+      ? `${headline}${fields.join === "aside" ? "," : ""} ${fields.text}.`
       : `${headline}.`,
   };
 }
 
-function changeHeadline(op: ChangeLike): string {
-  const segments = op.action.split(".").map((s) => s.trim()).filter(Boolean);
-  const on = op.plugin ? ` on ${op.plugin}` : "";
-  if (segments.length === 0) return `A change${on}`;
+/** The verb an action ends in, and the resource it acts on, as words. */
+function parseAction(action: string): { verb: string; resource: string } | null {
+  const segments = action.split(".").map((s) => s.trim()).filter(Boolean);
+  if (segments.length === 0) return null;
 
-  const raw = segments[segments.length - 1]!.toLowerCase();
-  const verb = CHANGE_VERBS[raw] ?? capitalise(words(raw));
-  const rest = segments.slice(0, -1).map(words).filter(Boolean).join(" ");
+  const last = segments[segments.length - 1]!.toLowerCase();
+  const before = segments.slice(0, -1);
+
+  // A last segment that is several words carries its own resource:
+  // `device.set_radio_channel` is "set the radio channel", not "set radio
+  // channel the device". The earlier segments named the thing that owns it,
+  // and the segment itself is more specific than they are.
+  const parts = words(last).split(" ").filter(Boolean);
+  if (parts.length > 1 && CHANGE_VERBS[parts[0]!]) {
+    return { verb: parts[0]!, resource: parts.slice(1).join(" ") };
+  }
+
+  const resource = before
+    .map((s) => RESOURCE_WORDS[s.toLowerCase()] ?? words(s))
+    .filter(Boolean)
+    .join(" ");
+  return { verb: last, resource };
+}
+
+function changeHeadline(op: ChangeLike): string {
+  const on = op.plugin ? ` on ${op.plugin}` : "";
+  const parsed = parseAction(op.action);
+  if (!parsed) return `A change${on}`;
+
+  const verb = CHANGE_VERBS[parsed.verb] ?? capitalise(words(parsed.verb));
 
   // No resource before the verb: the plugin is the only noun there is, so the
   // verb takes it directly rather than an article with nothing after it.
-  if (rest === "") return `${verb}${on}`;
+  if (parsed.resource === "") return `${verb}${on}`;
 
-  const article = INDEFINITE.has(raw)
-    ? (/^[aeiou]/.test(rest) ? "an" : "a")
+  // "an user" is what a vowel test gets wrong, and "u" is the only letter it
+  // gets wrong often enough to be worth naming.
+  const article = INDEFINITE.has(parsed.verb)
+    ? (/^[aeio]/.test(parsed.resource) ? "an" : "a")
     : "the";
-  return `${verb} ${article} ${rest}${on}`;
+  return `${verb} ${article} ${parsed.resource}${on}`;
 }
 
-function changeDelta(op: ChangeLike): { text: string; hadFrom: boolean } {
+/** Always quoted, for a value the sentence names rather than compares. */
+function quoted(value: string): string {
+  return /^“.*”$/.test(value) ? value : `“${value}”`;
+}
+
+/** How the delta joins the headline: an aside, a continuation, or a naming. */
+type Join = "aside" | "continuation";
+
+function changeDelta(op: ChangeLike): { text: string; join: Join } {
   const first = op.changes?.[0];
-  if (!first) return { text: "", hadFrom: false };
+  const parsed = parseAction(op.action);
+  if (!first) return { text: "", join: "continuation" };
 
   const to = fieldValue(first.to);
-  if (to === null) return { text: "", hadFrom: false };
+  if (to === null) return { text: "", join: "continuation" };
 
   const from = fieldValue(first.from);
+
+  // Turning a flag on and then saying "from off to on" is the verb again in
+  // the machine's words. Nothing is added, and the line is longer for it.
+  if (parsed && (parsed.verb === "enable" || parsed.verb === "disable") &&
+      typeof first.to === "boolean") {
+    return { text: "", join: "continuation" };
+  }
+
+  // Something that did not exist has nothing to have changed from, so the
+  // value is its name rather than the far end of a comparison.
+  if (from === null && parsed && INDEFINITE.has(parsed.verb)) {
+    return { text: `called ${quoted(to)}`, join: "aside" };
+  }
+
   return from === null
-    ? { text: `to ${to}`, hadFrom: false }
-    : { text: `from ${from} to ${to}`, hadFrom: true };
+    ? { text: `to ${to}`, join: "continuation" }
+    : { text: `from ${from} to ${to}`, join: "aside" };
 }
 
 /**
@@ -325,7 +383,9 @@ export function describeOutcome(op: ChangeLike, now: number = Date.now()): strin
   switch (op.state) {
     case "succeeded": return `applied${ago}`;
     case "failed": return `didn't run${ago}`;
-    case "indeterminate": return "ended in an unknown state";
+    // Never a time beside it: "an hour ago" reads as a settlement, and this is
+    // the one outcome that is still open.
+    case "indeterminate": return "ended in an unknown state; it may have landed";
     case "rejected": return `turned down${ago}`;
     case "expired": return `ran out of time${ago}`;
     case "cancelled": return `withdrawn${ago}`;

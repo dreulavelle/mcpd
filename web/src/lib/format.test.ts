@@ -155,12 +155,12 @@ describe("describing a change", () => {
       "Remove the stream on graylog.",
     ],
     [
-      "a flag, which reads as on and off rather than true and false",
+      "a flag on an action whose verb does not already say which way",
       op({
-        plugin: "graylog", action: "alert.disable",
-        changes: [{ field: "enabled", from: true, to: false }],
+        plugin: "graylog", action: "alert.set",
+        changes: [{ field: "silenced", from: false, to: true }],
       }),
-      "Turn off the alert on graylog, from on to off.",
+      "Set the alert on graylog, from off to on.",
     ],
     [
       "an underscored resource",
@@ -171,6 +171,66 @@ describe("describing a change", () => {
       "a verb this build has never heard of",
       op({ plugin: "observium", action: "poller.quiesce" }),
       "Quiesce the poller on observium.",
+    ],
+    // The SDK's own worked example. Splitting only on "." made the verb
+    // `set_radio_channel`, which is not in the map, and the whole segment
+    // became the verb: "Set radio channel the device on cnmaestro".
+    [
+      "a last segment that is a verb and its own resource",
+      op({
+        plugin: "cnmaestro", action: "device.set_radio_channel",
+        changes: [{ field: "channel", from: 36, to: 44 }],
+      }),
+      "Set the radio channel on cnmaestro, from 36 to 44.",
+    ],
+    // "an user" is what a plain vowel test produces, and bookstack creates
+    // users.
+    [
+      "a resource beginning with u, which takes a not an",
+      op({ plugin: "bookstack", action: "user.create" }),
+      "Create a user on bookstack.",
+    ],
+    // A page that did not exist has nothing to have changed from, so its
+    // value is its name: "Create a page on bookstack to Getting started" read
+    // as a move.
+    [
+      "a create whose only recorded field is the new thing's name",
+      op({
+        plugin: "bookstack", action: "page.create",
+        changes: [{ field: "page", from: null, to: "Getting started" }],
+      }),
+      "Create a page on bookstack, called “Getting started”.",
+    ],
+    [
+      "a create naming something with no spaces in its name",
+      op({
+        plugin: "bookstack", action: "book.create",
+        changes: [{ field: "book", from: null, to: "runbooks" }],
+      }),
+      "Create a book on bookstack, called “runbooks”.",
+    ],
+    // The bin is not what is destroyed; one item in it is. This is also the
+    // one irreversible action bookstack declares, so a sentence that reads as
+    // tidying up is the wrong sentence.
+    [
+      "an action on the recycle bin, which acts on one item in it",
+      op({ plugin: "bookstack", action: "recycle_bin.destroy" }),
+      "Destroy the item in the recycle bin on bookstack.",
+    ],
+    [
+      "restoring from the recycle bin",
+      op({ plugin: "bookstack", action: "recycle_bin.restore" }),
+      "Restore the item in the recycle bin on bookstack.",
+    ],
+    // "Turn off the alert, from on to off" says the verb twice, once in
+    // English and once in the machine's words.
+    [
+      "a flag, whose before and after only restate the verb",
+      op({
+        plugin: "graylog", action: "alert.disable",
+        changes: [{ field: "enabled", from: true, to: false }],
+      }),
+      "Turn off the alert on graylog.",
     ],
     [
       "a value with spaces in it, quoted so it does not run into the sentence",
@@ -235,6 +295,69 @@ describe("describing a change", () => {
 });
 
 /**
+ * Every action this build's plugins actually declare, read out loud.
+ *
+ * A table of hand-picked shapes proves the rules; this proves the rules cover
+ * what ships. Collected with
+ * `grep -rhoE 'Action:\s*"[^"]+"' internal/plugins | sort -u`; the sentence
+ * builder never sees these until a change reaches somebody's dashboard, so a
+ * malformed one has no earlier place to fail.
+ */
+describe("every action the plugins declare", () => {
+  const ACTIONS: [string, string, string][] = [
+    ["bookstack", "attachment.create", "Create an attachment on bookstack."],
+    ["bookstack", "attachment.delete", "Remove the attachment on bookstack."],
+    ["bookstack", "attachment.update", "Change the attachment on bookstack."],
+    ["bookstack", "book.create", "Create a book on bookstack."],
+    ["bookstack", "book.delete", "Remove the book on bookstack."],
+    ["bookstack", "book.update", "Change the book on bookstack."],
+    ["bookstack", "chapter.create", "Create a chapter on bookstack."],
+    ["bookstack", "chapter.delete", "Remove the chapter on bookstack."],
+    ["bookstack", "chapter.update", "Change the chapter on bookstack."],
+    ["bookstack", "comment.create", "Create a comment on bookstack."],
+    ["bookstack", "comment.delete", "Remove the comment on bookstack."],
+    ["bookstack", "comment.update", "Change the comment on bookstack."],
+    ["bookstack", "content_permissions.update", "Change the content permissions on bookstack."],
+    ["bookstack", "page.create", "Create a page on bookstack."],
+    ["bookstack", "page.delete", "Remove the page on bookstack."],
+    ["bookstack", "page.update", "Change the page on bookstack."],
+    ["bookstack", "recycle_bin.destroy", "Destroy the item in the recycle bin on bookstack."],
+    ["bookstack", "recycle_bin.restore", "Restore the item in the recycle bin on bookstack."],
+    ["bookstack", "role.create", "Create a role on bookstack."],
+    ["bookstack", "role.delete", "Remove the role on bookstack."],
+    ["bookstack", "role.update", "Change the role on bookstack."],
+    ["bookstack", "shelf.create", "Create a shelf on bookstack."],
+    ["bookstack", "shelf.delete", "Remove the shelf on bookstack."],
+    ["bookstack", "shelf.update", "Change the shelf on bookstack."],
+    ["bookstack", "user.create", "Create a user on bookstack."],
+    ["bookstack", "user.delete", "Remove the user on bookstack."],
+    ["bookstack", "user.update", "Change the user on bookstack."],
+    ["cnmaestro", "device.reboot", "Restart the device on cnmaestro."],
+    ["cnmaestro", "device.set_radio_channel", "Set the radio channel on cnmaestro."],
+    ["echo", "label.set", "Set the label on echo."],
+    ["echo", "thing.set", "Set the thing on echo."],
+    ["echo", "widget.set", "Set the widget on echo."],
+  ];
+
+  for (const [plugin, action, expected] of ACTIONS) {
+    it(`reads ${action} as "${expected}"`, () => {
+      expect(describeChange({ plugin, action }).sentence).toBe(expected);
+    });
+  }
+
+  it("leaves no action reading as its own machine name", () => {
+    for (const [plugin, action] of ACTIONS) {
+      const { headline } = describeChange({ plugin, action });
+      expect(headline).not.toContain(action);
+      expect(headline).not.toContain("_");
+      expect(headline).not.toContain(".");
+      // Every one is a verb, a thing and the system it is on.
+      expect(headline).toMatch(new RegExp(`^[A-Z].* on ${plugin}$`));
+    }
+  });
+});
+
+/**
  * A principal as a name. `system:policy` is the one that matters: it is not an
  * account, and a page that renders it says a person decided when nobody did.
  */
@@ -277,7 +400,7 @@ describe("describing an outcome", () => {
   // unknown state an hour ago" invites reading the hour as a settlement.
   it("does not call an unknown outcome a failure", () => {
     const text = describeOutcome(settled({ state: "indeterminate" }), NOW);
-    expect(text).toBe("ended in an unknown state");
+    expect(text).toBe("ended in an unknown state; it may have landed");
     expect(text).not.toMatch(/fail|didn't run/i);
   });
 
