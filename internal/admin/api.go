@@ -530,6 +530,7 @@ func (s *Server) routes() {
 	// any one account's own work.
 	api("GET /api/calls", s.handleListCalls, auth.PermHistoryRead)
 	api("GET /api/calls/callers", s.handleListCallers, auth.PermHistoryRead)
+	api("GET /api/calls/summary", s.handleCallSummary, auth.PermHistoryRead)
 
 	api("GET /api/backup", s.handleBackupStatus, auth.PermSystemWrite)
 	api("POST /api/backup", s.handleCreateBackup, auth.PermSystemWrite)

@@ -900,6 +900,19 @@ device — and a plugin is handed an interface narrow enough to report its own
 cache and its own upstream latency and nothing else, so an integration cannot
 invent series this host then has to carry.
 
+`GET /api/calls/summary?hours=24` is the one series the dashboard draws for
+itself: the tool-call ledger counted by hour and by system, zero filled so the
+window always has as many buckets as it asked for. The buckets are aligned to
+the clock rather than to now, so a bar holds the same calls whenever the page
+is opened rather than shifting on every reload. They are whole UTC hours, which
+is the reader's own hour wherever the offset from UTC is a whole number of them
+and half an hour out in the few places it is not. Both counts come from one
+read snapshot, so a call that arrives mid-answer cannot be in the per-system
+tally and missing from the total. `last_at` is the moment of the most recent
+call and is absent when there was none, because the hour a bucket opened
+cannot answer that to better than an hour. `hours` is capped at a week,
+because a year of hourly buckets is not a shape anything draws.
+
 ## Where configuration lives
 
 One authority per setting, and it is the database for all but four.

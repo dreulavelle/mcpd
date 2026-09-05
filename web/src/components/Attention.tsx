@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react";
-import { BellOff } from "lucide-react";
 import {
   api, type Certificate, type MCPServer, type Operation, type PendingRegistration,
   type Plugin, type PluginInstance, type TunnelStatus, type UpdateStatus,
@@ -59,7 +58,7 @@ export function attention(input: {
   if (input.unknown.length > 0) {
     out.push({
       key: "unknown", tone: "attention",
-      text: `${plural(input.unknown.length, "change", "changes")} ended in an unknown state. Each may have landed; read the target before proposing it again.`,
+      text: `${plural(input.unknown.length, "change", "changes")} ended in an unknown state. Each may have landed; check the system before proposing it again.`,
       to: "/approvals?state=indeterminate", linkLabel: "See them",
     });
   }
@@ -116,7 +115,7 @@ export function attention(input: {
     if (s.pending > 0) {
       out.push({
         key: `pending:${s.name}`, tone: "attention",
-        text: `${s.name} offers ${plural(s.pending, "tool", "tools")} nobody has classified yet. Unclassified tools are not served.`,
+        text: `${s.name} offers ${plural(s.pending, "tool", "tools")} nobody has allowed yet. Tools that are not allowed are not served.`,
         to: `/plugins/${encodeURIComponent(s.name)}`, linkLabel: s.name,
       });
     }
@@ -157,18 +156,23 @@ export function attention(input: {
 }
 
 /**
- * The first thing on the first screen: what needs somebody, in one list.
+ * What needs somebody, given what the overview already holds plus the sources
+ * only this list asks about.
  *
- * Each source is asked on its own and a failure drops that source rather
- * than the section -- a certificate list that cannot be read is not a reason
- * to hide a failed connector. Nothing here is an action; every line is a
- * place to go and read.
+ * A hook rather than state inside the component, because the sentence at the
+ * top of the overview counts these items and a component that kept them to
+ * itself would have the page saying "everything is working" above a list of
+ * things that are not.
+ *
+ * Each source is asked on its own and a failure drops that source rather than
+ * the list -- a certificate list that cannot be read is not a reason to hide a
+ * failed connector.
  */
-export function Attention({ plugins, instances, tunnels }: {
+export function useAttention({ plugins, instances, tunnels }: {
   plugins: Plugin[];
   instances: PluginInstance[];
   tunnels: TunnelStatus[];
-}) {
+}): Item[] {
   const can = useCanFn();
   const access = can("access:read");
   const pluginsWrite = can("plugins:read");
@@ -198,40 +202,40 @@ export function Attention({ plugins, instances, tunnels }: {
   }, [can, access, pluginsWrite, history]);
   usePoll(load, 30_000);
 
-  const items = attention({
+  return attention({
     admin, plugins, instances, tunnels, unknown, registrations, servers,
     certificates, updates, chainBrokenAt,
   });
+}
+
+/**
+ * The list itself. Nothing at all renders when nothing needs anybody: the
+ * sentence at the top of the overview already says so, and a card headed
+ * "Needs attention" reporting none is the loudest way to say quiet.
+ *
+ * Nothing here is an action; every line is a place to go and read.
+ */
+export function Attention({ items }: { items: Item[] }) {
+  if (items.length === 0) return null;
 
   return (
-    <Section
-      title="Needs attention"
-      description={items.length === 0 ? undefined : "Worst first. Each line is a place to go and read, not a thing to click through."}
-    >
+    <Section title="Needs attention" description="Worst first.">
       <Card>
         <CardContent>
-          {items.length === 0 ? (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <BellOff className="size-4" aria-hidden="true" />
-              Nothing needs you. Every plugin is healthy, every connector is up,
-              and nothing is waiting on a decision.
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {items.map((item) => (
-                <li key={item.key} className="flex items-start gap-2.5 text-sm">
-                  <StatusDot tone={item.tone} className="mt-2" />
-                  <span className="min-w-0 flex-1">{item.text}</span>
-                  <Link
-                    to={item.to}
-                    className="shrink-0 text-primary hover:underline"
-                  >
-                    {item.linkLabel}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
+          <ul className="space-y-2">
+            {items.map((item) => (
+              <li key={item.key} className="flex items-start gap-2.5 text-sm">
+                <StatusDot tone={item.tone} className="mt-2" />
+                <span className="min-w-0 flex-1">{item.text}</span>
+                <Link
+                  to={item.to}
+                  className="shrink-0 text-primary hover:underline"
+                >
+                  {item.linkLabel}
+                </Link>
+              </li>
+            ))}
+          </ul>
         </CardContent>
       </Card>
     </Section>
