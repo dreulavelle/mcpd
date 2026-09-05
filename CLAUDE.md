@@ -99,9 +99,12 @@ change its answer.
 **A claim of verification is earned, never assumed.** A mutation declares
 `Verifiable`; when it is false the executor performs no check and settles
 `outcome_verified` null. Null is "not checked", `false` is "checked and did not
-match", and they must not be collapsed. Likewise, two absent precondition
-snapshots comparing equal is not a drift check that passed — it is one that
-never ran, and `CheckDrift` says which.
+match", and they must not be collapsed. `false` means the re-read did not
+confirm the change — whether it came back and disagreed, or could not be read
+at all — and the trail does not distinguish the two, so nothing rendering it
+may claim a mismatch. Likewise, two absent precondition snapshots comparing
+equal is not a drift check that passed — it is one that never ran, and
+`CheckDrift` says which.
 
 **"Reviewed change" and "gated call" are different words on purpose.** The
 first carries exact fields, drift detection and a confirmed outcome. The second
