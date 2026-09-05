@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { api, type Operation, type Plugin, type TunnelStatus } from "@/lib/api";
+import { describeChange, principalWords } from "@/lib/format";
 import { NAV } from "@/lib/nav";
 import { useRouter } from "@/lib/router";
 import { score } from "@/lib/search";
@@ -109,9 +110,12 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
     for (const op of waiting) {
       out.push({
         id: `op:${op.id}`, group: "Waiting on a decision",
-        label: op.action.replace(/[._]/g, " "),
-        hint: `${op.plugin} · proposed by ${op.requested_by}`,
-        keywords: `${op.plugin} ${op.requested_by} ${op.id} ${op.risk}`,
+        // The change, not `label.set`. The palette is the one place somebody
+        // reaches for a proposal by name, so the name has to be the one the
+        // approvals page taught them.
+        label: describeChange(op).headline,
+        hint: `proposed by ${principalWords(op.requested_by)}`,
+        keywords: `${op.plugin} ${op.action} ${op.requested_by} ${op.id} ${op.risk}`,
         icon: ClipboardCheck,
         run: () => go(`/approvals/${encodeURIComponent(op.id)}`),
       });

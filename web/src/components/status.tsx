@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CircleHelp, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import type { OperationState, RiskLevel } from "@/lib/api";
 import { OPERATION_STATES, RISK_LABELS, stateLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -107,62 +107,6 @@ const RISK_TONE: Record<RiskLevel, Tone> = {
 export function RiskBadge({ risk }: { risk: RiskLevel | string }) {
   const tone = RISK_TONE[risk as RiskLevel] ?? "neutral";
   return <Chip tone={tone}>{RISK_LABELS[risk as RiskLevel] ?? risk}</Chip>;
-}
-
-/* -- verification ---------------------------------------------------------- */
-
-/**
- * Three outcomes, and the third is the one that matters: null or absent is
- * "nobody checked" and must never render as a tick. Typed to include null so a
- * call site cannot narrow it to a boolean without deciding.
- *
- * "Confirmed", not "Verified": the lifecycle's proofs, the approvals list and
- * this badge all name the same fact, and naming it twice is how one of them
- * drifts.
- */
-export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
-  if (verified === true) {
-    return (
-      <Chip tone="good">
-        <StatusDot tone="good" />
-        Confirmed
-      </Chip>
-    );
-  }
-  if (verified === false) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span tabIndex={0} className="rounded-full">
-            <Chip tone="problem">
-              <StatusDot tone="problem" />
-              Did not match
-            </Chip>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-xs">
-          The system was read again afterwards, and it did not show the change
-          that was asked for.
-        </TooltipContent>
-      </Tooltip>
-    );
-  }
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span tabIndex={0} className="rounded-full">
-          <Chip tone="neutral">
-            <CircleHelp className="size-3" aria-hidden="true" />
-            Not checked
-          </Chip>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        Nobody has read the system again, so this does not say whether the
-        change is in place.
-      </TooltipContent>
-    </Tooltip>
-  );
 }
 
 /* -- assurance ------------------------------------------------------------- */
