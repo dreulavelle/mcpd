@@ -56,9 +56,11 @@ export interface Operation {
   execute_by?: string;
   terminal_at?: string;
   /**
-   * Three values, not two: true confirmed, false checked and did not match,
-   * absent nobody checked. Null is in the type so a call site cannot narrow it
-   * to a boolean and render "not checked" as a tick.
+   * Three values, not two: true confirmed, false checked without confirming,
+   * absent nobody checked. False covers a re-read that disagreed and one that
+   * could not be made, and the record does not separate them. Null is in the
+   * type so a call site cannot narrow it to a boolean and render "not checked"
+   * as a tick.
    */
   verified?: boolean | null;
   /**
