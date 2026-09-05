@@ -764,18 +764,28 @@ func (s *Store) ClaimInvite(ctx context.Context, i Identity) (*User, error) {
 		return nil, ErrNotFound
 	}
 
-	var userID string
+	// Asked on the reader first, and only to decide whether there is anything
+	// to do. Every sign-in through a provider reaches here, and the ordinary
+	// answer is "no invitation" -- opening a write transaction for that would
+	// have every sign-in on the host queue for SQLite's single writer in order
+	// to learn nothing. It is not a check the claim relies on: the statement
+	// below restates it and every other condition, so a row that changes in
+	// between is refused there rather than acted on here.
+	var userID, invited string
+	if err := s.db.Reader().QueryRowContext(ctx,
+		`SELECT id, invite_provider FROM users WHERE email = ?`, email).
+		Scan(&userID, &invited); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if invited == "" {
+		return nil, ErrNotFound
+	}
+
 	now := s.now().UnixMilli()
 	err = s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		// The address names the row; every condition that decides whether it
-		// may be claimed is in the statement below, not here.
-		if err := tx.QueryRow(`SELECT id FROM users WHERE email = ?`, email).
-			Scan(&userID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNotFound
-			}
-			return err
-		}
 		affected, err := tx.ExecAffected(`
 			UPDATE users
 			   SET invite_provider = '', invite_expires_at = NULL, updated_at = ?
