@@ -11,7 +11,7 @@ import {
 import { when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
-import { parseHealth, statusWords } from "@/lib/health";
+import { parseHealth, statusTone, statusWords } from "@/lib/health";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import {
@@ -264,17 +264,11 @@ export function PluginsList() {
 function HealthSummary({ message }: { message: string }) {
   const h = parseHealth(message);
   if (h.status !== undefined) {
-    // Never "good": this only renders for a plugin that is not healthy, so a
-    // green chip beside a broken one was the status being read on its own
-    // rather than as part of the sentence that quoted it. A 2xx there means
-    // the far end answered and the body was wrong, which is worth attention
-    // and is not a failure of theirs.
-    const tone = h.status >= 200 && h.status < 300 ? "attention" : "problem";
     // The words say what happened; the number is evidence, so it goes in the
     // title rather than into the chip a person is meant to read at a glance.
     return (
       <span className="mt-1 block" title={`HTTP ${h.status} — ${h.title}`}>
-        <Chip tone={tone}>{statusWords(h.status)}</Chip>
+        <Chip tone={statusTone(h.status)}>{statusWords(h.status)}</Chip>
       </span>
     );
   }

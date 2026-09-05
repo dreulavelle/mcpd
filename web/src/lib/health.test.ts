@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseHealth, statusWords } from "./health";
+import { parseHealth, statusTone, statusWords } from "./health";
 
 /**
  * A status only appears in a health message when the check went wrong, so the
@@ -13,10 +13,12 @@ describe("an HTTP status as words", () => {
   const cases: [number, string][] = [
     [200, "Bad answer"],
     [204, "Bad answer"],
+    [302, "Bad answer"],
     [401, "Refused"],
     [403, "Refused"],
     [404, "Not found"],
     [408, "No answer"],
+    [429, "Rate limited"],
     [504, "No answer"],
     [502, "Their side failed"],
     [500, "Their side failed"],
@@ -28,8 +30,25 @@ describe("an HTTP status as words", () => {
     });
   }
 
-  it("never reports a 2xx as a refusal", () => {
-    expect(statusWords(200)).not.toBe("Refused");
+  // Three different things to do about them, so three different words. A
+  // redirect nobody followed and a request asked to wait were both "Refused",
+  // which is the far end saying no and is what neither of them did.
+  it("never reports an answer or a wait as a refusal", () => {
+    for (const status of [200, 302, 429]) {
+      expect(statusWords(status)).not.toBe("Refused");
+    }
+  });
+
+  // A status only lands here from a health message, which a plugin writes when
+  // something went wrong. A green chip beside a plugin that is not serving was
+  // the number being read on its own.
+  it("never colours a status as good, and keeps a transient one off problem", () => {
+    for (const status of [200, 302, 408, 429]) {
+      expect(statusTone(status)).toBe("attention");
+    }
+    for (const status of [401, 404, 500, 502]) {
+      expect(statusTone(status)).toBe("problem");
+    }
   });
 });
 

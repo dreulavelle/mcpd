@@ -12,7 +12,7 @@ import {
 import { unprefixed, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link, useRouter } from "@/lib/router";
-import { parseHealth, statusWords } from "@/lib/health";
+import { parseHealth, statusTone, statusWords } from "@/lib/health";
 import { useCan } from "@/lib/session";
 import {
   Copyable, Detail, Loading, Notice, PageHeader, Section,
@@ -524,7 +524,9 @@ function HealthNotice({ health, message }: { health: string; message: string }) 
         {(h.status !== undefined || h.reference) && (
           <span className="flex flex-wrap items-center gap-2">
             {h.status !== undefined && (
-              <Chip tone="problem" title={`HTTP ${h.status}`}>{statusWords(h.status)}</Chip>
+              <Chip tone={statusTone(h.status)} title={`HTTP ${h.status}`}>
+                {statusWords(h.status)}
+              </Chip>
             )}
             {h.reference && (
               <span className="text-xs">
