@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { MoreHorizontal, UsersRound } from "lucide-react";
-import { api, type Grant, type Group, type User, problemText } from "@/lib/api";
+import {
+  api, type Grant, type Group, type ProviderDescriptor, type User, problemText,
+} from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { collect, describe } from "@/lib/permissions";
 import { useCan } from "@/lib/session";
@@ -18,6 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -39,6 +42,11 @@ import { SectionHead } from "./SectionHead";
 export function Users({ embedded = false }: { embedded?: boolean } = {}) {
   const [users, setUsers] = useState<User[] | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
+  // The providers this host has set up, which is what "Choose how they sign
+  // in" can offer. The same list the sign-in page's buttons come from, so an
+  // administrator cannot invite somebody through a provider that page will not
+  // show them.
+  const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
@@ -51,6 +59,7 @@ export function Users({ embedded = false }: { embedded?: boolean } = {}) {
       .then((r) => { setUsers(r.users ?? []); setError(""); })
       .catch(() => setError("Couldn't load accounts."));
     api.groups().then((r) => setGroups(r.groups ?? [])).catch(() => undefined);
+    api.authOptions().then((r) => setProviders(r.providers ?? [])).catch(() => undefined);
   }, []);
   usePoll(load, 30_000);
 
@@ -89,7 +98,7 @@ export function Users({ embedded = false }: { embedded?: boolean } = {}) {
 
       {adding && (
         <AddUser
-          groups={groups}
+          groups={groups} providers={providers}
           onClose={() => setAdding(false)}
           onAdded={(email) => { setAdding(false); load(); notify("good", `Added ${email}.`); }}
         />
@@ -178,7 +187,16 @@ function UserRow({ user, mayWrite, notify, onChanged, onEdit }: {
               {user.self && <Chip tone="info">you</Chip>}
               {user.disabled && <Chip>disabled</Chip>}
               {user.status === "pending" && <Chip tone="attention">waiting</Chip>}
+              {user.invite_provider && <Chip tone="info">invited</Chip>}
             </div>
+            {/* Not "no password". An invited account is one an administrator
+                decided about and nobody has arrived at yet, and the thing to
+                know is which provider it is waiting for. */}
+            {user.invite_provider && (
+              <div className="text-xs text-muted-foreground">
+                Invited — waiting for a first sign-in with {user.invite_label}.
+              </div>
+            )}
             {/* The address always: it is what every grant and every audit
                 record is keyed on, so it can never be the thing dropped. */}
             {user.name !== user.email && (
@@ -306,8 +324,15 @@ function EditUser({ user, groups, notify, onClose, onChanged }: {
             <Input
               id="edit-user-password" type="password" autoComplete="new-password"
               value={password} onChange={(e) => setPassword(e.target.value)}
-              placeholder="Leave empty to keep the current one"
+              placeholder={user.invite_provider ? "At least 12 characters" : "Leave empty to keep the current one"}
             />
+            {/* Both would leave an account somebody is already using still
+                claimable by whoever holds the address at the provider. */}
+            {user.invite_provider && (
+              <p className="text-xs text-muted-foreground">
+                Setting a password cancels the invitation to sign in with {user.invite_label}.
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <Button type="submit" disabled={busy || !changed}>{busy ? "Saving…" : "Save"}</Button>
@@ -352,25 +377,49 @@ function sameGrants(a: Grant[], b: Grant[]): boolean {
   return x.length === y.length && x.every((v, i) => v === y[i]);
 }
 
-function AddUser({ groups, onClose, onAdded }: {
+/**
+ * A new person, and how they get in.
+ *
+ * The password half used to be the only half, which meant inventing one and
+ * handing it over by some channel neither person chose. An invitation says
+ * "this person signs in with Google" instead: the account is made with no
+ * credential at all, and the first verified sign-in through that provider
+ * claims it.
+ *
+ * There is deliberately no "any of them". An invitation that any provider can
+ * take up is one that widens with every provider the host ever adds, and the
+ * administrator is naming a person they already know how to reach.
+ */
+function AddUser({ groups, providers, onClose, onAdded }: {
   groups: Group[];
+  providers: ProviderDescriptor[];
   onClose: () => void;
   onAdded: (email: string) => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // "" is a password this administrator sets; anything else is the provider
+  // the invitation names.
+  const [how, setHow] = useState("");
   const [role, setRole] = useState("role_operator");
   const [grants, setGrants] = useState<Grant[]>([]);
   const [joined, setJoined] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const inviting = how !== "";
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
-      await api.createUser({ email: email.trim(), password, role, grants, groups: joined });
+      await api.createUser({
+        email: email.trim(), role, grants, groups: joined,
+        // One or the other, never both: an account holding an invitation and a
+        // password is one whose invitation is still claimable by whoever holds
+        // the address after somebody was given a password for it.
+        ...(inviting ? { invite_provider: how as ProviderDescriptor["provider"] } : { password }),
+      });
       onAdded(email.trim());
     } catch (err) {
       setError(problemText(err, "Couldn't add that account."));
@@ -384,7 +433,7 @@ function AddUser({ groups, onClose, onAdded }: {
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add a user</DialogTitle>
-          <DialogDescription>They sign in with the address and password you set here.</DialogDescription>
+          <DialogDescription>Choose how they sign in.</DialogDescription>
         </DialogHeader>
         {error && <Notice tone="problem">{error}</Notice>}
         <form onSubmit={submit} className="space-y-5">
@@ -394,13 +443,35 @@ function AddUser({ groups, onClose, onAdded }: {
               <Input id="new-email" type="email" autoComplete="off" value={email}
                      onChange={(e) => setEmail(e.target.value)} placeholder="them@example.com" />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="new-password">Password</Label>
-              <Input id="new-password" type="password" autoComplete="new-password"
-                     value={password} onChange={(e) => setPassword(e.target.value)}
-                     placeholder="At least 12 characters" />
-            </div>
+            {providers.length > 0 && (
+              <div className="space-y-1.5">
+                <Label htmlFor="new-how">How they sign in</Label>
+                <NativeSelect
+                  id="new-how" value={how} onChange={(e) => setHow(e.target.value)}
+                >
+                  <option value="">With a password you set</option>
+                  {providers.map((p) => (
+                    <option key={p.provider} value={p.provider}>With {p.label}</option>
+                  ))}
+                </NativeSelect>
+              </div>
+            )}
+            {!inviting && (
+              <div className="space-y-1.5">
+                <Label htmlFor="new-password">Password</Label>
+                <Input id="new-password" type="password" autoComplete="new-password"
+                       value={password} onChange={(e) => setPassword(e.target.value)}
+                       placeholder="At least 12 characters" />
+              </div>
+            )}
           </div>
+          {inviting && (
+            <p className="text-sm text-muted-foreground">
+              They get in the first time they sign in with{" "}
+              {providers.find((p) => p.provider === how)?.label}, using this address.
+              The invitation lasts two weeks.
+            </p>
+          )}
           <RolePicker id="new-role" value={role} onChange={setRole} />
           <GrantsPicker id="new-scope" value={grants} onChange={setGrants} subject="this account" />
           {groups.length > 0 && (
@@ -424,8 +495,8 @@ function AddUser({ groups, onClose, onAdded }: {
           )}
           <DialogFooter>
             <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={busy || !email.trim() || !password || !role}>
-              {busy ? "Adding…" : "Add user"}
+            <Button type="submit" disabled={busy || !email.trim() || (!inviting && !password) || !role}>
+              {busy ? "Adding…" : inviting ? "Send the invitation" : "Add user"}
             </Button>
           </DialogFooter>
         </form>

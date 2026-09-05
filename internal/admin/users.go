@@ -77,7 +77,7 @@ type userView struct {
 	// meet here.
 	InviteExpiresAt string `json:"invite_expires_at,omitempty"`
 	CreatedAt       string `json:"created_at"`
-	LastLoginAt string `json:"last_login_at,omitempty"`
+	LastLoginAt     string `json:"last_login_at,omitempty"`
 	// Self marks the account making the request, so the page can warn before
 	// someone edits themselves out of their own access.
 	Self bool `json:"self"`
