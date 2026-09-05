@@ -306,7 +306,7 @@ function Body({ server, tools, toolsError, onChanged }: {
                             size="sm"
                             onClick={() => setClassifying(t)}
                           >
-                            {t.state === "pending" ? "Review" : "Change"}
+                            {t.state === "pending" ? "Decide" : "Change"}
                           </Button>
                         )}
                       </TableCell>

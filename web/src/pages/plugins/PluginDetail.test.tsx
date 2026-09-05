@@ -98,7 +98,7 @@ describe("a remote MCP server's plugin page", () => {
   it("opens the classify dialog for the descriptor that was on screen", async () => {
     renderWith(<PluginDetail name="weather" />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Review" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Decide" }));
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("What the server says about it")).toBeInTheDocument();
@@ -145,7 +145,7 @@ describe("a remote MCP server's plugin page", () => {
     renderWith(<PluginDetail name="weather" />, { session: sessionFor("user") });
 
     expect(await screen.findByText("forecast")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Decide" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Discover" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
   });
