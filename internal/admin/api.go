@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -923,7 +924,12 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 	// for every other.
 	accounts, accountsErr := s.chatgptAccounts(r.Context())
 	if accountsErr != nil {
-		resp.Problem = accountsErr.Error()
+		// Rendered as a Notice on the Tunnels page, so it is a sentence
+		// rather than the wrapped error: the store's own text names a table
+		// and a decryption step, neither of which is a thing to do.
+		s.opts.Log.ErrorContext(r.Context(), "the ChatGPT accounts could not be read",
+			"error", accountsErr)
+		resp.Problem = "The ChatGPT accounts could not be read, so this page may be incomplete."
 	}
 	var seen []tunnel.TunnelInfo
 	for _, acct := range accounts {
@@ -934,7 +940,12 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 			view.CanManage = true
 			resp.CanManage = true
 			if list, err := s.listTunnels(r.Context(), acct.ID, dir); err != nil {
-				view.Problem = err.Error()
+				s.opts.Log.ErrorContext(r.Context(), "an account's tunnels could not be listed",
+					"account", acct.Name, "error", err)
+				// Not "check the admin key": a listing fails for reasons that
+				// have nothing to do with the key, and naming one sends
+				// people to change a setting that was right.
+				view.Problem = "This account's tunnels could not be listed, so this page may be incomplete."
 			} else {
 				list = ours(list, resp.Assignments)
 				for _, t := range list {
@@ -974,12 +985,16 @@ func (s *Server) handleTunnelStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.opts.Tunnel.Start(r.Context()); err != nil {
-		// The tunnel's own error is shown: an operator acting on this needs to
-		// know whether the tunnel id was wrong or the key lacked permission,
-		// and the manager already redacts the credential.
+		// The tunnel's own sentence, not the returned error. An operator
+		// acting on this needs to know whether the id was wrong or the key
+		// lacked permission, and the manager has already written that down --
+		// what it returns is the wrapped error it built for the log, which
+		// carries a package prefix and sometimes a dial address.
+		s.opts.Log.ErrorContext(r.Context(), "a tunnel would not start from the dashboard",
+			"by", auth.FromContext(r.Context()).ID, "error", err)
 		s.writeJSON(w, r, http.StatusConflict, map[string]any{
 			"error":  "tunnel_failed",
-			"detail": err.Error(),
+			"detail": s.tunnelFailure("", "That connector could not be started."),
 			"status": s.opts.Tunnel.Status(),
 		})
 		return
@@ -1544,6 +1559,87 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int, 
 	})
 }
 
+// wrappedPrefix matches the `pkg: ` a Go error in this repository is wrapped
+// with -- "sqlite: begin: %w", "backup: read the manifest: %w", "chatgpt
+// account: %s". A sentence written for a person does not begin that way, and
+// that difference is the only mechanical signal there is for telling the two
+// apart.
+//
+// Deliberately anchored. "http://app:8080 refused" is a URL, not a package.
+var wrappedPrefix = regexp.MustCompile(`^[a-z][a-z0-9]*(?: [a-z][a-z0-9]*)*: `)
+
+// personalPackages write every error they return for whoever made the
+// request, so their text is the answer and only the prefix is in the way.
+//
+// It is an allowlist, and short on purpose. The denylist it replaces was
+// wrong by construction: it had to name every package that might ever wrap an
+// error, and it missed backup, tunnel, registry, config, external, operations
+// and servertls on the first reading. Getting this list wrong now costs a
+// generic sentence and a log line rather than "backup: read the manifest:
+// unexpected EOF" in a toast.
+//
+// mcpservers is here because every error it returns is a specific statement
+// about the document somebody just pasted -- which field is missing, which
+// header name is not usable, which URL carries credentials -- and that is the
+// whole of what they can act on.
+var personalPackages = []string{"mcpservers: "}
+
+// writeProblem answers a 4xx with something the person who made the request
+// can act on.
+//
+// A 4xx body is read: the dashboard toasts it, and a form shows it beside the
+// field. So an error that names an internal package is not an answer -- it is
+// "sqlite: begin: database is locked" in a toast, which tells the reader
+// nothing and the operator no more. That one is logged with the correlation
+// id the caller was also given, and the caller is told what the handler
+// knows, which is the fallback.
+//
+// Three outcomes, and the default is the safe one:
+//
+//   - text with no package prefix is a sentence somebody wrote for a reader,
+//     and is the answer;
+//   - text prefixed by a package on the allowlist is the answer without its
+//     prefix;
+//   - anything else prefixed is a wrapped error: logged, and answered with
+//     the fallback.
+//
+// A 5xx body is not shown at all, only its correlation id, so nothing here
+// applies to one.
+func (s *Server) writeProblem(w http.ResponseWriter, r *http.Request, status int, err error, fallback string) {
+	msg := err.Error()
+	for _, prefix := range personalPackages {
+		if strings.HasPrefix(msg, prefix) {
+			s.writeError(w, r, status, strings.TrimPrefix(msg, prefix))
+			return
+		}
+	}
+	if wrappedPrefix.MatchString(msg) {
+		s.opts.Log.ErrorContext(r.Context(), "a request failed for a reason only a log can carry",
+			"path", r.URL.Path, "status", status, "error", err)
+		s.writeError(w, r, status, fallback)
+		return
+	}
+	s.writeError(w, r, status, msg)
+}
+
+// tunnelFailure says why a start or restart did not work, in the words the
+// tunnel already has.
+//
+// A manager that fails records a sentence for a person; what it *returns* is
+// the wrapped error it built for the log. Answering with the second is how a
+// 409 came to read "tunnel: no tunnel is configured".
+func (s *Server) tunnelFailure(tunnelID, fallback string) string {
+	for _, st := range s.opts.Tunnel.Status() {
+		if tunnelID != "" && st.TunnelID != tunnelID {
+			continue
+		}
+		if st.State == tunnel.StateFailed && st.Message != "" {
+			return st.Message
+		}
+	}
+	return fallback
+}
+
 // writeUpstreamError answers a refusal from OpenAI with the reason beside the
 // sentence.
 //
@@ -1825,9 +1921,11 @@ func (s *Server) handleRestartTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	if err := s.opts.Tunnel.Restart(r.Context(), id); err != nil {
+		s.opts.Log.ErrorContext(r.Context(), "a tunnel would not restart from the dashboard",
+			"tunnel", id, "by", auth.FromContext(r.Context()).ID, "error", err)
 		s.writeJSON(w, r, http.StatusConflict, map[string]any{
 			"error":  "tunnel_failed",
-			"detail": err.Error(),
+			"detail": s.tunnelFailure(id, "That connector could not be restarted."),
 			"status": s.opts.Tunnel.Status(),
 		})
 		return
@@ -1851,7 +1949,7 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Unassign {
 		if err := s.unassign(r, r.PathValue("id")); err != nil {
-			s.writeError(w, r, http.StatusBadRequest, err.Error())
+			s.writeProblem(w, r, http.StatusBadRequest, err, "That change could not be saved.")
 			return
 		}
 		s.writeJSON(w, r, http.StatusOK, map[string]string{"status": "unassigned"})
@@ -1863,7 +1961,7 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	account, err := s.resolveAccount(r.Context(), body.Account)
 	if err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That ChatGPT account could not be read.")
 		return
 	}
 	if err := s.assign(r, r.PathValue("id"), body.Plugin, account.ID); err != nil {
@@ -1878,7 +1976,7 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That change could not be saved.")
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"status": "assigned"})
@@ -1897,7 +1995,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	account, err := s.resolveAccount(r.Context(), wanted)
 	if err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That ChatGPT account could not be read.")
 		return
 	}
 	dir := s.directory(account.ID)

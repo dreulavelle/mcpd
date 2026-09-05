@@ -80,7 +80,7 @@ func (s *Server) handleAddMCPServerHeader(w http.ResponseWriter, r *http.Request
 	actor := auth.FromContext(r.Context()).ID
 	if err := s.opts.MCPServers.AddHeader(r.Context(), actor,
 		r.PathValue("name"), name, strings.TrimSpace(req.Description), secret); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That header could not be added.")
 		return
 	}
 	s.writeJSON(w, r, http.StatusCreated, map[string]any{
@@ -98,7 +98,7 @@ func (s *Server) handleRemoveMCPServerHeader(w http.ResponseWriter, r *http.Requ
 	actor := auth.FromContext(r.Context()).ID
 	if err := s.opts.MCPServers.RemoveHeader(r.Context(), actor,
 		r.PathValue("name"), r.PathValue("header")); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That header could not be removed.")
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"status": "removed"})
@@ -170,7 +170,8 @@ func (s *Server) handleImportMCPServer(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := auth.FromContext(r.Context()).ID
 	if err := s.opts.MCPServers.Import(r.Context(), actor, req.Name, req.Document); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err,
+			"That document could not be imported. Check it is the server.json for this server.")
 		return
 	}
 	s.opts.Log.Info("remote MCP server imported", "server", req.Name, "by", actor)
@@ -205,7 +206,7 @@ func (s *Server) handleSetMCPServerEnabled(w http.ResponseWriter, r *http.Reques
 	actor := auth.FromContext(r.Context()).ID
 	name := r.PathValue("name")
 	if err := s.opts.MCPServers.SetEnabled(r.Context(), actor, name, *req.Enabled); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That change could not be saved.")
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"status": "saved"})
@@ -219,7 +220,7 @@ func (s *Server) handleRemoveMCPServer(w http.ResponseWriter, r *http.Request) {
 	actor := auth.FromContext(r.Context()).ID
 	name := r.PathValue("name")
 	if err := s.opts.MCPServers.Remove(r.Context(), actor, name); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That server could not be removed.")
 		return
 	}
 	s.opts.Log.Info("remote MCP server removed", "server", name, "by", actor)
@@ -257,7 +258,7 @@ func (s *Server) handleMCPServerTools(w http.ResponseWriter, r *http.Request) {
 	}
 	tools, err := s.opts.MCPServers.Tools(r.Context(), r.PathValue("name"))
 	if err != nil {
-		s.writeError(w, r, http.StatusNotFound, err.Error())
+		s.writeProblem(w, r, http.StatusNotFound, err, "That server's tools could not be read.")
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
@@ -289,7 +290,9 @@ func (s *Server) handleClassifyMCPTool(w http.ResponseWriter, r *http.Request) {
 	err := s.opts.MCPServers.Classify(r.Context(), actor, server, tool,
 		req.DescriptorHash, mcpservers.ToolState(req.State))
 	if err != nil {
-		s.writeError(w, r, http.StatusConflict, err.Error())
+		s.writeProblem(w, r, http.StatusConflict, err,
+			"That tool could not be classified. Its description or schema has changed "+
+				"since you looked; refresh the tool list and try again.")
 		return
 	}
 	s.opts.Log.Info("remote MCP tool classified",

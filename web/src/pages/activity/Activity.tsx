@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { api, ApiError, type Caller, type ToolCall } from "@/lib/api";
+import { api, type Caller, type ToolCall, problemText } from "@/lib/api";
 import { when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link, useQueryParam } from "@/lib/router";
@@ -102,7 +102,7 @@ export function Activity() {
         setError("");
       })
       .catch((e) => setError(
-        e instanceof ApiError ? e.detail : "Couldn't read the call record."));
+        problemText(e, "Couldn't read the call record.")));
   }, [hours, outcome, principal, plugin, callerDays]);
   usePoll(load, 30_000);
 
@@ -126,7 +126,7 @@ export function Activity() {
       });
       setNext(page.next);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Couldn't read more.");
+      setError(problemText(e, "Couldn't read more."));
     } finally {
       setLoadingMore(false);
     }

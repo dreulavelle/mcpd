@@ -451,6 +451,10 @@ export interface TunnelStatus {
   /** The system this connector reaches, empty for all of them. */
   plugin?: string;
   message?: string;
+  /** The wrapped error behind `message`, for the technical details block. */
+  detail?: string;
+  /** OpenAI's verdict on the credential, where it gave one. */
+  code?: string;
   connected_at?: string;
   /**
    * What ChatGPT has actually sent through this tunnel since it connected.
@@ -972,6 +976,31 @@ export class ApiError extends Error {
     super(detail || code);
     this.name = "ApiError";
   }
+}
+
+/**
+ * What to show somebody when a request failed.
+ *
+ * Almost every status mcpd answers with carries a sentence written for the
+ * person who made the request: a 4xx refuses what they asked for, a 501 or a
+ * 503 says this host does not do that, a 502 quotes what the far end said.
+ * All of those are the answer, and replacing them would lose the only thing
+ * the reader could act on.
+ *
+ * 500 is the exception, and the only one: it means something went wrong
+ * inside, which the log has and the reader cannot use. That one gets the
+ * page's own sentence with the correlation id after it, because the id is the
+ * only thing somebody on a machine you cannot reach can quote back -- and
+ * without it here it was in the response body and on no screen. Anything that
+ * is not an ApiError never reached the server at all.
+ *
+ * Every toast and every loader goes through this, so the rule is decided once
+ * rather than at sixty call sites that each read `e.detail`.
+ */
+export function problemText(err: unknown, fallback: string): string {
+  if (!(err instanceof ApiError)) return fallback;
+  if (err.status !== 500 && err.detail) return err.detail;
+  return err.correlationId ? `${fallback} Reference ${err.correlationId}.` : fallback;
 }
 
 // Only the CSRF token, never the session: that lives in an HttpOnly cookie

@@ -1724,7 +1724,10 @@ rebuilding the bundle before the binary serves it.
 ### The dashboard's own decisions
 
 Four of them are worth writing down, because each was argued once and would
-otherwise be argued again in a review.
+otherwise be argued again in a review. What the dashboard *says*, as opposed to
+how it is built, is [`dashboard-copy.md`](dashboard-copy.md): the voice, and
+the rule that a sentence says what happened and what to do while an error code,
+a status, a route or a log line goes under "Technical details".
 
 **One table decides what a route needs.** `web/src/lib/nav.ts` holds the
 sections as data, and `capabilityFor` is the single answer to "may this be

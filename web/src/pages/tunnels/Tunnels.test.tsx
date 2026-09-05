@@ -63,9 +63,82 @@ describe("the tunnels page", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Details for mcpd: echo" }));
     const sheet = await screen.findByRole("dialog");
     expect(within(sheet).getByText("mcpd: echo")).toBeInTheDocument();
-    expect(within(sheet).getByText(/It will not restart on its own/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/This connector has stopped/)).toBeInTheDocument();
     expect(within(sheet).getByText(/connects as/)).toHaveTextContent("Lab");
     expect(window.location.search).toBe("?tunnel=tunnel_b");
+  });
+
+  // The bug this is for lived in the inspector's JSX, not in reading(): the
+  // sentence was correct and a raw `time=… level=WARN msg="poll failed;
+  // backing off"` line was rendered underneath it, in the Notice, on open.
+  it("keeps the evidence behind Technical details", async () => {
+    const line = `time=2026-09-04T03:37:01Z level=WARN msg="poll failed; backing off" client_instance_id=abc`;
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      tunnels: [status({
+        tunnel_id: "tunnel_b", plugin: "echo", state: "failed",
+        message: "OpenAI no longer accepts this account's key.",
+        detail: "tunnel: OpenAI refused this account's key (token_invalidated)",
+        code: "token_invalidated",
+        trouble: line, trouble_at: new Date().toISOString(),
+        requests: 0, last_request_at: undefined,
+      })],
+    }));
+    renderWith(<Tunnels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Details for mcpd: echo" }));
+    const sheet = await screen.findByRole("dialog");
+
+    // The sentence is on the page. Nothing else is: the code, the wrapped
+    // error and the client's line are all inside the disclosure, and it is
+    // shut.
+    //
+    // Asserted on the disclosure rather than on the sheet's text, because
+    // jsdom keeps a closed <details>'s content in textContent -- a browser
+    // hides it with a UA rule jsdom does not apply -- so a text assertion
+    // here would pass on the version of this page that had the log line in
+    // the Notice.
+    expect(within(sheet).getByText(/OpenAI no longer accepts/)).toBeInTheDocument();
+
+    const details = sheet.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details!.open).toBe(false);
+    expect(details!).toHaveTextContent("level=WARN");
+    expect(details!).toHaveTextContent("token_invalidated");
+    expect(details!).toHaveTextContent("tunnel: OpenAI refused");
+
+    // Everything outside the disclosure, which is what a person sees on open.
+    details!.remove();
+    expect(sheet).not.toHaveTextContent("level=WARN");
+    expect(sheet).not.toHaveTextContent("token_invalidated");
+    expect(sheet).not.toHaveTextContent("tunnel: OpenAI refused");
+  });
+
+  it("opens the technical details when asked", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      tunnels: [status({
+        tunnel_id: "tunnel_b", plugin: "echo", state: "failed",
+        message: "OpenAI no longer accepts this account's key.",
+        code: "token_invalidated", requests: 0, last_request_at: undefined,
+      })],
+    }));
+    renderWith(<Tunnels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Details for mcpd: echo" }));
+    const sheet = await screen.findByRole("dialog");
+
+    await userEvent.click(within(sheet).getByText("Technical details"));
+    expect(sheet.querySelector("details")!.open).toBe(true);
+  });
+
+  // Copy diagnostics is an action, not evidence: it was inside the technical
+  // details block, so it disappeared for every tunnel with nothing to show
+  // there -- which is every working one.
+  it("offers Copy diagnostics for a tunnel with nothing wrong", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({ tunnels: [status()] }));
+    renderWith(<Tunnels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Details for mcpd: graylog" }));
+    const sheet = await screen.findByRole("dialog");
+
+    expect(within(sheet).queryByText("Technical details")).not.toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: /Copy diagnostics/ })).toBeInTheDocument();
   });
 
   it("opens on the tunnel the address names", async () => {
@@ -217,5 +290,34 @@ describe("what a tunnel is doing", () => {
     const two = [account(), account({ id: "acct_2", name: "Nick" })];
     const shared = row({ state: "connected" }, { account: "acct_2", owners: ["acct_1", "acct_2"] });
     expect(reading(shared, ["graylog"], two).kind).not.toBe("elsewhere");
+  });
+
+  // The bug: the sidebar read `It will not restart on its own. tunnel: OpenAI
+  // refused this account's key for this tunnel (tunnel_use_forbidden): …`
+  // with a raw `time=… level=WARN msg="poll failed; backing off"` line under
+  // it. The status carries all three separately now, and only the sentence is
+  // prose -- the rest is under Technical details.
+  it("never puts evidence in a reading", () => {
+    const carrying = {
+      message: "OpenAI no longer accepts this account's key. Paste a new runtime key into the account under Settings › ChatGPT.",
+      detail: "tunnel: OpenAI refused this account's key (token_invalidated)",
+      code: "token_invalidated",
+      trouble: `time=2026-09-04T03:37:01Z level=WARN msg="poll failed; backing off" client_instance_id=abc`,
+      trouble_at: new Date().toISOString(),
+    };
+    const states: Partial<TunnelStatus>[] = [
+      { state: "failed", ...carrying },
+      { state: "failed", attempts: 2, next_retry_at: new Date(Date.now() + 60_000).toISOString(), ...carrying },
+      { state: "connected", degraded: true, ...carrying },
+      { state: "starting", ...carrying },
+      { state: "connected", ...carrying },
+    ];
+    for (const s of states) {
+      const detail = reading(row(s), ["graylog"], one).detail;
+      expect(detail).not.toContain(carrying.trouble);
+      expect(detail).not.toContain("level=WARN");
+      expect(detail).not.toContain("tunnel: ");
+      expect(detail).not.toMatch(/\([a-z]+(_[a-z]+)+\)/);
+    }
   });
 });

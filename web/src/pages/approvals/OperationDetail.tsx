@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { CircleAlert, TriangleAlert } from "lucide-react";
-import { api, ApiError, type AuditRecord, type Operation } from "@/lib/api";
+import { api, type AuditRecord, type Operation, problemText } from "@/lib/api";
 import { pretty, relative, riskLabel, when, whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { Link, useRouter } from "@/lib/router";
@@ -403,7 +403,7 @@ function Decide({ operation: op, onChanged }: {
       setReason("");
       onChanged();
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "That didn't work.");
+      notify("problem", problemText(e, "That didn't work."));
     } finally {
       setBusy(null);
     }

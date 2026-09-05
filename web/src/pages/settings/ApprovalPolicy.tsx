@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { ShieldBan, ShieldCheck, TriangleAlert } from "lucide-react";
 import {
-  api, ApiError,
-  type ApprovalPolicy as Policy, type ApprovalRule, type PolicyEvaluation,
+  api,
+  ApiError,
+  type ApprovalPolicy as Policy,
+  type ApprovalRule,
+  type PolicyEvaluation,
+  problemText,
 } from "@/lib/api";
 import { riskLabel } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
@@ -176,7 +180,7 @@ export function ApprovalPolicy() {
       adopt(await api.saveApprovalPolicy(rules));
       notify("good", "Rules saved.");
     } catch (e) {
-      setSaveProblem(e instanceof ApiError ? e.detail : "Couldn't save the rules.");
+      setSaveProblem(problemText(e, "Couldn't save the rules."));
       notify("problem", "Nothing was saved.");
     } finally {
       setBusy(false);
@@ -202,7 +206,7 @@ export function ApprovalPolicy() {
       setLoadProblem(null);
       notify("good", "Started over with no rules.");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "That didn't work.");
+      notify("problem", problemText(e, "That didn't work."));
     } finally {
       setBusy(false);
     }
@@ -248,9 +252,7 @@ export function ApprovalPolicy() {
         </Notice>
       ) : loadProblem ? (
         <Notice tone="problem">
-          {loadProblem instanceof ApiError
-            ? loadProblem.detail
-            : "Couldn't load the approval policy."}
+          {problemText(loadProblem, "Couldn't load the approval policy.")}
         </Notice>
       ) : null}
 
@@ -564,7 +566,7 @@ function WouldThisRun({ suggestions, stale }: {
         reversible,
       }));
     } catch (e) {
-      setProblem(e instanceof ApiError ? e.detail : "Couldn't ask about that change.");
+      setProblem(problemText(e, "Couldn't ask about that change."));
     } finally {
       setBusy(false);
     }
@@ -719,7 +721,7 @@ function DefaultDecision({ policy, mayWrite, onSaved }: {
       notify("good", "Saved.");
       onSaved();
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't save that.");
+      notify("problem", problemText(e, "Couldn't save that."));
     } finally {
       setBusy(false);
     }

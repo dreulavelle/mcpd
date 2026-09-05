@@ -86,13 +86,43 @@ describe("what needs attention", () => {
   });
 
   // A diagnosis can run to a paragraph. The digest keeps its first sentence;
-  // the rest is on the plugin's page.
-  it("keeps a long health message to its first sentence", () => {
+  // the rest is on the plugin's page. It is quoted, because the plugin wrote
+  // it and the dashboard did not: run into the line it reads as the
+  // dashboard's own words and as a paragraph of route names.
+  it("keeps a long health message to its first sentence, and quotes it", () => {
     const items = attention({
       ...nothing,
       plugins: [plugin({ name: "textable", health: "degraded",
         health_message: "/health timed out inside Textable (HTTP 408). This is not transient: the whole list has to be built in one response. Do not retry." })],
     });
-    expect(items[0]!.text).toBe("textable is degraded — /health timed out inside Textable (HTTP 408). …");
+    expect(items[0]!.text).toBe(
+      "textable is having trouble. It said: “/health timed out inside Textable (HTTP 408). …”");
+  });
+
+  // The bug: a tunnel's raw client log line, its wrapped Go error and the
+  // control plane's error code were all glued into the digest line, so the
+  // Overview read `The echo connector has stopped and will not restart on its
+  // own: tunnel: OpenAI refused this account's key for this tunnel
+  // (tunnel_use_forbidden): …`. None of the three belongs in a sentence.
+  it("never puts evidence in a sentence", () => {
+    const carrying = {
+      state: "failed" as const,
+      plugin: "echo",
+      tunnel_id: "t1",
+      message: "OpenAI no longer accepts this account's key. Paste a new runtime key into the account under Settings › ChatGPT.",
+      detail: "tunnel: OpenAI refused this account's key (token_invalidated)",
+      code: "token_invalidated",
+      trouble: `time=2026-09-04T03:37:01Z level=WARN msg="poll failed; backing off" client_instance_id=abc`,
+      degraded: true,
+    };
+    const items = attention({ ...nothing, tunnels: [carrying, { ...carrying, tunnel_id: "t2", state: "connected" }] });
+
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.text).not.toContain(carrying.trouble);
+      expect(item.text).not.toContain("level=WARN");
+      expect(item.text).not.toContain("tunnel: ");
+      expect(item.text).not.toMatch(/\([a-z]+(_[a-z]+)+\)/);
+    }
   });
 });

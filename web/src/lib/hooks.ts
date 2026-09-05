@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError } from "./api";
+import { problemText } from "./api";
 
 /** Re-runs a loader on an interval, and cleans up. */
 export function usePoll(fn: () => void, ms: number) {
@@ -49,7 +49,7 @@ export function useLoader<T>(
       },
       (err) => {
         if (!live.current || seq !== latest.current) return;
-        setError(err instanceof ApiError ? err.detail : fallbackMessage);
+        setError(problemText(err, fallbackMessage));
       },
     );
   }, [load, fallbackMessage]);

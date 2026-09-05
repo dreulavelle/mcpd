@@ -1,8 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
 import { Boxes } from "lucide-react";
 import {
-  api, ApiError, type Plugin, type PluginInstance, type PluginType,
+  api,
+  type Plugin,
+  type PluginInstance,
+  type PluginType,
   type StaleRemoval,
+  problemText,
 } from "@/lib/api";
 import { when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
@@ -192,10 +196,11 @@ export function PluginsList() {
           <div className="space-y-1.5">
             {failing.map((i) => (
               <p key={i.name}>
-                {/* The name is here and not in the message: the host stopped
-                    putting it there when this line started reading "graylog
-                    graylog did not start". */}
-                <strong>{i.name}</strong> {i.problem}
+                {/* The message is a whole sentence about "this plugin", so
+                    the name labels it rather than starting it. Running the
+                    two together read "graylog This plugin could not start." */}
+                <strong className="block">{i.name}</strong>
+                {i.problem}
               </p>
             ))}
             <p className="text-xs">
@@ -388,7 +393,7 @@ export function RestoreButton({ name, label, onChanged }: {
       const result = await api.restoreInstance(name);
       notify("good", result.note ?? `Restored ${name}.`);
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't restore it.");
+      notify("problem", problemText(e, "Couldn't restore it."));
     } finally {
       setBusy(false);
       onChanged();
@@ -477,7 +482,7 @@ function AddPlugin({ types, open, onOpenChange, onAdded }: {
       close(false);
       onAdded();
     } catch (e) {
-      setProblem(e instanceof ApiError ? e.detail : "Couldn't add it.");
+      setProblem(problemText(e, "Couldn't add it."));
     } finally {
       setBusy(false);
     }

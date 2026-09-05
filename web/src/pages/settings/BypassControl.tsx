@@ -1,5 +1,5 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { api, ApiError, type BypassStatus } from "@/lib/api";
+import { api, type BypassStatus, problemText } from "@/lib/api";
 import { when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
@@ -49,7 +49,7 @@ export function BypassControl() {
       notify("good", `Not asking for the next ${minutes} minutes.`);
       load();
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't open it.");
+      notify("problem", problemText(e, "Couldn't open it."));
     } finally {
       setBusy(false);
     }
@@ -62,7 +62,7 @@ export function BypassControl() {
       notify("good", closed > 0 ? "Asking again." : "Nothing was open.");
       load();
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't close it.");
+      notify("problem", problemText(e, "Couldn't close it."));
     } finally {
       setBusy(false);
     }

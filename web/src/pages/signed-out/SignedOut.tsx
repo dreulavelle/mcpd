@@ -1,6 +1,11 @@
 import { useState, type ReactNode } from "react";
 import {
-  api, ApiError, type AuthOptions, type ProviderName, type Session,
+  api,
+  ApiError,
+  type AuthOptions,
+  type ProviderName,
+  type Session,
+  problemText,
 } from "@/lib/api";
 import { consumeSSOOutcome } from "@/lib/sso";
 import { Notice } from "@/components/chrome";
@@ -127,7 +132,7 @@ function ProviderButtons({ providers, onProblem }: {
       window.location.assign(authorization_url);
     } catch (e) {
       setBusy("");
-      onProblem(e instanceof ApiError ? e.detail : "Couldn't start that sign-in.");
+      onProblem(problemText(e, "Couldn't start that sign-in."));
     }
   }
 
@@ -285,7 +290,10 @@ function SignUp({ onDone, onCancel }: {
     try {
       onDone(await api.register(email.trim(), password));
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't reach mcpd. Is it running?");
+      // problemText covers a 500 mcpd itself answered, so this cannot claim
+      // mcpd is not running. The two sites that branch on ApiError themselves
+      // still can, because they only reach it when nothing answered.
+      setError(problemText(err, "Couldn't sign up. Try again in a moment."));
     } finally {
       setBusy(false);
     }
@@ -368,11 +376,9 @@ export function FirstRun({ onDone }: {
       onDone(await api.registerFirst(email.trim(), password));
     } catch (err) {
       setError(
-        err instanceof ApiError
-          ? (err.status === 409
-            ? "Someone already claimed this instance. Reload and sign in."
-            : err.detail)
-          : "Couldn't reach mcpd. Is it running?",
+        err instanceof ApiError && err.status === 409
+          ? "Someone already claimed this instance. Reload and sign in."
+          : problemText(err, "Couldn't claim this instance. Try again in a moment."),
       );
     } finally {
       setBusy(false);

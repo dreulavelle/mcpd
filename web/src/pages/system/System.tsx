@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { AlertTriangle, RefreshCw, RotateCw } from "lucide-react";
-import { api, ApiError, type Resources, type UpdateStatus } from "@/lib/api";
+import { api, type Resources, type UpdateStatus, problemText } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
@@ -49,7 +49,7 @@ function Version({ mayAdmin }: { mayAdmin: boolean }) {
       reload();
       notify("good", "Checked.");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't check.");
+      notify("problem", problemText(e, "Couldn't check."));
     } finally {
       setBusy(false);
     }
@@ -290,7 +290,7 @@ function Restart() {
       setSent(true);
       notify("good", "Restarting. This page will reconnect on its own.");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't restart.");
+      notify("problem", problemText(e, "Couldn't restart."));
       setConfirming(false);
     } finally {
       setBusy(false);

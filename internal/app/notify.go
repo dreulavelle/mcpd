@@ -101,17 +101,18 @@ func (a *App) notifyBypassOpened(ctx context.Context, b *operations.Bypass) {
 // Background context rather than a request's: there is no caller here. This
 // is reached from the tunnel's own goroutine, and the alternative is a
 // cancelled context that would drop the event at the moment it matters.
-func (a *App) notifyTunnelFailed(plugin, tunnelID, account, reason string, retrying bool) {
-	// The reason already says what to do; the package prefix and a preamble
-	// about the Tunnels page were ad copy on a phone screen.
-	reason = strings.TrimPrefix(reason, "tunnel: ")
+func (a *App) notifyTunnelFailed(plugin, _, account, reason string, retrying bool) {
+	// The reason arrives as plain sentences from the tunnel -- what happened
+	// and what to do -- so nothing is stripped or rephrased here. It used to
+	// need "tunnel: " trimmed off the front, which is what a wrapped Go error
+	// on a phone screen looks like.
 	text := fmt.Sprintf("%s. mcpd will not retry this.", strings.TrimSuffix(reason, "."))
 	if retrying {
 		text = fmt.Sprintf("%s. mcpd is retrying and will say when it is back.", strings.TrimSuffix(reason, "."))
 	}
-	if tunnelID != "" {
-		text += " Tunnel " + tunnelID + "."
-	}
+	// The tunnel id is not appended. The title already names the connector and
+	// the account it is on, which is what identifies it to a person, and
+	// notify.Event has nowhere to carry an identifier that is not read aloud.
 	a.notifier.Notify(context.Background(), notify.Event{
 		Kind:     "tunnels.disconnected",
 		Severity: notify.SeverityWarning,
