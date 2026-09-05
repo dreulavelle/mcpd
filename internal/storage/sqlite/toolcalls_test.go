@@ -272,3 +272,144 @@ func TestCalls_BoundsTheLimit(t *testing.T) {
 		}
 	}
 }
+
+// The chart on the overview draws one bar per hour whatever happened, so the
+// window is zero-filled here rather than in the browser: a missing hour drawn
+// as a gap reads as a shorter day.
+func TestSummary_ZeroFillsTheWholeWindow(t *testing.T) {
+	ctx := context.Background()
+	s := newCallStore(t)
+	since := base.Add(-23 * time.Hour)
+
+	record(t, s, ToolCall{At: base, Principal: "key:a", Plugin: "graylog", Tool: "t", Outcome: "ok"})
+
+	sum, err := s.Summary(ctx, since, time.Hour, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Buckets) != 24 {
+		t.Fatalf("got %d buckets, want 24", len(sum.Buckets))
+	}
+	if !sum.Buckets[0].At.Equal(since) {
+		t.Errorf("first bucket at %v, want %v", sum.Buckets[0].At, since)
+	}
+	if !sum.Buckets[23].At.Equal(base) {
+		t.Errorf("last bucket at %v, want %v", sum.Buckets[23].At, base)
+	}
+	if sum.Buckets[23].OK != 1 || sum.Buckets[0].OK != 0 {
+		t.Errorf("the one call landed in %+v", sum.Buckets)
+	}
+}
+
+// A window nobody called in is not an error and not an empty list: it is a
+// day's worth of empty hours, which is what a flat chart is drawn from.
+func TestSummary_AnEmptyWindowIsStillAWindow(t *testing.T) {
+	ctx := context.Background()
+	s := newCallStore(t)
+
+	sum, err := s.Summary(ctx, base.Add(-23*time.Hour), time.Hour, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Buckets) != 24 || sum.Total != 0 {
+		t.Fatalf("got %d buckets and %d calls, want 24 and 0", len(sum.Buckets), sum.Total)
+	}
+	if len(sum.Plugins) != 0 {
+		t.Errorf("got %+v, want no systems", sum.Plugins)
+	}
+}
+
+func TestSummary_CountsEachOutcomeAndEachSystem(t *testing.T) {
+	ctx := context.Background()
+	s := newCallStore(t)
+	since := base.Add(-2 * time.Hour)
+
+	record(t, s, ToolCall{At: since, Principal: "key:a", Plugin: "graylog", Tool: "t", Outcome: "ok"})
+	record(t, s, ToolCall{At: since.Add(time.Minute), Principal: "key:a", Plugin: "graylog", Tool: "t", Outcome: "error"})
+	record(t, s, ToolCall{At: since.Add(time.Hour), Principal: "key:a", Plugin: "graylog", Tool: "t", Outcome: "denied"})
+	record(t, s, ToolCall{At: since.Add(time.Hour), Principal: "key:a", Plugin: "echo", Tool: "t", Outcome: "rate_limited"})
+
+	sum, err := s.Summary(ctx, since, time.Hour, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Buckets[0].OK != 1 || sum.Buckets[0].Error != 1 {
+		t.Errorf("first hour = %+v", sum.Buckets[0])
+	}
+	if sum.Buckets[1].Denied != 1 || sum.Buckets[1].RateLimited != 1 {
+		t.Errorf("second hour = %+v", sum.Buckets[1])
+	}
+	if sum.Total != 4 || sum.Errors != 1 || sum.Denied != 1 {
+		t.Errorf("total=%d errors=%d denied=%d", sum.Total, sum.Errors, sum.Denied)
+	}
+	// Busiest first, so a reader gets the answer without sorting.
+	if len(sum.Plugins) != 2 || sum.Plugins[0].Plugin != "graylog" || sum.Plugins[0].Calls != 3 {
+		t.Fatalf("systems = %+v", sum.Plugins)
+	}
+	if sum.Plugins[0].Errors != 1 || sum.Plugins[1].Plugin != "echo" {
+		t.Errorf("systems = %+v", sum.Plugins)
+	}
+}
+
+// Where a call on an exact boundary lands, and that neither end of the window
+// leaks. Integer division on the millisecond stamp is what decides, so the
+// hour a call starts owns it and the hour it might have finished in does not.
+func TestSummary_Bucketing(t *testing.T) {
+	since := base.Add(-3 * time.Hour)
+	cases := []struct {
+		name   string
+		at     time.Time
+		bucket int // -1 for outside the window
+	}{
+		{"the first millisecond of the window", since, 0},
+		{"the last millisecond of the first hour", since.Add(time.Hour - time.Millisecond), 0},
+		{"exactly on an hour boundary", since.Add(time.Hour), 1},
+		{"the last millisecond of the window", since.Add(3*time.Hour - time.Millisecond), 2},
+		{"one millisecond before the window", since.Add(-time.Millisecond), -1},
+		{"exactly at the end of the window", since.Add(3 * time.Hour), -1},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := newCallStore(t)
+			record(t, s, ToolCall{At: c.at, Principal: "key:a", Plugin: "p", Tool: "t", Outcome: "ok"})
+
+			sum, err := s.Summary(ctx, since, time.Hour, 3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := int64(0)
+			if c.bucket >= 0 {
+				want = 1
+			}
+			if sum.Total != want {
+				t.Fatalf("total = %d, want %d", sum.Total, want)
+			}
+			for i, b := range sum.Buckets {
+				got := b.OK
+				if i == c.bucket && got != 1 {
+					t.Errorf("bucket %d = %d, want the call", i, got)
+				}
+				if i != c.bucket && got != 0 {
+					t.Errorf("bucket %d = %d, want nothing", i, got)
+				}
+			}
+		})
+	}
+}
+
+// A caller asking for nothing gets nothing rather than a panic on a negative
+// slice length.
+func TestSummary_RefusesAnEmptyWindow(t *testing.T) {
+	ctx := context.Background()
+	s := newCallStore(t)
+
+	sum, err := s.Summary(ctx, base, time.Hour, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Buckets) != 0 {
+		t.Errorf("got %d buckets, want none", len(sum.Buckets))
+	}
+}

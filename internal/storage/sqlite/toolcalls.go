@@ -217,3 +217,114 @@ func (s *ToolCallStore) PruneToolCalls(ctx context.Context, cutoff time.Time) (i
 	removed, _ := result.RowsAffected()
 	return removed, nil
 }
+
+// HourBucket is one step of a window: how the calls that started inside it
+// ended. Present even when nothing happened, so a chart drawn from these has a
+// bar per step rather than a gap that reads as a shorter day.
+type HourBucket struct {
+	At          time.Time `json:"at"`
+	OK          int64     `json:"ok"`
+	Error       int64     `json:"error"`
+	Denied      int64     `json:"denied"`
+	RateLimited int64     `json:"rate_limited"`
+}
+
+// PluginCalls is one system's share of a window.
+type PluginCalls struct {
+	Plugin string `json:"plugin"`
+	Calls  int64  `json:"calls"`
+	Errors int64  `json:"errors"`
+}
+
+// CallSummary is a window of the ledger seen two ways: along time, and by the
+// system that was reached.
+type CallSummary struct {
+	Buckets []HourBucket  `json:"buckets"`
+	Plugins []PluginCalls `json:"plugins"`
+	Total   int64         `json:"total"`
+	Errors  int64         `json:"errors"`
+	Denied  int64         `json:"denied"`
+}
+
+// Summary counts the calls in [since, since+step*buckets) by step and by plugin.
+//
+// The bucket count is a parameter rather than something worked out from the
+// clock: two reads of the clock either side of an hour boundary would answer
+// with 24 buckets once and 25 the next minute, and a caller that promised its
+// reader a fixed number of bars has no way to notice.
+func (s *ToolCallStore) Summary(ctx context.Context, since time.Time, step time.Duration, buckets int) (CallSummary, error) {
+	out := CallSummary{Buckets: []HourBucket{}, Plugins: []PluginCalls{}}
+	if buckets <= 0 || step <= 0 {
+		return out, nil
+	}
+
+	from := since.UnixMilli()
+	width := step.Milliseconds()
+	until := from + width*int64(buckets)
+
+	out.Buckets = make([]HourBucket, buckets)
+	for i := range out.Buckets {
+		out.Buckets[i].At = since.Add(time.Duration(i) * step)
+	}
+
+	// Integer division on the millisecond stamp puts each call in a step. The
+	// range is bounded at both ends so the totals below are the sum of the
+	// bars: a row from a clock that ran ahead would otherwise be counted once
+	// and drawn nowhere.
+	rows, err := s.db.Reader().QueryContext(ctx, `
+		SELECT (at - ?) / ? AS bucket,
+		       SUM(CASE WHEN outcome = 'ok' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN outcome = 'rate_limited' THEN 1 ELSE 0 END)
+		  FROM tool_calls
+		 WHERE at >= ? AND at < ?
+		 GROUP BY bucket`, from, width, from, until)
+	if err != nil {
+		return CallSummary{}, fmt.Errorf("sqlite: summarise calls by hour: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			index                       int64
+			ok, failed, denied, limited int64
+		)
+		if err := rows.Scan(&index, &ok, &failed, &denied, &limited); err != nil {
+			return CallSummary{}, fmt.Errorf("sqlite: scan call bucket: %w", err)
+		}
+		if index < 0 || index >= int64(buckets) {
+			continue
+		}
+		b := &out.Buckets[index]
+		b.OK, b.Error, b.Denied, b.RateLimited = ok, failed, denied, limited
+		out.Total += ok + failed + denied + limited
+		out.Errors += failed
+		out.Denied += denied
+	}
+	if err := rows.Err(); err != nil {
+		return CallSummary{}, fmt.Errorf("sqlite: summarise calls by hour: %w", err)
+	}
+
+	byPlugin, err := s.db.Reader().QueryContext(ctx, `
+		SELECT plugin,
+		       COUNT(*),
+		       SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END)
+		  FROM tool_calls
+		 WHERE at >= ? AND at < ?
+		 GROUP BY plugin
+		 ORDER BY COUNT(*) DESC, plugin`, from, until)
+	if err != nil {
+		return CallSummary{}, fmt.Errorf("sqlite: summarise calls by plugin: %w", err)
+	}
+	defer byPlugin.Close()
+
+	for byPlugin.Next() {
+		var p PluginCalls
+		if err := byPlugin.Scan(&p.Plugin, &p.Calls, &p.Errors); err != nil {
+			return CallSummary{}, fmt.Errorf("sqlite: scan plugin summary: %w", err)
+		}
+		out.Plugins = append(out.Plugins, p)
+	}
+	return out, byPlugin.Err()
+}
