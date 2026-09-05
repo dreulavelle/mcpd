@@ -318,7 +318,12 @@ function ConnectProvider({ onDone, onCancel }: {
       if (err instanceof ApiError && err.status === 401) {
         setError("That password did not match.");
       } else if (err instanceof ApiError && err.status === 404) {
-        onCancel("Too many attempts. Start the sign-in again.");
+        // Several things retire an offer -- three wrong passwords, the ten
+        // minutes running out, "Not now" in another tab, a second sign-in
+        // replacing it -- and the server does not say which, on purpose.
+        // Naming one of them would be wrong most of the time, and what to do
+        // is the same either way.
+        onCancel("That offer is no longer open. Start the sign-in again.");
       } else {
         setError(problemText(err, "Couldn't connect that provider. Try again in a moment."));
       }

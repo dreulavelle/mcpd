@@ -211,8 +211,9 @@ describe("connecting a provider at sign-in", () => {
     expect(screen.getByRole("button", { name: "Connect and sign in" })).toBeInTheDocument();
   });
 
-  // The row is retired after three, and what the person needs at that point is
-  // to start again rather than to keep typing into a screen backed by nothing.
+  // Several things retire an offer and the server does not say which, so the
+  // sentence names none of them: what to do is the same either way, and
+  // "too many attempts" is wrong for an offer that simply expired.
   it("sends somebody back to the form once the offer has been retired", async () => {
     vi.spyOn(api, "pendingLink").mockResolvedValue(OFFER);
     vi.spyOn(api, "connectPendingLink").mockRejectedValue(new ApiError(404, "not_found", "there is nothing waiting to be connected"));
@@ -224,7 +225,7 @@ describe("connecting a provider at sign-in", () => {
     await userEvent.click(screen.getByRole("button", { name: "Connect and sign in" }));
 
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
-    expect(screen.getByText("Too many attempts. Start the sign-in again."))
+    expect(screen.getByText("That offer is no longer open. Start the sign-in again."))
       .toBeInTheDocument();
   });
 
