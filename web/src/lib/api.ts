@@ -352,6 +352,13 @@ export interface UpdateUser {
   grants?: Grant[];
   disabled?: boolean;
   password?: string;
+  /**
+   * Offers an invitation again, with a fresh expiry, to an account still
+   * waiting for its first sign-in. Refused for one that already signs in some
+   * other way — both at once would leave an account somebody is using still
+   * claimable by whoever holds its address at the provider.
+   */
+  invite_provider?: ProviderName;
 }
 
 export interface Tool {

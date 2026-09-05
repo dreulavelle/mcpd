@@ -51,8 +51,9 @@ const userColumns = `id, email, password_hash, display_name, role_id, grants_jso
 // InviteTTL is how long an invitation stays claimable.
 //
 // Long enough for somebody starting on a Monday to arrive, short enough that a
-// row nobody used stops being a way in. Re-inviting is saving the account
-// again, which is one control on a page rather than a second concept.
+// row nobody used stops being a way in. One that lapsed is offered again
+// through UpdateRequest.InviteProvider, which re-stamps this from now -- the
+// same decision made a second time rather than a second concept.
 const InviteTTL = 14 * 24 * time.Hour
 
 // CreateRequest describes a new account.
@@ -339,6 +340,18 @@ type UpdateRequest struct {
 	RoleID      *string
 	Grants      *auth.Grants
 	Disabled    *bool
+	// InviteProvider re-issues an invitation, with a fresh expiry, on an
+	// account that is still waiting for its first sign-in. It is how an
+	// invitation that lapsed is offered again -- there is no separate concept,
+	// because from the administrator's side it is the same decision made a
+	// second time.
+	//
+	// It cannot create one on an account that already signs in some other way;
+	// that condition is in the WHERE clause. Empty is refused rather than read
+	// as "cancel", because an invited account with its invitation withdrawn is
+	// one nobody can ever sign in to -- a deletion wearing the appearance of
+	// an edit. Delete the account, or give it a password.
+	InviteProvider *Provider
 }
 
 // Update edits an account.
@@ -354,6 +367,10 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 		if err := req.Grants.Validate(); err != nil {
 			return nil, err
 		}
+	}
+	if req.InviteProvider != nil && !req.InviteProvider.Valid() {
+		return nil, fmt.Errorf("users: %q is not a provider this build knows",
+			*req.InviteProvider)
 	}
 	// An empty direct grant is legitimate; see Create. It denies everything on
 	// its own, and a group is how such an account reaches anything.
@@ -438,6 +455,34 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 			return ErrLastAdmin
 		}
 
+		// Its own guarded statement rather than another column in the one
+		// above, because its conditions are different ones and folding them in
+		// would make a zero-row result mean either of two unrelated things.
+		//
+		// Re-stamping the expiry is the whole of what this usually does: the
+		// account is already invited, the invitation lapsed, and somebody is
+		// offering it again. The conditions are what stop it becoming a way to
+		// put an invitation on an account somebody is already using.
+		if req.InviteProvider != nil {
+			expires := s.now().Add(InviteTTL)
+			affected, err := tx.ExecAffected(`
+				UPDATE users
+				   SET invite_provider = ?, invite_expires_at = ?, updated_at = ?
+				 WHERE id = ?
+				   AND password_hash = ?
+				   AND disabled = 0
+				   AND NOT EXISTS (
+				       SELECT 1 FROM user_identities WHERE user_id = users.id
+				   )`,
+				string(*req.InviteProvider), expires.UnixMilli(), now, id, NoPassword)
+			if err != nil {
+				return err
+			}
+			if affected == 0 {
+				return ErrAlreadySignsIn
+			}
+		}
+
 		// A disabled account must not keep browsing on a session it already
 		// holds, and a demoted one must not keep the rights its old session
 		// was resolved with. Sessions carry no capabilities themselves -- they
@@ -447,6 +492,8 @@ func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User
 		if req.Disabled != nil || req.RoleID != nil || req.Grants != nil {
 			return tx.Exec(`DELETE FROM user_sessions WHERE user_id = ?`, id)
 		}
+		// Not for an invitation: an account waiting for its first sign-in has
+		// no session to end, and re-issuing one takes nothing away.
 		return nil
 	})
 	if err != nil {

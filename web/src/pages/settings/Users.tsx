@@ -4,6 +4,7 @@ import {
   api, type Grant, type Group, type ProviderDescriptor, type User, problemText,
 } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
+import { day } from "@/lib/format";
 import { collect, describe } from "@/lib/permissions";
 import { useCan } from "@/lib/session";
 import { EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
@@ -190,11 +191,14 @@ function UserRow({ user, mayWrite, notify, onChanged, onEdit }: {
               {user.invite_provider && <Chip tone="info">invited</Chip>}
             </div>
             {/* Not "no password". An invited account is one an administrator
-                decided about and nobody has arrived at yet, and the thing to
-                know is which provider it is waiting for. */}
+                decided about and nobody has arrived at yet, and the two things
+                to know are which provider it is waiting for and how long the
+                invitation has left — which is the answer to "why can they not
+                get in" as often as the provider is. */}
             {user.invite_provider && (
               <div className="text-xs text-muted-foreground">
-                Invited — waiting for a first sign-in with {user.invite_label}.
+                Invited — waiting for a first sign-in with {user.invite_label}
+                {user.invite_expires_at ? `, until ${day(user.invite_expires_at)}` : ""}.
               </div>
             )}
             {/* The address always: it is what every grant and every audit
@@ -291,6 +295,24 @@ function EditUser({ user, groups, notify, onClose, onChanged }: {
     }
   }
 
+  // A fresh fortnight on the invitation already there, which is why it sends
+  // the provider the row is waiting for rather than asking again: this is the
+  // same decision made a second time, not a new one.
+  async function reinvite() {
+    if (!user.invite_provider) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.updateUser(user.id, { invite_provider: user.invite_provider });
+      onChanged();
+      notify("good", "Invitation sent again.");
+    } catch (err) {
+      setError(problemText(err, "Couldn't send that invitation again."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function membership(groupId: string, join: boolean) {
     setBusy(true);
     setError("");
@@ -339,6 +361,25 @@ function EditUser({ user, groups, notify, onClose, onChanged }: {
             <span className="text-xs text-muted-foreground">Applies on their next request.</span>
           </div>
         </form>
+
+        {/* An invitation lapses after a fortnight, and until now the sentence
+            somebody met at that point told them to ask an administrator for
+            something the administrator had no way to do. */}
+        {user.invite_provider && (
+          <div className="space-y-2 border-t pt-5">
+            <div className="text-sm font-medium">Invitation</div>
+            <p className="text-sm text-muted-foreground">
+              Waiting for a first sign-in with {user.invite_label}
+              {user.invite_expires_at ? `, until ${day(user.invite_expires_at)}` : ""}.
+            </p>
+            <Button
+              type="button" variant="outline" disabled={busy}
+              onClick={() => reinvite()}
+            >
+              Send the invitation again
+            </Button>
+          </div>
+        )}
 
         <div className="space-y-2 border-t pt-5">
           <div className="text-sm font-medium">Groups</div>

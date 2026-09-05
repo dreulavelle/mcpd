@@ -946,7 +946,7 @@ function moment(iso: string, near: string): string {
 }
 
 /** A date without a time, for an expiry or a cutoff. */
-function day(iso: string): string {
+export function day(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { day: "numeric", month: "long" });

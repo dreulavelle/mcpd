@@ -28,6 +28,27 @@ func (s *Server) providerConfigured(r *http.Request, p users.Provider) bool {
 	return false
 }
 
+// providerLabel is what a button for this provider says.
+//
+// From the configured providers rather than from sso.Label, because a provider
+// the operator runs is called whatever they called it and sso.Label has
+// nothing to fall back to but the bare name. "You were invited to sign in with
+// oidc" is a sentence naming a thing nobody on this host has ever seen; the
+// Authentication page calls it Authentik, and so should this.
+//
+// The bare label is still the fallback, for a provider that has since been
+// switched off: the row it names is still there and still has to render.
+func (s *Server) providerLabel(r *http.Request, p users.Provider) string {
+	if s.opts.SSO != nil {
+		for _, d := range s.opts.SSO.Available(r.Context()) {
+			if d.Provider == string(p) {
+				return d.Label
+			}
+		}
+	}
+	return sso.Label(p)
+}
+
 // userView is what the dashboard sees. The password hash is never in it: the
 // page has no use for it and every serialisation is a chance to leak it.
 //
@@ -109,6 +130,8 @@ func viewOfUser(u *users.User, self bool, access groups.Resolved, memberOf []gro
 	}
 	if u.Invited() {
 		v.InviteProvider = string(u.InviteProvider)
+		// The bare name here; viewUser replaces it with the configured label,
+		// which is a question about settings this function cannot see.
 		v.InviteLabel = sso.Label(u.InviteProvider)
 		if u.InviteExpiresAt != nil {
 			v.InviteExpiresAt = u.InviteExpiresAt.Format(time.RFC3339)
@@ -134,7 +157,11 @@ func (s *Server) viewUser(r *http.Request, u *users.User, self bool) userView {
 			memberOf = viewOfGroupRefs(list)
 		}
 	}
-	return viewOfUser(u, self, s.accessFor(r, u), memberOf)
+	v := viewOfUser(u, self, s.accessFor(r, u), memberOf)
+	if v.InviteProvider != "" {
+		v.InviteLabel = s.providerLabel(r, u.InviteProvider)
+	}
+	return v
 }
 
 // currentAccountID returns the signed-in account's identifier.
@@ -250,6 +277,10 @@ type updateUserRequest struct {
 	Grants      *[]auth.Grant `json:"grants,omitempty"`
 	Disabled    *bool         `json:"disabled,omitempty"`
 	Password    *string       `json:"password,omitempty"`
+	// InviteProvider offers an invitation again, with a fresh expiry, to an
+	// account still waiting for its first sign-in. It is refused for one that
+	// already signs in some other way.
+	InviteProvider *string `json:"invite_provider,omitempty"`
 }
 
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -283,6 +314,15 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		RoleID:      req.Role,
 		Disabled:    req.Disabled,
 	}
+	if req.InviteProvider != nil {
+		invite := users.Provider(strings.TrimSpace(*req.InviteProvider))
+		if !s.providerConfigured(r, invite) {
+			s.writeError(w, r, http.StatusBadRequest,
+				"that sign-in provider is not set up on this host")
+			return
+		}
+		update.InviteProvider = &invite
+	}
 	if req.Grants != nil {
 		gs := auth.Grants(*req.Grants)
 		update.Grants = &gs
@@ -303,11 +343,15 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusConflict,
 			"that display name is another account's address")
 		return
+	case errors.Is(err, users.ErrAlreadySignsIn):
+		s.writeError(w, r, http.StatusConflict,
+			"that account already has a way to sign in, so it cannot be invited")
+		return
 	case err != nil:
 		s.writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.opts.Log.Info("account updated", "email", user.Email,
+	s.opts.Log.InfoContext(r.Context(), "account updated", "email", user.Email,
 		"by", auth.FromContext(r.Context()).ID)
 	s.writeJSON(w, r, http.StatusOK, s.viewUser(r, user, user.ID == s.currentAccountID(r)))
 }

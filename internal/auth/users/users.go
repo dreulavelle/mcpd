@@ -79,6 +79,11 @@ var (
 	// ErrDomainNotAllowed reports an address outside the configured
 	// allow-list.
 	ErrDomainNotAllowed = errors.New("users: that email domain is not allowed to register here")
+	// ErrAlreadySignsIn reports an invitation offered to an account that
+	// already has a way in -- a password, or a provider it has linked. Both
+	// at once would leave an account somebody is using still claimable by
+	// whoever holds its address at the provider.
+	ErrAlreadySignsIn = errors.New("users: that account already has a way to sign in")
 	// ErrInviteExpired reports an invitation whose window has closed. Kept
 	// apart from ErrNotFound because an administrator can act on it -- the
 	// invitation is re-issued by saving the account again -- while "no such

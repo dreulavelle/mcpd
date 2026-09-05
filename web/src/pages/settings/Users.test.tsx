@@ -111,8 +111,41 @@ describe("the users page", () => {
     })]);
     renderWith(<Users />);
     const row = (await screen.findByText("alice@example.com")).closest("tr")!;
-    expect(within(row).getByText(/Invited — waiting for a first sign-in with Google\./))
+    // The expiry is on the row because "why can they not get in" is answered
+    // by a lapsed invitation as often as by the wrong provider.
+    expect(within(row).getByText(/Invited — waiting for a first sign-in with Google, until/))
       .toBeInTheDocument();
+    expect(within(row).getByText(/September/)).toBeInTheDocument();
+  });
+
+  // The invitation lapses after a fortnight, and the sentence somebody meets
+  // at that point tells them to ask an administrator. It named an action the
+  // administrator had no way to perform until this existed.
+  it("offers an invited account's invitation again", async () => {
+    const updated = vi.spyOn(api, "updateUser").mockResolvedValue(user());
+    stub([user({
+      has_password: false, invite_provider: "google", invite_label: "Google",
+      invite_expires_at: "2026-09-01T09:00:00Z",
+    })]);
+    renderWith(<Users />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Actions for/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Send the invitation again" }));
+
+    expect(updated).toHaveBeenCalledWith("usr_1", { invite_provider: "google" });
+  });
+
+  // Nothing to send again on an account that already signs in, so the control
+  // is not there to be pressed.
+  it("does not offer to invite an account that already signs in", async () => {
+    stub([user()]);
+    renderWith(<Users />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Actions for/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+
+    expect(screen.queryByRole("button", { name: "Send the invitation again" })).toBeNull();
   });
 
   it("says nothing about invitations for an account nobody invited", async () => {
