@@ -254,16 +254,17 @@ export interface ChangeWords {
  */
 export function describeChange(op: ChangeLike): ChangeWords {
   const headline = changeHeadline(op);
-  const fields = changeDelta(op);
+  const delta = changeDelta(op);
+  const text = delta ? deltaWords(delta) : "";
   const impact = op.impact?.trim() ?? "";
 
   return {
     headline,
-    detail: fields.text || impact,
+    detail: text || impact,
     // An aside takes a comma; a continuation finishes the same clause and
     // does not.
-    sentence: fields.text
-      ? `${headline}${fields.join === "aside" ? "," : ""} ${fields.text}.`
+    sentence: delta
+      ? `${headline}${delta.join === "aside" ? "," : ""} ${text}.`
       : `${headline}.`,
   };
 }
@@ -316,35 +317,54 @@ function quoted(value: string): string {
   return /^“.*”$/.test(value) ? value : `“${value}”`;
 }
 
-/** How the delta joins the headline: an aside, a continuation, or a naming. */
-type Join = "aside" | "continuation";
+/**
+ * What differs, in parts, so a layout can weight the values and the sentence
+ * can read them out. One function, because a card that says "to Getting
+ * started" beside a heading that says "called “Getting started”" is two
+ * renderings of one fact disagreeing in front of somebody.
+ *
+ * "aside" takes a comma before it; "continuation" finishes the same clause.
+ */
+export type ChangeDelta =
+  | { kind: "between"; join: "aside"; from: string; to: string }
+  | { kind: "to"; join: "continuation"; to: string }
+  | { kind: "called"; join: "aside"; name: string };
 
-function changeDelta(op: ChangeLike): { text: string; join: Join } {
+export function changeDelta(op: ChangeLike): ChangeDelta | null {
   const first = op.changes?.[0];
-  const parsed = parseAction(op.action);
-  if (!first) return { text: "", join: "continuation" };
+  if (!first) return null;
 
   const to = fieldValue(first.to);
-  if (to === null) return { text: "", join: "continuation" };
+  if (to === null) return null;
 
+  const parsed = parseAction(op.action);
   const from = fieldValue(first.from);
 
   // Turning a flag on and then saying "from off to on" is the verb again in
   // the machine's words. Nothing is added, and the line is longer for it.
   if (parsed && (parsed.verb === "enable" || parsed.verb === "disable") &&
       typeof first.to === "boolean") {
-    return { text: "", join: "continuation" };
+    return null;
   }
 
   // Something that did not exist has nothing to have changed from, so the
   // value is its name rather than the far end of a comparison.
   if (from === null && parsed && INDEFINITE.has(parsed.verb)) {
-    return { text: `called ${quoted(to)}`, join: "aside" };
+    return { kind: "called", join: "aside", name: quoted(to) };
   }
 
   return from === null
-    ? { text: `to ${to}`, join: "continuation" }
-    : { text: `from ${from} to ${to}`, join: "aside" };
+    ? { kind: "to", join: "continuation", to }
+    : { kind: "between", join: "aside", from, to };
+}
+
+/** The same delta as running text, for a sentence or a one-line row. */
+export function deltaWords(delta: ChangeDelta): string {
+  switch (delta.kind) {
+    case "between": return `from ${delta.from} to ${delta.to}`;
+    case "to": return `to ${delta.to}`;
+    case "called": return `called ${delta.name}`;
+  }
 }
 
 /**
