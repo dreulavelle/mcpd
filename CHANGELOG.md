@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/dreulavelle/mcpd/compare/v0.18.0...v0.19.0) (2026-09-05)
+
+
+### Features
+
+* **auth:** connect a provider at sign-in, and invite a person to sign in with one ([#133](https://github.com/dreulavelle/mcpd/issues/133)) ([7af4403](https://github.com/dreulavelle/mcpd/commit/7af440327c1ce1b281aaa365e6216389a4019683))
+
 ## [0.18.0](https://github.com/dreulavelle/mcpd/compare/v0.17.1...v0.18.0) (2026-09-05)
 
 
