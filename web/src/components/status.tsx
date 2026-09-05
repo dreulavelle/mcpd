@@ -115,13 +115,17 @@ export function RiskBadge({ risk }: { risk: RiskLevel | string }) {
  * Three outcomes, and the third is the one that matters: null or absent is
  * "nobody checked" and must never render as a tick. Typed to include null so a
  * call site cannot narrow it to a boolean without deciding.
+ *
+ * "Confirmed", not "Verified": the lifecycle's proofs, the approvals list and
+ * this badge all name the same fact, and naming it twice is how one of them
+ * drifts.
  */
 export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
   if (verified === true) {
     return (
       <Chip tone="good">
         <StatusDot tone="good" />
-        Verified
+        Confirmed
       </Chip>
     );
   }
@@ -206,9 +210,10 @@ export function AuthorisedByRule({ rule }: { rule: string }) {
         <span tabIndex={0} className="rounded-full">
           <Chip tone="info">
             <ShieldCheck className="size-3 shrink-0" aria-hidden="true" />
-            <span>
-              No one was asked — rule <code className="font-mono">{rule}</code>
-            </span>
+            {/* The rule's id is the name somebody typed on the Rules tab, not
+                a generated one, so it reads as a name rather than as evidence.
+                The monospaced copy of it is under Technical details. */}
+            <span>No one was asked — rule {rule}</span>
           </Chip>
         </span>
       </TooltipTrigger>

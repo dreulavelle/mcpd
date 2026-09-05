@@ -13,7 +13,7 @@ import { StateBadge, stateTone, VerifiedBadge } from "./status";
  */
 describe("VerifiedBadge", () => {
   const cases: [string, boolean | null | undefined, string][] = [
-    ["confirmed by a re-read", true, "Verified"],
+    ["confirmed by a re-read", true, "Confirmed"],
     ["checked and did not match", false, "Did not match"],
     ["explicitly null", null, "Not checked"],
     ["absent from the payload", undefined, "Not checked"],
@@ -26,8 +26,11 @@ describe("VerifiedBadge", () => {
     });
   }
 
+  // "Confirmed" rather than "Verified", so this badge, the lifecycle's proofs
+  // and the approvals list all name one fact with one word.
   it("never claims verification for an unchecked outcome", () => {
     renderWith(<VerifiedBadge verified={undefined} />);
+    expect(screen.queryByText("Confirmed")).not.toBeInTheDocument();
     expect(screen.queryByText("Verified")).not.toBeInTheDocument();
   });
 

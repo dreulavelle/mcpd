@@ -1,7 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { CircleAlert, TriangleAlert } from "lucide-react";
 import { api, type AuditRecord, type Operation, problemText } from "@/lib/api";
-import { pretty, relative, riskLabel, when, whenExact } from "@/lib/format";
+import {
+  describeChange, pretty, relative, riskLabel, when, whenExact,
+} from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { Link, useRouter } from "@/lib/router";
 import { useCan } from "@/lib/session";
@@ -9,10 +11,13 @@ import { useNotify } from "@/components/toast";
 import {
   CodeBlock, Detail, Loading, Notice, PageHeader, Section,
 } from "@/components/chrome";
+import { Disclosure } from "@/components/disclosure";
+import { usePrincipalNames } from "@/components/principal";
 import {
-  AssuranceBadge, AuthorisedByRule, RiskBadge, StateBadge, VerifiedBadge,
+  AssuranceBadge, AuthorisedByRule, RiskBadge, StateBadge,
 } from "@/components/status";
 import { policyAuthorisation, type PolicyAuthorisation } from "./authorisation";
+import { FieldDelta, fieldDelta } from "./delta";
 import { Lifecycle } from "./Lifecycle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -54,27 +59,36 @@ function Body({ operation: op, audit, onChanged }: {
   onChanged: () => void;
 }) {
   const authorisation = policyAuthorisation(op, audit);
+  const name = usePrincipalNames();
+  const { headline } = describeChange(op);
+  const delta = fieldDelta(op);
 
   return (
     <>
       <PageHeader
-        title={op.action.replace(/[._]/g, " ")}
+        // The change, not `label.set`. The machine's name for it is under
+        // Technical details, with the id and what was sent.
+        title={headline}
         back={{ to: "/approvals", label: "Approvals" }}
         lede={
           <>
+            {delta && <span className="block"><FieldDelta delta={delta} /></span>}
             {op.impact && <span className="block">{op.impact}</span>}
             <span className="block">
-              A change to{" "}
-              <Link to={`/plugins/${encodeURIComponent(op.plugin)}`} className="text-primary hover:underline">
-                {op.plugin}
-              </Link>
-              , proposed by{" "}
+              Proposed by{" "}
               <Link
                 to={`/activity?principal=${encodeURIComponent(op.requested_by)}&hours=720`}
                 className="text-primary hover:underline"
                 title="Everything this caller has done, on Activity"
               >
-                {op.requested_by}
+                {name(op.requested_by)}
+              </Link>
+              {" on "}
+              <Link
+                to={`/plugins/${encodeURIComponent(op.plugin)}`}
+                className="text-primary hover:underline"
+              >
+                {op.plugin}
               </Link>
               .
             </span>
@@ -102,24 +116,17 @@ function Body({ operation: op, audit, onChanged }: {
           </Notice>
         )}
 
-        {op.state === "failed" && (op.error_detail || op.error_code) && (
+        {op.state === "failed" && (
           <Notice tone="problem" icon={<CircleAlert />}>
-            <strong>It did not run.</strong>{" "}
-            {op.error_detail || op.error_code}
-            {op.error_detail && op.error_code && (
-              <span className="ml-1 font-mono text-xs opacity-80">({op.error_code})</span>
-            )}
+            <strong>It did not run.</strong> Nothing changed.
+            {/* Quoted, because it is what the system said rather than what
+                this page has to say. The code beside it is evidence and goes
+                under Technical details. */}
+            {op.error_detail && <> The system said: “{op.error_detail}”</>}
           </Notice>
         )}
 
         {authorisation && <AuthorisedInAdvance authorisation={authorisation} />}
-
-        <Section
-          title="Where this stands"
-          description="What has happened, and what can still happen."
-        >
-          <Lifecycle operation={op} audit={audit} />
-        </Section>
 
         <WhatThisProves operation={op} />
 
@@ -155,91 +162,22 @@ function Body({ operation: op, audit, onChanged }: {
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  No list of fields was recorded. What was sent is below.
+                  No list of fields was recorded. What was sent is under
+                  Technical details.
                 </p>
               )}
             </CardContent>
           </Card>
         </Section>
 
-        <Section title="What was sent" description="Recorded when the change was proposed. If it does not match at the moment it runs, it does not run.">
-          <div className="grid gap-3 lg:grid-cols-2">
-            <Payload label="What it changes" value={op.target} />
-            <Payload label="What it should become" value={op.desired} />
-            <Payload label="How it was before" value={op.before} />
-            <Payload
-              label="How it looked afterwards"
-              value={op.observed}
-              empty="Nobody has looked yet."
-            />
-          </div>
+        <Section
+          title="Where this stands"
+          description="What has happened, what can still happen, and what the record proves."
+        >
+          <Lifecycle operation={op} audit={audit} />
         </Section>
 
-        <Section title="Record">
-          <Card>
-            <CardContent>
-              <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <Detail label="Proposed by">{op.requested_by}</Detail>
-                <Detail label="Proposed at">{whenExact(op.requested_at)}</Detail>
-                <Detail label="Proposal expires">
-                  {whenExact(op.expires_at)}
-                  <span className="block text-xs text-muted-foreground">
-                    {relative(op.expires_at)}
-                  </span>
-                </Detail>
-                {/* Never the approver field alone: on an auto-approval it is
-                    `system:policy`, which reads as somebody having clicked. */}
-                {op.authorized_by_rule ? (
-                  <Detail label="Approved by">
-                    Rule <code className="font-mono text-xs">{op.authorized_by_rule}</code>
-                    <span className="block text-xs text-muted-foreground">
-                      No one was asked.{" "}
-                      <Link to="/settings/policy" className="text-primary hover:underline">
-                        The rules as they stand now
-                      </Link>
-                      .
-                    </span>
-                  </Detail>
-                ) : op.approved_by ? (
-                  <Detail label="Decided by">{op.approved_by}</Detail>
-                ) : null}
-                {op.approved_at && (
-                  <Detail label={op.authorized_by_rule ? "Approved at" : "Decided at"}>
-                    {whenExact(op.approved_at)}
-                  </Detail>
-                )}
-                {op.execute_by && (
-                  <Detail label="Must run by">
-                    {whenExact(op.execute_by)}
-                    <span className="block text-xs text-muted-foreground">
-                      An approval does not last for ever. After this it expires.
-                    </span>
-                  </Detail>
-                )}
-                {op.terminal_at && (
-                  <Detail label="Settled at">{whenExact(op.terminal_at)}</Detail>
-                )}
-                <Detail label="Attempts">{op.attempts}</Detail>
-                <Detail label="Outcome confirmed">
-                  <VerifiedBadge verified={op.verified} />
-                </Detail>
-                <Detail label="Checked against how it was before">
-                  {op.drift_checked
-                    ? "Yes — compared against a record of how the system looked before."
-                    : "Nothing recorded how it looked before, so nothing was compared."}
-                </Detail>
-                <Detail label="Can be confirmed afterwards">
-                  {op.outcome_verifiable
-                    ? "Reading the system again can prove this change happened."
-                    : "This kind of change leaves nothing to read back, so it cannot be confirmed."}
-                </Detail>
-                <Detail label="Reference" className="sm:col-span-2 lg:col-span-3">
-                  <code className="font-mono text-xs break-all">{op.id}</code>
-                </Detail>
-              </dl>
-            </CardContent>
-          </Card>
-        </Section>
+        <WhoAndWhen operation={op} name={name} />
 
         <Section title="History" description="Every step this change went through.">
           <Card className="overflow-hidden p-0">
@@ -279,8 +217,150 @@ function Body({ operation: op, audit, onChanged }: {
             )}
           </Card>
         </Section>
+
+        <Technical operation={op} />
       </div>
     </>
+  );
+}
+
+/**
+ * Who did what, and when, as sentences rather than a grid of labelled cells.
+ *
+ * Every fact the old Record grid carried is here except the three it shared
+ * with the lifecycle's proofs, which say the same things in more words a few
+ * inches above, and the id and the attempt count, which are evidence.
+ */
+function WhoAndWhen({ operation: op, name }: {
+  operation: Operation;
+  name: (actor: string) => string;
+}) {
+  const lines: ReactNode[] = [];
+
+  lines.push(
+    <>
+      {name(op.requested_by)} proposed this{" "}
+      <Moment iso={op.requested_at} />.
+    </>,
+  );
+
+  // A deadline only means something while it can still be missed.
+  if (!op.terminal && op.expires_at) {
+    lines.push(
+      <>
+        The proposal runs out <Moment iso={op.expires_at} />. After that nobody
+        can approve it.
+      </>,
+    );
+  }
+
+  // Never the approver field alone: on an auto-approval it is `system:policy`,
+  // which is not an account and reads as somebody having clicked.
+  if (op.authorized_by_rule) {
+    lines.push(
+      <>
+        A standing rule approved it
+        {op.approved_at && <> <Moment iso={op.approved_at} /></>}, with nobody
+        asked.{" "}
+        <Link to="/settings/policy" className="text-primary hover:underline">
+          The rules as they stand now
+        </Link>
+        .
+      </>,
+    );
+  } else if (op.approved_by) {
+    lines.push(
+      <>
+        {name(op.approved_by)} {decisionVerb(op.state)}
+        {op.approved_at && <> <Moment iso={op.approved_at} /></>}.
+      </>,
+    );
+  }
+
+  if (!op.terminal && op.execute_by) {
+    lines.push(
+      <>
+        The approval itself runs out <Moment iso={op.execute_by} />. After that
+        the change will not run, even though somebody said yes.
+      </>,
+    );
+  }
+
+  if (op.terminal_at) {
+    lines.push(<>It settled <Moment iso={op.terminal_at} />.</>);
+  }
+
+  return (
+    <Section title="Who and when">
+      <Card>
+        <CardContent>
+          <ul className="space-y-2 text-sm">
+            {lines.map((line, i) => <li key={i}>{line}</li>)}
+          </ul>
+        </CardContent>
+      </Card>
+    </Section>
+  );
+}
+
+function decisionVerb(state: string): string {
+  switch (state) {
+    case "rejected": return "turned it down";
+    case "cancelled": return "withdrew it";
+    default: return "approved it";
+  }
+}
+
+/** How long ago, with the exact time one hover away rather than in the line. */
+function Moment({ iso }: { iso: string }) {
+  return <time dateTime={iso} title={whenExact(iso)}>{relative(iso)}</time>;
+}
+
+/**
+ * Evidence: the machine's name for the change, the id somebody quotes back,
+ * how many times it was tried, an error code, and what was actually sent.
+ * Closed, because none of it is what the page is about.
+ */
+function Technical({ operation: op }: { operation: Operation }) {
+  return (
+    <Disclosure summary="Technical details">
+      <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Detail label="Action">
+          <code className="font-mono text-xs">{op.action}</code>
+        </Detail>
+        <Detail label="Attempts">{op.attempts}</Detail>
+        {op.error_code && (
+          <Detail label="Error code">
+            <code className="font-mono text-xs">{op.error_code}</code>
+          </Detail>
+        )}
+        {op.authorized_by_rule && (
+          <Detail label="Rule">
+            <code className="font-mono text-xs">{op.authorized_by_rule}</code>
+          </Detail>
+        )}
+        <Detail label="Reference" className="sm:col-span-2 lg:col-span-3">
+          <code className="font-mono text-xs break-all">{op.id}</code>
+        </Detail>
+      </dl>
+
+      <div>
+        <p className="mb-2 text-sm text-muted-foreground">
+          What was sent, recorded when the change was proposed. If it does not
+          match at the moment it runs, it does not run.
+        </p>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Payload label="What it changes" value={op.target} />
+          <Payload label="What it should become" value={op.desired} />
+          <Payload label="How it was before" value={op.before} />
+          <Payload
+            label="How it looked afterwards"
+            value={op.observed}
+            empty="Nobody has looked yet."
+          />
+        </div>
+      </div>
+    </Disclosure>
   );
 }
 
@@ -323,8 +403,9 @@ function AuthorisedInAdvance({ authorisation: a }: {
 }
 
 /**
- * What this record will prove. Silent on a reviewed change: a notice on every
- * operation goes unread on the one that says something else.
+ * What this record will prove, said before the decision rather than after it.
+ * Silent on a reviewed change: a notice on every operation goes unread on the
+ * one that says something else.
  */
 function WhatThisProves({ operation: op }: { operation: Operation }) {
   if (op.assurance === "reviewed_change") return null;

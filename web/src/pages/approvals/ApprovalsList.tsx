@@ -5,8 +5,7 @@ import {
 } from "lucide-react";
 import { api, type Operation, type OperationState } from "@/lib/api";
 import {
-  confirmationWord, describeChange, describeOutcome, fieldValue, relative,
-  riskLabel,
+  confirmationWord, describeChange, describeOutcome, relative, riskLabel,
 } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { Link, useQueryParam } from "@/lib/router";
@@ -19,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { FieldDelta, fieldDelta } from "./delta";
 
 /**
  * Changes an assistant has proposed: the ones waiting on a person, and then
@@ -307,19 +307,6 @@ function count(settled: Operation[], group: Group): number {
 }
 
 /**
- * The first recorded field, as the two halves a layout can weight separately.
- * Null where nothing was recorded, or where the value is structured and has no
- * honest short form.
- */
-function fieldDelta(op: Operation): { from: string | null; to: string } | null {
-  const first = op.changes?.[0];
-  if (!first) return null;
-  const to = fieldValue(first.to);
-  if (to === null) return null;
-  return { from: fieldValue(first.from), to };
-}
-
-/**
  * One change waiting on a decision.
  *
  * The whole card is the link, because the thing a person does with it is open
@@ -360,11 +347,8 @@ function WaitingCard({ op, name }: {
           </div>
 
           {delta ? (
-            <p className="text-sm text-muted-foreground">
-              {delta.from !== null && (
-                <>from <span className="font-medium text-foreground">{delta.from}</span>{" "}</>
-              )}
-              to <span className="font-medium text-foreground">{delta.to}</span>
+            <p className="text-sm">
+              <FieldDelta delta={delta} />
             </p>
           ) : detail ? (
             <p className="text-sm text-muted-foreground">{detail}</p>
