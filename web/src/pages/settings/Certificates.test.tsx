@@ -92,7 +92,7 @@ describe("the certificates page", () => {
     stub([]);
     vi.spyOn(api, "addCertificate").mockRejectedValue(new ApiError(
       400, "bad_request",
-      "trust: that is a PKCS#7 bundle: convert it first with `openssl pkcs7`",
+      "that is a PKCS#7 bundle: convert it first with `openssl pkcs7`",
     ));
     renderWith(<Certificates />);
 
