@@ -163,7 +163,7 @@ export function Brand({ compact }: { compact?: boolean }) {
 function SearchButton({ onSearch, compact }: { onSearch: () => void; compact?: boolean }) {
   if (compact) {
     return (
-      <Button variant="ghost" size="icon-sm" aria-label="Search the console" onClick={onSearch}>
+      <Button variant="ghost" size="icon-sm" aria-label="Search the dashboard" onClick={onSearch}>
         <Search className="size-4" aria-hidden="true" />
       </Button>
     );
