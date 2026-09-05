@@ -1,157 +1,230 @@
-# mcpd
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner-light.svg">
+    <img src="docs/assets/banner-light.svg" alt="mcpd — private infrastructure, connected to AI." width="1600">
+  </picture>
+</p>
 
-### Give ChatGPT access to your private infrastructure — without making it public.
+<h1 align="center">mcpd</h1>
 
-**mcpd** is a self-hosted MCP gateway that securely connects ChatGPT to the apps, services, monitoring systems, and infrastructure running inside your network.
+<p align="center">
+  <strong>Give ChatGPT access to your private infrastructure — without making it public.</strong>
+</p>
 
-No public IP. No port forwarding. No public FQDN. No exposing internal services to the internet.
+<p align="center">
+  <a href="https://github.com/dreulavelle/mcpd/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dreulavelle/mcpd/ci.yml?branch=main&amp;style=flat&amp;label=CI" alt="CI status on main"></a>
+  <a href="https://github.com/dreulavelle/mcpd/releases/latest"><img src="https://img.shields.io/github/v/release/dreulavelle/mcpd?style=flat&amp;color=0e6d5b" alt="Latest release"></a>
+  <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/dreulavelle/mcpd?style=flat&amp;logo=go&amp;logoColor=white" alt="Go version required to build from source"></a>
+  <a href="https://github.com/dreulavelle/mcpd/pkgs/container/mcpd"><img src="https://img.shields.io/badge/container-GHCR-0e6d5b?style=flat&amp;logo=docker&amp;logoColor=white" alt="Container image on GitHub Container Registry"></a>
+  <a href="https://buymeacoffee.com/dreulavelle"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-support-ffdd00?style=flat&amp;logo=buymeacoffee&amp;logoColor=white" alt="Support mcpd on Buy Me a Coffee"></a>
+</p>
 
-```text
-ChatGPT  →  Secure outbound tunnel  →  mcpd  →  Your private services
-```
+<p align="center">
+  <a href="#install">Quick start</a> ·
+  <a href="#built-in-integrations">Integrations</a> ·
+  <a href="#security-and-approvals">Security</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
 
-Run mcpd next to your infrastructure, connect the systems you want ChatGPT to reach, and start asking questions about your real environment.
+**mcpd** is a self-hosted Model Context Protocol (MCP) gateway for the apps,
+monitoring systems, and infrastructure inside your network. Run it next to
+your services, choose what each account can reach, and ask ChatGPT about your
+real environment.
 
-*"Which access points are down at the high school?"*
-*"What changed on the network before the outage started?"*
-*"Why is this laptop dropping off the Wi-Fi?"*
-
-## Features
-
-### Secure connectivity
-
-* **Built-in ChatGPT tunnels** — connect ChatGPT securely without exposing mcpd or your services publicly.
-* **Outbound-only connectivity** — no inbound firewall rules, NAT changes, or public DNS required.
-* **Multiple ChatGPT accounts** — connect several workspaces at once, each with its own identity and its own access.
-* **One gateway, many systems** — combine integrations behind a single endpoint, or give each one its own isolated connector.
-* **Trust your own certificate authority** — internal services signed by your company CA, or by the appliance itself, just work. No disabling verification.
-
-### Keep humans in control
-
-* **Approval-gated actions** — AI can look at anything you allow. Changing something needs a person.
-* **Approve in the conversation** — routine changes are confirmed where the work is happening. No context-switch to a dashboard, no queue to babysit.
-* **Approval policies** — pre-approve the routine work so it flows, and hold the consequential decisions for review.
-* **Nothing irreversible is ever auto-approved** — a change that can't be undone always waits for a human, whatever your rules say.
-* **Drift detection** — a change is re-checked against live state before it runs, so an approval from an hour ago can't apply to a system that has moved on.
-* **Confirmed outcomes** — mcpd verifies the change actually landed rather than assuming it did, and says plainly when it couldn't check.
-* **Fine-grained access** — control exactly which users, groups, API keys, and tunnels can reach each system.
-
-### Connect anything
-
-* **Built-in integrations** — ships ready to connect to real infrastructure, out of the box.
-* **Multiple instances per integration** — connect as many environments, customers, sites, or servers as you need, independently.
-* **MCP marketplace** — discover and import thousands of MCP servers from multiple catalogs.
-* **Remote MCP support** — bring MCP servers you already run under one managed, access-controlled gateway.
-* **Full MCP support** — tools, resources, and prompts, not just tools.
-* **Plugin architecture** — build your own integrations with the included Go SDK, in or out of process, without rebuilding the platform.
-
-### Runs on your terms
-
-* **Encrypted credentials** — integration secrets are stored locally and encrypted.
-* **No telemetry** — crash reporting and update checks are off until you switch them on. Nothing leaves your network that you didn't agree to send.
-* **Tamper-evident audit history** — a hash-chained record of what was asked for, who approved it, and what actually happened.
-* **Built-in dashboard** — plugins, tunnels, users, permissions, approvals, logs, and system health, all in the browser.
-* **Performance visibility** — per-tool latency, error rates, and cache behaviour, so you can see which integration is slow rather than guess.
-* **SSO and local accounts** — sign in with Google, Microsoft Entra, GitHub, or any OIDC provider, alongside local users.
-* **API keys for automation** — give scripts and agents their own identities and permissions.
-* **Backup and restore** — take the whole instance as one encrypted file, put it back, or move it to another machine. See [`docs/backup.md`](docs/backup.md).
-* **Know what happened** — every tool call recorded with who made it, and outbound notifications when a remote server changes a tool or somebody stops the asking. See [`docs/notifications.md`](docs/notifications.md).
-* **Your own catalogue** — keep the list of servers you permit in a git repository, reviewed like anything else. See [`docs/catalog.md`](docs/catalog.md).
-* **Self-hosted and lightweight** — one binary with the dashboard, database, MCP host, and tunnel management built in. No runtime to install, no database server to maintain.
-* **Docker or bare metal** — deploy wherever your infrastructure already lives.
-
-## Built-in integrations
-
-mcpd currently ships with:
-
-* **Graylog** — search logs, investigate events, alerts, streams, and system health.
-* **Observium** — inspect devices, interfaces, sensors, alerts, capacity, and network health.
-* **Cambium cnMaestro** — query wireless networks, devices, clients, alarms, topology, and statistics.
-* **Extreme Networks ExtremeCloud IQ** — access points, switches, connected clients, alerts, sites, and what's going wrong with any of them.
-* **Bandwidth** — calls, messages, number inventory, port-in orders and why they stalled, 10DLC registration, and E911 addresses.
-* **Textable** — business SMS: tenants, the organizations and users inside them, and individual users, organizations and contacts.
-* **3CX** — one or many customers' v20 phone systems: health and licence, extensions and registration, trunks and the numbers on them, where each number rings, queues and ring groups, office hours and holidays, call records and the event log.
-* **Echo** — a reference plugin demonstrating the plugin and approval system.
-
-The infrastructure integrations are read-only — they look, they don't touch. Need something else? Build your own plugin with the included Go SDK, connect a remote MCP server, or find one in the marketplace.
+The built-in ChatGPT tunnel connects outbound. Your mcpd host needs no public
+IP, inbound port forwarding, or public DNS.
 
 ## Why mcpd?
 
-Most infrastructure is private for a reason.
+- **One gateway, many systems.** Use built-in integrations, import remote MCP
+  servers, or build a plugin with the Go SDK.
+- **Access you control.** Scope users, groups, API keys, ChatGPT accounts, and
+  tunnels to the plugin instances they need.
+- **Changes with recorded approval.** Approve in the conversation or define
+  standing rules for routine work. Irreversible mutations always need a person.
+- **A dashboard for operations.** Manage integrations, tunnels, permissions,
+  approval history, logs, and per-tool performance in the browser.
+- **One self-contained binary.** The dashboard, database, MCP host, and tunnel
+  management ship together. No separate database server or runtime to install.
+- **Deployment on your terms.** Run the published container, install a Debian
+  package, or use a Linux binary.
 
-Your monitoring servers, controllers, internal APIs, management tools, NAS devices, hypervisors, and other services often live behind firewalls with no public endpoint — exactly where they should be.
-
-mcpd gives ChatGPT a secure path **into that environment without turning the environment itself into a public service.**
-
-You decide what ChatGPT can reach.
-
-You decide what it can change.
-
-Your infrastructure stays private.
+[Explore all features](docs/features.md), including SSO, encrypted backups,
+private catalogs, and notifications.
 
 ## Install
 
 ### Docker
 
+You need Docker with the Compose plugin on a host that can reach the systems
+you want to connect.
+
 ```bash
 mkdir -p mcpd/data && cd mcpd
 curl -fsSLO https://raw.githubusercontent.com/dreulavelle/mcpd/main/docker-compose.prod.yml
+```
+
+The container defaults to UID/GID 1000. On Linux, if your user's UID or GID
+differs, add the matching values to `.env` **before the first start**:
+
+```bash
+printf 'UID=%s\nGID=%s\n' "$(id -u)" "$(id -g)" >> .env
+```
+
+Keep only one entry for each key if `.env` already exists. Then start mcpd:
+
+```bash
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-No clone, no build, no toolchain — it pulls the published image and starts. Then open:
+Open **`http://<server-ip>/`** and create your administrator account.
+The published image needs no clone, build, or Go toolchain.
 
-```text
-http://<server-ip>/
-```
+> **Keep management access private.** The default Compose file publishes the
+> dashboard on port 80 and the MCP listener on port 8080. Keep both restricted
+> to trusted networks. The ChatGPT tunnel does not require either port to be
+> exposed to the public internet.
 
-Create your administrator account and start adding integrations.
+<details>
+<summary>Debian packages and standalone binaries</summary>
 
-> Building from source instead? `git clone`, then `docker compose up -d`.
-> If your user account isn't uid 1000, tell Compose who you are first, or the
-> `./data` directory comes back owned by somebody else:
-> ```bash
-> printf 'UID=%s\nGID=%s\n' "$(id -u)" "$(id -g)" >> .env
-> ```
-
-### Debian
-
-Download the latest `.deb` from the [Releases](https://github.com/dreulavelle/mcpd/releases) page and install it:
+Download the matching `.deb` from [Releases](https://github.com/dreulavelle/mcpd/releases/latest)
+and install it:
 
 ```bash
 sudo apt install ./mcpd_<version>_<arch>.deb
 ```
 
-mcpd starts automatically as a system service. Open:
+Replace `<version>` and `<arch>` with the downloaded filename. The package
+starts mcpd as a system service. Open **`http://<server-ip>/`** to finish setup.
 
-```text
-http://<server-ip>/
+Releases also include standalone `linux-amd64` and `linux-arm64` binaries,
+a systemd unit, and checksums.
+
+</details>
+
+<details>
+<summary>Build the container from source</summary>
+
+```bash
+git clone https://github.com/dreulavelle/mcpd.git
+cd mcpd
+mkdir -p data
 ```
 
-That's it. Plain `linux-amd64` and `linux-arm64` binaries ship with every release too.
+On Linux, set UID/GID in `.env` as described above if either differs from 1000.
+Then build and start:
 
-> **Back up `data/.env`** (or `/var/lib/mcpd/.env` on Debian). It holds the key
-> that every stored credential is encrypted with — back up that directory and
-> you've backed up the deployment.
+```bash
+docker compose up -d
+```
+
+For native development, see [CLAUDE.md](CLAUDE.md) for build commands and
+repository conventions, and [Architecture](docs/architecture.md) for the design.
+
+</details>
+
+> **Back up the data directory, including its `.env` file.** The encryption
+> key is in `data/.env` for Docker or `/var/lib/mcpd/.env` on Debian.
+> A database copy alone is not enough to recover encrypted credentials.
+> See [Backup and restore](docs/backup.md) for the supported backup workflow.
 
 ## Get started
 
-Once mcpd is running:
+1. **Add an integration** and configure the systems it can reach.
+2. **Connect your ChatGPT account.**
+3. **Create a tunnel** for that account.
+4. **Choose which plugin instances the tunnel may access.**
+5. **Add the tunnel as a connector in ChatGPT.** Follow the handoff shown on
+   mcpd's Tunnels page; creating the tunnel does not attach the connector for you.
+6. **Ask about your infrastructure.**
 
-1. Add an integration.
-2. Connect your ChatGPT account.
-3. Create a secure tunnel.
-4. Choose what that tunnel can reach.
-5. Ask ChatGPT about your infrastructure.
+For example:
 
-> **Your infrastructure stays private. ChatGPT gets the access you choose.**
+> “Which access points are down at the high school?”
+>
+> “What changed on the network before the outage started?”
+>
+> “Why is this laptop dropping off the Wi-Fi?”
+
+Using another MCP client? The dashboard's **Clients** page helps configure
+direct connections with an API key. See [Connecting a client](docs/configuration.md#connecting-a-client).
+
+## Built-in integrations
+
+| Integration | What you can work with | Access |
+| --- | --- | --- |
+| [Graylog](docs/graylog.md) | Logs, events, alerts, streams, and system health | Read-only |
+| [Observium](docs/observium.md) | Devices, interfaces, sensors, alerts, and capacity | Read-only |
+| [Cambium cnMaestro](docs/cnmaestro.md) | Wireless networks, clients, alarms, topology, and statistics | Read-only |
+| [ExtremeCloud IQ](docs/extremecloudiq.md) | Access points, switches, clients, alerts, and sites | Read-only |
+| [Bandwidth](docs/bandwidth.md) | Calls, messages, numbers, port orders, 10DLC, and E911 | Read-only |
+| [Flowroute](docs/flowroute.md) | Customer accounts, numbers, inbound routes, E911, CNAM, and port orders | Read-only |
+| [Textable](docs/textable.md) | Business SMS tenants, organizations, users, and contacts | Read-only |
+| [3CX](docs/3cx.md) | Customer v20 systems, extensions, trunks, routing, queues, and call history | Read-only |
+| [BookStack](docs/bookstack.md) | Knowledge-base content, search, users, roles, and permissions | Reads and approval-gated changes |
+| [Echo](examples/echo) | A reference plugin for testing the SDK and approval flow | Reads and approval-gated changes |
+
+Create multiple instances of an integration for different sites, customers,
+or environments. Access is scoped **per plugin instance**: when an instance
+contains several customers, its permitted callers can reach all of them.
+Use separate instances when access needs to differ.
+
+Need something else? Browse the MCP marketplace, connect an existing remote
+MCP server, or [write your own plugin](docs/plugins.md).
+
+## Security and approvals
+
+**Private connectivity is not local-only AI processing.** Internal services do
+not need public endpoints for the ChatGPT tunnel. Permitted tool results still
+travel to ChatGPT; choose integrations and access grants with that data flow
+in mind.
+
+- **Credentials stay under your management.** Integration secrets are
+  encrypted locally. Use narrowly scoped credentials for each connected system.
+- **Approval is recorded before a mutation executes.** Standing rules can
+  authorize eligible routine changes; irreversible mutations cannot be
+  auto-approved by those rules.
+- **Approval and verification are different.** A *reviewed change* carries
+  exact fields, drift detection, and a confirmed outcome. A *gated call*
+  records authorization without claiming all of those guarantees.
+- **History is tamper-evident.** A hash-chained audit trail records
+  authorizations and operation transitions. The tool-call ledger records who
+  called what and how it ended.
+- **Optional reporting stays optional.** Crash reporting and update checks
+  are off until enabled.
+
+Read [How a change gets made](docs/approvals.md),
+[Approval policies](docs/approval-policy.md), and
+[Configuration and credentials](docs/configuration.md) before granting write access.
 
 ## Documentation
 
-Detailed configuration, security, plugin development, approvals, and architecture documentation lives in [`docs/`](docs/).
+| I want to… | Start here |
+| --- | --- |
+| Understand the full feature set | [Features](docs/features.md) |
+| Configure accounts, credentials, clients, and certificates | [Configuration](docs/configuration.md) |
+| Understand approvals and standing rules | [Approval flow](docs/approvals.md) · [Approval policies](docs/approval-policy.md) |
+| Back up, restore, or upgrade an instance | [Backup and restore](docs/backup.md) · [Upgrading](docs/upgrading.md) |
+| Maintain an approved server catalog | [Private catalogs](docs/catalog.md) |
+| Configure outbound notifications | [Notifications](docs/notifications.md) |
+| Build an integration | [Plugin guide](docs/plugins.md) · [Go SDK](sdk) · [Echo example](examples/echo) |
+| Understand the implementation | [Architecture](docs/architecture.md) |
 
----
+## Contributing
 
-**mcpd — private infrastructure, connected to AI.**
+Bug reports, documentation improvements, and integration proposals are welcome.
+[Open an issue](https://github.com/dreulavelle/mcpd/issues) with the behavior you
+expected, what happened, and steps to reproduce it. Remove credentials,
+customer information, and sensitive infrastructure details before sharing logs.
+
+For code changes, start with [Architecture](docs/architecture.md) and
+[repository conventions](CLAUDE.md). Discuss substantial changes in an issue
+before opening a pull request.
+
+## Support
 
 If mcpd saves you time, you can [buy me a coffee](https://buymeacoffee.com/dreulavelle).
+You can also help by reporting a bug, improving the docs, or sharing the project.
