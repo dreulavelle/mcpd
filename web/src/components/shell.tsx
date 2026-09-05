@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { BypassBanner } from "./BypassBanner";
+import { Mark } from "./mark";
 import { SessionExpiry } from "./SessionExpiry";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -156,12 +157,7 @@ function SidebarFooter({ onSignOut, onNavigate }: {
 export function Brand({ compact }: { compact?: boolean }) {
   return (
     <div className={cn("flex items-center gap-2", compact ? "" : "h-14 px-4")}>
-      <span
-        aria-hidden="true"
-        className="grid size-6 place-items-center rounded-md bg-primary font-mono text-sm font-bold text-primary-foreground"
-      >
-        m
-      </span>
+      <Mark className="text-primary" />
       <span className="font-semibold tracking-tight">mcpd</span>
     </div>
   );

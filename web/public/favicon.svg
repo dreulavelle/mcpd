@@ -3,14 +3,18 @@
   actually is: a hub that everything reaches its systems through, rather than
   a letter that would only read as a letter at 16px.
 
+  The same geometry is drawn by components/mark.tsx inside the console and by
+  the assets under docs/assets; change one and change them all.
+
   currentColor is deliberate. The mark is drawn on a transparent ground and
   inherits the tab's own colour scheme, so it stays legible in a light and a
-  dark browser chrome without shipping two files that can drift apart.
+  dark browser chrome without shipping two files that can drift apart. The two
+  colours are the console's --primary in each theme.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
   <style>
-    :root { color: #0f172a; }
-    @media (prefers-color-scheme: dark) { :root { color: #e2e8f0; } }
+    :root { color: #357d7b; }
+    @media (prefers-color-scheme: dark) { :root { color: #88c0d0; } }
   </style>
   <g stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
     <path d="M16 16 L7 7" />

@@ -67,6 +67,12 @@ describe.each(["light", "dark"] as const)("the %s palette", (theme) => {
       .toBeGreaterThanOrEqual(4.5);
   });
 
+  // The sign-in panel is the same night in both themes, and both of its text
+  // tokens are read on it: the heading in one, the facts in the other.
+  it.each(["panel-foreground", "panel-muted"])("draws %s legibly on the sign-in panel", (name) => {
+    expect(contrast(token(name, theme), token("panel", theme))).toBeGreaterThanOrEqual(4.5);
+  });
+
   // No assertion about --border or --faint. Both are decoration: a card's
   // hairline, and a dot that never appears without the word it agrees with
   // beside it. 1.4.11's 3:1 governs a control whose identification depends on

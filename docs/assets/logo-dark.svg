@@ -2,7 +2,7 @@
   <title id="title">mcpd</title>
   <desc id="desc">The mcpd hub-and-spoke symbol beside a lowercase geometric wordmark. For dark backgrounds.</desc>
   <!-- Hub geometry matches web/public/favicon.svg; wordmark uses paths, not fonts. -->
-  <g transform="translate(0 16) scale(4)" color="#4dbca2"><g stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+  <g transform="translate(0 16) scale(4)" color="#88c0d0"><g stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
     <path d="M16 16 7 7M16 16 25 10M16 16 16 26"/>
   </g>
   <g fill="currentColor">
@@ -11,7 +11,7 @@
     <circle cx="25" cy="10" r="3"/>
     <circle cx="16" cy="26" r="3"/>
   </g></g>
-  <g transform="translate(180 44)" color="#e8ecea"><g fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+  <g transform="translate(180 44)" color="#eceff4"><g fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
     <path d="M0 76V14M0 28C0 4 34 4 34 28V76M34 28C34 4 68 4 68 28V76"/>
     <path d="M134 22C124 8 102 8 94 26C85 47 91 70 108 76C118 80 128 76 135 68"/>
     <path d="M160 105V14M161 28C173 5 205 8 205 44C205 80 173 85 161 62"/>
