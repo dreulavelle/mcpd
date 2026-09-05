@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.0](https://github.com/dreulavelle/mcpd/compare/v0.17.1...v0.18.0) (2026-09-05)
+
+
+### Features
+
+* **web:** a masthead on the overview ([9b286ef](https://github.com/dreulavelle/mcpd/commit/9b286ef9fb1af69457c140abf9db149d5afce52d))
+* **web:** a sign-in panel that is the brand's own night ([d1fe44d](https://github.com/dreulavelle/mcpd/commit/d1fe44d774e831b2d3b7a9c9a8a0df43000b2a5f))
+* **web:** Nord palette, and the brand mark inside the console ([8b8e0f4](https://github.com/dreulavelle/mcpd/commit/8b8e0f4793b6bf9f10315d32fa29d79113e05780))
+
 ## [0.17.1](https://github.com/dreulavelle/mcpd/compare/v0.17.0...v0.17.1) (2026-09-05)
 
 
