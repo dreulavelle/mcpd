@@ -1,4 +1,5 @@
 import type { AuditRecord, OperationState, RiskLevel } from "./api";
+import { BUILTIN_ROLES } from "./permissions";
 
 /** A timestamp, in the reader's locale, short enough to sit in a table cell. */
 export function when(iso: string): string {
@@ -99,6 +100,8 @@ export interface NameBook {
   /** Keyed by account id and by email alike, because entries carry both. */
   users?: Record<string, string>;
   keys?: Record<string, string>;
+  /** Custom roles by id; the built-in ones are known without asking. */
+  roles?: Record<string, string>;
 }
 
 export interface ActorWords {
@@ -299,12 +302,12 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
       };
 
     case "apikey.created":
-      pushRole(facts, d);
+      pushRole(facts, d, book);
       pushReach(facts, d);
       pushExpiry(facts, d);
       return { phrase: ["created ", key(subject, d, book)], facts };
     case "apikey.rescoped":
-      pushRole(facts, d);
+      pushRole(facts, d, book);
       pushReach(facts, d);
       pushExpiry(facts, d);
       if (str(d, "name_before")) facts.push(`was called ${str(d, "name_before")}`);
@@ -336,12 +339,12 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
       return { phrase: ["deleted ", role(subject)], facts };
 
     case "group.created":
-      pushRole(facts, d);
+      pushRole(facts, d, book);
       pushReach(facts, d);
       return { phrase: ["created ", group(subject)], facts };
     case "group.updated": {
       const renamed = str(d, "renamed_from");
-      pushRole(facts, d);
+      pushRole(facts, d, book);
       pushReach(facts, d);
       if (d["role"] !== undefined || d["grants"] !== undefined) {
         if (renamed) facts.push(`was called ${renamed}`);
@@ -421,14 +424,14 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
       return { phrase: ["switched off the plugin ", ...serverName(subject)], facts };
 
     case "chatgpt.account.added":
-      pushRole(facts, d);
+      pushRole(facts, d, book);
       pushReach(facts, d);
       return { phrase: ["added ", chatgpt(d)], facts };
     case "chatgpt.account.updated":
       if (str(d, "api_key")) facts.push("a new key");
       if (str(d, "admin_key") === "cleared") facts.push("admin key cleared");
       else if (str(d, "admin_key")) facts.push("a new admin key");
-      pushRole(facts, d);
+      pushRole(facts, d, book);
       pushReach(facts, d);
       if (bool(d, "enabled") === false) facts.push("switched off");
       else if (bool(d, "enabled") === true) facts.push("switched on");
@@ -445,7 +448,7 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
       if (ceiling) facts.push(`up to ${riskLabel(ceiling).toLowerCase()} risk`);
       if (str(d, "reason")) facts.push(quoted(str(d, "reason")));
       const closes = str(d, "expires_at");
-      if (closes) facts.push(`closes ${when(closes)}`);
+      if (closes) facts.push(`closes ${moment(closes, r.at)}`);
       return {
         phrase: [
           minutes
@@ -725,11 +728,24 @@ function pushReason(facts: string[], d: Record<string, unknown>): void {
   if (reason) facts.push(quoted(reason));
 }
 
-function pushRole(facts: string[], d: Record<string, unknown>): void {
-  const now = str(d, "role");
+/**
+ * The role a subject was given, by name.
+ *
+ * The trail stores the role's identifier, and `role_x1a2` in a sentence is the
+ * record leaking through the words meant to explain it. A role this reader
+ * cannot name is left out of the sentence rather than named badly; it is still
+ * in the raw entry, which is where identifiers live.
+ */
+function pushRole(facts: string[], d: Record<string, unknown>, book: NameBook): void {
+  const now = roleName(str(d, "role"), book);
   if (!now) return;
-  const before = str(d, "role_before");
+  const before = roleName(str(d, "role_before"), book);
   facts.push(before && before !== now ? `role ${before} → ${now}` : `role ${now}`);
+}
+
+function roleName(id: string, book: NameBook): string {
+  if (!id) return "";
+  return book.roles?.[id] ?? BUILTIN_ROLES[id]?.name ?? "";
 }
 
 function pushExpiry(facts: string[], d: Record<string, unknown>): void {
@@ -846,6 +862,23 @@ function value(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+/**
+ * A moment beside another one: the time alone when they fall on the same day,
+ * because a window opened at 06:10 and closing at 06:40 does not need the date
+ * saying twice on one line.
+ */
+function moment(iso: string, near: string): string {
+  const a = new Date(iso);
+  const b = new Date(near);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return when(iso);
+  const sameDay = a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate();
+  return sameDay
+    ? a.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : when(iso);
 }
 
 /** A date without a time, for an expiry or a cutoff. */
