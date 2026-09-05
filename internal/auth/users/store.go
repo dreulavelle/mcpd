@@ -70,7 +70,7 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	}
 	roleID := strings.TrimSpace(req.RoleID)
 	if roleID == "" {
-		return nil, fmt.Errorf("users: a role is required")
+		return nil, errors.New("a role is required")
 	}
 	if err := req.Grants.Validate(); err != nil {
 		return nil, err
@@ -310,7 +310,7 @@ type UpdateRequest struct {
 // other's administrator and both proceed, leaving a host no one can administer.
 func (s *Store) Update(ctx context.Context, id string, req UpdateRequest) (*User, error) {
 	if req.RoleID != nil && strings.TrimSpace(*req.RoleID) == "" {
-		return nil, fmt.Errorf("users: a role is required")
+		return nil, errors.New("a role is required")
 	}
 	if req.Grants != nil {
 		if err := req.Grants.Validate(); err != nil {

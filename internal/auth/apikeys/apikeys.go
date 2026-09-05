@@ -185,7 +185,7 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*K
 	}
 	roleID := strings.TrimSpace(req.RoleID)
 	if roleID == "" {
-		return nil, "", fmt.Errorf("apikeys: a role is required")
+		return nil, "", errors.New("a role is required")
 	}
 	if err := req.Grants.Validate(); err != nil {
 		return nil, "", err
@@ -204,7 +204,7 @@ func (s *Store) Create(ctx context.Context, actor string, req CreateRequest) (*K
 	var expires *int64
 	if req.ExpiresAt != nil {
 		if !req.ExpiresAt.After(now) {
-			return nil, "", fmt.Errorf("apikeys: an expiry in the past would issue a key that is already dead")
+			return nil, "", errors.New("an expiry in the past would issue a key that is already dead")
 		}
 		ms := req.ExpiresAt.UnixMilli()
 		expires = &ms
@@ -342,7 +342,7 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 		}
 	}
 	if req.RoleID != nil && strings.TrimSpace(*req.RoleID) == "" {
-		return nil, fmt.Errorf("apikeys: a role is required")
+		return nil, errors.New("a role is required")
 	}
 	var grants auth.Grants
 	if req.Grants != nil {
@@ -403,7 +403,7 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 			var ms *int64
 			if *req.ExpiresAt != nil {
 				if !(*req.ExpiresAt).After(now) {
-					return fmt.Errorf("apikeys: an expiry in the past would kill the key it is set on")
+					return errors.New("an expiry in the past would kill the key it is set on")
 				}
 				v := (*req.ExpiresAt).UnixMilli()
 				ms = &v
@@ -486,7 +486,7 @@ func (s *Store) Update(ctx context.Context, actor, id string, req UpdateRequest)
 // secrets ever open a key.
 func (s *Store) Rotate(ctx context.Context, actor, id string, grace time.Duration) (*Key, string, error) {
 	if grace < 0 || grace > MaxGrace {
-		return nil, "", fmt.Errorf("apikeys: the grace period must be between nothing and %s", MaxGrace)
+		return nil, "", fmt.Errorf("the grace period must be between nothing and %s", MaxGrace)
 	}
 	secret, err := GenerateSecret()
 	if err != nil {
@@ -732,7 +732,7 @@ func (v *Verifier) Verify(ctx context.Context, token string, r *http.Request) (*
 // in a list, it appears beside an audit entry, and a control or
 // invisible-formatting character in it makes it read as something it is not.
 func ValidateName(raw string) (string, error) {
-	return auth.ValidateLabel("apikeys", "key name", raw)
+	return auth.ValidateLabel("key name", raw)
 }
 
 // GenerateSecret returns a credential with 32 bytes of entropy behind the

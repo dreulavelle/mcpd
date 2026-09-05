@@ -56,26 +56,26 @@ import (
 // for an operator to do next, and "invalid certificate" tells them none of it.
 var (
 	// ErrNotFound reports an unknown certificate.
-	ErrNotFound = errors.New("trust: no such certificate")
+	ErrNotFound = errors.New("no such certificate")
 	// ErrDuplicateName reports a name another certificate already uses.
-	ErrDuplicateName = errors.New("trust: a certificate with that name already exists")
+	ErrDuplicateName = errors.New("a certificate with that name already exists")
 	// ErrDuplicateCertificate reports a certificate already stored under
 	// another name. Reported with that name, so the answer is "it is already
 	// there, called X" rather than a refusal with no way forward.
-	ErrDuplicateCertificate = errors.New("trust: that certificate is already stored")
+	ErrDuplicateCertificate = errors.New("that certificate is already stored")
 	// ErrNoCertificate reports input with nothing certificate-shaped in it.
-	ErrNoCertificate = errors.New("trust: that is not a certificate")
+	ErrNoCertificate = errors.New("that is not a certificate")
 	// ErrPKCS7 reports a .p7b or .p7c bundle, which is a container this host
 	// does not open. Separate because the fix is one command rather than a
 	// different file.
-	ErrPKCS7 = errors.New("trust: that is a PKCS#7 bundle")
+	ErrPKCS7 = errors.New("that is a PKCS#7 bundle")
 	// ErrPrivateKey reports a paste that includes a private key. Refused
 	// outright rather than trimmed: a key that reached this table would be
 	// stored in the clear and shown in a dashboard, so the only safe response
 	// is to refuse the whole thing and say so.
-	ErrPrivateKey = errors.New("trust: that includes a private key")
+	ErrPrivateKey = errors.New("that includes a private key")
 	// ErrMultiple reports more than one certificate in one paste.
-	ErrMultiple = errors.New("trust: that is more than one certificate")
+	ErrMultiple = errors.New("that is more than one certificate")
 )
 
 // Certificate is one stored trust anchor, with the facts parsed from it.
@@ -290,16 +290,16 @@ func ValidateName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	switch {
 	case name == "":
-		return "", errors.New("trust: a certificate needs a name")
+		return "", errors.New("a certificate needs a name")
 	case utf8.RuneCountInString(name) > 64:
-		return "", errors.New("trust: a certificate name is at most 64 characters")
+		return "", errors.New("a certificate name is at most 64 characters")
 	case strings.Contains(name, ","):
-		return "", errors.New("trust: a certificate name cannot contain a comma; " +
-			"an instance names the certificates it trusts as a comma-separated list")
+		return "", errors.New("a certificate name cannot contain a comma, " +
+			"because a plugin names the certificates it trusts in a comma-separated list")
 	}
 	for _, r := range name {
 		if !unicode.IsPrint(r) {
-			return "", errors.New("trust: a certificate name must be printable")
+			return "", errors.New("a certificate name must be printable")
 		}
 	}
 	return name, nil

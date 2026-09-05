@@ -263,12 +263,12 @@ func HashPassword(plaintext string) (string, error) {
 func ValidatePassword(p string) error {
 	const minLen = 12
 	if len(p) < minLen {
-		return fmt.Errorf("users: password must be at least %d characters", minLen)
+		return fmt.Errorf("a password must be at least %d characters", minLen)
 	}
 	// bcrypt silently truncates beyond 72 bytes, which would make two
 	// different long passwords equivalent. Reject rather than truncate.
 	if len(p) > 72 {
-		return fmt.Errorf("users: password must be at most 72 bytes")
+		return errors.New("a password must be at most 72 bytes")
 	}
 	return nil
 }
@@ -331,21 +331,21 @@ func ValidateDisplayName(raw string) (string, error) {
 		return "", nil
 	}
 	if !utf8.ValidString(name) {
-		return "", fmt.Errorf("users: a display name must be valid UTF-8")
+		return "", errors.New("a display name must be valid UTF-8")
 	}
 	for _, r := range name {
 		switch {
 		case unicode.IsControl(r):
-			return "", fmt.Errorf("users: a display name cannot contain control characters")
+			return "", errors.New("a display name cannot contain control characters")
 		case unicode.Is(unicode.Cf, r):
 			// Cf is the invisible-formatting category: zero-width joiners,
 			// bidirectional overrides, and the rest of the characters whose
 			// entire purpose is to change how the text around them renders.
-			return "", fmt.Errorf("users: a display name cannot contain invisible formatting characters")
+			return "", errors.New("a display name cannot contain invisible formatting characters")
 		}
 	}
 	if utf8.RuneCountInString(name) > MaxDisplayNameRunes {
-		return "", fmt.Errorf("users: a display name must be at most %d characters",
+		return "", fmt.Errorf("a display name must be at most %d characters",
 			MaxDisplayNameRunes)
 	}
 	return name, nil
@@ -382,11 +382,11 @@ func SafeDisplayName(raw string) string {
 func NormalizeEmail(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "", fmt.Errorf("users: email is required")
+		return "", errors.New("an email address is required")
 	}
 	addr, err := mail.ParseAddress(trimmed)
 	if err != nil {
-		return "", fmt.Errorf("users: %q is not a valid email address", trimmed)
+		return "", fmt.Errorf("%q is not a valid email address", trimmed)
 	}
 	// ParseAddress accepts a display name ("Alice <a@example.com>"); only the
 	// address itself is the identity.
