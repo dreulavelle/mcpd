@@ -265,7 +265,12 @@ type Session struct {
 // verified once per sign-in rather than once per request, so a slower hash
 // costs nothing noticeable and raises the price of an offline attack on a
 // leaked database.
-const bcryptCost = 12
+//
+// A variable rather than a constant so this package's own tests can lower it:
+// under the race detector one hash at this cost takes seconds, and a few
+// hundred of them met CI's ten-minute limit. Nothing outside the tests writes
+// it.
+var bcryptCost = 12
 
 // HashPassword derives the stored form of a password.
 func HashPassword(plaintext string) (string, error) {

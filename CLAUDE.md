@@ -219,7 +219,12 @@ conventional commit as the change underneath it puts that change in the
 changelog twice. Either squash, or give the merge a plain subject
 (`Merge branch 'feat/thing'`) that release-please ignores. 0.7.0 shipped with
 every entry duplicated for exactly this reason and had to be corrected by hand
-before it was tagged.
+before it was tagged. The plain subject is not enough on its own: GitHub's
+default merge commit puts the PR title in the commit *body*, and release-please
+reads that line too. 0.18.0 and 0.19.1 both had to have the duplicate removed
+from the release PR by hand. Merge through the API with an empty message
+(`gh api -X PUT repos/{owner}/{repo}/pulls/N/merge -f merge_method=merge
+-f commit_message=`), or squash.
 
 `gofmt`, `go vet`, and the tests must pass before Go work is finished. Prefer
 the standard library; every dependency is a thing to keep in step.
