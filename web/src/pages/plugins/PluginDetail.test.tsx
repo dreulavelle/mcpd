@@ -132,7 +132,7 @@ describe("a remote MCP server's plugin page", () => {
 
     renderWith(<PluginDetail name="weather" />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Switch off" }));
+    await userEvent.click(await screen.findByRole("switch", { name: "Enabled" }));
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith("weather", false));
   });
 
@@ -198,12 +198,12 @@ describe("a plugin the configuration file declares", () => {
     });
   }
 
-  it("says the file is unchanged rather than implying it was edited", async () => {
+  it("offers Remove in one line, with no dead end pointing at the file", async () => {
     declared();
     renderWith(<PluginDetail name="weather" />);
 
-    expect(await screen.findByText(/The file is unchanged/)).toBeInTheDocument();
-    expect(screen.getByText(/after every restart/)).toBeInTheDocument();
+    expect(await screen.findByText("Removes this plugin. Its settings are forgotten."))
+      .toBeInTheDocument();
     // The old dead end: "remove it there rather than here".
     expect(screen.queryByText(/Remove it there/)).not.toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Remove" })).toBeInTheDocument();
@@ -233,7 +233,7 @@ describe("a plugin the configuration file declares", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog.textContent).toMatch(/required: true/);
-    expect(dialog.textContent).toMatch(/configuration file does not change/);
+    expect(dialog.textContent).toMatch(/Removing it overrides that/);
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", true));
@@ -246,21 +246,17 @@ describe("a plugin the configuration file declares", () => {
    * which this host does not write and cannot forget, so the sentence has to
    * carry both halves or it is wrong in one direction or the other.
    */
-  it("says which settings go with a file-declared removal", async () => {
+  it("says in one line that a removal forgets the settings", async () => {
     declared();
     const remove = vi.spyOn(api, "removeInstance").mockResolvedValue({ status: "removed" });
 
     renderWith(<PluginDetail name="weather" />);
-    expect(await screen.findByText(/Settings entered here, including credentials, are forgotten/))
-      .toBeInTheDocument();
-    expect(screen.getByText(/the configuration file itself provides stays/))
+    expect(await screen.findByText("Removes this plugin. Its settings are forgotten."))
       .toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog.textContent).toMatch(/Settings entered here, including credentials, are forgotten/);
-    expect(dialog.textContent).toMatch(/configuration file itself provides stays/);
-    expect(dialog.textContent).toMatch(/added again later/);
+    expect(dialog.textContent).toMatch(/settings, including credentials, are forgotten/);
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("weather", false));
@@ -276,7 +272,7 @@ describe("a plugin the configuration file declares", () => {
       .mockResolvedValue({ status: "saved" });
 
     renderWith(<PluginDetail name="weather" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Switch off" }));
+    await userEvent.click(await screen.findByRole("switch", { name: "Enabled" }));
 
     await waitFor(() => expect(setEnabled).toHaveBeenCalledWith("weather", false));
   });

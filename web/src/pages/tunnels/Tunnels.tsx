@@ -162,7 +162,7 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
       return { kind: "ready", label: "Ready", tone: "good", rank: 6, bucket: "ready",
         detail: `${s.requests ?? 0} request${s.requests === 1 ? "" : "s"} since it connected${s.connected_at ? ` ${relative(s.connected_at)}` : ""}.` };
     case "stopped":
-      return { kind: "off", label: "Off", tone: "neutral", rank: 7, bucket: "off", detail: "Switched off." };
+      return { kind: "off", label: "Off", tone: "neutral", rank: 7, bucket: "off", detail: "Disabled." };
     default:
       return { kind: "unused", label: "Not used", tone: "neutral", rank: 8, bucket: "off", detail: "" };
   }

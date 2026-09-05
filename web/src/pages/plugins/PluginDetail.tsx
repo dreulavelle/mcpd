@@ -21,6 +21,7 @@ import { SettingsForm } from "@/components/SettingsForm";
 import { Chip, healthTone, healthWords, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
 import { ForgetRemovalButton } from "./PluginsList";
 import { Input } from "@/components/ui/input";
@@ -121,7 +122,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
       : instance?.missing?.length
         ? `Waiting on ${instance.missing.join(", ")}.`
         : instance?.problem
-          || (instance?.enabled === false ? "Switched off." : "Not running yet."));
+          || (instance?.enabled === false ? "Disabled." : "Not running yet."));
 
   return (
     <>
@@ -130,7 +131,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
         back={{ to: "/plugins", label: "Plugins" }}
         lede={plugin?.description || undefined}
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             {runtime === "mcp" && <Chip tone="info">Remote MCP server</Chip>}
             {instance?.removed ? (
               <Chip>Removed</Chip>
@@ -142,6 +143,10 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
             ) : (
               <Chip tone="attention">Not running</Chip>
             )}
+            <EnabledToggle
+              name={name} instance={instance} runtime={runtime}
+              onChanged={onChanged}
+            />
           </div>
         }
       />
@@ -248,9 +253,6 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
           </>
         )}
 
-        <EnabledControl
-          name={name} instance={instance} runtime={runtime} onChanged={onChanged}
-        />
 
         <Declaration instance={instance} />
 
@@ -409,11 +411,11 @@ function FinishRemovalButton({ name, onChanged }: {
 }
 
 /**
- * Switching a plugin off without removing it. Not for a remote MCP server: its
- * own panel owns the column, and a record written here would be shadowed on the
+ * The on/off switch, in the page header. Not for a remote MCP server: its own
+ * panel owns the column, and a record written here would be shadowed on the
  * next read -- reporting success and changing nothing.
  */
-function EnabledControl({ name, instance, runtime, onChanged }: {
+function EnabledToggle({ name, instance, runtime, onChanged }: {
   name: string;
   instance: PluginInstance | null;
   runtime: "builtin" | "mcp";
@@ -424,7 +426,6 @@ function EnabledControl({ name, instance, runtime, onChanged }: {
   const [busy, setBusy] = useState(false);
 
   if (!mayManage || !instance || runtime === "mcp") return null;
-  // The notice at the top of the page owns the only control that applies.
   if (instance.removed) return null;
 
   const on = instance.enabled;
@@ -433,9 +434,7 @@ function EnabledControl({ name, instance, runtime, onChanged }: {
     setBusy(true);
     try {
       await api.setInstanceEnabled(name, !on);
-      notify("good", on
-        ? `Switched ${name} off.`
-        : `Switched ${name} on. It serves as soon as it has what it needs.`);
+      notify("good", on ? `Disabled ${name}.` : `Enabled ${name}.`);
     } catch (e) {
       notify("problem", problemText(e, "Couldn't change it."));
     } finally {
@@ -445,24 +444,15 @@ function EnabledControl({ name, instance, runtime, onChanged }: {
   }
 
   return (
-    <Card>
-      <CardContent className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-[52ch] text-sm text-muted-foreground">
-          {on
-            ? "Switching it off stops it being served. Its settings are kept."
-            : "Switched off. Its settings are still here, and switching it back on serves it again."}
-          {instance.from_file && (
-            <>
-              {" "}This is saved here, not in the configuration file, which does
-              not change.
-            </>
-          )}
-        </p>
-        <Button variant="outline" size="sm" disabled={busy} onClick={toggle}>
-          {busy ? "Saving…" : on ? "Switch off" : "Switch on"}
-        </Button>
-      </CardContent>
-    </Card>
+    <label className="inline-flex items-center gap-2 text-sm">
+      <Switch
+        checked={on}
+        disabled={busy}
+        onCheckedChange={toggle}
+        aria-label={on ? "Enabled" : "Disabled"}
+      />
+      <span>{on ? "Enabled" : "Disabled"}</span>
+    </label>
   );
 }
 
@@ -495,23 +485,15 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
     // is the file: it still lists a declared plugin afterwards, and a value it
     // supplies itself comes back with the plugin -- so the file's version says
     // which settings are forgotten rather than claiming all of them are.
-    const question = fromFile
-      ? "This takes it off this host, now and after every restart. Settings "
-        + "entered here, including credentials, are forgotten; anything the "
-        + "configuration file itself provides stays. Your configuration file "
-        + "does not change, and it can be added again later."
-        + (required
-          ? "\n\nThe file marks it required: true, so this host is not meant "
-            + "to run without it. Removing it overrides that."
-          : "")
-      : "Its settings, including credentials, go with it.";
+    const question = "Its settings, including credentials, are forgotten."
+      + (required
+        ? "\n\nThe configuration file marks it required: true. Removing it overrides that."
+        : "");
     if (!(await confirm({ title: `Remove ${name}?`, description: question, action: "Remove" }))) return;
     setBusy(true);
     try {
       await api.removeInstance(name, required);
-      // "The settings entered here" rather than "its settings": a declared
-      // plugin's file may supply some of its own, and those are still there.
-      notify("good", `Removed ${name}. The settings entered here are forgotten.`);
+      notify("good", `Removed ${name}.`);
       // A plugin the file lists still has a page -- it is removed, not gone --
       // and that page is where it can be added again. Leaving for the list
       // would hide the way back behind the Add dialog.
@@ -527,34 +509,11 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
   return (
     <Card>
       <CardContent className="flex flex-wrap items-center justify-between gap-3">
-        <div className="max-w-[52ch] space-y-1 text-sm text-muted-foreground">
-          {fromFile ? (
-            <>
-              <p>
-                This plugin is listed in the configuration file. Removing it
-                takes it off this host, now and after every restart, and it can
-                be added again later.
-              </p>
-              <p>
-                Settings entered here, including credentials, are forgotten.
-                Anything the configuration file itself provides stays.{" "}
-                <strong className="text-foreground">
-                  The file is unchanged
-                </strong>{" "}
-                — if you redeploy from it, the removal still holds.
-              </p>
-              {required && (
-                <p className="text-attention">
-                  The file marks this <code className="font-mono">required: true</code>,
-                  so this host is not meant to run without it. You will be asked
-                  to confirm.
-                </p>
-              )}
-            </>
-          ) : (
-            <p>
-              Removing this forgets its settings, including any credentials. A
-              name reused later cannot inherit them.
+        <div className="space-y-1 text-sm text-muted-foreground">
+          <p>Removes this plugin. Its settings are forgotten.</p>
+          {required && (
+            <p className="text-attention">
+              The configuration file marks it required. You will be asked to confirm.
             </p>
           )}
         </div>
@@ -738,7 +697,7 @@ function describe(state: TunnelStatus["state"]): string {
     case "connected": return "ready";
     case "starting": return "connecting";
     case "failed": return "not connecting";
-    case "stopped": return "switched off";
+    case "stopped": return "disabled";
     default: return String(state);
   }
 }

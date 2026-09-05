@@ -19,6 +19,7 @@ import {
 } from "@/components/chrome";
 import { Chip, StatusDot } from "@/components/status";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -42,7 +43,7 @@ export function ServerState({ server: s }: { server: MCPServer }) {
     return <Chip tone="problem">Can't be read</Chip>;
   }
   if (!s.enabled) {
-    return <Chip tone="neutral">Switched off</Chip>;
+    return <Chip tone="neutral">Disabled</Chip>;
   }
   if (s.mounted) {
     return (
@@ -163,7 +164,7 @@ function Body({ server, tools, toolsError, onChanged }: {
     setBusy(true);
     try {
       await api.setMCPServerEnabled(server.name, enabled);
-      notify("good", enabled ? "Switched on." : "Switched off.");
+      notify("good", enabled ? "Enabled." : "Disabled.");
     } catch (e) {
       notify("problem", problemText(e, "Couldn't change that."));
     } finally {
@@ -356,20 +357,21 @@ function Body({ server, tools, toolsError, onChanged }: {
               <ServerState server={server} />
               {mayAdminister && (
                 <p className="text-sm text-muted-foreground">
-                  Switching it off stops serving its tools and keeps your
-                  decisions about them. Removing it forgets this server
-                  completely, including any credential.
+                  Removing it forgets this server, including any credential.
                 </p>
               )}
             </div>
             {mayAdminister && (
               <div className="flex gap-2">
-                <Button
-                  variant="outline" size="sm" disabled={busy || !server.readable}
-                  onClick={() => toggle(!server.enabled)}
-                >
-                  {server.enabled ? "Switch off" : "Switch on"}
-                </Button>
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <Switch
+                    checked={server.enabled}
+                    disabled={busy || !server.readable}
+                    onCheckedChange={(next) => toggle(next)}
+                    aria-label={server.enabled ? "Enabled" : "Disabled"}
+                  />
+                  <span>{server.enabled ? "Enabled" : "Disabled"}</span>
+                </label>
                 <Button
                   variant="outline" size="sm" disabled={busy}
                   className="text-destructive hover:text-destructive"

@@ -382,7 +382,7 @@ describe("an audit entry as a sentence", () => {
 
     ["mcpserver.disabled", entry("mcpserver.disabled", {
       plugin: "graylog", detail: { enabled: false },
-    }), "switched off the remote server graylog"],
+    }), "disabled the remote server graylog"],
 
     // The header's name is evidence, so the sentence does not carry it.
     ["mcpserver.header_added", entry("mcpserver.header_added", {
@@ -430,7 +430,7 @@ describe("an audit entry as a sentence", () => {
 
     ["plugin.disabled", entry("plugin.disabled", {
       plugin: "echo", detail: { source: "configuration file", enabled: false },
-    }), "switched off the plugin echo"],
+    }), "disabled the plugin echo"],
 
     ["chatgpt.account.added", entry("chatgpt.account.added", {
       detail: {

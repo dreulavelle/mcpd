@@ -509,7 +509,7 @@ function systemRows(
     if (listed.has(i.name) || i.mounted || i.removed) continue;
     rows.push(i.enabled
       ? { name: i.name, tone: "attention", state: "waiting on settings", calls: calls.get(i.name) }
-      : { name: i.name, tone: "neutral", state: "switched off", calls: calls.get(i.name) });
+      : { name: i.name, tone: "neutral", state: "disabled", calls: calls.get(i.name) });
   }
 
   const rank: Record<Tone, number> = { problem: 0, attention: 1, info: 2, neutral: 3, good: 4 };
@@ -565,7 +565,7 @@ function connectorState(t: TunnelStatus): { tone: Tone; state: string } {
   switch (t.state) {
     case "connected": return { tone: "good", state: "ready" };
     case "starting": return { tone: "info", state: "connecting" };
-    case "disabled": return { tone: "neutral", state: "switched off" };
+    case "disabled": return { tone: "neutral", state: "disabled" };
     default: return { tone: "neutral", state: "stopped" };
   }
 }
