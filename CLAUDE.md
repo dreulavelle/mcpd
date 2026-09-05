@@ -42,6 +42,19 @@ that `public/theme.js` sets before first paint; the dark palette in
 re-pointed at it. Keep it that way: a second copy of the palette under the
 media query is one more than can be kept in step.
 
+The palette is Nord, and `index.test.ts` holds every text token to 4.5:1 on
+every surface. Those two facts pull against each other: Nord's Frost and
+Aurora were picked for syntax highlighting and most of them fail as text on
+Nord's own surfaces, so the surfaces are Nord's exact steps and the text
+colours are Nord's hues at whatever lightness the test demands. Do not paste
+a Nord hex in as a text colour because it is the "real" one; run the test.
+The chart series colours are not Nord at all, on purpose -- the palette is
+low-chroma by design and reads as grey once it is a filled area, and the
+comment on `--chart-1` says how that was checked. The brand mark is one
+shape drawn three times -- `components/mark.tsx`, `public/favicon.svg` and
+`docs/assets/` -- and the assets take their colours from the tokens, so a
+palette change reaches all three.
+
 The container's data lives in `./data` — one bind mount holding `config.yaml`,
 the database, TLS material, the rotating log in `logs/` and out-of-process
 plugins. It is generated on first start if it is empty, and the container runs

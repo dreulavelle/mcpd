@@ -12,10 +12,19 @@
  * work is information design: what needs attention should be visible before
  * anything is read, and state is carried by form as well as by words.
  *
- * The palette is carried over from the console this replaces. Semantic colour
- * (good / attention / problem) is kept separate from the accent, because here
- * it means something -- an accent used for "fine" leaves nothing to say
- * "not fine" with.
+ * The palette is Nord (nordtheme.com): Polar Night and Snow Storm for the
+ * surfaces, Frost for the accent, Aurora for meaning. Surfaces are Nord's own
+ * steps, unchanged. Text is not, and the reason is measured rather than a
+ * matter of taste: index.test.ts holds every text token to 4.5:1 on every
+ * surface, and Nord's Frost and Aurora were chosen for syntax highlighting,
+ * where nobody reads a paragraph in them. nord11, the red, sits at 3:1 on its
+ * own background. So each semantic colour here keeps a Nord hue and takes the
+ * lightness the surfaces demand -- lighter in dark, darker in light -- and the
+ * test is what says whether that was done right.
+ *
+ * Semantic colour (good / attention / problem) is kept separate from the
+ * accent, because here it means something -- an accent used for "fine" leaves
+ * nothing to say "not fine" with.
  *
  * Light and dark follow the system unless somebody has chosen one; the choice
  * is kept in the browser and applied by public/theme.js before the first
@@ -28,62 +37,79 @@
 :root {
   color-scheme: light;
 
-  /* Neutrals carry a slight green-blue bias, matching the accent rather than
-     sitting flat beside it. */
-  --background: #f7f8f7;
-  --foreground: #131a19;
+  /* Nord's bright ambiance: nord6 for the page, nord5 and nord4 stepping
+     down for the surfaces on it. The card is the one value not in Nord. A
+     card is lifted off the page by being lighter than it, and nord6 is the
+     top of Snow Storm -- there is no step above it to lift to. */
+  --background: #eceff4;
+  --foreground: #2e3440;
 
   --card: #ffffff;
-  --card-foreground: #131a19;
+  --card-foreground: #2e3440;
   --popover: #ffffff;
-  --popover-foreground: #131a19;
+  --popover-foreground: #2e3440;
 
-  --primary: #0e6d5b;
-  --primary-hover: #0b5849;
+  /* Frost, in the teal of nord7 -- the hue the mark is drawn in -- taken
+     down until white lettering clears 4.5:1 on it. nord7 itself is 2:1. */
+  --primary: #357d7b;
+  --primary-hover: #2d6b69;
   --primary-foreground: #ffffff;
 
-  --secondary: #f0f2f1;
-  --secondary-foreground: #131a19;
+  --secondary: #e5e9f0;
+  --secondary-foreground: #2e3440;
 
-  --muted: #f0f2f1;
-  --muted-foreground: #606b68;
+  --muted: #e5e9f0;
+  --muted-foreground: #4c566a;
   /* Non-text only -- a status dot, never a word. There is no tint of this grey
      that is both legible at 4.5:1 and visibly fainter than the token above:
      solving for AA lands it darker than --muted-foreground, which is not a
      third step in a hierarchy, it is the same step twice. So secondary text
      has one colour, and this stays for marks that carry no reading. */
-  --faint: #9aa5a1;
+  --faint: #8d97a8;
 
-  --accent: #e6eae8;
-  --accent-foreground: #131a19;
+  --accent: #d8dee9;
+  --accent-foreground: #2e3440;
 
-  --border: #dde2e0;
-  --border-soft: #e9edeb;
-  --input: #dde2e0;
-  --ring: #0e6d5b;
+  --border: #d8dee9;
+  --border-soft: #e5e9f0;
+  --input: #d8dee9;
+  --ring: #357d7b;
+
+  /* The sign-in panel. Polar Night in both themes, deliberately: it is the
+     one surface that is the brand rather than the console, and it holds the
+     same night in a light room as in a dark one. In dark it is told from the
+     page by the hairline beside it. NetworkField reads these at mount, so the
+     field follows the palette like everything else. */
+  --panel: #2e3440;
+  --panel-foreground: #eceff4;
+  --panel-muted: #b5bcca;
+  --panel-accent: #88c0d0;
 
   /* Semantic status. Each has a foreground for text and icons and a wash for
-     the surface behind them. */
-  --good: #1c6b4c;
-  --good-soft: #1c6b4c14;
-  --attention: #8a5a0c;
-  --attention-soft: #8a5a0c14;
-  --problem: #a5382a;
-  --problem-soft: #a5382a14;
-  --info: #2a5a86;
-  --info-soft: #2a5a8614;
-  --destructive: #a5382a;
+     the surface behind them. Aurora's hues at the lightness that clears 4.5:1
+     on nord4, the darkest surface a word is drawn on here. */
+  --good: #50693b;
+  --good-soft: #50693b14;
+  --attention: #7d5b16;
+  --attention-soft: #7d5b1614;
+  --problem: #a3424b;
+  --problem-soft: #a3424b14;
+  --info: #476489;
+  --info-soft: #47648914;
+  --destructive: #bb5660;
   --destructive-foreground: #ffffff;
 
-  /* Series colours, for charts only. Deliberately not --primary: the brand
-     teal has a chroma of 0.086, which reads as grey once it is a filled area
-     rather than a button, and a validator says so rather than a reviewer
-     noticing late. These four are a selected set -- the order is the order
-     they are assigned in, never cycled -- and they clear the lightness band,
-     the chroma floor and colour-vision separation against this surface. The
-     first sits below 3:1 on white, so anything drawn in it carries a visible
-     label or a table beside it. Reordering them is not cosmetic: blue beside
-     violet fails outright in dark. */
+  /* Series colours, for charts only. Deliberately neither --primary nor Nord:
+     Nord is a low-chroma palette by design, and low chroma is exactly what
+     reads as grey once a colour is a filled area rather than a word -- the
+     validator fails every Frost and Aurora hue on its chroma floor, and fails
+     the pairs Nord puts beside each other on separation. These four are a
+     selected set -- the order is the order they are assigned in, never
+     cycled -- and they clear the lightness band, the chroma floor and
+     colour-vision separation against this surface. The first sits below 3:1
+     on white, so anything drawn in it carries a visible label or a table
+     beside it. Reordering them is not cosmetic: blue beside violet fails
+     outright in dark. */
   --chart-1: #1baf7a;
   --chart-2: #2a78d6;
   --chart-3: #eb6834;
@@ -95,48 +121,62 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --background: #0d1211;
-  --foreground: #e8ecea;
+  /* Polar Night, as Nord lays it out: nord0 for the page, nord1 for what is
+     raised off it, nord2 for what is selected or hovered. */
+  --background: #2e3440;
+  --foreground: #eceff4;
 
-  --card: #151b1a;
-  --card-foreground: #e8ecea;
-  --popover: #151b1a;
-  --popover-foreground: #e8ecea;
+  --card: #3b4252;
+  --card-foreground: #eceff4;
+  --popover: #3b4252;
+  --popover-foreground: #eceff4;
 
-  --primary: #4dbca2;
-  --primary-hover: #62cab2;
-  --primary-foreground: #06120f;
+  /* nord8, Nord's own primary accent, with nord0 lettering: 6.2:1. */
+  --primary: #88c0d0;
+  --primary-hover: #99cbd9;
+  --primary-foreground: #2e3440;
 
-  --secondary: #1c2422;
-  --secondary-foreground: #e8ecea;
+  --secondary: #434c5e;
+  --secondary-foreground: #eceff4;
 
-  --muted: #1c2422;
-  --muted-foreground: #94a09c;
-  --faint: #6a7672;
+  --muted: #434c5e;
+  /* nord3, lifted until it clears 4.5:1 on nord2. Nord's own subtle text is
+     nord4, which is nearly the foreground; this keeps a visible step. */
+  --muted-foreground: #b5bcca;
+  --faint: #6c7689;
 
-  --accent: #242e2b;
-  --accent-foreground: #e8ecea;
+  --accent: #434c5e;
+  --accent-foreground: #eceff4;
 
-  --border: #2a3532;
-  --border-soft: #222c2a;
-  --input: #2a3532;
-  --ring: #4dbca2;
+  --border: #434c5e;
+  --border-soft: #3b4252;
+  --input: #4c566a;
+  --ring: #88c0d0;
 
-  --good: #55bd8c;
-  --good-soft: #55bd8c1f;
-  --attention: #d5a052;
-  --attention-soft: #d5a0521f;
-  --problem: #e08472;
-  --problem-soft: #e084721f;
-  --info: #74a8d4;
-  --info-soft: #74a8d41f;
-  --destructive: #e08472;
-  --destructive-foreground: #180a08;
+  --panel: #2e3440;
+  --panel-foreground: #eceff4;
+  --panel-muted: #b5bcca;
+  --panel-accent: #88c0d0;
+
+  /* Aurora, lifted to 4.5:1 on nord2. The red moves furthest: nord11 is 2:1
+     there, so what passes is a dusty rose rather than Nord's red. Which is
+     the choice this palette makes everywhere -- the hue is Nord's, the
+     lightness is what a word needs. nord13 clears as it is. */
+  --good: #a9c98f;
+  --good-soft: #a9c98f1f;
+  --attention: #ebcb8b;
+  --attention-soft: #ebcb8b1f;
+  --problem: #dfb1b5;
+  --problem-soft: #dfb1b51f;
+  --info: #a8bed4;
+  --info-soft: #a8bed41f;
+  --destructive: #bb5660;
+  --destructive-foreground: #ffffff;
 
   /* Stepped for the dark surface rather than flipped: the same four hues,
-     re-chosen against #151b1a. The light steps are too light here -- the
-     dark brand teal misses the band by itself -- so this is a second
-     selection, validated as a set, not an inversion of the first. */
+     re-chosen against #3b4252. The light steps are too light here, so this
+     is a second selection, validated as a set, not an inversion of the
+     first. */
   --chart-1: #199e70;
   --chart-2: #3987e5;
   --chart-3: #d95926;
@@ -167,6 +207,11 @@
   --color-border-soft: var(--border-soft);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
+  --color-panel: var(--panel);
+  --color-panel-foreground: var(--panel-foreground);
+  --color-panel-muted: var(--panel-muted);
+  --color-panel-accent: var(--panel-accent);
 
   --color-good: var(--good);
   --color-good-soft: var(--good-soft);
