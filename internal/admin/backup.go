@@ -229,15 +229,26 @@ func (s *Server) stageFrom(w http.ResponseWriter, r *http.Request, body io.Reade
 	case err == nil:
 	case errors.Is(err, backup.ErrPassphrase):
 		// 400 rather than 403: nothing here is about the caller's rights.
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		//
+		// The sentence is written here rather than carried by the sentinel,
+		// which stays an ordinary Go error. This is the one place that knows
+		// both what failed and that somebody is reading the answer.
+		s.writeError(w, r, http.StatusBadRequest,
+			"The archive did not open. Check the passphrase, and that the file "+
+				"is the one that was downloaded.")
 		return
 	case errors.Is(err, backup.ErrKeyMismatch):
-		s.writeError(w, r, http.StatusConflict, err.Error())
+		s.writeError(w, r, http.StatusConflict,
+			"This archive was made by a host using a different settings encryption "+
+				"key, so the credentials in it cannot be read here. Set this host's "+
+				"key to the one that host used, restart, and restore again.")
 		return
 	default:
 		s.opts.Log.ErrorContext(r.Context(), "a restore could not be staged",
 			"principal", actor, "error", err)
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err,
+			"That archive could not be read. Check it is a backup made by mcpd "+
+				"and that the download finished.")
 		return
 	}
 

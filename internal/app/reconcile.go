@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -123,8 +124,11 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 	}
 	t, ok := a.types.Lookup(inst.Type)
 	if !ok {
-		return nil, t, fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
-			"configuration but not compiled into this binary", inst.Name, inst.Type)
+		// Shown on the Plugins page with the instance's name printed beside
+		// it, so this is the continuation of that name and repeats neither
+		// the name nor a package prefix.
+		return nil, t, errors.New("is not included in this build of mcpd, so it " +
+			"cannot start. Remove it, or run a build that has it")
 	}
 	cfg, err := a.resolveInstanceSettings(ctx, inst.Name, t)
 	if err != nil {
@@ -132,7 +136,7 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 	}
 	p, err := t.New(a.pluginDeps(inst.Name), cfg)
 	if err != nil {
-		return nil, t, fmt.Errorf("app: plugin %q: %w", inst.Name, err)
+		return nil, t, fmt.Errorf("could not start: %w", err)
 	}
 	return p, t, nil
 }
@@ -145,7 +149,7 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 func (a *App) buildMCPInstance(ctx context.Context, name string) (plugins.Plugin, error) {
 	srv, ok := a.mcpServer(name)
 	if !ok {
-		return nil, fmt.Errorf("app: no remote MCP server named %q", name)
+		return nil, fmt.Errorf("names no remote MCP server called %q", name)
 	}
 	tools, err := a.mcpStore.EnabledTools(ctx, name)
 	if err != nil {

@@ -148,7 +148,7 @@ func (s *Server) handleAddInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := auth.FromContext(r.Context()).ID
 	if err := s.opts.AddPlugin(r.Context(), actor, req.Name, req.Type); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That plugin could not be added.")
 		return
 	}
 	s.opts.Log.Info("plugin instance added",
@@ -183,7 +183,7 @@ func (s *Server) handleSetInstanceEnabled(w http.ResponseWriter, r *http.Request
 	actor := auth.FromContext(r.Context()).ID
 	name := r.PathValue("name")
 	if err := s.opts.SetPluginEnabled(r.Context(), actor, name, *req.Enabled); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That change could not be saved.")
 		return
 	}
 	s.opts.Log.Info("plugin instance toggled",
@@ -204,7 +204,7 @@ func (s *Server) handleRemoveInstance(w http.ResponseWriter, r *http.Request) {
 	// removal changes with it.
 	acknowledged := r.URL.Query().Get("acknowledge_required") == "true"
 	if err := s.opts.RemovePlugin(r.Context(), actor, name, acknowledged); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That plugin could not be removed.")
 		return
 	}
 	s.opts.Log.Info("plugin instance removed", "instance", name, "by", actor)
@@ -219,7 +219,7 @@ func (s *Server) handleRestoreInstance(w http.ResponseWriter, r *http.Request) {
 	actor := auth.FromContext(r.Context()).ID
 	name := r.PathValue("name")
 	if err := s.opts.RestorePlugin(r.Context(), actor, name); err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That plugin could not be brought back.")
 		return
 	}
 	s.opts.Log.Info("plugin instance restored", "instance", name, "by", actor)

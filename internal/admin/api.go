@@ -923,7 +923,12 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 	// for every other.
 	accounts, accountsErr := s.chatgptAccounts(r.Context())
 	if accountsErr != nil {
-		resp.Problem = accountsErr.Error()
+		// Rendered as a Notice on the Tunnels page, so it is a sentence
+		// rather than the wrapped error: the store's own text names a table
+		// and a decryption step, neither of which is a thing to do.
+		s.opts.Log.ErrorContext(r.Context(), "the ChatGPT accounts could not be read",
+			"error", accountsErr)
+		resp.Problem = "The ChatGPT accounts could not be read, so this page may be incomplete."
 	}
 	var seen []tunnel.TunnelInfo
 	for _, acct := range accounts {
@@ -934,7 +939,10 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 			view.CanManage = true
 			resp.CanManage = true
 			if list, err := s.listTunnels(r.Context(), acct.ID, dir); err != nil {
-				view.Problem = err.Error()
+				s.opts.Log.ErrorContext(r.Context(), "an account's tunnels could not be listed",
+					"account", acct.Name, "error", err)
+				view.Problem = "OpenAI did not answer with this account's tunnels. " +
+					"Check its admin key under Settings › ChatGPT."
 			} else {
 				list = ours(list, resp.Assignments)
 				for _, t := range list {
@@ -1544,6 +1552,43 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int, 
 	})
 }
 
+// internalPrefixes name the packages whose error text is written for whoever
+// is reading a stack trace, not for whoever made the request.
+//
+// It is a list rather than a guess at the shape of a sentence: every one of
+// these is a deliberate `pkg: ` prefix in this repository, and the packages
+// that do write for a person -- the validation in users, roles, groups,
+// apikeys, trust -- are deliberately absent.
+var internalPrefixes = []string{
+	"sqlite:", "settings:", "app:", "plugins:", "mcpservers:", "auth:",
+	"storage:", "json:",
+}
+
+// writeProblem answers a 4xx with something the person who made the request
+// can act on.
+//
+// A 4xx body is read: the dashboard toasts it, and a form shows it beside the
+// field. So an error that names an internal package is not an answer -- it is
+// "sqlite: begin: database is locked" in a toast, which tells the reader
+// nothing and the operator no more. That one is logged with the correlation
+// id the caller was also given, and the caller is told what the handler knows,
+// which is the fallback.
+//
+// A 5xx body is not shown at all, only its correlation id, so nothing here
+// applies to one.
+func (s *Server) writeProblem(w http.ResponseWriter, r *http.Request, status int, err error, fallback string) {
+	msg := err.Error()
+	for _, prefix := range internalPrefixes {
+		if strings.Contains(msg, prefix) {
+			s.opts.Log.ErrorContext(r.Context(), "a request failed for a reason only a log can carry",
+				"path", r.URL.Path, "status", status, "error", err)
+			s.writeError(w, r, status, fallback)
+			return
+		}
+	}
+	s.writeError(w, r, status, msg)
+}
+
 // writeUpstreamError answers a refusal from OpenAI with the reason beside the
 // sentence.
 //
@@ -1851,7 +1896,7 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Unassign {
 		if err := s.unassign(r, r.PathValue("id")); err != nil {
-			s.writeError(w, r, http.StatusBadRequest, err.Error())
+			s.writeProblem(w, r, http.StatusBadRequest, err, "That change could not be saved.")
 			return
 		}
 		s.writeJSON(w, r, http.StatusOK, map[string]string{"status": "unassigned"})
@@ -1863,7 +1908,7 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	account, err := s.resolveAccount(r.Context(), body.Account)
 	if err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That ChatGPT account could not be read.")
 		return
 	}
 	if err := s.assign(r, r.PathValue("id"), body.Plugin, account.ID); err != nil {
@@ -1878,7 +1923,7 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That change could not be saved.")
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]string{"status": "assigned"})
@@ -1897,7 +1942,7 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	account, err := s.resolveAccount(r.Context(), wanted)
 	if err != nil {
-		s.writeError(w, r, http.StatusBadRequest, err.Error())
+		s.writeProblem(w, r, http.StatusBadRequest, err, "That ChatGPT account could not be read.")
 		return
 	}
 	dir := s.directory(account.ID)
