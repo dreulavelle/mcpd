@@ -250,7 +250,7 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
       return { phrase: ["withdrew a request to ", ...change()], facts };
     case "operation.expired":
       return {
-        phrase: ["let a request to ", ...change(), " run out of time"],
+        phrase: ["recorded that a request to ", ...change(), " ran out of time"],
         facts,
       };
     case "operation.executing":
@@ -332,7 +332,9 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
         if (renamed) facts.push(`was called ${renamed}`);
         return { phrase: ["changed what ", role(subject), " may do"], facts };
       }
-      if (renamed) return { phrase: [`renamed the role ${renamed} to `, role(subject)], facts };
+      if (renamed) {
+        return { phrase: [`renamed the role ${renamed} to `, roleLink(subject)], facts };
+      }
       return { phrase: ["changed ", role(subject)], facts };
     }
     case "role.deleted":
@@ -350,7 +352,9 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
         if (renamed) facts.push(`was called ${renamed}`);
         return { phrase: ["changed what ", group(subject), " hands out"], facts };
       }
-      if (renamed) return { phrase: [`renamed the group ${renamed} to `, group(subject)], facts };
+      if (renamed) {
+        return { phrase: [`renamed the group ${renamed} to `, groupLink(subject)], facts };
+      }
       return { phrase: ["changed ", group(subject)], facts };
     }
     case "group.deleted": {
@@ -505,17 +509,21 @@ export function auditCategory(r: AuditRecord): EventCategory {
  * change may be in place, and painting it as a failure invites a retry that
  * applies it twice. An opened approval window is attention because it is the
  * state somebody has to remember to leave.
+ *
+ * Only `succeeded` is good. An approved change has been cleared and has not
+ * run, and colouring it the same as one that landed says the work is done
+ * while it is still waiting on the executor.
  */
 export function auditTone(r: AuditRecord): EventTone {
   switch (r.kind) {
     case "operation.succeeded":
-    case "operation.approved":
       return "good";
     case "operation.failed":
       return "problem";
     case "operation.indeterminate":
     case "approval.bypass.opened":
       return "attention";
+    case "operation.approved":
     case "operation.executing":
     case "operation.proposed":
       return "info";
@@ -670,6 +678,15 @@ function role(name: string): Phrase {
 
 function group(name: string): Phrase {
   return { text: name ? `the group ${name}` : "a group", to: "/settings/groups" };
+}
+
+/** The bare name, for a sentence that has already said which kind of thing. */
+function roleLink(name: string): Phrase {
+  return { text: name || "a role", to: "/settings/roles" };
+}
+
+function groupLink(name: string): Phrase {
+  return { text: name || "a group", to: "/settings/groups" };
 }
 
 function certificate(name: string): Phrase {
@@ -847,7 +864,7 @@ function pushDrift(facts: string[], d: Record<string, unknown>): void {
       facts.push("nothing had changed since it was proposed");
       break;
     case "not_checked":
-      facts.push("no drift check ran");
+      facts.push("whether the system had changed was not checked");
       break;
   }
 }

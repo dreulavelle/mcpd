@@ -188,7 +188,7 @@ describe("an audit entry as a sentence", () => {
 
     ["operation.expired", entry("operation.expired", {
       actor: "system:reaper", operation_id: "op_1", plugin: "echo", action: "label.set",
-    }), "let a request to set the label on echo run out of time"],
+    }), "recorded that a request to set the label on echo ran out of time"],
 
     ["operation.executing", entry("operation.executing", {
       actor: "system:executor", operation_id: "op_1", plugin: "echo", action: "label.set",
@@ -268,7 +268,7 @@ describe("an audit entry as a sentence", () => {
 
     ["role.updated, renamed only", entry("role.updated", {
       plugin: "Auditor", detail: { role: "role_x1", renamed_from: "Reader" },
-    }), "renamed the role Reader to the role Auditor"],
+    }), "renamed the role Reader to Auditor"],
 
     ["role.deleted", entry("role.deleted", {
       plugin: "Auditor", detail: { role: "role_x1" },
@@ -287,6 +287,12 @@ describe("an audit entry as a sentence", () => {
         grants_before: [{ plugin: "echo", level: "read" }],
       },
     }), "changed what the group Field team hands out"],
+
+    // Named once, not twice: "to the group Field team" after "renamed the
+    // group" says the same noun over again.
+    ["group.updated, renamed only", entry("group.updated", {
+      plugin: "Field team", detail: { group: "g_1", renamed_from: "Field crew" },
+    }), "renamed the group Field crew to Field team"],
 
     ["group.deleted", entry("group.deleted", {
       plugin: "Field team", detail: { group: "g_1", role: "role_operator", grants: [], members: 3 },
@@ -459,7 +465,7 @@ describe("an audit entry as a sentence", () => {
   it.each([
     ["none", "nothing had changed since it was proposed"],
     ["detected", "the system had changed since it was proposed"],
-    ["not_checked", "no drift check ran"],
+    ["not_checked", "whether the system had changed was not checked"],
   ])("says which of the three a drift check was (%s)", (drift, want) => {
     const record: AuditRecord = {
       seq: 1, at: at(0), kind: "operation.executing", actor: "system:executor",
