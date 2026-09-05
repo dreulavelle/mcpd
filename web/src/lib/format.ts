@@ -306,12 +306,28 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
       pushReach(facts, d);
       pushExpiry(facts, d);
       return { phrase: ["created ", key(subject, d, book)], facts };
-    case "apikey.rescoped":
+    case "apikey.rescoped": {
       pushRole(facts, d, book);
       pushReach(facts, d);
       pushExpiry(facts, d);
-      if (str(d, "name_before")) facts.push(`was called ${str(d, "name_before")}`);
+      // The detail is sparse: only the fields that changed are in it. A name
+      // and nothing else is a rename, and calling that a change to what the
+      // key may do puts a privilege change in the trail that never happened.
+      const renamed = str(d, "name_before");
+      const scoped = d["role"] !== undefined
+        || d["grants"] !== undefined
+        || d["expires_at"] !== undefined
+        || d["groups"] !== undefined;
+      if (renamed && !scoped) {
+        return {
+          phrase: [`renamed the key ${renamed} to `,
+            { text: str(d, "name") || "a key", to: "/settings/keys" }],
+          facts,
+        };
+      }
+      if (renamed) facts.push(`was called ${renamed}`);
       return { phrase: ["changed what ", key(subject, d, book), " may do"], facts };
+    }
     case "apikey.rotated": {
       const grace = num(d, "grace_seconds");
       if (grace !== null) {
@@ -731,13 +747,46 @@ function operationPath(r: AuditRecord): string | null {
  * is the verb, whatever comes before it is the thing acted on.
  */
 export function actionWords(action?: string): string | null {
-  const trimmed = (action ?? "").trim();
-  if (!trimmed) return null;
-  const parts = trimmed.split(".").filter(Boolean);
-  const verb = parts.pop()?.replace(/_/g, " ") ?? "";
-  if (!verb) return null;
-  const resource = parts.join(" ").replace(/_/g, " ");
-  return resource ? `${verb} the ${resource}` : verb;
+  const segments = (action ?? "").split(".").map((s) => s.trim()).filter(Boolean);
+  if (segments.length === 0) return null;
+
+  const last = machineWords(segments[segments.length - 1]!);
+  const before = segments.slice(0, -1);
+
+  // A last segment of several words carries its own resource, so
+  // `device.set_radio_channel` is "set the radio channel" rather than "set
+  // radio channel the device". The segments before it named the thing that
+  // owns the setting, and the setting is the more specific noun.
+  const parts = last.split(" ").filter(Boolean);
+  if (parts.length > 1 && CHANGE_VERBS.has(parts[0]!)) {
+    return `${parts[0]} the ${parts.slice(1).join(" ")}`;
+  }
+
+  const resource = before.map(machineWords).filter(Boolean).join(" ");
+  return resource ? `${last} the ${resource}` : last;
+}
+
+/**
+ * The verbs a mutation's action is allowed to begin with.
+ *
+ * Only consulted to split a compound last segment, so an unknown verb costs
+ * nothing: `foo.bar_baz` stays "bar_baz the foo" rather than becoming "bar the
+ * baz" on a guess. The same set decides the same split on the Approvals page,
+ * so a change is described the same way wherever it is read.
+ */
+const CHANGE_VERBS = new Set([
+  "set", "update", "change", "create", "add", "delete", "remove", "enable",
+  "disable", "reset", "rotate", "revoke", "assign", "rename", "move",
+  "restart", "reboot", "pause", "resume", "silence", "acknowledge", "clear",
+]);
+
+/** Machine casing to words: `radio_channel` and `radioChannel` both read out. */
+function machineWords(segment: string): string {
+  return segment
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function pushReason(facts: string[], d: Record<string, unknown>): void {
@@ -840,14 +889,21 @@ function authorityWords(d: Record<string, unknown>, book: NameBook): string | nu
 /**
  * Whether the target was re-read afterwards, and what it said.
  *
- * Null is "nobody checked" and false is "checked, and it did not match". They
- * are different facts and collapsing them turns an unverified change into a
- * verified one.
+ * Three values, kept apart. Null is "nobody checked": the mutation declared
+ * that re-reading proves nothing, so the executor read nothing and claimed
+ * nothing.
+ *
+ * False is not "it did not match". The executor settles false for both halves
+ * of `verify` failing -- a re-read that came back and disagreed, and a re-read
+ * that never came back at all -- and the audit entry carries only `verified`,
+ * `upstream_ref` and `error_code`, so nothing in the record tells the two
+ * apart. "It did not match" would assert a comparison that may never have
+ * happened, which is the same error as reading null as false one step along.
  */
 function verifiedWords(verified: boolean | null, system: string): string {
   const against = system ? ` against ${system}` : "";
   if (verified === true) return `checked${against}: the change is in place`;
-  if (verified === false) return `checked${against}: it did not match`;
+  if (verified === false) return `checked${against}: the change could not be confirmed`;
   return "not checked";
 }
 

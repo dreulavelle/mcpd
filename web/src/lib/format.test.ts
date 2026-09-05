@@ -138,8 +138,43 @@ describe("an action as words", () => {
     ["firewall_rule.delete", "delete the firewall rule"],
     ["site.device.reboot", "reboot the site device"],
     ["reboot", "reboot"],
+    // A last segment of several words carries its own resource. Treating it
+    // as one verb produced "set radio channel the device".
+    ["device.set_radio_channel", "set the radio channel"],
+    ["device.setRadioChannel", "set the radio channel"],
+    // An unknown first word is not a verb on a guess.
+    ["foo.bar_baz", "bar baz the foo"],
   ])("reads %s as %s", (action, want) => {
     expect(actionWords(action)).toBe(want);
+  });
+
+  /**
+   * Every action any plugin in this repository declares, so a new mutation
+   * whose name does not read as English is caught here rather than on the page.
+   *
+   * Kept in step by hand with `grep -rhoE 'Action:\s*"[^"]+"' internal/plugins`.
+   */
+  const DECLARED = [
+    "attachment.create", "attachment.delete", "attachment.update",
+    "book.create", "book.delete", "book.update",
+    "chapter.create", "chapter.delete", "chapter.update",
+    "comment.create", "comment.delete", "comment.update",
+    "content_permissions.update",
+    "device.reboot", "device.set_radio_channel",
+    "label.set",
+    "page.create", "page.delete", "page.update",
+    "recycle_bin.destroy", "recycle_bin.restore",
+    "role.create", "role.delete", "role.update",
+    "shelf.create", "shelf.delete", "shelf.update",
+    "user.create", "user.delete", "user.update",
+  ];
+
+  it.each(DECLARED)("reads %s as a phrase that can follow \"asked to\"", (action) => {
+    const words = actionWords(action)!;
+    expect(words).toBeTruthy();
+    // No machine casing left, and a verb at the front rather than a noun.
+    expect(words).not.toMatch(/[_.]/);
+    expect(words).toMatch(/^[a-z]+( the .+)?$/);
   });
 
   it("has nothing to say about an absent action", () => {
@@ -248,6 +283,13 @@ describe("an audit entry as a sentence", () => {
         grants_before: [{ plugin: "cnmaestro", level: "write" }],
       },
     }), "changed what the key ledger may do"],
+
+    // The detail is sparse. A name and nothing else changed is a rename, and
+    // calling it a change to what the key may do records a privilege change
+    // that never happened.
+    ["apikey.rescoped, renamed only", entry("apikey.rescoped", {
+      plugin: "key_993f", detail: { name: "ledger", name_before: "temp-key" },
+    }), "renamed the key temp-key to ledger"],
 
     ["apikey.rotated", entry("apikey.rotated", {
       plugin: "key_993f", detail: { name: "ledger", grace_seconds: 3600 },
@@ -451,7 +493,7 @@ describe("an audit entry as a sentence", () => {
   // Collapsing them turns an unverified change into a verified one.
   it.each([
     [true, "checked against echo: the change is in place"],
-    [false, "checked against echo: it did not match"],
+    [false, "checked against echo: the change could not be confirmed"],
     [null, "not checked"],
   ])("keeps all three values of verified apart (%s)", (verified, want) => {
     const record: AuditRecord = {
