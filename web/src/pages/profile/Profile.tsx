@@ -1,6 +1,11 @@
 import { useCallback, useState } from "react";
 import {
-  api, ApiError, type Meta, type ProviderName, type Session, type User,
+  api,
+  type Meta,
+  type ProviderName,
+  type Session,
+  type User,
+  problemText,
 } from "@/lib/api";
 import { collect, describe } from "@/lib/permissions";
 import { PermissionMatrix } from "@/components/PermissionMatrix";
@@ -147,7 +152,7 @@ function LinkedProviders() {
       window.location.assign(authorization_url);
     } catch (err) {
       setBusy("");
-      setProblem(err instanceof ApiError ? err.detail : "Couldn't start that.");
+      setProblem(problemText(err, "Couldn't start that."));
     }
   }
 
@@ -164,7 +169,7 @@ function LinkedProviders() {
       notify("good", `${label} unlinked.`);
       reload();
     } catch (err) {
-      setProblem(err instanceof ApiError ? err.detail : "Couldn't unlink that.");
+      setProblem(problemText(err, "Couldn't unlink that."));
     } finally {
       setBusy("");
     }
@@ -249,7 +254,7 @@ function DisplayName({ session }: { session: Session }) {
     } catch (err) {
       // The server's sentence: it is the only thing that knows which rule
       // the value broke.
-      setProblem(err instanceof ApiError ? err.detail : "Couldn't change it.");
+      setProblem(problemText(err, "Couldn't change it."));
     } finally {
       setBusy(false);
     }
@@ -333,7 +338,7 @@ function ChangePassword({ email, self, mayEdit }: {
       setPassword("");
       setConfirm("");
     } catch (err) {
-      setProblem(err instanceof ApiError ? err.detail : "Couldn't change it.");
+      setProblem(problemText(err, "Couldn't change it."));
     } finally {
       setBusy(false);
     }

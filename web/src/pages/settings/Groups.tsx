@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { MoreHorizontal, UsersRound } from "lucide-react";
-import { api, ApiError, type Grant, type Group, type GroupMember } from "@/lib/api";
+import { api, type Grant, type Group, type GroupMember, problemText } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
@@ -135,7 +135,7 @@ function GroupRow({ group, mayWrite, notify, onChanged, onEdit }: {
       onChanged();
       notify("good", "Group deleted.");
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+      setError(problemText(e, "That didn't work."));
     }
   }
 
@@ -214,7 +214,7 @@ function EditGroup({ group, notify, mayWrite, onClose, onChanged }: {
       onChanged();
       notify("good", "Saved.");
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't save that.");
+      setError(problemText(err, "Couldn't save that."));
     } finally {
       setBusy(false);
     }
@@ -229,7 +229,7 @@ function EditGroup({ group, notify, mayWrite, onClose, onChanged }: {
       onChanged();
       notify("good", `Took ${m.label} out.`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't do that.");
+      setError(problemText(err, "Couldn't do that."));
     } finally {
       setBusy(false);
     }
@@ -319,7 +319,7 @@ function AddGroup({ onClose, onAdded }: {
       await api.createGroup({ name: name.trim(), description: description.trim(), role, grants });
       onAdded(name.trim());
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't add that group.");
+      setError(problemText(err, "Couldn't add that group."));
     } finally {
       setBusy(false);
     }

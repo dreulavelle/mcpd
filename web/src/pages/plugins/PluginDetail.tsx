@@ -1,7 +1,13 @@
 import { useCallback, useState } from "react";
 import {
-  api, ApiError, type Plugin, type PluginType, type PluginInstance, type SettingsPayload,
-  type TunnelInfo, type TunnelStatus,
+  api,
+  type Plugin,
+  type PluginType,
+  type PluginInstance,
+  type SettingsPayload,
+  type TunnelInfo,
+  type TunnelStatus,
+  problemText,
 } from "@/lib/api";
 import { unprefixed, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
@@ -376,7 +382,7 @@ function EnabledControl({ name, instance, runtime, onChanged }: {
         ? `Switched ${name} off.`
         : `Switched ${name} on. It serves as soon as it has what it needs.`);
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't change it.");
+      notify("problem", problemText(e, "Couldn't change it."));
     } finally {
       setBusy(false);
       onChanged();
@@ -455,7 +461,7 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
       if (fromFile) onChanged();
       else navigate("/plugins");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't remove it.");
+      notify("problem", problemText(e, "Couldn't remove it."));
       setBusy(false);
       onChanged();
     }

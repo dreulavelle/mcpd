@@ -1,6 +1,10 @@
 import { useCallback, useState } from "react";
 import {
-  api, ApiError, type Group, type PendingRegistration, type ProviderName,
+  api,
+  type Group,
+  type PendingRegistration,
+  type ProviderName,
+  problemText,
 } from "@/lib/api";
 import { useLoader, usePoll } from "@/lib/hooks";
 import { Loading, Notice, Out, PageHeader } from "@/components/chrome";
@@ -232,7 +236,7 @@ function PendingRow({ user, groups, onChanged, notify }: {
       onChanged();
       notify("good", what);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+      setError(problemText(e, "That didn't work."));
     } finally {
       setBusy(false);
     }

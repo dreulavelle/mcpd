@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -174,9 +175,7 @@ func (a *App) registerPlugins(ctx context.Context) error {
 					// the shape a stale instance record takes after a plugin
 					// is removed from a build, or after an earlier version of
 					// this host wrote one it should not have.
-					err := fmt.Errorf("this instance is recorded as type %q, "+
-						"which this build does not have; remove it, or run a "+
-						"build that does", inst.Type)
+					err := errors.New(problemUnknownType)
 					a.log.ErrorContext(ctx, "skipping a plugin instance of an unknown type",
 						"plugin", name, "type", inst.Type)
 					a.noteReconcile(name, err)

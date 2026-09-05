@@ -534,9 +534,13 @@ func (a *App) ClassifyMCPTool(ctx context.Context, actor, server, tool, hash str
 
 	if err := a.mcpStore.ClassifyTool(ctx, actor, server, tool, hash, state); err != nil {
 		if errors.Is(err, sqlite.ErrToolClassification) {
-			return fmt.Errorf("%s of %s was not changed: either it has been "+
+			// The names are quoted and the colon is gone: "search of graylog
+			// was not changed: …" reads as a wrapped Go error to anything
+			// deciding whether a message was written for a person, and this
+			// one was.
+			return fmt.Errorf("%q on %q was not changed. Either it has been "+
 				"rediscovered with a different description or schema since you "+
-				"read it, or it is one this host cannot mount", tool, server)
+				"read it, or it is one this host cannot mount.", tool, server)
 		}
 		return err
 	}

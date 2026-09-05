@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Lock, Plus } from "lucide-react";
-import { api, ApiError, type RoleDef } from "@/lib/api";
+import { api, type RoleDef, problemText } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { BUILTIN_ROLES, describe, type PermissionSet } from "@/lib/permissions";
 import { useCan } from "@/lib/session";
@@ -139,7 +139,7 @@ function RoleDetail({ role, mayWrite, onChanged }: {
       onChanged();
       notify("good", "Saved.");
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't save that.");
+      setError(problemText(err, "Couldn't save that."));
     } finally {
       setBusy(false);
     }
@@ -154,7 +154,7 @@ function RoleDetail({ role, mayWrite, onChanged }: {
       onChanged();
       notify("good", "Role deleted.");
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "That didn't work.");
+      setError(problemText(err, "That didn't work."));
     } finally {
       setBusy(false);
     }
@@ -244,7 +244,7 @@ function AddRole({ roles, onClose, onAdded }: {
       const made = await api.createRole({ name: name.trim(), description: description.trim(), permissions: perms });
       onAdded(made.id, made.name);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't add that role.");
+      setError(problemText(err, "Couldn't add that role."));
     } finally {
       setBusy(false);
     }

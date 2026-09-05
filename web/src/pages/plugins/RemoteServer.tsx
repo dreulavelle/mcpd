@@ -1,8 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
-  api, ApiError, type MCPDiff, type MCPDiscovery, type MCPServer, type MCPTool,
+  api,
+  type MCPDiff,
+  type MCPDiscovery,
+  type MCPServer,
+  type MCPTool,
   type MCPToolState,
+  problemText,
 } from "@/lib/api";
 import { when, whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
@@ -147,9 +152,7 @@ function Body({ server, tools, toolsError, onChanged }: {
       setDiff(result.diff ?? {});
       notify("good", result.note ?? "Discovered.");
     } catch (e) {
-      notify("problem", e instanceof ApiError
-        ? e.detail
-        : "Couldn't reach the server.");
+      notify("problem", problemText(e, "Couldn't reach the server."));
     } finally {
       setDiscovering(false);
       onChanged();
@@ -162,7 +165,7 @@ function Body({ server, tools, toolsError, onChanged }: {
       await api.setMCPServerEnabled(server.name, enabled);
       notify("good", enabled ? "Switched on." : "Switched off.");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't change that.");
+      notify("problem", problemText(e, "Couldn't change that."));
     } finally {
       setBusy(false);
       onChanged();
@@ -177,7 +180,7 @@ function Body({ server, tools, toolsError, onChanged }: {
       notify("good", `Removed ${server.name}.`);
       navigate("/plugins");
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't remove it.");
+      notify("problem", problemText(e, "Couldn't remove it."));
       setBusy(false);
       onChanged();
     }
@@ -420,7 +423,7 @@ function Headers({ server, mayAdminister, onChanged }: {
       setAdding(false);
       onChanged();
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't add that header.");
+      notify("problem", problemText(e, "Couldn't add that header."));
     } finally {
       setBusy(false);
     }
@@ -433,7 +436,7 @@ function Headers({ server, mayAdminister, onChanged }: {
       notify("good", `Removed ${header}.`);
       onChanged();
     } catch (e) {
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't remove that header.");
+      notify("problem", problemText(e, "Couldn't remove that header."));
     } finally {
       setBusy(false);
     }

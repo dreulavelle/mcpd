@@ -107,12 +107,12 @@ func (s *Server) unmatchedRules(rules []operations.AutoApprovalRule) []string {
 		switch {
 		case r.Plugin != operations.RuleAny && actions[r.Plugin] == nil:
 			out = append(out, fmt.Sprintf(
-				"rule %q names plugin %q, which is not mounted here, so it matches nothing",
+				"rule %q names %q, which is not a system on this host. It matches nothing.",
 				r.ID, r.Plugin))
 		case r.Action != operations.RuleAny && !anyPluginHas(actions, r.Plugin, r.Action):
 			out = append(out, fmt.Sprintf(
-				"rule %q names action %q, which no mounted plugin registers, "+
-					"so it matches nothing", r.ID, r.Action))
+				"rule %q names %q, which nothing on this host can do. It matches nothing.",
+				r.ID, r.Action))
 		}
 	}
 	sort.Strings(out)

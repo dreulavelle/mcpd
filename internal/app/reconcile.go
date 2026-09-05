@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -92,6 +93,18 @@ func isEmpty(v any) bool {
 	return false
 }
 
+// problemUnknownType is what a person reads when an instance names a plugin
+// type this binary was not built with.
+//
+// One constant because two paths reach the same field: a rebuild through
+// reconcile, and the startup wiring that finds a stale instance record and
+// keeps the host up rather than refusing to start. Both are stored as
+// PluginInstance.problem and printed on their own by the Plugins list and by
+// a plugin's own page, so it is a whole sentence carrying no package prefix --
+// and two copies of it drift.
+const problemUnknownType = "This plugin's type is not in this build of mcpd, " +
+	"so it cannot start. Remove it, or run a build that includes it."
+
 // noteReconcile records why an instance is not serving, or clears the note
 // when it is. Kept beside the instance rather than on the plugin because the
 // case that matters is the one where there is no plugin to hang it on.
@@ -123,8 +136,7 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 	}
 	t, ok := a.types.Lookup(inst.Type)
 	if !ok {
-		return nil, t, fmt.Errorf("app: plugin %q has type %q, which is enabled in "+
-			"configuration but not compiled into this binary", inst.Name, inst.Type)
+		return nil, t, errors.New(problemUnknownType)
 	}
 	cfg, err := a.resolveInstanceSettings(ctx, inst.Name, t)
 	if err != nil {
@@ -132,7 +144,8 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 	}
 	p, err := t.New(a.pluginDeps(inst.Name), cfg)
 	if err != nil {
-		return nil, t, fmt.Errorf("app: plugin %q: %w", inst.Name, err)
+		// The plugin wrote the inner text, so it is quoted rather than run in.
+		return nil, t, fmt.Errorf("This plugin could not start. It said: %q", err.Error())
 	}
 	return p, t, nil
 }
@@ -145,7 +158,7 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 func (a *App) buildMCPInstance(ctx context.Context, name string) (plugins.Plugin, error) {
 	srv, ok := a.mcpServer(name)
 	if !ok {
-		return nil, fmt.Errorf("app: no remote MCP server named %q", name)
+		return nil, fmt.Errorf("This plugin names a remote MCP server, %q, that is not on this host.", name)
 	}
 	tools, err := a.mcpStore.EnabledTools(ctx, name)
 	if err != nil {

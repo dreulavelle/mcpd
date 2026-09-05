@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { MoreHorizontal, UsersRound } from "lucide-react";
-import { api, ApiError, type Grant, type Group, type User } from "@/lib/api";
+import { api, type Grant, type Group, type User, problemText } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { collect, describe } from "@/lib/permissions";
 import { useCan } from "@/lib/session";
@@ -161,7 +161,7 @@ function UserRow({ user, mayWrite, notify, onChanged, onEdit }: {
       onChanged();
       notify("good", what);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+      setError(problemText(e, "That didn't work."));
     }
   };
 
@@ -267,7 +267,7 @@ function EditUser({ user, groups, notify, onClose, onChanged }: {
       onChanged();
       notify("good", "Saved.");
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't save that.");
+      setError(problemText(err, "Couldn't save that."));
     } finally {
       setBusy(false);
     }
@@ -281,7 +281,7 @@ function EditUser({ user, groups, notify, onClose, onChanged }: {
       else await api.removeGroupMember(groupId, "user", user.id);
       onChanged();
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't change that group.");
+      setError(problemText(err, "Couldn't change that group."));
     } finally {
       setBusy(false);
     }
@@ -373,7 +373,7 @@ function AddUser({ groups, onClose, onAdded }: {
       await api.createUser({ email: email.trim(), password, role, grants, groups: joined });
       onAdded(email.trim());
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Couldn't add that account.");
+      setError(problemText(err, "Couldn't add that account."));
     } finally {
       setBusy(false);
     }

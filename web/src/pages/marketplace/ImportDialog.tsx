@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { api, ApiError, type CatalogEntry } from "@/lib/api";
+import { api, type CatalogEntry, problemText } from "@/lib/api";
 import { relative, when } from "@/lib/format";
 import { Detail, Notice } from "@/components/chrome";
 import { useNotify } from "@/components/toast";
@@ -86,7 +86,7 @@ export function ImportDialog({
       onOpenChange(false);
       onImported(name.trim());
     } catch (e) {
-      const detail = e instanceof ApiError ? e.detail : "Couldn't import that.";
+      const detail = problemText(e, "Couldn't import that.");
       // Next to the box, with the cursor, because it is a field to change.
       if (/already exists/i.test(detail)) {
         setNameProblem(detail);

@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, type Certificate } from "@/lib/api";
+import { api, type Certificate, problemText } from "@/lib/api";
 import { usePoll } from "@/lib/hooks";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
 import { Chip } from "@/components/status";
@@ -112,7 +112,7 @@ function CertificateRow({ cert, notify, onChanged }: {
       onChanged();
       notify("good", "Certificate removed.");
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+      setError(problemText(e, "That didn't work."));
     } finally {
       setBusy(false);
     }
@@ -237,7 +237,7 @@ function AddCertificate({ onClose, onAdded }: {
       notify("good", `Trusting ${added.name}. Plugins are picking it up now.`);
       onAdded();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+      setError(problemText(e, "That didn't work."));
     } finally {
       setBusy(false);
     }

@@ -1,5 +1,12 @@
 import { useCallback, useState, type FormEvent } from "react";
-import { api, ApiError, type AccountCheck, type ChatGPTAccount, type ChatGPTAccountBody, type Grant } from "@/lib/api";
+import {
+  api,
+  type AccountCheck,
+  type ChatGPTAccount,
+  type ChatGPTAccountBody,
+  type Grant,
+  problemText,
+} from "@/lib/api";
 import { useLoader, usePoll } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { SettingsForm } from "@/components/SettingsForm";
@@ -53,7 +60,7 @@ export function ChatGPT() {
     api.chatgptAccounts()
       .then((r) => { setRows(r.accounts ?? []); setError(""); })
       .catch((e) => setError(
-        e instanceof ApiError ? e.detail : "Couldn't load ChatGPT accounts.",
+        problemText(e, "Couldn't load ChatGPT accounts."),
       ));
   }, []);
   usePoll(load, 60_000);
@@ -143,7 +150,7 @@ function AccountRow({ account, notify, onChanged }: {
       if (result.can_make) notify("good", `${account.name} can list and make tunnels.`);
       onChanged();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "Couldn't check it.");
+      setError(problemText(e, "Couldn't check it."));
     } finally {
       setBusy(false);
     }
@@ -161,7 +168,7 @@ function AccountRow({ account, notify, onChanged }: {
       onChanged();
       notify("good", `${account.name} removed.`);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+      setError(problemText(e, "That didn't work."));
     } finally {
       setBusy(false);
     }
@@ -177,7 +184,7 @@ function AccountRow({ account, notify, onChanged }: {
         ? `${account.name} is connecting again.`
         : `${account.name} is switched off; its tunnels have stopped.`);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+      setError(problemText(e, "That didn't work."));
     } finally {
       setBusy(false);
     }
@@ -332,7 +339,7 @@ function AccountDialog({ account, onClose, onSaved }: {
         : `${saved.name} added, connecting as ${saved.principal}.`);
       onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : "That didn't work.");
+      setError(problemText(e, "That didn't work."));
     } finally {
       setBusy(false);
     }

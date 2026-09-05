@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ShieldQuestionMark, TriangleAlert } from "lucide-react";
-import { api, ApiError, type MCPTool, type MCPToolState } from "@/lib/api";
+import { api, ApiError, type MCPTool, type MCPToolState, problemText } from "@/lib/api";
 import { pretty } from "@/lib/format";
 import { CodeBlock, Notice } from "@/components/chrome";
 import { Chip } from "@/components/status";
@@ -103,7 +103,7 @@ export function ClassifyDialog({ server, tool, open, onOpenChange, onDone }: {
         onDone();
         return;
       }
-      notify("problem", e instanceof ApiError ? e.detail : "Couldn't record that.");
+      notify("problem", problemText(e, "Couldn't record that."));
     } finally {
       setBusy(null);
     }
