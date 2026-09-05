@@ -362,20 +362,61 @@ describe("a change a standing rule authorised", () => {
     expect(screen.queryByText(/No one was asked/i)).not.toBeInTheDocument();
   });
 
-  // The same field, and a different verb: `approved_by` on a turned-down
-  // change is whoever turned it down, and "alice approved it" would be the
-  // opposite of what happened.
-  it("says a person turned it down where they did", async () => {
+  /**
+   * Approving and withdrawing are two acts by two people, and `approved_by`
+   * only records the first.
+   *
+   * A change alice approved and bob then withdrew read as "alice withdrew it",
+   * which names the wrong person for the act that mattered. The trail records
+   * both, and the trail is what the page now reads.
+   */
+  it("names whoever withdrew it, not whoever approved it", async () => {
     mount(
       operationFixture({
-        state: "rejected", terminal: true,
+        state: "cancelled", terminal: true,
         approved_by: "user:alice@example.com",
         approved_at: "2026-08-22T09:00:01Z",
+        terminal_at: "2026-08-22T09:30:00Z",
+      }),
+      "admin",
+      [{
+        seq: 3, at: "2026-08-22T09:30:00Z", kind: "operation.cancelled",
+        actor: "user:bob@example.com", from_state: "approved", to_state: "cancelled",
+      }],
+    );
+
+    expect(await screen.findByText(/alice approved it/i)).toBeInTheDocument();
+    expect(screen.getByText(/bob withdrew it/i)).toBeInTheDocument();
+    expect(screen.queryByText(/alice withdrew it/i)).not.toBeInTheDocument();
+  });
+
+  // Rejecting writes no approver at all, so the only record of who did it is
+  // the entry.
+  it("names whoever turned it down, from the entry that recorded it", async () => {
+    mount(
+      operationFixture({ state: "rejected", terminal: true, terminal_at: "2026-08-22T09:10:00Z" }),
+      "admin",
+      [{
+        seq: 3, at: "2026-08-22T09:10:00Z", kind: "operation.rejected",
+        actor: "user:alice@example.com", from_state: "pending_approval", to_state: "rejected",
+      }],
+    );
+
+    expect(await screen.findByText(/alice turned it down/i)).toBeInTheDocument();
+  });
+
+  // The trail can be pruned. Then the sentence loses its subject rather than
+  // borrowing one from a field that means something else.
+  it("says what happened without a subject once the entry is gone", async () => {
+    mount(
+      operationFixture({
+        state: "rejected", terminal: true, terminal_at: "2026-08-22T09:10:00Z",
       }),
       "admin",
     );
 
-    expect(await screen.findByText(/alice turned it down/i)).toBeInTheDocument();
+    expect(await screen.findByText(/It was turned down/i)).toBeInTheDocument();
+    expect(screen.queryByText(/assistant turned it down/i)).not.toBeInTheDocument();
   });
 
   // Assurance is orthogonal: an auto-approved change can carry every proof,

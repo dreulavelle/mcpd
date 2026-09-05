@@ -74,6 +74,9 @@ function Body({ operation: op, audit, onChanged }: {
           <>
             {delta && <span className="block"><FieldDelta delta={delta} /></span>}
             {op.impact && <span className="block">{op.impact}</span>}
+            {/* The system is already the last two words of the heading, so
+                the lede names it as a place to go rather than saying it
+                again. */}
             <span className="block">
               Proposed by{" "}
               <Link
@@ -81,16 +84,15 @@ function Body({ operation: op, audit, onChanged }: {
                 className="text-primary hover:underline"
                 title="Everything this caller has done, on Activity"
               >
-                {name(op.requested_by)}
+                {name(op.requested_by, op.requested_by_name)}
               </Link>
-              {" on "}
+              .{" "}
               <Link
                 to={`/plugins/${encodeURIComponent(op.plugin)}`}
                 className="text-primary hover:underline"
               >
-                {op.plugin}
+                About {op.plugin}
               </Link>
-              .
             </span>
           </>
         }
@@ -177,7 +179,7 @@ function Body({ operation: op, audit, onChanged }: {
           <Lifecycle operation={op} audit={audit} />
         </Section>
 
-        <WhoAndWhen operation={op} name={name} />
+        <WhoAndWhen operation={op} audit={audit} name={name} />
 
         <Section title="History" description="Every step this change went through.">
           <Card className="overflow-hidden p-0">
@@ -231,15 +233,16 @@ function Body({ operation: op, audit, onChanged }: {
  * with the lifecycle's proofs, which say the same things in more words a few
  * inches above, and the id and the attempt count, which are evidence.
  */
-function WhoAndWhen({ operation: op, name }: {
+function WhoAndWhen({ operation: op, audit, name }: {
   operation: Operation;
-  name: (actor: string) => string;
+  audit: AuditRecord[];
+  name: (actor: string, resolved?: string) => string;
 }) {
   const lines: ReactNode[] = [];
 
   lines.push(
     <>
-      {name(op.requested_by)} proposed this{" "}
+      {name(op.requested_by, op.requested_by_name)} proposed this{" "}
       <Moment iso={op.requested_at} />.
     </>,
   );
@@ -271,9 +274,23 @@ function WhoAndWhen({ operation: op, name }: {
   } else if (op.approved_by) {
     lines.push(
       <>
-        {name(op.approved_by)} {decisionVerb(op.state)}
+        {name(op.approved_by, op.approved_by_name)} approved it
         {op.approved_at && <> <Moment iso={op.approved_at} /></>}.
       </>,
+    );
+  }
+
+  // Turning down and withdrawing are their own entries with their own actors.
+  // `approved_by` is whoever approved it, so on a change that was approved and
+  // then withdrawn it named the approver as the person who withdrew it -- two
+  // different people, and the record says so. Where the trail has been cleared
+  // the sentence loses its subject rather than borrowing one.
+  const settler = settlement(op, audit);
+  if (settler) {
+    lines.push(
+      settler.actor
+        ? <>{name(settler.actor)} {settler.verb} <Moment iso={settler.at} />.</>
+        : <>It was {settler.passive} <Moment iso={settler.at} />.</>,
     );
   }
 
@@ -286,7 +303,9 @@ function WhoAndWhen({ operation: op, name }: {
     );
   }
 
-  if (op.terminal_at) {
+  // Only where the settling was not already said above, which it is for a
+  // change somebody turned down or withdrew.
+  if (op.terminal_at && !settler) {
     lines.push(<>It settled <Moment iso={op.terminal_at} />.</>);
   }
 
@@ -303,12 +322,30 @@ function WhoAndWhen({ operation: op, name }: {
   );
 }
 
-function decisionVerb(state: string): string {
-  switch (state) {
-    case "rejected": return "turned it down";
-    case "cancelled": return "withdrew it";
-    default: return "approved it";
-  }
+/**
+ * Who turned a change down or withdrew it, out of the trail that recorded it.
+ *
+ * Neither writes `approved_by`, so the operation row alone cannot say. The
+ * audit entry can, and where it has been pruned the sentence says what
+ * happened without inventing somebody to have done it.
+ */
+function settlement(op: Operation, audit: AuditRecord[]): {
+  actor: string;
+  verb: string;
+  passive: string;
+  at: string;
+} | null {
+  const kinds: Partial<Record<string, { verb: string; passive: string }>> = {
+    rejected: { verb: "turned it down", passive: "turned down" },
+    cancelled: { verb: "withdrew it", passive: "withdrawn" },
+  };
+  const words = kinds[op.state];
+  if (!words) return null;
+
+  const entry = audit.find((r) => r.kind === `operation.${op.state}`);
+  const at = entry?.at ?? op.terminal_at;
+  if (!at) return null;
+  return { actor: entry?.actor ?? "", verb: words.verb, passive: words.passive, at };
 }
 
 /** How long ago, with the exact time one hover away rather than in the line. */
