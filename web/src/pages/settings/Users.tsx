@@ -338,7 +338,7 @@ function EditUser({ user, groups, notify, onClose, onChanged }: {
             </ul>
           )}
           <p className="text-xs text-muted-foreground">
-            Holds: {describe(collect(user.permissions)).toLowerCase()}; reaches {grantsLabel(user.reaches).toLowerCase()}.
+            Holds {describe(collect(user.permissions)).toLowerCase()}. Reaches {grantsLabel(user.reaches).toLowerCase()}.
           </p>
         </div>
       </SheetContent>
