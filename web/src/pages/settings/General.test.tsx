@@ -18,7 +18,7 @@ const groups: SettingGroup[] = [
         kind: "string", group: "server", apply: "live",
       },
       {
-        key: "server.tls_mode", label: "Certificate for the MCP endpoint",
+        key: "server.tls_mode", label: "Certificate for the address assistants use",
         kind: "enum", group: "server", apply: "restart",
         options: ["off", "self-signed"], default: "off",
       },
