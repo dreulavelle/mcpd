@@ -32,13 +32,18 @@ function operation(overrides: Partial<Operation> = {}): Operation {
   };
 }
 
+/**
+ * The endpoint as it actually behaves: one state at most, and a limit the
+ * server applies per plugin rather than across the answer.
+ */
 function mount(operations: Operation[], path = "/approvals") {
-  vi.spyOn(api, "operations").mockResolvedValue({
-    operations, count: operations.length,
+  vi.spyOn(api, "operations").mockImplementation(async (state) => {
+    const matching = state
+      ? operations.filter((op) => op.state === state)
+      : operations;
+    return { operations: matching, count: matching.length };
   });
-  // The page names people rather than principals where it may read the
-  // accounts, which an administrator's session can.
-  vi.spyOn(api, "users").mockResolvedValue({ users: [], count: 0 });
+  // Only keys need resolving client-side; users arrive resolved on the record.
   vi.spyOn(api, "keys").mockResolvedValue({ keys: [], count: 0 });
   return renderWith(<ApprovalsList />, { session: sessionFor("admin"), path });
 }
@@ -143,6 +148,58 @@ describe("what is waiting", () => {
     expect(screen.getByRole("heading", { name: "Lately" })).toBeInTheDocument();
   });
 
+  /**
+   * The server's limit is per plugin, not across the answer.
+   *
+   * A system that settles two hundred changes between polls fills its own
+   * slice of the unfiltered page, and a proposal still waiting on somebody
+   * falls off it. The queue is the half of this screen that cannot be allowed
+   * to lie, so it is fetched as its own call and merged by id.
+   */
+  it("finds a waiting proposal the unfiltered page has no room for", async () => {
+    const waiting = operation({
+      id: "op-buried", plugin: "graylog", action: "alert.silence",
+      state: "pending_approval", terminal: false, verified: undefined,
+      terminal_at: undefined, requested_at: at(-90_000), expires_at: at(600),
+    });
+    const flood = Array.from({ length: 200 }, (_, i) => operation({
+      id: `op-noise-${i}`, requested_at: at(-i),
+    }));
+
+    vi.spyOn(api, "operations").mockImplementation(async (state) =>
+      state === "pending_approval"
+        ? { operations: [waiting], count: 1 }
+        // What the unfiltered call returns once one plugin has used up the
+        // page: everything settled, and nothing that is waiting.
+        : { operations: flood, count: flood.length });
+    vi.spyOn(api, "keys").mockResolvedValue({ keys: [], count: 0 });
+    renderWith(<ApprovalsList />, { session: sessionFor("admin") });
+
+    const region = await screen.findByRole("region", { name: /waiting on you/i });
+    expect(within(region).getByRole("heading", { level: 3 }).textContent)
+      .toBe("Silence the alert on graylog");
+  });
+
+  it("counts a change that came back from both calls once", async () => {
+    mount(aBusyHost());
+    const region = await screen.findByRole("region", { name: /waiting on you/i });
+    expect(within(region).getAllByRole("heading", { level: 3 })).toHaveLength(2);
+  });
+
+  // Past the deadline, "Runs out 5 minutes ago" is arithmetic rather than the
+  // fact, and the fact is that it is too late.
+  it("says a lapsed proposal is out of time rather than counting backwards", async () => {
+    mount([operation({
+      id: "op-late", plugin: "echo", action: "label.set",
+      state: "pending_approval", terminal: false, verified: undefined,
+      terminal_at: undefined, expires_at: at(-300),
+    })]);
+
+    const region = await screen.findByRole("region", { name: /waiting on you/i });
+    expect(within(region).getByText("Out of time")).toBeInTheDocument();
+    expect(within(region).queryByText(/Runs out/)).not.toBeInTheDocument();
+  });
+
   it("says a fresh host has had nothing proposed rather than showing an empty queue", async () => {
     mount([]);
     expect(await screen.findByText(/No assistant has proposed anything yet/i))
@@ -194,6 +251,60 @@ describe("what became of the rest", () => {
       .closest("li")!;
     expect(failed.textContent).toContain("didn't run");
     expect(failed.textContent).toContain("did not match");
+  });
+
+  /**
+   * Rejecting never writes `approved_by`, so falling back to the requester
+   * had the row read "ChatGPT (work) · turned down an hour ago" -- an
+   * assistant turning its own change down, which is not a thing that happens.
+   */
+  it("does not present the requester as the person who settled it", async () => {
+    mount([operation({
+      id: "op-r", plugin: "threecx", action: "password.reset",
+      state: "rejected", verified: undefined, changes: undefined,
+      approved_by: undefined, requested_by: "svc:chatgpt:work",
+    })]);
+
+    const row = (await screen.findByText(/Reset the password on threecx/))
+      .closest("li")!;
+    // The who-fragment says what it knows -- who asked -- and the outcome
+    // beside it keeps no subject at all.
+    expect(row.textContent).toMatch(/proposed by ChatGPT \(work\) · turned down/);
+  });
+
+  it("names the person where the record does say who decided", async () => {
+    mount([operation({
+      id: "op-r", plugin: "threecx", action: "password.reset",
+      state: "rejected", verified: undefined, changes: undefined,
+      approved_by: "user:dreu@example.com", approved_by_name: "Dreu Lavelle",
+    })]);
+
+    const row = (await screen.findByText(/Reset the password on threecx/))
+      .closest("li")!;
+    // Resolved server-side for every session, so no request is made for it.
+    expect(row.textContent).toContain("Dreu Lavelle · turned down");
+    expect(row.textContent).not.toContain("proposed by");
+  });
+
+  // A delete records no new value. Without the plugin's own sentence, two
+  // page deletions on one system were the same row twice.
+  it("falls back to the impact where a change records no new value", async () => {
+    mount([
+      operation({
+        id: "op-d1", plugin: "bookstack", action: "page.delete",
+        changes: undefined, impact: "Deletes the page “Runbook: failover”.",
+      }),
+      operation({
+        id: "op-d2", plugin: "bookstack", action: "page.delete",
+        changes: undefined, impact: "Deletes the page “Onboarding”.",
+      }),
+    ]);
+
+    const lately = await screen.findByRole("region", { name: "Lately" });
+    const rows = within(lately).getAllByRole("listitem").map((li) => li.textContent);
+    expect(rows[0]).toContain("Runbook: failover");
+    expect(rows[1]).toContain("Onboarding");
+    expect(rows[0]).not.toBe(rows[1]);
   });
 
   it("shows ten and offers the rest rather than every change this host has made", async () => {
@@ -249,6 +360,52 @@ describe("cutting the list", () => {
       .getAllByRole("listitem");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.textContent).toContain("ended in an unknown state");
+  });
+
+  // The address bar is somewhere anybody can type, and a build that trusted
+  // it indexed GROUPS with a key nobody defined and rendered a blank page.
+  it("treats a group it has never heard of as no filter at all", async () => {
+    mount(aBusyHost(), "/approvals?show=bogus");
+
+    const everything = await screen.findByRole("radio", { name: "Everything (8)" });
+    expect(everything).toHaveAttribute("aria-checked", "true");
+    expect(within(screen.getByRole("region", { name: "Lately" }))
+      .getAllByRole("listitem")).toHaveLength(8);
+  });
+
+  it("ignores a state it has never heard of the same way", async () => {
+    mount(aBusyHost(), "/approvals?state=nonsense");
+    expect(await screen.findByRole("radio", { name: "Everything (8)" }))
+      .toHaveAttribute("aria-checked", "true");
+  });
+
+  /**
+   * Choosing Everything has to actually mean everything.
+   *
+   * The chip writes `show` and the legacy link carries `state`. Clearing only
+   * `show` left `state=indeterminate` behind, `groupForState` read it again,
+   * and the view snapped back to Unknown -- a control that undoes itself.
+   */
+  it("drops the legacy state when a chip clears the new one", async () => {
+    mount(aBusyHost(), "/approvals?state=indeterminate");
+    await screen.findByRole("region", { name: "Lately" });
+
+    await userEvent.click(screen.getByRole("radio", { name: "Everything (8)" }));
+    expect(window.location.search).toBe("");
+    expect(screen.getByRole("radio", { name: "Everything (8)" }))
+      .toHaveAttribute("aria-checked", "true");
+    expect(within(screen.getByRole("region", { name: "Lately" }))
+      .getAllByRole("listitem")).toHaveLength(8);
+  });
+
+  it("drops the legacy plugin when the system select clears the new one", async () => {
+    mount(aBusyHost(), "/approvals?plugin=graylog");
+    await screen.findByRole("region", { name: "Lately" });
+
+    await userEvent.selectOptions(screen.getByLabelText("System"), "");
+    expect(window.location.search).toBe("");
+    expect(screen.getByRole("heading", { name: "Set the label on echo" }))
+      .toBeInTheDocument();
   });
 
   // A host with several systems proposing changes needs the list cut by one of

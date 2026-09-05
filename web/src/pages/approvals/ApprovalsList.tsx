@@ -50,6 +50,11 @@ const GROUP_LABELS: Record<Group, string> = {
   unknown: "Unknown",
 };
 
+/** Whether a value out of the address is one of the groups this build has. */
+function isGroup(value: string): value is Group {
+  return value === "" || Object.hasOwn(GROUPS, value);
+}
+
 /**
  * The state links that existed before this page had chips. Attention sends
  * people here with `?state=indeterminate`, and a link somebody bookmarked has
@@ -97,20 +102,43 @@ const SOON_MS = 60 * 60 * 1000;
 
 export function ApprovalsList() {
   const [show, setShow] = useQueryParam("show");
-  const [state] = useQueryParam("state");
-  // `show` is what this page writes; `state` is what older links carry.
-  const group: Group = (show || groupForState(state)) as Group;
+  const [state, setState] = useQueryParam("state");
+  // `show` is what this page writes; `state` is what older links carry. An
+  // unknown value in either is no filter rather than a crash: the address bar
+  // is somewhere anybody can type, and `GROUPS[group]` on a value nobody
+  // defined is a blank page.
+  // An absent `show` is not a choice, so it falls through to the legacy link
+  // rather than answering for it.
+  const group: Group = show !== "" && isGroup(show) ? show : groupForState(state);
 
   const [system, setSystem] = useQueryParam("system");
-  const [legacySystem] = useQueryParam("plugin");
+  const [legacySystem, setLegacySystem] = useQueryParam("plugin");
   const plugin = system || legacySystem;
+
+  // Both halves of each pair, or the legacy one wins back the moment the new
+  // one is cleared and the view snaps to a filter nobody chose.
+  const chooseGroup = (next: Group) => { setShow(next); setState(""); };
+  const chooseSystem = (next: string) => { setSystem(next); setLegacySystem(""); };
 
   const [needle, setNeedle] = useState("");
   // The owner asked for the last ten, not every change this host has ever
   // made. The rest is a click away rather than a scrollbar away.
   const [showing, setShowing] = useState(10);
 
-  const load = useCallback(() => api.operations(undefined, 200), []);
+  // Two calls, because the unfiltered one is capped per plugin server-side: a
+  // system that has settled two hundred changes since lunch would push a
+  // proposal still waiting on somebody out of the page entirely, and the
+  // queue is the half of this screen that cannot be allowed to lie.
+  const load = useCallback(async () => {
+    const [all, pending] = await Promise.all([
+      api.operations(undefined, 200),
+      api.operations("pending_approval", 200),
+    ]);
+    const byId = new Map<string, Operation>();
+    for (const op of all.operations ?? []) byId.set(op.id, op);
+    for (const op of pending.operations ?? []) byId.set(op.id, op);
+    return { operations: [...byId.values()] };
+  }, []);
   const { data, error } = useLoader(load, "Couldn't load proposed changes.", 10_000);
   const name = usePrincipalNames();
 
@@ -168,7 +196,7 @@ export function ApprovalsList() {
                 aria-label="System"
                 className="w-44"
                 value={plugin}
-                onChange={(e) => setSystem(e.target.value)}
+                onChange={(e) => chooseSystem(e.target.value)}
               >
                 <option value="">Every system</option>
                 {systems.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -200,7 +228,7 @@ export function ApprovalsList() {
           No change matches that.{" "}
           <Button
             variant="link" className="h-auto p-0"
-            onClick={() => { setSystem(""); setNeedle(""); }}
+            onClick={() => { chooseSystem(""); setNeedle(""); }}
           >
             Widen it
           </Button>
@@ -247,7 +275,7 @@ export function ApprovalsList() {
                   <Segmented
                     label="Show"
                     value={group}
-                    onChange={(next) => { setShow(next); setShowing(10); }}
+                    onChange={(next) => { chooseGroup(next); setShowing(10); }}
                     options={(Object.keys(GROUP_LABELS) as Group[]).map((g) => ({
                       value: g,
                       label: `${GROUP_LABELS[g]} (${count(settled, g)})`,
@@ -261,7 +289,7 @@ export function ApprovalsList() {
                   Nothing here yet.{" "}
                   <Button
                     variant="link" className="h-auto p-0"
-                    onClick={() => setShow("")}
+                    onClick={() => chooseGroup("")}
                   >
                     Show everything
                   </Button>
@@ -316,12 +344,15 @@ function count(settled: Operation[], group: Group): number {
  */
 function WaitingCard({ op, name }: {
   op: Operation;
-  name: (actor: string) => string;
+  name: (actor: string, resolved?: string) => string;
 }) {
   const { headline, detail } = describeChange(op);
   const delta = fieldDelta(op);
   const left = Date.parse(op.expires_at) - Date.now();
   const soon = !Number.isNaN(left) && left < SOON_MS;
+  // Past the deadline it has not run out "5 minutes ago" -- it is simply too
+  // late, and the arithmetic is not the fact.
+  const gone = !Number.isNaN(left) && left <= 0;
 
   return (
     <Link
@@ -341,7 +372,7 @@ function WaitingCard({ op, name }: {
                 "text-xs whitespace-nowrap",
                 soon ? "text-attention" : "text-muted-foreground",
               )}>
-                Runs out {relative(op.expires_at)}
+                {gone ? "Out of time" : `Runs out ${relative(op.expires_at)}`}
               </p>
             )}
           </div>
@@ -356,7 +387,7 @@ function WaitingCard({ op, name }: {
 
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs">
             <p className="text-muted-foreground">
-              {name(op.requested_by)}
+              {name(op.requested_by, op.requested_by_name)}
               {" · "}
               <span className={op.risk === "low" ? undefined : MARK_TONE[riskTone(op.risk)]}>
                 {riskLabel(op.risk).toLowerCase()} risk
@@ -390,19 +421,26 @@ function riskTone(risk: string): Tone {
  */
 function SettledRow({ op, name }: {
   op: Operation;
-  name: (actor: string) => string;
+  name: (actor: string, resolved?: string) => string;
 }) {
-  const { headline } = describeChange(op);
+  const { headline, detail } = describeChange(op);
   const delta = fieldDelta(op);
   const tone = stateTone(op.state);
   const Mark = MARKS[op.state] ?? Check;
 
-  // Who the row is about is whoever settled it, falling back to whoever asked.
-  // A rule is named as a rule: `approved_by` on one of those is `system:policy`,
-  // which is not an account and must not read as one.
-  const actor = op.authorized_by_rule
-    ? "system:policy"
-    : op.approved_by || op.requested_by;
+  // Who the row names, and only where the record actually says.
+  //
+  // A rule is named as a rule: `approved_by` on one of those is
+  // `system:policy`, which is not an account. Where nobody is recorded as
+  // having settled it -- rejecting never writes `approved_by` -- the row says
+  // who proposed it and leaves the outcome subjectless. Falling back to the
+  // requester read as "ChatGPT turned its own change down", which is a
+  // sentence about something that did not happen.
+  const who = op.authorized_by_rule
+    ? name("system:policy")
+    : op.approved_by
+      ? name(op.approved_by, op.approved_by_name)
+      : `proposed by ${name(op.requested_by, op.requested_by_name)}`;
 
   // Before it ran, "not checked" is true of everything and says nothing.
   const ran = op.state === "succeeded" || op.state === "failed" ||
@@ -422,16 +460,20 @@ function SettledRow({ op, name }: {
           >
             {headline}
           </Link>
-          {delta && (
+          {/* A delete records no new value, so without the plugin's own
+              sentence two deletions on one system read identically. */}
+          {delta ? (
             <span className="text-muted-foreground">
               {" — "}
               {delta.from !== null ? `from ${delta.from} to ${delta.to}` : `to ${delta.to}`}
             </span>
-          )}
+          ) : detail ? (
+            <span className="text-muted-foreground">{" — "}{detail}</span>
+          ) : null}
         </p>
         <p className="text-xs text-muted-foreground">
           {[
-            name(actor),
+            who,
             describeOutcome(op),
             ran ? confirmationWord(op.verified) : "",
           ].filter(Boolean).join(" · ")}
