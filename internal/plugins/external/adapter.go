@@ -289,11 +289,11 @@ func (p *Plugin) Check(ctx context.Context) plugins.Health {
 func (p *Plugin) check(ctx context.Context) plugins.Health {
 	proc, err := p.process()
 	if err != nil {
-		return plugins.Unhealthy("plugin process is not running")
+		return plugins.Unhealthy("This plugin is not running.")
 	}
 	var result HealthResult
 	if err := proc.Call(ctx, MethodHealth, nil, &result); err != nil {
-		return plugins.Degraded("plugin did not answer its health check")
+		return plugins.Degraded("This plugin did not answer when asked how it was.")
 	}
 	switch plugins.HealthState(result.State) {
 	case plugins.HealthyState:
@@ -313,7 +313,7 @@ func (p *Plugin) Health() plugins.Health {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.health.State == "" {
-		return plugins.Unhealthy("plugin has not completed its handshake")
+		return plugins.Unhealthy("This plugin has not finished starting up.")
 	}
 	return p.health
 }

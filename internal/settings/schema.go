@@ -535,12 +535,11 @@ func schema() []Group {
 					Key: KeyServerPublicURL, Label: "Address assistants use",
 					Kind: KindString, Group: "server", Apply: ApplyLive,
 					Placeholder: "https://mcp.example.net",
-					Help: "The MCP endpoint as clients reach it, with the scheme and " +
-						"the port. Empty means the host this page is on, at the MCP " +
-						"port, which is right on one network and wrong through a " +
-						"proxy. Behind a proxy it is also how mcpd knows the " +
-						"connection is really https. A self-signed certificate is " +
-						"issued for this address, so changing it needs a restart.",
+					Help: "The address assistants connect to, including https:// and " +
+						"the port. Leave it empty and mcpd guesses from the address " +
+						"this page is on, which is right on one network and wrong " +
+						"through a proxy. A certificate is issued for this address, " +
+						"so changing it needs a restart.",
 				},
 				{
 					Key: KeyServerFrontendPublicURL, Label: "Address this page is on",
@@ -559,7 +558,7 @@ func schema() []Group {
 						"only when something in front of mcpd terminates TLS.",
 				},
 				{
-					Key: KeyServerTLSMode, Label: "Certificate for the MCP endpoint",
+					Key: KeyServerTLSMode, Label: "Certificate for the address assistants use",
 					Kind: KindEnum, Group: "server", Apply: ApplyRestart,
 					Default: "off", Options: []string{"off", "self-signed"},
 					Help: "Leave this off when a reverse proxy already terminates " +
@@ -570,9 +569,9 @@ func schema() []Group {
 					Key: KeyServerFrontendEnabled, Label: "Serve this dashboard",
 					Kind: KindBool, Group: "server", Apply: ApplyRestart,
 					Default: true,
-					Help: "Turning it off leaves the MCP endpoint running and nothing " +
-						"to administer it from until you turn it back on in the " +
-						"database by hand.",
+					Help: "Turning it off leaves assistants connected and leaves you " +
+						"nothing to administer this host from, until you turn it " +
+						"back on in the database by hand.",
 				},
 			},
 		},
@@ -929,8 +928,8 @@ func schema() []Group {
 					Key: KeyServerWriteTimeout, Label: "Allow for a reply",
 					Kind: KindDuration, Unit: UnitSeconds, Group: "timeouts", Apply: ApplyRestart,
 					Default: 120, Min: intPtr(1), Max: intPtr(3600),
-					Help: "A tool call that reaches a slow upstream spends its time " +
-						"here, so this is the one to raise if long calls are being cut off.",
+					Help: "A tool call waiting on a slow system spends its time here, " +
+						"so this is the one to raise if long calls are being cut off.",
 				},
 				{
 					Key: KeyServerIdleTimeout, Label: "Hold an idle connection",

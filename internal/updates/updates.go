@@ -207,7 +207,7 @@ func (c *Checker) fetch(ctx context.Context, cfg Config) (Status, error) {
 		return Status{}, errors.New("GitHub is rate limiting this address; the next check should succeed")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Status{}, fmt.Errorf("the release list answered HTTP %d", resp.StatusCode)
+		return Status{}, fmt.Errorf("GitHub could not be asked for the release list (HTTP %d)", resp.StatusCode)
 	}
 
 	var raw []struct {
