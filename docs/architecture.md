@@ -444,6 +444,19 @@ be proved is ownership of the mcpd account. Linking writes a row in
 `user_identities`, which is the only thing that ever turns a subject into an
 account.
 
+**A subject who cannot sign in is not an administrator.**
+`roles.CountAdministrators` is the one place that rule is written in SQL, and
+every exclusion in it is the same rule: what stands between this host and
+nobody being able to administer it is a person who can actually get in and put
+things right. Keys are excluded because a key cannot sign in, and a pending
+account holds nothing whatever its row says. An unclaimed invitation is
+excluded for the same reason and is the one that is easy to miss, because the
+row looks like an ordinary administrator — it has the role, it is enabled, and
+it is active. What it has not got is a credential. Counting it would let the
+last person who actually holds the role demote or delete themselves, with the
+guard satisfied by an address somebody typed on the Users page and an
+invitation that may already have lapsed.
+
 **Three proofs turn an address into that row, and no other.** The rule above
 says what is *not* a proof; these are what is. The first is signing in here and
 linking from the profile page — the original one, and the only one that needs
@@ -458,12 +471,17 @@ the address, which is what the first paragraph asks for; what differs is who
 makes it.
 
 **The offer at a collision is a row, and it is bounded like a state.**
-`sso_pending_links` carries a digest for a key, the browser binding beside it,
-an expiry and a failure count, and every one of them is in the `WHERE` clause
-of the claim. It has a cookie name of its own because the callback clears the
-flow's binding cookie on every exit, including the exit that makes the offer,
-and it is set before the redirect header is written for the reason every
-`Set-Cookie` in that handler is. Three wrong passwords retire it: the row names
+`sso_pending_links` carries a digest for a key, a browser binding beside it, an
+expiry and a failure count, and every one of them is in the `WHERE` clause of
+the claim. Both secrets are minted by the store and set as cookies of their
+own, and neither is the flow's binding: the callback retires that one on every
+exit, including the exit that makes the offer, so a row bound to it is a row no
+browser can present — the offer is written, the screen is drawn, and every
+request for it answers that nothing is waiting. They are set before the
+redirect header is written, for the reason every `Set-Cookie` in that handler
+is, and they are retired together, because a token presented without its
+binding is refused with a sentence about an offer the person can see no trace
+of. Three wrong passwords retire it: the row names
 one account, so without a ceiling it is a password oracle with a ten-minute
 life against an address somebody has already proved they can read mail at. The
 password is compared outside the write transaction — bcrypt at this cost holds
@@ -602,9 +620,12 @@ the provider, the sentinel password hash, the enabled flag, an expiry and the
 absence of any identity, so two callbacks arriving together produce one claim
 and one refusal. The invitation lapses after fourteen days because an address
 can be reassigned, and one that never lapses is an account handed to whoever
-holds the address next; setting a password clears it in the same statement,
-because an account holding both is one whose invitation is still claimable
-after somebody was given a password for it. An invited account is active rather
+holds the address next. A lapsed one is offered again by saving the account,
+which re-stamps the expiry from now through the same guard — an invitation
+cannot be put onto an account that has since gained a password or linked a
+provider, because that account is one somebody is already using and whoever
+holds its address at the provider could then claim it. Setting a password
+clears the invitation in the same statement, for that reason. An invited account is active rather
 than pending, and is not in the approval queue: it is one somebody already
 decided about.
 
