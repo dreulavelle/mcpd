@@ -78,6 +78,17 @@ var (
 	ErrMultiple = errors.New("that is more than one certificate")
 )
 
+// errPKCS7 is what both PKCS#7 paths answer with.
+//
+// A bundle arrives PEM-armoured or as raw DER, and the person who pasted it
+// cannot tell those apart -- so answering one of them with the conversion and
+// the other with only "that is a PKCS#7 bundle" made the help depend on which
+// armour the export happened to use. It wraps ErrPKCS7, so errors.Is still
+// recognises it.
+var errPKCS7 = fmt.Errorf("%w: convert it first with `openssl pkcs7 "+
+	"-print_certs -in bundle.p7b -out certificates.pem`, then add the "+
+	"certificates from that file one at a time", ErrPKCS7)
+
 // Certificate is one stored trust anchor, with the facts parsed from it.
 type Certificate struct {
 	ID   string
@@ -185,7 +196,7 @@ func parsePEM(raw []byte) (*Certificate, error) {
 		case strings.Contains(block.Type, "PRIVATE KEY"):
 			return nil, ErrPrivateKey
 		case block.Type == "PKCS7":
-			return nil, ErrPKCS7
+			return nil, errPKCS7
 		case block.Type == "CERTIFICATE":
 			c, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
@@ -223,9 +234,7 @@ func parseDER(raw []byte) (*Certificate, error) {
 	// looking at it in a text editor it is the same wall of binary. Naming the
 	// conversion is the whole value of telling the two apart.
 	if isPKCS7(raw) {
-		return nil, fmt.Errorf("%w: convert it first with `openssl pkcs7 "+
-			"-print_certs -in bundle.p7b -out certificates.pem`, then add the "+
-			"certificates from that file one at a time", ErrPKCS7)
+		return nil, errPKCS7
 	}
 	return nil, ErrNoCertificate
 }
