@@ -76,27 +76,31 @@ func TestSSOCallback_AnAddressWithAPasswordAccountOffersToLinkRatherThanRefusing
 	// The offer is worth nothing without the cookie, and a Set-Cookie added
 	// after http.Redirect has written the header is never sent. The recorder
 	// snapshots its headers at WriteHeader, so this assertion is the ordering.
-	c := cookieNamed(res, ssoLinkCookie)
-	if c == nil || c.Value != identities.offerToken {
-		t.Fatalf("link cookie = %+v; want the offer's token, set before the redirect", c)
+	for name, want := range map[string]string{
+		ssoLinkCookie: identities.offerToken, ssoLinkBindingCookie: identities.offerBinding,
+	} {
+		c := cookieNamed(res, name)
+		if c == nil || c.Value != want {
+			t.Fatalf("%s = %+v; want %q, set before the redirect", name, c, want)
+		}
+		if !c.HttpOnly {
+			t.Errorf("%s must be HttpOnly, or a script on the page can read it", name)
+		}
+		if c.SameSite != http.SameSiteLaxMode {
+			t.Errorf("%s SameSite = %v; want Lax", name, c.SameSite)
+		}
+		if c.Path != ssoCookiePath {
+			t.Errorf("%s Path = %q; want the flow's path, not the whole dashboard", name, c.Path)
+		}
 	}
-	if !c.HttpOnly {
-		t.Error("the link cookie must be HttpOnly, or a script on the page can read it")
-	}
-	if c.SameSite != http.SameSiteLaxMode {
-		t.Errorf("SameSite = %v; want Lax", c.SameSite)
-	}
-	if c.Path != ssoCookiePath {
-		t.Errorf("Path = %q; want the flow's path and not the whole dashboard", c.Path)
-	}
-	// A name of its own. finish() clears mcpd_sso on every exit from the
-	// callback, including this one, so a second use of that name would clear
-	// the offer in the same response that made it.
-	if c.Name == ssoCookie {
-		t.Error("the offer rides the binding cookie, which this exit clears")
-	}
+	// Names of their own. finish() clears mcpd_sso on every exit from the
+	// callback, including this one, so an offer bound to it is one no browser
+	// can present.
 	if binding := cookieNamed(res, ssoCookie); binding == nil || binding.MaxAge >= 0 {
 		t.Error("the binding cookie was not retired on the way out")
+	}
+	if identities.offerBinding == "the-binding" {
+		t.Error("the offer was bound to the flow's binding, which this response retires")
 	}
 	if session := cookieNamed(res, sessionCookie); session != nil && session.Value != "" {
 		t.Error("a session was issued before anybody presented a password")
@@ -192,40 +196,110 @@ func TestSSOCallback_AnOfferThatCannotBeRecordedFallsBackToTheRefusal(t *testing
 	}
 }
 
-// A callback with no binding cookie is one this host cannot bind an offer to,
-// and an offer nobody can bind to a browser is one anybody can hand to
-// anybody.
-func TestSSOCallback_AnOfferIsNotMadeToABrowserItCannotBeBoundTo(t *testing.T) {
+// The offer's binding comes from the store, so a callback whose own binding
+// cookie has already gone -- a browser that dropped it, a proxy that stripped
+// it -- still produces a usable offer. It could not before: binding the row to
+// a cookie the caller happened to still have is what made the offer depend on
+// something this response was about to retire anyway.
+func TestSSOCallback_TheOfferDoesNotDependOnTheFlowsBinding(t *testing.T) {
 	accounts := newFakeAccounts()
 	accounts.user.PasswordHash = "$2a$12$a-hash"
 	identities := &fakeIdentities{byEmail: accounts.user}
 	s := NewServer(testOptions(accounts, identities))
 
 	res := callbackFor(t, s, "", googleIdentity())
-	if got := res.Header.Get("Location"); got != "/?sso_error=address_taken" {
-		t.Errorf("Location = %q; want the ordinary refusal", got)
+	if got := res.Header.Get("Location"); got != "/?sso_error=link_password" {
+		t.Errorf("Location = %q; want the connect screen", got)
 	}
-	if identities.offered != nil {
-		t.Error("an offer was made to a browser it could not be bound to")
+	if identities.offered == nil {
+		t.Fatal("no offer was recorded")
+	}
+	held := jar(res)
+	if res := pendingRequest(t, s, http.MethodGet, "", held); res.StatusCode != http.StatusOK {
+		t.Errorf("GET pending = %d; want the offer this browser holds", res.StatusCode)
 	}
 }
 
 // --- the routes that take the offer up ---------------------------------------
 
 // offered puts a server and a browser into the state the screen renders from.
-func offered(t *testing.T) (*Server, *fakeAccounts, *fakeIdentities) {
+//
+// The cookies come out of the callback's own response, so what the tests below
+// present is what a browser would actually be holding.
+func offered(t *testing.T) (*Server, *fakeAccounts, *fakeIdentities, []*http.Cookie) {
 	t.Helper()
 	accounts := newFakeAccounts()
 	accounts.user.PasswordHash = "$2a$12$a-hash"
 	identities := &fakeIdentities{byEmail: accounts.user}
 	s := NewServer(testOptions(accounts, identities))
-	if res := callbackFor(t, s, "the-binding", googleIdentity()); res.StatusCode != http.StatusSeeOther {
+	res := callbackFor(t, s, "the-binding", googleIdentity())
+	if res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("offer: %d", res.StatusCode)
 	}
-	return s, accounts, identities
+	// The flow's own binding cookie is what the browser arrived with, and the
+	// callback retires it. Carrying it in is what makes the jar honest: if the
+	// offer were bound to it, everything after this would find nothing.
+	return s, accounts, identities,
+		jar(res, &http.Cookie{Name: ssoCookie, Value: "the-binding"})
 }
 
-func pendingRequest(t *testing.T, s *Server, method, body, token, binding string) *http.Response {
+// The bug the round-one review caught. The offer was bound to the flow's
+// binding cookie and finish() retires that cookie in the same response, so a
+// real browser ended the callback holding a token it could not use: the row
+// was there, the screen was drawn, and every request for it answered "there is
+// nothing waiting".
+//
+// What makes this assertable is that the cookies come from the response rather
+// than from the test. The offer's own binding has to be one the callback set,
+// and it must not be the flow's.
+func TestPendingLink_TheOfferSurvivesTheCookiesTheCallbackRetires(t *testing.T) {
+	s, _, _, held := offered(t)
+
+	names := map[string]bool{}
+	for _, c := range held {
+		names[c.Name] = true
+	}
+	if names[ssoCookie] {
+		t.Error("the flow's binding cookie survived the callback; finish() must retire it")
+	}
+	if !names[ssoLinkCookie] || !names[ssoLinkBindingCookie] {
+		t.Fatalf("the browser is holding %v; want both halves of the offer", names)
+	}
+
+	// And the offer is usable with exactly what the browser has left.
+	if res := pendingRequest(t, s, http.MethodGet, "", held); res.StatusCode != http.StatusOK {
+		t.Fatalf("GET pending = %d with the cookies the callback left; want 200", res.StatusCode)
+	}
+}
+
+// jar is what a browser would be holding after a response.
+//
+// Cookies the response retired are dropped, which is the whole point of the
+// helper: hand-injecting a cookie name into a follow-up request is how a test
+// asserts a flow that no real browser can complete. The bug this exists for is
+// exactly that -- the offer was bound to the flow's binding cookie, the same
+// response cleared it, and every later request answered "there is nothing
+// waiting" while the tests passed.
+func jar(res *http.Response, carry ...*http.Cookie) []*http.Cookie {
+	held := map[string]*http.Cookie{}
+	for _, c := range carry {
+		held[c.Name] = c
+	}
+	for _, c := range res.Cookies() {
+		if c.MaxAge < 0 || c.Value == "" {
+			delete(held, c.Name)
+			continue
+		}
+		held[c.Name] = c
+	}
+	out := make([]*http.Cookie, 0, len(held))
+	for _, c := range held {
+		out = append(out, &http.Cookie{Name: c.Name, Value: c.Value})
+	}
+	return out
+}
+
+func pendingRequest(t *testing.T, s *Server, method, body string, cookies []*http.Cookie) *http.Response {
 	t.Helper()
 	var r *http.Request
 	if body == "" {
@@ -234,24 +308,37 @@ func pendingRequest(t *testing.T, s *Server, method, body, token, binding string
 		r = httptest.NewRequest(method, "/api/auth/sso/pending", strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
 	}
-	if token != "" {
-		r.AddCookie(&http.Cookie{Name: ssoLinkCookie, Value: token})
-	}
-	if binding != "" {
-		r.AddCookie(&http.Cookie{Name: ssoCookie, Value: binding})
+	for _, c := range cookies {
+		r.AddCookie(c)
 	}
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	return w.Result()
 }
 
+// named picks one cookie out of a jar, for a test that wants to corrupt it.
+func named(cookies []*http.Cookie, name, value string) []*http.Cookie {
+	out := make([]*http.Cookie, 0, len(cookies))
+	for _, c := range cookies {
+		if c.Name == name {
+			if value == "" {
+				continue
+			}
+			out = append(out, &http.Cookie{Name: name, Value: value})
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // The screen confirms with the server before it draws a password field. A code
 // in the address bar is a parameter somebody can type, and drawing the field
 // on the strength of one would ask for a password against nothing.
 func TestPendingLink_TheScreenIsOnlyDrawnForAnOfferTheServerConfirms(t *testing.T) {
-	s, _, identities := offered(t)
+	s, _, _, held := offered(t)
 
-	res := pendingRequest(t, s, http.MethodGet, "", identities.offerToken, "the-binding")
+	res := pendingRequest(t, s, http.MethodGet, "", held)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("GET pending = %d; want the offer this browser holds", res.StatusCode)
 	}
@@ -265,15 +352,16 @@ func TestPendingLink_TheScreenIsOnlyDrawnForAnOfferTheServerConfirms(t *testing.
 
 	for _, tc := range []struct {
 		name    string
-		token   string
-		binding string
+		cookies []*http.Cookie
 	}{
-		{"no cookies at all", "", ""},
-		{"a token nobody was issued", "a-token-nobody-holds", "the-binding"},
-		{"another browser's binding", identities.offerToken, "somebody-elses-binding"},
+		{"no cookies at all", nil},
+		{"a token nobody was issued", named(held, ssoLinkCookie, "a-token-nobody-holds")},
+		{"another browser's binding", named(held, ssoLinkBindingCookie, "somebody-elses")},
+		{"the token with no binding", named(held, ssoLinkBindingCookie, "")},
+		{"the binding with no token", named(held, ssoLinkCookie, "")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res := pendingRequest(t, s, http.MethodGet, "", tc.token, tc.binding)
+			res := pendingRequest(t, s, http.MethodGet, "", tc.cookies)
 			if res.StatusCode != http.StatusNotFound {
 				t.Errorf("GET pending = %d; want 404", res.StatusCode)
 			}
@@ -285,10 +373,10 @@ func TestPendingLink_TheScreenIsOnlyDrawnForAnOfferTheServerConfirms(t *testing.
 // person in. Everything about which account and which subject comes out of the
 // row, so there is nothing in the request for a caller to aim elsewhere.
 func TestPendingLink_TheRightPasswordConnectsTheProviderAndSignsIn(t *testing.T) {
-	s, accounts, identities := offered(t)
+	s, accounts, _, held := offered(t)
 
 	res := pendingRequest(t, s, http.MethodPost,
-		`{"password":"a-sufficiently-long-passphrase"}`, identities.offerToken, "the-binding")
+		`{"password":"a-sufficiently-long-passphrase"}`, held)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("POST pending = %d; want a session", res.StatusCode)
 	}
@@ -302,9 +390,12 @@ func TestPendingLink_TheRightPasswordConnectsTheProviderAndSignsIn(t *testing.T)
 	if c := cookieNamed(res, sessionCookie); c == nil || c.Value != accounts.token {
 		t.Fatalf("session cookie = %+v; want the issued token", c)
 	}
-	// The offer is spent, and the cookie holding it goes with it.
-	if c := cookieNamed(res, ssoLinkCookie); c == nil || c.MaxAge >= 0 {
-		t.Error("the link cookie survived the connection")
+	// The offer is spent, and both cookies holding it go with it. Leaving one
+	// behind would have the next request present half an offer.
+	for _, name := range []string{ssoLinkCookie, ssoLinkBindingCookie} {
+		if c := cookieNamed(res, name); c == nil || c.MaxAge >= 0 {
+			t.Errorf("%s survived the connection", name)
+		}
 	}
 	if len(accounts.loggedIn) != 1 {
 		t.Errorf("the sign-in was not recorded: %v", accounts.loggedIn)
@@ -314,19 +405,13 @@ func TestPendingLink_TheRightPasswordConnectsTheProviderAndSignsIn(t *testing.T)
 // Somebody who signed in as another account in another tab must not end up
 // with two live sessions and a cookie naming whichever was written last.
 func TestPendingLink_SigningInReplacesAnyExistingSession(t *testing.T) {
-	s, accounts, identities := offered(t)
+	s, accounts, _, held := offered(t)
 
-	r := httptest.NewRequest(http.MethodPost, "/api/auth/sso/pending",
-		strings.NewReader(`{"password":"a-sufficiently-long-passphrase"}`))
-	r.Header.Set("Content-Type", "application/json")
-	r.AddCookie(&http.Cookie{Name: ssoLinkCookie, Value: identities.offerToken})
-	r.AddCookie(&http.Cookie{Name: ssoCookie, Value: "the-binding"})
-	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: accounts.token})
-	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("POST pending = %d", w.Code)
+	res := pendingRequest(t, s, http.MethodPost,
+		`{"password":"a-sufficiently-long-passphrase"}`,
+		append(held, &http.Cookie{Name: sessionCookie, Value: accounts.token}))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("POST pending = %d", res.StatusCode)
 	}
 	if len(accounts.deleted) != 1 || accounts.deleted[0] != accounts.token {
 		t.Errorf("ended sessions = %v; want the one this browser was holding", accounts.deleted)
@@ -337,10 +422,9 @@ func TestPendingLink_SigningInReplacesAnyExistingSession(t *testing.T) {
 // left is kept in the row: it would only be useful to somebody who is not the
 // account's owner.
 func TestPendingLink_AWrongPasswordIsRefusedWithoutASession(t *testing.T) {
-	s, _, identities := offered(t)
+	s, _, _, held := offered(t)
 
-	res := pendingRequest(t, s, http.MethodPost,
-		`{"password":"not-the-password"}`, identities.offerToken, "the-binding")
+	res := pendingRequest(t, s, http.MethodPost, `{"password":"not-the-password"}`, held)
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("POST pending = %d; want 401", res.StatusCode)
 	}
@@ -358,19 +442,22 @@ func TestPendingLink_AWrongPasswordIsRefusedWithoutASession(t *testing.T) {
 // offer left live is one the next person at that browser is holding, and the
 // screen it draws asks for a password.
 func TestPendingLink_NotNowRetiresTheOffer(t *testing.T) {
-	s, _, identities := offered(t)
+	s, _, identities, held := offered(t)
 
-	res := pendingRequest(t, s, http.MethodDelete, "", identities.offerToken, "the-binding")
+	res := pendingRequest(t, s, http.MethodDelete, "", held)
 	if res.StatusCode != http.StatusNoContent {
 		t.Fatalf("DELETE pending = %d; want 204", res.StatusCode)
 	}
 	if identities.discarded != 1 {
 		t.Errorf("discarded %d times; want once", identities.discarded)
 	}
-	if c := cookieNamed(res, ssoLinkCookie); c == nil || c.MaxAge >= 0 {
-		t.Error("the link cookie survived being put away")
+	for _, name := range []string{ssoLinkCookie, ssoLinkBindingCookie} {
+		if c := cookieNamed(res, name); c == nil || c.MaxAge >= 0 {
+			t.Errorf("%s survived being put away", name)
+		}
 	}
-	if res := pendingRequest(t, s, http.MethodGet, "", identities.offerToken, "the-binding"); res.StatusCode != http.StatusNotFound {
+	// What the browser has left after that, which is nothing.
+	if res := pendingRequest(t, s, http.MethodGet, "", jar(res, held...)); res.StatusCode != http.StatusNotFound {
 		t.Errorf("GET pending = %d after Not now; want 404", res.StatusCode)
 	}
 }
@@ -385,7 +472,10 @@ func TestPendingLink_RefusedWhenAccountsAreNotConfigured(t *testing.T) {
 		if method == http.MethodPost {
 			body = `{"password":"a-sufficiently-long-passphrase"}`
 		}
-		res := pendingRequest(t, s, method, body, "a-token", "a-binding")
+		res := pendingRequest(t, s, method, body, []*http.Cookie{
+			{Name: ssoLinkCookie, Value: "a-token"},
+			{Name: ssoLinkBindingCookie, Value: "a-binding"},
+		})
 		if res.StatusCode != http.StatusServiceUnavailable {
 			t.Errorf("%s pending = %d; want 503", method, res.StatusCode)
 		}

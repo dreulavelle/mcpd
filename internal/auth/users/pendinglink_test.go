@@ -11,22 +11,30 @@ import (
 
 // offer makes an account with a password and an offer to link Google to it,
 // which is the state every test below starts from.
-func offer(t *testing.T, s *Store, binding string) (*User, string) {
+//
+// The store mints both secrets. It used to take the binding from the caller,
+// which let the callback bind an offer to the flow's cookie -- the one the
+// same response retires -- so the row was written and no browser could ever
+// present it.
+func offer(t *testing.T, s *Store) (*User, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	claim(t, s)
 	u := mustCreate(t, s, "alice@example.com", "role_operator")
-	token, err := s.OfferLink(ctx, PendingLink{
+	token, binding, err := s.OfferLink(ctx, PendingLink{
 		Provider: ProviderGoogle,
 		Subject:  "google-subject-1",
 		Email:    u.Email,
 		Name:     "Alice",
 		UserID:   u.ID,
-	}, binding)
+	})
 	if err != nil {
 		t.Fatalf("offer: %v", err)
 	}
-	return u, token
+	if token == "" || binding == "" || token == binding {
+		t.Fatalf("offer returned %q and %q; want two distinct secrets", token, binding)
+	}
+	return u, token, binding
 }
 
 // The offer is bound to the browser the flow began in, exactly as a state is.
@@ -35,7 +43,7 @@ func offer(t *testing.T, s *Store, binding string) (*User, string) {
 func TestPendingLink_OnlyUsableWithTheBrowserItWasIssuedTo(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	_, token := offer(t, s, "the-right-binding")
+	_, token, binding := offer(t, s)
 
 	for _, tc := range []struct {
 		name    string
@@ -44,8 +52,8 @@ func TestPendingLink_OnlyUsableWithTheBrowserItWasIssuedTo(t *testing.T) {
 	}{
 		{"another browser's binding", token, "somebody-elses-binding"},
 		{"no binding at all", token, ""},
-		{"a token nobody was issued", "a-token-nobody-holds", "the-right-binding"},
-		{"no token at all", "", "the-right-binding"},
+		{"a token nobody was issued", "a-token-nobody-holds", binding},
+		{"no token at all", "", binding},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := s.PendingLinkFor(ctx, tc.token, tc.binding); !errors.Is(err, ErrNotFound) {
@@ -60,7 +68,7 @@ func TestPendingLink_OnlyUsableWithTheBrowserItWasIssuedTo(t *testing.T) {
 
 	// The control: the right pair works, so the refusals above are the
 	// binding and not the offer never having been written.
-	if _, err := s.PendingLinkFor(ctx, token, "the-right-binding"); err != nil {
+	if _, err := s.PendingLinkFor(ctx, token, binding); err != nil {
 		t.Fatalf("the offer this browser holds was refused: %v", err)
 	}
 }
@@ -70,12 +78,12 @@ func TestPendingLink_OnlyUsableWithTheBrowserItWasIssuedTo(t *testing.T) {
 func TestPendingLink_ASecondClaimMatchesNothing(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	_, token := offer(t, s, "binding")
+	_, token, binding := offer(t, s)
 
-	if _, err := s.ClaimPendingLink(ctx, token, "binding", "a-sufficiently-long-passphrase"); err != nil {
+	if _, err := s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase"); err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
-	_, err := s.ClaimPendingLink(ctx, token, "binding", "a-sufficiently-long-passphrase")
+	_, err := s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("second claim = %v; want ErrNotFound", err)
 	}
@@ -86,24 +94,24 @@ func TestPendingLink_ASecondClaimMatchesNothing(t *testing.T) {
 func TestPendingLink_ThreeWrongPasswordsRetireTheOffer(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	_, token := offer(t, s, "binding")
+	_, token, binding := offer(t, s)
 
 	for i := 1; i <= 2; i++ {
-		if _, err := s.ClaimPendingLink(ctx, token, "binding", "not-the-password"); !errors.Is(err, ErrInvalidCredentials) {
+		if _, err := s.ClaimPendingLink(ctx, token, binding, "not-the-password"); !errors.Is(err, ErrInvalidCredentials) {
 			t.Fatalf("attempt %d = %v; want ErrInvalidCredentials", i, err)
 		}
-		if _, err := s.PendingLinkFor(ctx, token, "binding"); err != nil {
+		if _, err := s.PendingLinkFor(ctx, token, binding); err != nil {
 			t.Fatalf("the offer was retired after %d wrong passwords: %v", i, err)
 		}
 	}
-	if _, err := s.ClaimPendingLink(ctx, token, "binding", "not-the-password"); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := s.ClaimPendingLink(ctx, token, binding, "not-the-password"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("third attempt = %v; want ErrInvalidCredentials", err)
 	}
 	// And now there is nothing left, including for the right password.
-	if _, err := s.PendingLinkFor(ctx, token, "binding"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.PendingLinkFor(ctx, token, binding); !errors.Is(err, ErrNotFound) {
 		t.Errorf("the offer survived three wrong passwords: %v", err)
 	}
-	_, err := s.ClaimPendingLink(ctx, token, "binding", "a-sufficiently-long-passphrase")
+	_, err := s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("the right password still claimed a retired offer: %v", err)
 	}
@@ -114,13 +122,13 @@ func TestPendingLink_ThreeWrongPasswordsRetireTheOffer(t *testing.T) {
 func TestPendingLink_AnExpiredOfferIsRefused(t *testing.T) {
 	s, setClock := newStore(t)
 	ctx := context.Background()
-	_, token := offer(t, s, "binding")
+	_, token, binding := offer(t, s)
 
 	setClock(testClock.Add(PendingLinkTTL + time.Second))
-	if _, err := s.PendingLinkFor(ctx, token, "binding"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.PendingLinkFor(ctx, token, binding); !errors.Is(err, ErrNotFound) {
 		t.Errorf("PendingLinkFor = %v; want ErrNotFound for an expired offer", err)
 	}
-	_, err := s.ClaimPendingLink(ctx, token, "binding", "a-sufficiently-long-passphrase")
+	_, err := s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("ClaimPendingLink = %v; want ErrNotFound for an expired offer", err)
 	}
@@ -132,19 +140,60 @@ func TestPendingLink_AnExpiredOfferIsRefused(t *testing.T) {
 func TestPendingLink_ADisabledAccountCannotBeLinked(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	u, token := offer(t, s, "binding")
+	u, token, binding := offer(t, s)
 
 	off := true
 	if _, err := s.Update(ctx, u.ID, UpdateRequest{Disabled: &off}); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if _, err := s.PendingLinkFor(ctx, token, "binding"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.PendingLinkFor(ctx, token, binding); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a disabled account still had an offer: %v", err)
 	}
-	_, err := s.ClaimPendingLink(ctx, token, "binding", "a-sufficiently-long-passphrase")
+	_, err := s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("a disabled account was linked: %v", err)
 	}
+}
+
+// Two things fail the guarded insert and they are not the same fact. A
+// provider already linked to this account is a collision -- there is something
+// there. An account disabled between the compare and the write is the offer no
+// longer being claimable, which is what an expired one is, and calling it a
+// collision would have the screen say a provider is connected when none is.
+func TestPendingLink_DriftAndACollisionAreDifferentRefusals(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a provider already linked is a collision", func(t *testing.T) {
+		s, _ := newStore(t)
+		u, token, binding := offer(t, s)
+		if err := s.LinkIdentity(ctx, "user:"+u.Email, Identity{
+			Provider: ProviderGoogle, Subject: "some-other-subject", UserID: u.ID,
+		}); err != nil {
+			t.Fatalf("link: %v", err)
+		}
+		_, err := s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase")
+		if !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrIdentityLinked) {
+			t.Fatalf("claim = %v; want a refusal", err)
+		}
+	})
+
+	t.Run("a password changed underneath is not", func(t *testing.T) {
+		s, _ := newStore(t)
+		u, token, binding := offer(t, s)
+		// Read the row, then move the account underneath the write. The hash
+		// compared against is carried into the WHERE clause, so the insert
+		// matches nothing -- and nothing is linked, so it is not a collision.
+		if err := s.SetPassword(ctx, u.ID, "an-entirely-different-passphrase"); err != nil {
+			t.Fatalf("set password: %v", err)
+		}
+		if _, err := s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase"); !errors.Is(err, ErrInvalidCredentials) {
+			t.Errorf("claim = %v; want the wrong-password refusal", err)
+		}
+		linked, err := s.IdentitiesFor(ctx, u.ID)
+		if err != nil || len(linked) != 0 {
+			t.Fatalf("identities = %v, %v; want none", linked, err)
+		}
+	})
 }
 
 // The password required is the one the account holds now, not the one it held
@@ -153,15 +202,15 @@ func TestPendingLink_ADisabledAccountCannotBeLinked(t *testing.T) {
 func TestPendingLink_ThePasswordRequiredIsTheCurrentOne(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	u, token := offer(t, s, "binding")
+	u, token, binding := offer(t, s)
 
 	if err := s.SetPassword(ctx, u.ID, "an-entirely-different-passphrase"); err != nil {
 		t.Fatalf("set password: %v", err)
 	}
-	if _, err := s.ClaimPendingLink(ctx, token, "binding", "a-sufficiently-long-passphrase"); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Errorf("the old password still worked: %v", err)
 	}
-	got, err := s.ClaimPendingLink(ctx, token, "binding", "an-entirely-different-passphrase")
+	got, err := s.ClaimPendingLink(ctx, token, binding, "an-entirely-different-passphrase")
 	if err != nil {
 		t.Fatalf("the current password was refused: %v", err)
 	}
@@ -179,14 +228,14 @@ func TestPendingLink_TheTrailSaysThePasswordConfirmedIt(t *testing.T) {
 	ctx := context.Background()
 	claim(t, s)
 	u := mustCreate(t, s, "alice@example.com", "role_operator")
-	token, err := s.OfferLink(ctx, PendingLink{
+	token, binding, err := s.OfferLink(ctx, PendingLink{
 		Provider: ProviderGoogle, Subject: "google-subject-1",
 		Email: u.Email, UserID: u.ID,
-	}, "binding")
+	})
 	if err != nil {
 		t.Fatalf("offer: %v", err)
 	}
-	if _, err := s.ClaimPendingLink(ctx, token, "binding", "a-sufficiently-long-passphrase"); err != nil {
+	if _, err := s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase"); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
@@ -210,7 +259,7 @@ func TestPendingLink_TheTrailSaysThePasswordConfirmedIt(t *testing.T) {
 func TestPendingLink_TwoClaimsAtOnceProduceOneIdentity(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	u, token := offer(t, s, "binding")
+	u, token, binding := offer(t, s)
 
 	var wg sync.WaitGroup
 	results := make([]error, 2)
@@ -218,7 +267,7 @@ func TestPendingLink_TwoClaimsAtOnceProduceOneIdentity(t *testing.T) {
 	for i := range results {
 		go func() {
 			defer wg.Done()
-			_, results[i] = s.ClaimPendingLink(ctx, token, "binding", "a-sufficiently-long-passphrase")
+			_, results[i] = s.ClaimPendingLink(ctx, token, binding, "a-sufficiently-long-passphrase")
 		}()
 	}
 	wg.Wait()
@@ -245,21 +294,21 @@ func TestPendingLink_TwoClaimsAtOnceProduceOneIdentity(t *testing.T) {
 func TestPendingLink_DiscardingRetiresIt(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	_, token := offer(t, s, "binding")
+	_, token, binding := offer(t, s)
 
 	// Somebody else's binding retires nothing, for the same reason it cannot
 	// claim anything.
 	if err := s.DiscardPendingLink(ctx, token, "somebody-elses-binding"); err != nil {
 		t.Fatalf("discard: %v", err)
 	}
-	if _, err := s.PendingLinkFor(ctx, token, "binding"); err != nil {
+	if _, err := s.PendingLinkFor(ctx, token, binding); err != nil {
 		t.Fatalf("another browser's discard retired the offer: %v", err)
 	}
 
-	if err := s.DiscardPendingLink(ctx, token, "binding"); err != nil {
+	if err := s.DiscardPendingLink(ctx, token, binding); err != nil {
 		t.Fatalf("discard: %v", err)
 	}
-	if _, err := s.PendingLinkFor(ctx, token, "binding"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.PendingLinkFor(ctx, token, binding); !errors.Is(err, ErrNotFound) {
 		t.Errorf("the offer survived being put away: %v", err)
 	}
 }
@@ -271,12 +320,12 @@ func TestPendingLink_DiscardingRetiresIt(t *testing.T) {
 func TestPendingLink_DeletingTheAccountTakesTheOffer(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	u, token := offer(t, s, "binding")
+	u, token, binding := offer(t, s)
 
 	if err := s.Delete(ctx, u.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := s.PendingLinkFor(ctx, token, "binding"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.PendingLinkFor(ctx, token, binding); !errors.Is(err, ErrNotFound) {
 		t.Errorf("an offer outlived its account: %v", err)
 	}
 }

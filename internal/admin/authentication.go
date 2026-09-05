@@ -37,7 +37,7 @@ type Registrations interface {
 	// The half-finished offer to link a provider with the account's own
 	// password. Made at the callback, held against the browser, and completed
 	// on a route of its own.
-	OfferLink(ctx context.Context, link users.PendingLink, binding string) (string, error)
+	OfferLink(ctx context.Context, link users.PendingLink) (token, binding string, err error)
 	PendingLinkFor(ctx context.Context, token, binding string) (*users.PendingLinkView, error)
 	ClaimPendingLink(ctx context.Context, token, binding, password string) (*users.User, error)
 	DiscardPendingLink(ctx context.Context, token, binding string) error
@@ -56,16 +56,23 @@ type Registrations interface {
 // sign-in being refused for a state this host did issue.
 const ssoCookie = "mcpd_sso"
 
-// ssoLinkCookie carries the offer to link a provider to an account that
-// already holds the address.
+// ssoLinkCookie and ssoLinkBindingCookie carry the offer to link a provider to
+// an account that already holds the address.
 //
-// A name of its own rather than a second use of ssoCookie, because finish()
-// clears that one on every exit from the callback -- including the exit that
-// makes this offer. Same path, same attributes, and SameSite=Lax is what
-// closes login CSRF on the claim: there is no session yet, so there is no CSRF
-// token, and a POST with a JSON body carrying a cookie the browser will not
-// send cross-site is what stands in its place.
-const ssoLinkCookie = "mcpd_sso_link"
+// Names of their own rather than a second use of ssoCookie, and that is the
+// whole point: finish() retires the flow's binding on every exit from the
+// callback, including the exit that makes this offer. An offer bound to that
+// cookie is one no browser can present -- the row is written, the screen is
+// drawn, and every request for it answers "there is nothing waiting".
+//
+// Same path and same attributes as the flow's, and SameSite=Lax is what closes
+// login CSRF on the claim: there is no session yet, so there is no CSRF token,
+// and a browser will not send either of these on a cross-site POST. Nothing
+// here checks a content type, so the JSON body is not part of that.
+const (
+	ssoLinkCookie        = "mcpd_sso_link"
+	ssoLinkBindingCookie = "mcpd_sso_link_binding"
+)
 
 // ssoCookiePath scopes the binding to the flow. It is not the session cookie
 // and has no business travelling with every request to the dashboard.
@@ -95,28 +102,37 @@ func (s *Server) clearSSOCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) setLinkCookie(w http.ResponseWriter, r *http.Request, value string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     ssoLinkCookie,
-		Value:    value,
-		Path:     ssoCookiePath,
-		MaxAge:   int(users.PendingLinkTTL / time.Second),
-		HttpOnly: true,
-		Secure:   s.secureCookies(r),
-		SameSite: http.SameSiteLaxMode,
-	})
+func (s *Server) setLinkCookies(w http.ResponseWriter, r *http.Request, token, binding string) {
+	for _, c := range []struct{ name, value string }{
+		{ssoLinkCookie, token}, {ssoLinkBindingCookie, binding},
+	} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     c.name,
+			Value:    c.value,
+			Path:     ssoCookiePath,
+			MaxAge:   int(users.PendingLinkTTL / time.Second),
+			HttpOnly: true,
+			Secure:   s.secureCookies(r),
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
-func (s *Server) clearLinkCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     ssoLinkCookie,
-		Value:    "",
-		Path:     ssoCookiePath,
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   s.secureCookies(r),
-		SameSite: http.SameSiteLaxMode,
-	})
+// clearLinkCookies retires both halves. Leaving one behind would have the next
+// request present a token with no binding, which is refused -- correctly, and
+// with a sentence about an offer the person can see no trace of.
+func (s *Server) clearLinkCookies(w http.ResponseWriter, r *http.Request) {
+	for _, name := range []string{ssoLinkCookie, ssoLinkBindingCookie} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     ssoCookiePath,
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   s.secureCookies(r),
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
 func ssoBinding(r *http.Request) string {
@@ -129,6 +145,14 @@ func ssoBinding(r *http.Request) string {
 
 func linkToken(r *http.Request) string {
 	c, err := r.Cookie(ssoLinkCookie)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+func linkBinding(r *http.Request) string {
+	c, err := r.Cookie(ssoLinkBindingCookie)
 	if err != nil {
 		return ""
 	}
@@ -617,17 +641,16 @@ func (s *Server) offerLink(w http.ResponseWriter, r *http.Request, identity *sso
 		}
 	}
 
-	// Bound to the browser the flow began in, by the binding cookie that
-	// brought the callback here. The state is about to be retired; this is a
-	// second row with its own token, and it needs both.
-	binding := ssoBinding(r)
-	token, err := s.opts.Identities.OfferLink(ctx, users.PendingLink{
+	// Both secrets come from the store, and neither is the flow's binding.
+	// finish() retires that one in this very response, so a row bound to it
+	// would be a row this browser can never present again.
+	token, binding, err := s.opts.Identities.OfferLink(ctx, users.PendingLink{
 		Provider: identity.Provider,
 		Subject:  identity.Subject,
 		Email:    identity.Email,
 		Name:     identity.Name,
 		UserID:   account.ID,
-	}, binding)
+	})
 	if err != nil {
 		s.opts.Log.ErrorContext(ctx, "could not offer a provider link",
 			"provider", identity.Provider, "account", account.ID, "error", err)
@@ -635,10 +658,10 @@ func (s *Server) offerLink(w http.ResponseWriter, r *http.Request, identity *sso
 		return
 	}
 
-	// Before finish, which writes the redirect header. A Set-Cookie added
-	// after the header is written is never sent, and this one is the whole of
-	// what the next screen has to work with.
-	s.setLinkCookie(w, r, token)
+	// Before finish, which writes the redirect header. A Set-Cookie added after
+	// the header is written is never sent, and these two are the whole of what
+	// the next screen has to work with.
+	s.setLinkCookies(w, r, token, binding)
 	s.opts.Log.InfoContext(ctx, "offered to link a provider at sign-in",
 		"provider", identity.Provider, "account", account.ID)
 	s.finish(w, r, "/", outcomeLinkPassword)

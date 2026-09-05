@@ -45,28 +45,32 @@ type PendingLink struct {
 	UserID string
 }
 
-// OfferLink records a pending link and returns the token to put in a cookie.
+// OfferLink records a pending link and returns the two secrets to set on the
+// browser it was offered to.
 //
-// Two secrets, travelling by different routes, exactly as a state and its
-// binding do: the token is set on the browser this offer was made to, and the
-// binding is the cookie the flow already carried. A claim has to present both.
+// Both are minted here rather than taken from the caller, and the flow's own
+// binding is deliberately not reused. The callback retires that cookie on
+// every exit -- including this one -- so a row bound to it is a row no browser
+// can ever present: the offer was written, the screen was drawn, and every
+// request for it answered "there is nothing waiting". That was the shape of
+// the bug this signature exists to make impossible.
 //
 // Expired rows are purged in the same transaction as the row being written.
 // The endpoint that reaches here needs no credential -- anybody who can start
 // a sign-in for a taken address causes one insert -- so this is what actually
 // bounds the table, whatever the background sweep is doing.
-func (s *Store) OfferLink(ctx context.Context, link PendingLink, binding string) (token string, err error) {
+func (s *Store) OfferLink(ctx context.Context, link PendingLink) (token, binding string, err error) {
 	if !link.Provider.Valid() {
-		return "", fmt.Errorf("users: %q is not a provider this build knows", link.Provider)
+		return "", "", fmt.Errorf("users: %q is not a provider this build knows", link.Provider)
 	}
 	if strings.TrimSpace(link.Subject) == "" || strings.TrimSpace(link.UserID) == "" {
-		return "", errors.New("users: an offered link needs a subject and an account")
-	}
-	if strings.TrimSpace(binding) == "" {
-		return "", errors.New("users: an offered link needs a browser to be bound to")
+		return "", "", errors.New("users: an offered link needs a subject and an account")
 	}
 	if token, err = generateSecret(); err != nil {
-		return "", err
+		return "", "", err
+	}
+	if binding, err = generateSecret(); err != nil {
+		return "", "", err
 	}
 
 	now := s.now()
@@ -93,9 +97,9 @@ func (s *Store) OfferLink(ctx context.Context, link PendingLink, binding string)
 			now.UnixMilli(), now.Add(PendingLinkTTL).UnixMilli())
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return token, nil
+	return token, binding, nil
 }
 
 // PendingLinkView is what the signed-out screen may be told about an offer.
@@ -158,8 +162,10 @@ func (s *Store) PendingLinkFor(ctx context.Context, token, binding string) (*Pen
 //
 // A wrong password leaves the row for another try and counts against it. There
 // is no session here to carry a CSRF token, so what closes login CSRF is the
-// combination this endpoint already needs: a POST with a JSON body, and a
-// cookie that is SameSite=Lax and was set on the browser the flow began in.
+// cookies: both are SameSite=Lax, which a browser will not send on a
+// cross-site POST, and without them this matches no row. The JSON body is not
+// part of that defence -- nothing here checks a content type -- so it is not
+// counted as one.
 func (s *Store) ClaimPendingLink(ctx context.Context, token, binding, password string) (*User, error) {
 	if token == "" || binding == "" {
 		return nil, ErrNotFound
@@ -253,7 +259,22 @@ func (s *Store) ClaimPendingLink(ctx context.Context, token, binding, password s
 			return err
 		}
 		if affected == 0 {
-			return ErrIdentityLinked
+			// Two very different things failed the same statement, and they
+			// need different answers. A provider already linked to this
+			// account is a collision: there is something there, and saying so
+			// is right. Anything else -- disabled, or a password changed
+			// between the compare and this write -- is the offer no longer
+			// being claimable, which is the same sentence as an expired one.
+			var linked int
+			if err := tx.QueryRow(
+				`SELECT COUNT(*) FROM user_identities WHERE user_id = ? AND provider = ?`,
+				link.UserID, string(link.Provider)).Scan(&linked); err != nil {
+				return err
+			}
+			if linked > 0 {
+				return ErrIdentityLinked
+			}
+			return ErrNotFound
 		}
 		// In the same transaction as the link it records. An entry written
 		// separately is one that can disagree with the database about whether

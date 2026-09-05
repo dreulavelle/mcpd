@@ -45,10 +45,10 @@ type fakeIdentities struct {
 	invited    *users.User
 	inviteErr  error
 
-	// The offer, and what happened to it. The binding is kept because these
-	// tests care that it is compared at all: a fake that ignored it would
-	// assert nothing about the one thing that makes an offer useless to a
-	// browser it was not made to.
+	// The offer, and what happened to it. Both secrets are kept because these
+	// tests care that both are compared: a fake that ignored either would
+	// assert nothing about what makes an offer useless to a browser it was not
+	// made to.
 	offered      *users.PendingLink
 	offerToken   string
 	offerBinding string
@@ -91,19 +91,19 @@ func (f *fakeIdentities) ClaimInvite(context.Context, users.Identity) (*users.Us
 	return f.invited, nil
 }
 
-func (f *fakeIdentities) OfferLink(_ context.Context, link users.PendingLink, binding string) (string, error) {
+// The store mints both secrets, so the fake does too. A fake that took the
+// binding from the caller would let a handler bind an offer to a cookie the
+// same response retires -- which is the bug these tests exist for.
+func (f *fakeIdentities) OfferLink(_ context.Context, link users.PendingLink) (string, string, error) {
 	if f.offerErr != nil {
-		return "", f.offerErr
-	}
-	if binding == "" {
-		return "", errors.New("an offered link needs a browser to be bound to")
+		return "", "", f.offerErr
 	}
 	f.offered = &link
-	f.offerBinding = binding
 	if f.offerToken == "" {
 		f.offerToken = "an-offer-token"
 	}
-	return f.offerToken, nil
+	f.offerBinding = "an-offer-binding"
+	return f.offerToken, f.offerBinding, nil
 }
 
 // held reports whether this pair names the live offer.

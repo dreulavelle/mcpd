@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
 )
 
@@ -43,7 +42,7 @@ func (s *Server) handlePendingLink(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
 		return
 	}
-	link, err := s.opts.Identities.PendingLinkFor(r.Context(), linkToken(r), ssoBinding(r))
+	link, err := s.opts.Identities.PendingLinkFor(r.Context(), linkToken(r), linkBinding(r))
 	if err != nil {
 		// One answer for no offer, an expired one, and one belonging to a
 		// different browser. They are one sentence and one thing to do.
@@ -52,7 +51,7 @@ func (s *Server) handlePendingLink(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, r, http.StatusOK, pendingLinkResponse{
 		Provider: string(link.Provider),
-		Label:    sso.Label(link.Provider),
+		Label:    s.providerLabel(r, link.Provider),
 		Email:    link.Email,
 	})
 }
@@ -76,7 +75,7 @@ func (s *Server) handleCompletePendingLink(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	ctx := r.Context()
-	token, binding := linkToken(r), ssoBinding(r)
+	token, binding := linkToken(r), linkBinding(r)
 
 	user, err := s.opts.Identities.ClaimPendingLink(ctx, token, binding, req.Password)
 	switch {
@@ -90,12 +89,12 @@ func (s *Server) handleCompletePendingLink(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, r, http.StatusUnauthorized, "that password did not match")
 		return
 	case errors.Is(err, users.ErrIdentityLinked):
-		s.clearLinkCookie(w, r)
+		s.clearLinkCookies(w, r)
 		s.writeError(w, r, http.StatusConflict,
 			"that provider account is already connected to an account here")
 		return
 	case errors.Is(err, users.ErrNotFound):
-		s.clearLinkCookie(w, r)
+		s.clearLinkCookies(w, r)
 		s.writeError(w, r, http.StatusNotFound, "there is nothing waiting to be connected")
 		return
 	case err != nil:
@@ -128,7 +127,7 @@ func (s *Server) handleCompletePendingLink(w http.ResponseWriter, r *http.Reques
 	s.opts.Log.InfoContext(ctx, "provider connected at sign-in and signed in",
 		"user", user.Email, "session", sess.ID)
 
-	s.clearLinkCookie(w, r)
+	s.clearLinkCookies(w, r)
 	s.setSessionCookie(w, r, token2, sess.ExpiresAt)
 	s.writeJSON(w, r, http.StatusOK, s.sessionView(r, user, sess))
 }
@@ -144,12 +143,12 @@ func (s *Server) handleDiscardPendingLink(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.opts.Identities.DiscardPendingLink(
-		r.Context(), linkToken(r), ssoBinding(r)); err != nil {
+		r.Context(), linkToken(r), linkBinding(r)); err != nil {
 		s.opts.Log.ErrorContext(r.Context(), "could not discard an offered provider link",
 			"error", err)
 		s.writeError(w, r, http.StatusInternalServerError, "could not put that away")
 		return
 	}
-	s.clearLinkCookie(w, r)
+	s.clearLinkCookies(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
