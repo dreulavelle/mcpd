@@ -1,12 +1,15 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/spoked/mcpd/internal/tunnel"
 )
 
 // A 4xx body is read by whoever made the request, so it never carries an
@@ -105,3 +108,47 @@ func TestWriteProblem_HidesWhatOnlyALogCanCarry(t *testing.T) {
 		})
 	}
 }
+
+// A start or restart that fails answers with the tunnel's own sentence.
+//
+// The bug: the handler answered with what Start returned, which is the
+// wrapped error the manager built for the log -- so pressing Restart on a
+// tunnel with no configuration produced "tunnel: no tunnel is configured" in
+// a toast, and a dial failure produced an address.
+func TestTunnelFailure_AnswersWithTheSentenceNotTheError(t *testing.T) {
+	s := newTestServer(t, newFakeAccounts())
+	s.opts.Tunnel = stubTunnels{list: []tunnel.Status{
+		{TunnelID: "tunnel_a", State: tunnel.StateConnected},
+		{
+			TunnelID: "tunnel_b",
+			State:    tunnel.StateFailed,
+			Message:  "OpenAI no longer accepts this account's key.",
+			Detail:   "tunnel: OpenAI refused this account's key (token_invalidated)",
+			Code:     "token_invalidated",
+		},
+	}}
+
+	if got := s.tunnelFailure("tunnel_b", "no"); got != "OpenAI no longer accepts this account's key." {
+		t.Errorf("named tunnel = %q", got)
+	}
+	// No id: the aggregate start, which has no one tunnel to ask about.
+	if got := s.tunnelFailure("", "no"); got != "OpenAI no longer accepts this account's key." {
+		t.Errorf("any tunnel = %q", got)
+	}
+	// A tunnel that did not fail says nothing, so the handler's own sentence
+	// stands rather than a blank detail.
+	if got := s.tunnelFailure("tunnel_a", "That connector could not be started."); got != "That connector could not be started." {
+		t.Errorf("healthy tunnel = %q", got)
+	}
+	if got := s.tunnelFailure("tunnel_z", "That connector could not be started."); got != "That connector could not be started." {
+		t.Errorf("unknown tunnel = %q", got)
+	}
+}
+
+type stubTunnels struct{ list []tunnel.Status }
+
+func (s stubTunnels) Status() []tunnel.Status             { return s.list }
+func (stubTunnels) Start(context.Context) error           { return nil }
+func (stubTunnels) Stop(context.Context) error            { return nil }
+func (stubTunnels) Enabled() bool                         { return true }
+func (stubTunnels) Restart(context.Context, string) error { return nil }

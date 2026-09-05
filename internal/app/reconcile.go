@@ -93,6 +93,18 @@ func isEmpty(v any) bool {
 	return false
 }
 
+// problemUnknownType is what a person reads when an instance names a plugin
+// type this binary was not built with.
+//
+// One constant because two paths reach the same field: a rebuild through
+// reconcile, and the startup wiring that finds a stale instance record and
+// keeps the host up rather than refusing to start. Both are stored as
+// PluginInstance.problem and printed on their own by the Plugins list and by
+// a plugin's own page, so it is a whole sentence carrying no package prefix --
+// and two copies of it drift.
+const problemUnknownType = "This plugin's type is not in this build of mcpd, " +
+	"so it cannot start. Remove it, or run a build that includes it."
+
 // noteReconcile records why an instance is not serving, or clears the note
 // when it is. Kept beside the instance rather than on the plugin because the
 // case that matters is the one where there is no plugin to hang it on.
@@ -124,11 +136,7 @@ func (a *App) buildInstance(ctx context.Context, inst Instance) (plugins.Plugin,
 	}
 	t, ok := a.types.Lookup(inst.Type)
 	if !ok {
-		// This is stored as PluginInstance.problem and printed on its own by
-		// both the Plugins list and a plugin's own page, so it is a whole
-		// sentence and carries no package prefix.
-		return nil, t, errors.New("This plugin's type is not in this build of mcpd, " +
-			"so it cannot start. Remove it, or run a build that includes it.")
+		return nil, t, errors.New(problemUnknownType)
 	}
 	cfg, err := a.resolveInstanceSettings(ctx, inst.Name, t)
 	if err != nil {

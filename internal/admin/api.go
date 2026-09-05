@@ -985,12 +985,16 @@ func (s *Server) handleTunnelStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.opts.Tunnel.Start(r.Context()); err != nil {
-		// The tunnel's own error is shown: an operator acting on this needs to
-		// know whether the tunnel id was wrong or the key lacked permission,
-		// and the manager already redacts the credential.
+		// The tunnel's own sentence, not the returned error. An operator
+		// acting on this needs to know whether the id was wrong or the key
+		// lacked permission, and the manager has already written that down --
+		// what it returns is the wrapped error it built for the log, which
+		// carries a package prefix and sometimes a dial address.
+		s.opts.Log.ErrorContext(r.Context(), "a tunnel would not start from the dashboard",
+			"by", auth.FromContext(r.Context()).ID, "error", err)
 		s.writeJSON(w, r, http.StatusConflict, map[string]any{
 			"error":  "tunnel_failed",
-			"detail": err.Error(),
+			"detail": s.tunnelFailure("", "That connector could not be started."),
 			"status": s.opts.Tunnel.Status(),
 		})
 		return
@@ -1618,6 +1622,24 @@ func (s *Server) writeProblem(w http.ResponseWriter, r *http.Request, status int
 	s.writeError(w, r, status, msg)
 }
 
+// tunnelFailure says why a start or restart did not work, in the words the
+// tunnel already has.
+//
+// A manager that fails records a sentence for a person; what it *returns* is
+// the wrapped error it built for the log. Answering with the second is how a
+// 409 came to read "tunnel: no tunnel is configured".
+func (s *Server) tunnelFailure(tunnelID, fallback string) string {
+	for _, st := range s.opts.Tunnel.Status() {
+		if tunnelID != "" && st.TunnelID != tunnelID {
+			continue
+		}
+		if st.State == tunnel.StateFailed && st.Message != "" {
+			return st.Message
+		}
+	}
+	return fallback
+}
+
 // writeUpstreamError answers a refusal from OpenAI with the reason beside the
 // sentence.
 //
@@ -1899,9 +1921,11 @@ func (s *Server) handleRestartTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	if err := s.opts.Tunnel.Restart(r.Context(), id); err != nil {
+		s.opts.Log.ErrorContext(r.Context(), "a tunnel would not restart from the dashboard",
+			"tunnel", id, "by", auth.FromContext(r.Context()).ID, "error", err)
 		s.writeJSON(w, r, http.StatusConflict, map[string]any{
 			"error":  "tunnel_failed",
-			"detail": err.Error(),
+			"detail": s.tunnelFailure(id, "That connector could not be restarted."),
 			"status": s.opts.Tunnel.Status(),
 		})
 		return

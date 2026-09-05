@@ -1069,7 +1069,10 @@ const (
 	msgBadConfig = "This connector's settings are not valid. Check its tunnel ID " +
 		"and the account it uses."
 	// msgCannotBuild: the MCP server behind the tunnel could not be built.
-	msgCannotBuild = "mcpd could not set this connector up. Try restarting it."
+	// No "try restarting it": the notification appends whether mcpd will
+	// retry, and the two together read "…Try restarting it. mcpd will not
+	// retry this."
+	msgCannotBuild = "mcpd could not set this connector up."
 	// msgUnreachable: the tunnel could not be dialled. Worth retrying.
 	msgUnreachable = "OpenAI's tunnel service could not be reached."
 )
