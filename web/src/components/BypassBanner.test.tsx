@@ -78,7 +78,7 @@ describe("the standing warning about an open window", () => {
     });
     renderWith(<BypassBanner />);
 
-    expect(await screen.findByText(/2 windows are open; this is the widest/))
+    expect(await screen.findByText(/2 windows are open, and this is the widest/))
       .toBeInTheDocument();
   });
 
