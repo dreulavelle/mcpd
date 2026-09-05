@@ -76,13 +76,13 @@ export const OPERATION_STATES: Record<OperationState, { label: string; meaning: 
   approved: { label: "Approved", meaning: "Cleared to run. It has not run yet." },
   executing: { label: "Running", meaning: "Being applied now." },
   succeeded: { label: "Applied", meaning: "It ran, and the change is in place." },
-  failed: { label: "Didn't run", meaning: "It did not run. Nothing changed upstream." },
+  failed: { label: "Didn't run", meaning: "It did not run. Nothing changed." },
   indeterminate: {
     label: "Unknown",
     meaning:
-      "Execution began and the outcome was never recorded. The change may " +
-      "have landed. Check upstream before proposing it again — a retry would " +
-      "apply it twice.",
+      "It started, and nobody recorded what happened. The change may be in " +
+      "place. Check the system before proposing it again, so it is not " +
+      "applied twice.",
   },
   rejected: { label: "Turned down", meaning: "Somebody decided against it." },
   expired: { label: "Expired", meaning: "Nobody decided in time." },

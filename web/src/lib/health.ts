@@ -17,6 +17,20 @@ export interface Health {
   body: string;
 }
 
+/**
+ * An HTTP status as words a person can act on.
+ *
+ * A chip reading `HTTP 401` tells an ops manager nothing; "Refused" tells them
+ * the far end said no. The number is still worth keeping, so every call site
+ * puts it in a `title` rather than dropping it.
+ */
+export function statusWords(status: number): string {
+  if (status === 404) return "Not found";
+  if (status === 408 || status === 504 || status === 524) return "No answer";
+  if (status >= 500) return "Their side failed";
+  return "Refused";
+}
+
 export function parseHealth(message: string): Health {
   const text = message.trim();
   const status = /\bHTTP (\d{3})\b/.exec(text);

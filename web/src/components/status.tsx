@@ -134,8 +134,8 @@ export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
           </span>
         </TooltipTrigger>
         <TooltipContent className="max-w-xs">
-          mcpd re-read the target afterwards and what it found was not what was
-          asked for.
+          The system was read again afterwards, and it did not show the change
+          that was asked for.
         </TooltipContent>
       </Tooltip>
     );
@@ -151,8 +151,8 @@ export function VerifiedBadge({ verified }: { verified?: boolean | null }) {
         </span>
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
-        Nobody has re-read the target, so this says nothing either way about
-        whether the change is in place.
+        Nobody has read the system again, so this does not say whether the
+        change is in place.
       </TooltipContent>
     </Tooltip>
   );
@@ -181,10 +181,10 @@ export function AssuranceBadge({ assurance, authorizedByRule }: {
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
         {reviewed
-          ? "Exact fields, a drift check against a stored snapshot, and an outcome confirmed by re-reading the target."
+          ? "The exact change was recorded, checked against how the system looked beforehand, and confirmed afterwards."
           : authorizedByRule
-            ? "A rule allowed it and the call was made. That is all this record proves — it does not say the change is in place."
-            : "A person authorised it and the call was made. That is all this record proves — it does not say the change is in place."}
+            ? "A rule allowed it and the call was made. This does not say whether the change is in place."
+            : "A person allowed it and the call was made. This does not say whether the change is in place."}
       </TooltipContent>
     </Tooltip>
   );
