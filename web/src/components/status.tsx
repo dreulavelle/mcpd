@@ -226,3 +226,18 @@ export function healthTone(health: string): Tone {
     default: return "problem";
   }
 }
+
+/**
+ * A health state as a word somebody would say out loud. "unhealthy" and
+ * "degraded" are the API's vocabulary, not a person's; a state this build does
+ * not know renders as itself, which is the signal the two have drifted apart.
+ */
+export function healthWords(health: string): string {
+  switch (health) {
+    case "healthy": case "up": return "Working";
+    case "degraded": return "Having trouble";
+    case "unhealthy": case "down": return "Not working";
+    case "unknown": case "": return "Not checked";
+    default: return health;
+  }
+}

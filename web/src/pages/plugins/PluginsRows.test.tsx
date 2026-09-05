@@ -141,7 +141,7 @@ describe("removals with nothing left to remove", () => {
     renderWith(<PluginsList />, { path: "/plugins" });
 
     expect(await screen.findByText("gone")).toBeInTheDocument();
-    expect(screen.getByText(/no longer declares them/)).toBeInTheDocument();
+    expect(screen.getByText(/no longer lists them/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Forget" }));
     await waitFor(() => expect(restore).toHaveBeenCalledWith("gone"));

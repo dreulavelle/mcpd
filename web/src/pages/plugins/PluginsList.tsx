@@ -11,13 +11,13 @@ import {
 import { when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link } from "@/lib/router";
-import { parseHealth } from "@/lib/health";
+import { parseHealth, statusWords } from "@/lib/health";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import {
   EmptyState, Loading, Notice, PageHeader, Section,
 } from "@/components/chrome";
-import { Chip, healthTone, StatusDot } from "@/components/status";
+import { Chip, healthTone, healthWords, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -152,7 +152,7 @@ export function PluginsList() {
     <>
       <PageHeader
         title="Plugins"
-        lede="What mcpd can work with, and what each one is set up to reach."
+        lede="Every system this host can reach, and what each one is set up to do."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {(rows?.length ?? 0) > 8 && (
@@ -204,8 +204,8 @@ export function PluginsList() {
               </p>
             ))}
             <p className="text-xs">
-              It keeps serving what it was serving before, and takes up the new
-              settings as soon as they work.
+              It keeps working with its old settings, and picks up the new ones
+              as soon as they work.
             </p>
           </div>
         </Notice>
@@ -217,14 +217,11 @@ export function PluginsList() {
         <Loading rows={4} />
       ) : rows && rows.length === 0 ? (
         <EmptyState mark={<Boxes />} title="No plugins yet">
-          Add an integration this build carries with the button above, find a
-          remote MCP server in the{" "}
+          Add one with the button above, or find a remote MCP server in the{" "}
           <Link to="/marketplace" className="text-primary hover:underline">
             Marketplace
           </Link>
-          , or declare one under <code className="font-mono">plugins:</code> in
-          the configuration file — that one needs a restart, because the file is
-          read once when the host starts.
+          .
         </EmptyState>
       ) : (
         <div className="mt-4 space-y-8">
@@ -236,7 +233,7 @@ export function PluginsList() {
           {builtin.length > 0 && (
             <Section
               title="Built in"
-              description="Integrations this binary was built with. They propose changes for approval and mcpd can plan against their state."
+              description="Integrations that ship with mcpd. These can suggest changes for someone to approve."
             >
               <PluginTable rows={builtin} mayManage={mayAdd} onChanged={load} />
             </Section>
@@ -245,7 +242,7 @@ export function PluginsList() {
           {remote.length > 0 && (
             <Section
               title="Remote MCP servers"
-              description="Somebody else's servers, mounted as plugins and managed here like any other. They cannot propose changes, and only the tools an administrator classified are served."
+              description="Servers somebody else runs, added here and managed like any other plugin. They cannot suggest changes, and only the tools an administrator has sorted are served."
               actions={mayAdd
                 ? (
                   <Link to="/marketplace" className="text-sm text-primary hover:underline">
@@ -268,9 +265,11 @@ function HealthSummary({ message }: { message: string }) {
   const h = parseHealth(message);
   if (h.status !== undefined) {
     const tone = h.status >= 200 && h.status < 300 ? "good" : "problem";
+    // The words say what happened; the number is evidence, so it goes in the
+    // title rather than into the chip a person is meant to read at a glance.
     return (
-      <span className="mt-1 block" title={h.title}>
-        <Chip tone={tone} className="font-mono">HTTP {h.status}</Chip>
+      <span className="mt-1 block" title={`HTTP ${h.status} — ${h.title}`}>
+        <Chip tone={tone}>{statusWords(h.status)}</Chip>
       </span>
     );
   }
@@ -294,8 +293,8 @@ function PluginTable({ rows, mayManage, onChanged }: {
             <TableRow>
               <TableHead>Plugin</TableHead>
               <TableHead>State</TableHead>
-              <TableHead className="text-right">Read</TableHead>
-              <TableHead className="text-right">Write</TableHead>
+              <TableHead className="text-right">Read tools</TableHead>
+              <TableHead className="text-right">Write tools</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -336,7 +335,7 @@ function PluginTable({ rows, mayManage, onChanged }: {
                   ) : row.running ? (
                     <Chip tone={healthTone(row.health)}>
                       <StatusDot tone={healthTone(row.health)} />
-                      {row.health === "healthy" ? "Serving" : row.health}
+                      {row.health === "healthy" ? "Serving" : healthWords(row.health)}
                     </Chip>
                   ) : (
                     <Chip tone="attention">Not running</Chip>
@@ -426,9 +425,8 @@ function StaleRemovals({ rows, mayManage, onChanged }: {
     <Notice tone="info">
       <div className="space-y-2">
         <p>
-          These were removed here, and the configuration file no longer declares
-          them. Nothing is being held back — the removal only bites if the name
-          is declared again. Forget one to clear it.
+          These were removed here, and the configuration file no longer lists
+          them. Forget one to take it off this list.
         </p>
         {rows.map((r) => (
           <p key={r.name} className="flex flex-wrap items-center gap-x-2 text-sm">
@@ -494,8 +492,8 @@ function AddPlugin({ types, open, onOpenChange, onAdded }: {
         <DialogHeader>
           <DialogTitle>Add a plugin</DialogTitle>
           <DialogDescription>
-            An instance of an integration this build carries. It records intent;
-            it starts serving once it has what it needs.
+            Adds an integration that ships with mcpd. It starts working once it
+            has what it needs.
           </DialogDescription>
         </DialogHeader>
 
@@ -503,7 +501,7 @@ function AddPlugin({ types, open, onOpenChange, onAdded }: {
 
         {types.length === 0 ? (
           <Notice tone="attention">
-            This build has no integrations compiled in.
+            This build of mcpd has no integrations to add.
           </Notice>
         ) : (
           <div className="space-y-4">
@@ -529,9 +527,9 @@ function AddPlugin({ types, open, onOpenChange, onAdded }: {
                 onChange={(e) => setName(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Its endpoint, its tool prefix, and what the history calls it.
-                Name it only when you have more than one of the same integration
-                — <code className="font-mono">nas-primary</code> and{" "}
+                What this one is called everywhere else in mcpd. Name it only
+                when you have more than one of the same integration —{" "}
+                <code className="font-mono">nas-primary</code> and{" "}
                 <code className="font-mono">nas-backup</code> rather than two
                 things both called {chosen}.
               </p>
