@@ -409,7 +409,7 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
     case "mcpserver.enabled":
       return { phrase: ["switched on the remote server ", ...serverName(subject)], facts };
     case "mcpserver.disabled":
-      return { phrase: ["switched off the remote server ", ...serverName(subject)], facts };
+      return { phrase: ["disabled the remote server ", ...serverName(subject)], facts };
     case "mcpserver.header_added":
       // The header's name is evidence, so it stays in the raw entry.
       if (bool(d, "secret")) facts.push("a secret one");
@@ -450,7 +450,7 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
     case "plugin.enabled":
       return { phrase: ["switched on the plugin ", ...serverName(subject)], facts };
     case "plugin.disabled":
-      return { phrase: ["switched off the plugin ", ...serverName(subject)], facts };
+      return { phrase: ["disabled the plugin ", ...serverName(subject)], facts };
 
     case "chatgpt.account.added":
       pushRole(facts, d, book);
@@ -462,7 +462,7 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
       else if (str(d, "admin_key")) facts.push("a new admin key");
       pushRole(facts, d, book);
       pushReach(facts, d);
-      if (bool(d, "enabled") === false) facts.push("switched off");
+      if (bool(d, "enabled") === false) facts.push("disabled");
       else if (bool(d, "enabled") === true) facts.push("switched on");
       return { phrase: ["changed ", chatgpt(d)], facts };
     case "chatgpt.account.removed":

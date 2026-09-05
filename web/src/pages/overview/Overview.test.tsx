@@ -366,7 +366,7 @@ describe("the overview", () => {
 
     const systems = (await screen.findByText("Systems")).closest("section")!;
     expect(within(systems).getByText("observium")).toBeInTheDocument();
-    expect(within(systems).getByText("switched off")).toBeInTheDocument();
+    expect(within(systems).getByText("disabled")).toBeInTheDocument();
     expect(screen.queryByText("Nothing is set up yet.")).not.toBeInTheDocument();
   });
 
