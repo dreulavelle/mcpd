@@ -533,6 +533,18 @@ func (s *Server) completeSignIn(w http.ResponseWriter, r *http.Request, state *s
 			s.finish(w, r, "/", registrationOutcome(err))
 			return
 		default:
+			// Somebody this host already knows is answered before the
+			// registration policy is consulted. Register applies the policy
+			// first and notices the collision second, so on a host with
+			// sign-ups switched off -- the common case -- an existing account
+			// was told "this host isn't accepting new accounts" and never saw
+			// the offer, which is written for exactly that person. Register's
+			// own ErrAddressTaken stays below as the answer to a row created
+			// between this read and its write.
+			if _, known := s.opts.Identities.ByEmail(ctx, identity.Email); known == nil {
+				s.offerLink(w, r, identity)
+				return
+			}
 			user, err = s.opts.Identities.Register(ctx, users.RegisterRequest{
 				Email:       identity.Email,
 				DisplayName: identity.Name,

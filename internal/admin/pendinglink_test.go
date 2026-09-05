@@ -107,6 +107,38 @@ func TestSSOCallback_AnAddressWithAPasswordAccountOffersToLinkRatherThanRefusing
 	}
 }
 
+// The bug that shipped in 0.19.0. Register applies the registration policy
+// before it notices the address is taken, so on a host with sign-ups switched
+// off -- the common case -- an account that already existed was told "this
+// host isn't accepting new accounts" and never reached the offer. The person
+// the offer is written for was the one person who could not get it.
+func TestSSOCallback_AnExistingAccountIsOfferedTheLinkWhenRegistrationIsClosed(t *testing.T) {
+	accounts := newFakeAccounts()
+	accounts.user.PasswordHash = "$2a$12$a-hash-that-is-not-the-sentinel"
+	identities := &fakeIdentities{
+		byEmail:     accounts.user,
+		registerErr: users.ErrRegistrationClosed,
+	}
+	s := NewServer(testOptions(accounts, identities))
+
+	// Through completeSignIn rather than offerLink: the bug was in the order
+	// of the decisions above the offer, and a test that starts at the offer
+	// cannot see it.
+	r := httptest.NewRequest(http.MethodGet, "/api/auth/sso/google/callback", nil)
+	w := httptest.NewRecorder()
+	s.completeSignIn(w, r, &sso.State{
+		Provider: users.ProviderGoogle, Purpose: sso.PurposeSignIn, ReturnTo: "/",
+	}, googleIdentity())
+	res := w.Result()
+
+	if got := res.Header.Get("Location"); got != "/?sso_error=link_password" {
+		t.Fatalf("Location = %q; want the connect screen, not a refusal", got)
+	}
+	if identities.offered == nil {
+		t.Fatal("no offer was recorded")
+	}
+}
+
 // Three arrivals at a taken address, three answers, and which one depends on
 // the account rather than on the provider.
 func TestSSOCallback_WhatATakenAddressIsToldDependsOnTheAccount(t *testing.T) {
