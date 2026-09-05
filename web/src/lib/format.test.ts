@@ -409,7 +409,7 @@ describe("an audit entry as a sentence", () => {
 
     ["plugin.restored", entry("plugin.restored", {
       plugin: "echo", detail: { source: "configuration file" },
-    }), "restored the plugin echo"],
+    }), "added the plugin echo back"],
 
     ["plugin.enabled", entry("plugin.enabled", {
       plugin: "echo", detail: { source: "configuration file", enabled: true },

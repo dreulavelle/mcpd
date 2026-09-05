@@ -22,7 +22,7 @@ import { Chip, healthTone, healthWords, StatusDot } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { RestoreButton } from "./PluginsList";
+import { AddDeclaredButton } from "./PluginsList";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useConfirm } from "@/components/confirm";
@@ -117,7 +117,7 @@ function Body({ name, plugin, instance, settings, tunnels, onChanged, guide }: {
   const health = plugin?.health ?? "unhealthy";
   const healthMessage = plugin?.health_message
     ?? (instance?.removed
-      ? "Removed here. The configuration file still declares it."
+      ? "Removed from this host. The configuration file still lists it."
       : instance?.missing?.length
         ? `Waiting on ${instance.missing.join(", ")}.`
         : instance?.problem
@@ -322,8 +322,9 @@ function Declaration({ instance }: { instance: PluginInstance | null }) {
 }
 
 /**
- * A plugin removed here that the file still declares. The wording is the point:
- * assuming the file changed leads to a surprise on the next deploy.
+ * A plugin removed here that the file still lists. The wording is the point:
+ * the removal took its settings, so what "add it again" offers is an empty
+ * plugin, and assuming the file changed leads to a surprise on the next deploy.
  */
 function RemovedNotice({ name, instance, mayManage, onChanged }: {
   name: string;
@@ -335,18 +336,22 @@ function RemovedNotice({ name, instance, mayManage, onChanged }: {
     <Notice tone="attention">
       <div className="space-y-2">
         <p>
-          <strong>Removed.</strong> This plugin is not being served, now or
-          after a restart.{" "}
+          This plugin is not on this host.{" "}
           {instance.removed_by && (
-            <>Removed by {instance.removed_by}
+            <>{instance.removed_by} removed it
               {instance.removed_at ? ` on ${when(instance.removed_at)}` : ""}.{" "}
             </>
           )}
-          The configuration file is unchanged — if you redeploy from it, the
-          removal still holds.
+          The configuration file still lists it, so it can be added again and
+          set up from scratch.
         </p>
         {mayManage && (
-          <RestoreButton name={name} label="Restore" onChanged={onChanged} />
+          <AddDeclaredButton
+            name={name} label="Add" pending="Adding…"
+            done={`Added ${name}. Set it up below.`}
+            failed="Couldn't add it."
+            onChanged={onChanged}
+          />
         )}
       </div>
     </Notice>
@@ -436,12 +441,13 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
   const required = fromFile && instance.required === true;
 
   async function remove() {
-    // Two different acts, so two different confirmations. Telling somebody
-    // their credentials are about to be forgotten when they are not is as
-    // wrong as not telling them when they are.
+    // The settings go either way, so both confirmations say so. What differs
+    // is the file: it still lists a declared plugin afterwards, which is the
+    // one thing somebody would otherwise assume this had changed.
     const question = fromFile
-      ? "This stops it being served, now and after every restart. "
-        + "Your configuration file does not change, and you can restore it here."
+      ? "This takes it off this host, now and after every restart, and forgets "
+        + "its settings, including any credentials. Your configuration file "
+        + "does not change, and it can be added again later."
         + (required
           ? "\n\nThe file marks it required: true, so this host is not meant "
             + "to run without it. Removing it overrides that."
@@ -451,12 +457,10 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
     setBusy(true);
     try {
       await api.removeInstance(name, required);
-      notify("good", fromFile
-        ? `Removed ${name}. The configuration file is unchanged.`
-        : `Removed ${name}.`);
-      // A file-declared plugin still has a page -- it is removed, not gone --
-      // and that page is where the restore is. Leaving for the list would hide
-      // the undo behind a search.
+      notify("good", `Removed ${name}. Its settings are forgotten.`);
+      // A plugin the file lists still has a page -- it is removed, not gone --
+      // and that page is where it can be added again. Leaving for the list
+      // would hide the way back behind the Add dialog.
       if (fromFile) onChanged();
       else navigate("/plugins");
     } catch (e) {
@@ -474,14 +478,15 @@ function RemoveControl({ name, instance, runtime, onChanged }: {
             <>
               <p>
                 This plugin is listed in the configuration file. Removing it
-                here stops it being served, now and on every restart.{" "}
+                takes it off this host, now and after every restart, and forgets
+                its settings, including any credentials.
+              </p>
+              <p>
                 <strong className="text-foreground">
                   The file is unchanged
                 </strong>{" "}
-                — if you redeploy from it, the removal still holds.
-              </p>
-              <p>
-                Its settings are kept, so restoring it brings it back as it was.
+                — if you redeploy from it, the removal still holds. It can be
+                added again later.
               </p>
               {required && (
                 <p className="text-attention">

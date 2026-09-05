@@ -439,7 +439,10 @@ export function auditWords(r: AuditRecord, book: NameBook = {}): EventWords {
     case "plugin.removed":
       return { phrase: ["removed the plugin ", ...serverName(subject)], facts };
     case "plugin.restored":
-      return { phrase: ["restored the plugin ", ...serverName(subject)], facts };
+      // The action name is what the trail has always written, and entries made
+      // before this change carry it. The sentence is the current one: nothing
+      // comes back with the plugin, so this is an add.
+      return { phrase: ["added the plugin ", ...serverName(subject), " back"], facts };
     case "plugin.enabled":
       return { phrase: ["switched on the plugin ", ...serverName(subject)], facts };
     case "plugin.disabled":
