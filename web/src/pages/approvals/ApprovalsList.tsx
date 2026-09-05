@@ -5,7 +5,8 @@ import {
 } from "lucide-react";
 import { api, type Operation, type OperationState } from "@/lib/api";
 import {
-  confirmationWord, describeChange, describeOutcome, relative, riskLabel,
+  changeDelta, confirmationWord, deltaWords, describeChange, describeOutcome,
+  OPERATION_STATES, relative, riskLabel, stateLabel,
 } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
 import { Link, useQueryParam } from "@/lib/router";
@@ -18,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { FieldDelta, fieldDelta } from "./delta";
+import { FieldDelta } from "./delta";
 
 /**
  * Changes an assistant has proposed: the ones waiting on a person, and then
@@ -56,15 +57,20 @@ function isGroup(value: string): value is Group {
 }
 
 /**
- * The state links that existed before this page had chips. Attention sends
- * people here with `?state=indeterminate`, and a link somebody bookmarked has
- * to keep landing on the same changes.
+ * The state links that existed before this page had chips.
+ *
+ * Attention sends people here with `?state=indeterminate`, and a link somebody
+ * bookmarked has to land on the changes it named. Translating one to a chip
+ * was lossy in both directions -- `rejected` would have picked up withdrawn
+ * and expired, and `approved` had no chip at all -- so the parameter keeps its
+ * own exact filter and says on screen that it is narrowing the list.
+ *
+ * `pending_approval` is not one of these: those changes are the section above,
+ * which is already the first thing on the page.
  */
-function groupForState(state: string): Group {
-  for (const [group, states] of Object.entries(GROUPS)) {
-    if (states.includes(state as OperationState)) return group as Group;
-  }
-  return "";
+function exactState(state: string): OperationState | "" {
+  if (state === "" || state === "pending_approval") return "";
+  return Object.hasOwn(OPERATION_STATES, state) ? state as OperationState : "";
 }
 
 /** What each state's mark is, so a row is scannable before it is read. */
@@ -103,13 +109,11 @@ const SOON_MS = 60 * 60 * 1000;
 export function ApprovalsList() {
   const [show, setShow] = useQueryParam("show");
   const [state, setState] = useQueryParam("state");
-  // `show` is what this page writes; `state` is what older links carry. An
-  // unknown value in either is no filter rather than a crash: the address bar
-  // is somewhere anybody can type, and `GROUPS[group]` on a value nobody
+  // An unknown value in either is no filter rather than a crash: the address
+  // bar is somewhere anybody can type, and `GROUPS[group]` on a value nobody
   // defined is a blank page.
-  // An absent `show` is not a choice, so it falls through to the legacy link
-  // rather than answering for it.
-  const group: Group = show !== "" && isGroup(show) ? show : groupForState(state);
+  const group: Group = isGroup(show) ? show : "";
+  const only = exactState(state);
 
   const [system, setSystem] = useQueryParam("system");
   const [legacySystem, setLegacySystem] = useQueryParam("plugin");
@@ -160,9 +164,12 @@ export function ApprovalsList() {
     const q = needle.trim().toLowerCase();
     return loaded.filter((op) =>
       (!plugin || op.plugin === plugin) &&
+      // The words on the screen, and also the ones that are not: somebody who
+      // knows an action or has an id from a support call should find the
+      // change by it, even though neither is what the row shows.
       (!q || [
-        describeChange(op).sentence, op.plugin, op.requested_by, op.impact,
-        op.id, op.authorized_by_rule ?? "",
+        describeChange(op).sentence, op.plugin, op.action, op.requested_by,
+        op.impact, op.id, op.authorized_by_rule ?? "",
       ].join(" ").toLowerCase().includes(q)));
   }, [loaded, plugin, needle]);
 
@@ -185,8 +192,12 @@ export function ApprovalsList() {
   );
 
   const inGroup = useMemo(
-    () => group === "" ? settled : settled.filter((op) => GROUPS[group].includes(op.state)),
-    [settled, group],
+    () => only
+      ? settled.filter((op) => op.state === only)
+      : group === ""
+        ? settled
+        : settled.filter((op) => GROUPS[group].includes(op.state)),
+    [settled, group, only],
   );
 
   const narrowed = plugin !== "" || needle.trim() !== "";
@@ -280,6 +291,21 @@ export function ApprovalsList() {
             <section aria-labelledby="lately-heading">
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                 <h2 id="lately-heading" className="text-sm font-semibold">Lately</h2>
+                {/* A link that named one exact state gets that exact state,
+                    and says so. The chips are groups, and answering a link for
+                    turned-down changes with withdrawn and expired ones beside
+                    them would be answering a different question. */}
+                {only ? (
+                  <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                    Showing only: {stateLabel(only).toLowerCase()}
+                    <Button
+                      variant="link" className="h-auto p-0 text-xs"
+                      onClick={() => { setState(""); setShowing(10); }}
+                    >
+                      Show everything
+                    </Button>
+                  </p>
+                ) : (
                 <div className="scroll-x">
                   <Segmented
                     label="Show"
@@ -291,6 +317,7 @@ export function ApprovalsList() {
                     }))}
                   />
                 </div>
+                )}
               </div>
 
               {inGroup.length === 0 ? (
@@ -298,7 +325,7 @@ export function ApprovalsList() {
                   Nothing here yet.{" "}
                   <Button
                     variant="link" className="h-auto p-0"
-                    onClick={() => chooseGroup("")}
+                    onClick={() => { chooseGroup(""); setShowing(10); }}
                   >
                     Show everything
                   </Button>
@@ -356,7 +383,7 @@ function WaitingCard({ op, name }: {
   name: (actor: string, resolved?: string) => string;
 }) {
   const { headline, detail } = describeChange(op);
-  const delta = fieldDelta(op);
+  const delta = changeDelta(op);
   const left = Date.parse(op.expires_at) - Date.now();
   const soon = !Number.isNaN(left) && left < SOON_MS;
   // Past the deadline it has not run out "5 minutes ago" -- it is simply too
@@ -433,7 +460,7 @@ function SettledRow({ op, name }: {
   name: (actor: string, resolved?: string) => string;
 }) {
   const { headline, detail } = describeChange(op);
-  const delta = fieldDelta(op);
+  const delta = changeDelta(op);
   const tone = stateTone(op.state);
   const Mark = MARKS[op.state] ?? Check;
 
@@ -480,8 +507,7 @@ function SettledRow({ op, name }: {
               sentence two deletions on one system read identically. */}
           {delta ? (
             <span className="text-muted-foreground">
-              {" — "}
-              {delta.from !== null ? `from ${delta.from} to ${delta.to}` : `to ${delta.to}`}
+              {" — "}{deltaWords(delta)}
             </span>
           ) : detail ? (
             <span className="text-muted-foreground">{" — "}{detail}</span>

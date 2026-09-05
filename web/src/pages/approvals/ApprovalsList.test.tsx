@@ -429,13 +429,12 @@ describe("cutting the list", () => {
 
   // Attention links here with the old parameter, and so does anything anybody
   // bookmarked. A link that lands on the wrong list is worse than no link.
-  it("still answers ?state=indeterminate, as the Unknown chip", async () => {
+  it("still answers ?state=indeterminate with the changes it named", async () => {
     mount(aBusyHost(), "/approvals?state=indeterminate");
 
-    const unknown = await screen.findByRole("radio", { name: "Unknown (1)" });
-    expect(unknown).toHaveAttribute("aria-checked", "true");
-    const rows = within(screen.getByRole("region", { name: "Lately" }))
-      .getAllByRole("listitem");
+    const lately = await screen.findByRole("region", { name: "Lately" });
+    expect(within(lately).getByText(/Showing only: unknown/)).toBeInTheDocument();
+    const rows = within(lately).getAllByRole("listitem");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.textContent).toContain("ended in an unknown state");
   });
@@ -458,22 +457,63 @@ describe("cutting the list", () => {
   });
 
   /**
-   * Choosing Everything has to actually mean everything.
+   * A legacy link named one exact state, and the chips are groups.
    *
-   * The chip writes `show` and the legacy link carries `state`. Clearing only
-   * `show` left `state=indeterminate` behind, `groupForState` read it again,
-   * and the view snapped back to Unknown -- a control that undoes itself.
+   * Translating between them lost in both directions: `?state=rejected`
+   * would have answered with withdrawn and expired changes beside the
+   * rejected one, and `?state=approved` had no chip at all and fell to
+   * Everything. So the parameter keeps its own filter, and the page says on
+   * screen that something narrower than a chip is in force.
    */
-  it("drops the legacy state when a chip clears the new one", async () => {
-    mount(aBusyHost(), "/approvals?state=indeterminate");
-    await screen.findByRole("region", { name: "Lately" });
+  it("answers a legacy link with that exact state, not the group around it", async () => {
+    mount(aBusyHost(), "/approvals?state=rejected");
 
-    await userEvent.click(screen.getByRole("radio", { name: "Everything (8)" }));
+    const lately = await screen.findByRole("region", { name: "Lately" });
+    expect(within(lately).getByText(/Showing only: turned down/)).toBeInTheDocument();
+    const rows = within(lately).getAllByRole("listitem");
+    // One rejected change. The Turned down chip would have answered with
+    // three, the withdrawn and the expired one included.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain("Reset the password on threecx");
+    // The chips are not offered while something narrower than a chip is on.
+    expect(within(lately).queryByRole("radio")).not.toBeInTheDocument();
+  });
+
+  it("answers a state that never had a chip of its own", async () => {
+    mount([
+      ...aBusyHost(),
+      operation({
+        id: "op-ap", plugin: "echo", action: "label.set", state: "approved",
+        terminal: false, verified: undefined, terminal_at: undefined,
+      }),
+    ], "/approvals?state=approved");
+
+    const lately = await screen.findByRole("region", { name: "Lately" });
+    expect(within(lately).getByText(/Showing only: approved/)).toBeInTheDocument();
+    expect(within(lately).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("clears the legacy filter and gives the chips back", async () => {
+    mount(aBusyHost(), "/approvals?state=indeterminate");
+    const lately = await screen.findByRole("region", { name: "Lately" });
+    expect(within(lately).getAllByRole("listitem")).toHaveLength(1);
+
+    await userEvent.click(within(lately).getByRole("button", { name: "Show everything" }));
     expect(window.location.search).toBe("");
-    expect(screen.getByRole("radio", { name: "Everything (8)" }))
+    expect(await screen.findByRole("radio", { name: "Everything (8)" }))
       .toHaveAttribute("aria-checked", "true");
     expect(within(screen.getByRole("region", { name: "Lately" }))
       .getAllByRole("listitem")).toHaveLength(8);
+  });
+
+  // Waiting changes are the section above, which is already the first thing on
+  // the page, so this one narrows nothing.
+  it("leaves the page alone for a link naming the waiting state", async () => {
+    mount(aBusyHost(), "/approvals?state=pending_approval");
+
+    await screen.findByRole("region", { name: /waiting on you/i });
+    expect(await screen.findByRole("radio", { name: "Everything (8)" }))
+      .toHaveAttribute("aria-checked", "true");
   });
 
   it("drops the legacy plugin when the system select clears the new one", async () => {
@@ -498,6 +538,60 @@ describe("cutting the list", () => {
       .toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Set the label on echo" }))
       .not.toBeInTheDocument();
+  });
+
+  /**
+   * The card, the row and the detail lede each render the delta, and each was
+   * free to word it differently: the card had its own copy of the rule and
+   * did not know that a create names a thing rather than moving it, so it
+   * said "to Getting started" under a heading that said "called “Getting
+   * started”". One function now answers for all three.
+   */
+  it("words the delta the same way in the card as in the sentence", async () => {
+    mount([operation({
+      id: "op-new", plugin: "bookstack", action: "page.create",
+      state: "pending_approval", terminal: false, verified: undefined,
+      terminal_at: undefined, expires_at: at(1800),
+      changes: [{ field: "page", from: null, to: "Getting started" }],
+    })]);
+
+    const region = await screen.findByRole("region", { name: /waiting on you/i });
+    expect(region.textContent).toContain("called “Getting started”");
+    expect(region.textContent).not.toContain("to “Getting started”");
+  });
+
+  it("drops the same boolean in the row that the sentence drops", async () => {
+    mount([operation({
+      id: "op-off", plugin: "graylog", action: "alert.disable",
+      changes: [{ field: "enabled", from: true, to: false }],
+      impact: "Stops the alert firing.",
+    })]);
+
+    const row = (await screen.findByText(/Turn off the alert on graylog/))
+      .closest("li")!;
+    expect(row.textContent).not.toContain("from on to off");
+    // The plugin's own sentence stands in, as it does wherever a change
+    // records no delta worth reading.
+    expect(row.textContent).toContain("Stops the alert firing.");
+  });
+
+  // Somebody with an action from the SDK or an id off a support call should
+  // find the change by it, even though neither is what the row shows.
+  it("finds a change by the machine's name for it, and by its id", async () => {
+    mount(aBusyHost());
+    await screen.findByRole("region", { name: "Lately" });
+
+    const find = screen.getByLabelText("Find a change");
+    await userEvent.type(find, "device.reboot");
+    expect(within(screen.getByRole("region", { name: "Lately" }))
+      .getAllByRole("listitem")).toHaveLength(1);
+
+    await userEvent.clear(find);
+    await userEvent.type(find, "op-4");
+    const rows = within(screen.getByRole("region", { name: "Lately" }))
+      .getAllByRole("listitem");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain("Change the device on cnmaestro");
   });
 
   it("searches the sentence a person can actually see", async () => {
