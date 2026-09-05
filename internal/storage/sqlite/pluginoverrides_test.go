@@ -93,7 +93,7 @@ func TestPluginOverrides_Restore(t *testing.T) {
 	if err := store.Remove(ctx, "user:alice", "echo", echoDeclaration); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Restore(ctx, "user:bob", "echo"); err != nil {
+	if err := store.Restore(ctx, "user:bob", "echo", true); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	list, err := store.List(ctx)
@@ -110,6 +110,36 @@ func TestPluginOverrides_Restore(t *testing.T) {
 	if len(entries) != 2 || entries[0].Entry.Kind != "plugin.restored" {
 		t.Fatalf("audit = %+v, want the restore recorded too", entries)
 	}
+	if !strings.Contains(string(entries[0].Entry.Detail), `"declared":true`) {
+		t.Errorf("audit detail %s does not say the file still declared it", entries[0].Entry.Detail)
+	}
+}
+
+// One action name, two acts. Forgetting a removal whose declaration has left
+// the file adds nothing back, and an entry read years later cannot ask the file
+// which it was -- so the entry says.
+func TestPluginOverrides_RestoreRecordsWhetherAnythingWasDeclared(t *testing.T) {
+	store, audit, _ := newOverrideStore(t)
+	ctx := context.Background()
+
+	if err := store.Remove(ctx, "user:alice", "gone", echoDeclaration); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Restore(ctx, "user:alice", "gone", false); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	entries, err := audit.Recent(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := string(entries[0].Entry.Detail)
+	if !strings.Contains(detail, `"declared":false`) {
+		t.Errorf("audit detail %s does not say the declaration was gone", detail)
+	}
+	// Nothing came back, so nothing may claim it came back to anything.
+	if strings.Contains(detail, "restored_to") {
+		t.Errorf("audit detail %s names what it was restored to, and it was not", detail)
+	}
 }
 
 // Restoring something that is not removed is a claim that lost a race, or a
@@ -118,14 +148,14 @@ func TestPluginOverrides_RestoreWithoutARemoval(t *testing.T) {
 	store, _, _ := newOverrideStore(t)
 	ctx := context.Background()
 
-	if err := store.Restore(ctx, "user:alice", "echo"); !errors.Is(err, ErrNotRemoved) {
+	if err := store.Restore(ctx, "user:alice", "echo", true); !errors.Is(err, ErrNotRemoved) {
 		t.Fatalf("Restore = %v, want ErrNotRemoved", err)
 	}
 	// Nor when the row exists for another reason.
 	if err := store.SetEnabled(ctx, "user:alice", "echo", echoDeclaration, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Restore(ctx, "user:alice", "echo"); !errors.Is(err, ErrNotRemoved) {
+	if err := store.Restore(ctx, "user:alice", "echo", true); !errors.Is(err, ErrNotRemoved) {
 		t.Fatalf("Restore = %v, want ErrNotRemoved", err)
 	}
 }
@@ -143,7 +173,7 @@ func TestPluginOverrides_RestoreKeepsTheEnabledOverride(t *testing.T) {
 	if err := store.Remove(ctx, "user:alice", "echo", echoDeclaration); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Restore(ctx, "user:alice", "echo"); err != nil {
+	if err := store.Restore(ctx, "user:alice", "echo", true); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	list, err := store.List(ctx)

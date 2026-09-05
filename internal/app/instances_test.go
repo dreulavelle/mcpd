@@ -447,9 +447,13 @@ func TestRemoveInstance_ForgetsAKeyTheTypeNoLongerDeclares(t *testing.T) {
 	}
 	declared := "plugins.gone.base_url"
 	orphan := "plugins.gone.legacy_token"
+	// Injected into every instance's group by the catalog rather than by the
+	// type, so a wipe that walked the type's fields never saw it.
+	purpose := settings.PluginSettingKey("gone", settings.PluginPurposeKey)
 	if err := a.settings.Apply(ctx, "user:test", []settings.Change{
 		{Key: declared, Value: `"https://x.test"`},
 		{Key: orphan, Value: `"a credential nothing declares any more"`},
+		{Key: purpose, Value: `"what this one is for"`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +470,7 @@ func TestRemoveInstance_ForgetsAKeyTheTypeNoLongerDeclares(t *testing.T) {
 	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err != nil {
 		t.Fatalf("RemoveInstance: %v", err)
 	}
-	for _, key := range []string{declared, orphan} {
+	for _, key := range []string{declared, orphan, purpose} {
 		if _, ok, _ := a.settings.Get(ctx, key); ok {
 			t.Errorf("%s outlived the removal", key)
 		}
@@ -534,6 +538,40 @@ func TestRemoveInstance_FinishesAHalfDoneRemoval(t *testing.T) {
 	}
 	if got := instanceNamed(t, a, "gone"); !got.Removed {
 		t.Error("the second removal put the plugin back")
+	}
+	if got := instanceNamed(t, a, "gone"); got.StoredSettings {
+		t.Error("the instance still reports settings it no longer has")
+	}
+}
+
+// The dashboard cannot offer to finish a half-done removal without being told
+// there is one, and the Remove card is not drawn for something already removed.
+// So a removed instance says whether anything is still stored under its name.
+func TestInstances_ARemovedPluginReportsSettingsItStillHolds(t *testing.T) {
+	ctx := context.Background()
+	a := fileApp(t, filepath.Join(t.TempDir(), "mcpd.db"),
+		map[string]config.PluginConfig{"gone": {Type: "cnmaestro", Enabled: true}})
+
+	if err := a.settings.Apply(ctx, "user:test",
+		settingsChange("plugins.gone.base_url", `"https://x.test"`)); err != nil {
+		t.Fatal(err)
+	}
+	declared := instanceNamed(t, a, "gone")
+	if err := a.pluginOverrides.Remove(ctx, "user:test", "gone", a.declaredAs(declared)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.loadOverrides(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := instanceNamed(t, a, "gone"); !got.Removed || !got.StoredSettings {
+		t.Fatalf("instance = %+v, want it removed and reporting what it still holds", got)
+	}
+	if err := a.RemoveInstance(ctx, "user:test", "gone", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := instanceNamed(t, a, "gone"); got.StoredSettings {
+		t.Error("finishing the removal did not clear the report")
 	}
 }
 

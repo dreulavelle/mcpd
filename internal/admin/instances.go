@@ -63,12 +63,16 @@ type PluginInstanceInfo struct {
 	// explicit acknowledgement.
 	Required bool `json:"required,omitempty"`
 	Enabled  bool `json:"enabled"`
-	// Removed marks a file-declared instance an administrator removed here.
-	// It stays in this list, because somebody who removes the wrong thing has
-	// to be able to find it again to restore it.
+	// Removed marks a file-declared instance an administrator removed here. It
+	// stays in this list so the dashboard can offer it as something to add
+	// again, not as one of the plugins this host serves.
 	Removed   bool      `json:"removed,omitempty"`
 	RemovedBy string    `json:"removed_by,omitempty"`
 	RemovedAt time.Time `json:"removed_at,omitzero"`
+	// StoredSettings marks a removed instance that still holds values under
+	// its name -- a removal made before the wipe existed, or one interrupted.
+	// Removing it again takes them.
+	StoredSettings bool `json:"stored_settings,omitempty"`
 	// Declaration is the file's entry for this instance, when there is one.
 	Declaration *PluginDeclaration `json:"declaration,omitempty"`
 	// Mounted reports whether it is serving now. An instance is not mounted
@@ -229,8 +233,7 @@ func (s *Server) handleRestoreInstance(w http.ResponseWriter, r *http.Request) {
 	// adds an empty one rather than bringing anything back.
 	s.writeJSON(w, r, http.StatusOK, map[string]any{
 		"status": "restored",
-		"note": "It comes back as the configuration file lists it, with only " +
-			"what the file provides. It starts serving as soon as it has what " +
-			"it needs.",
+		"note": "It is back as the configuration file declares it, with nothing " +
+			"entered here. It starts serving as soon as it has what it needs.",
 	})
 }

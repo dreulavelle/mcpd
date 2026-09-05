@@ -2103,6 +2103,15 @@ exactly as it was, and the operator can try again. The other order leaves it
 removed with its credentials still stored — the state this exists to prevent —
 so removing something already removed is not refused: it re-runs the wipe and
 returns, which is how a removal interrupted between its two halves is finished.
+Inside the wipe the same reasoning orders the two writes: the settings go
+first, the `plugin_rows` second, because a row holds a customer's address and
+password that nobody can recreate and a retry has to still find it there.
+
+A removed instance therefore reports `stored_settings` when anything is left
+under its name — a removal made by a build that kept them deliberately, or one
+interrupted. The dashboard offers to finish it, since the Remove card is not
+drawn for something already removed and there would otherwise be nowhere to
+reach the idempotent path from.
 
 **What the file itself supplies is not this host's to forget.** A declaration
 may carry a `settings:` block, and `resolveFields` falls back to it, so a
@@ -2114,6 +2123,12 @@ forgotten, and what the file provides stays.
 override entirely, so what returns is whatever the file declares now rather
 than a copy of what it declared then. The endpoint and `App.RestoreInstance`
 keep their old names because clients depend on them; what they do is an add.
+
+One endpoint, two acts: with a declaration still in the file the plugin comes
+back, and without one — a stale removal being forgotten — nothing does. The
+audit entry records `declared` so the trail can say which, since it is read
+long after either the file or this host can be asked. Rows written before that
+field get the sentence true of both, which is that a removal was forgotten.
 
 **Removing one is an administrative act and is audited.** It overrides the
 deployment's own configuration, so it appends to the hash-chained trail inside

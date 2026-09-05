@@ -52,14 +52,23 @@ type Instance struct {
 	// Removed reports that an administrator removed a file-defined instance
 	// from the dashboard. The declaration is still in the file and the file is
 	// untouched; what changed is that mcpd ignores it, now and on every
-	// restart, until someone restores it.
+	// restart, until somebody adds it back from that declaration.
 	//
-	// A removed instance stays in this list rather than vanishing from it.
-	// Somebody who removes the wrong thing and then cannot find it to undo is
-	// worse off than before they had the button.
+	// A removed instance stays in this list rather than vanishing from it, so
+	// that the dashboard can offer it as something to add again. It is not
+	// among the plugins this host serves, and the Plugins page does not draw
+	// it as one.
 	Removed   bool      `json:"removed,omitempty"`
 	RemovedBy string    `json:"removed_by,omitempty"`
 	RemovedAt time.Time `json:"removed_at,omitzero"`
+	// StoredSettings reports that a removed instance still has values under
+	// its name. That is a removal whose wipe did not run: one made by a build
+	// that kept the settings deliberately, or one interrupted between its two
+	// halves. It is reported rather than cleaned up on read, because a
+	// credential disappearing during a page load is not something an operator
+	// can be shown; removing the plugin again takes it, and the dashboard says
+	// so. Only computed for a removed instance.
+	StoredSettings bool `json:"stored_settings,omitempty"`
 }
 
 // instanceRecord is what the store holds for an instance added in the
@@ -153,6 +162,10 @@ func (a *App) instances(ctx context.Context) []Instance {
 			// what to serve. Enabled is the one field every such caller reads,
 			// so this is where the removal has to land.
 			existing.Enabled = false
+			// One cache scan, and only for a name somebody has removed. The
+			// common case is no removed instances and no scans at all.
+			existing.StoredSettings = len(a.settings.WithPrefix(ctx,
+				settings.PluginSettingPrefix(name))) > 0
 		} else if ov.Enabled != nil {
 			existing.Enabled = *ov.Enabled
 		}
@@ -308,16 +321,17 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 		}
 		// The wipe first, the override second, and the order is the recovery
 		// story. If the wipe fails nothing is removed and the operator can try
-		// again; if the override fails the plugin is still listed with nothing
-		// set up, which is visible and safe. The other order leaves a plugin
-		// removed with its credentials still stored -- the state this change
-		// exists to prevent -- and a retry with nothing to retry.
+		// again; if the override fails the plugin is still listed, holding
+		// nothing, which is visible and safe. The other order leaves a plugin
+		// removed with its credentials still stored -- the state this exists
+		// to prevent -- and a retry that used to be refused outright.
 		//
-		// The cost is that the plugin is briefly still mounted while its
-		// settings go, so a reconcile may rebuild it against an empty
-		// configuration and mark it unhealthy. The override lands immediately
-		// after and unmounts it; every reconcile reads the instance fresh, so
-		// they converge whichever order the detached ones run in.
+		// The cost is a window. The plugin is still declared while its
+		// settings go, so the settings watcher's reconcile fires against an
+		// instance whose required values have just been deleted: it unmounts
+		// and reports waiting on them, until the override lands a moment later
+		// and it reads as removed. Every reconcile reads the instance fresh,
+		// so they converge whichever order the detached ones run in.
 		if err := a.forgetInstance(ctx, actor, name); err != nil {
 			a.log.ErrorContext(ctx, "a plugin's settings could not be forgotten, so it was not removed",
 				"plugin", name, "error", err)
@@ -331,7 +345,15 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 			return nil
 		}
 		if err := a.pluginOverrides.Remove(ctx, actor, name, a.declaredAs(*found)); err != nil {
-			return err
+			a.log.ErrorContext(ctx, "a plugin's settings were forgotten but the removal was not recorded",
+				"plugin", name, "error", err)
+			// Said plainly, because the half that landed is the destructive
+			// one and the operator is looking at a plugin that appears
+			// untouched. Written for a reader: this sentence reaches them
+			// through writeProblem with no package prefix to strip.
+			return fmt.Errorf("%q has lost its settings but is still on this "+
+				"host, because the removal itself could not be saved. Remove "+
+				"it again to finish", name)
 		}
 		return a.overridesChanged(ctx, name)
 	}
@@ -357,19 +379,37 @@ func (a *App) RemoveInstance(ctx context.Context, actor, name string, acknowledg
 // What the configuration file itself supplies under `settings:` is not here to
 // wipe: it is in a file mcpd does not write, and it comes back with the plugin.
 func (a *App) forgetInstance(ctx context.Context, actor, name string, also ...settings.Change) error {
-	changes := also
+	keys := make([]string, 0, 8)
 	for key := range a.settings.WithPrefix(ctx, settings.PluginSettingPrefix(name)) {
+		keys = append(keys, key)
+	}
+	// Map order is not an order. settings_history records one row per key, and
+	// two hosts removing the same plugin should leave the same trail.
+	sort.Strings(keys)
+
+	changes := also
+	for _, key := range keys {
 		changes = append(changes, settings.Change{Key: key, Delete: true})
 	}
-	if a.pluginRows != nil {
-		if err := a.pluginRows.DeleteAll(ctx, name); err != nil {
+	if len(changes) > 0 {
+		if err := a.settings.Apply(ctx, actor, changes); err != nil {
 			return err
 		}
 	}
-	if len(changes) == 0 {
-		return nil
+	// The rows last, and the order is deliberate. A row holds a customer's
+	// address and password, typed once and recoverable from nowhere else; a
+	// scalar setting is one field on a form. If this fails the settings are
+	// already gone and the rows are not, which a second removal finishes --
+	// the other order would delete the rows and then leave the removal to be
+	// retried against nothing.
+	if a.pluginRows != nil {
+		if err := a.pluginRows.DeleteAll(ctx, name); err != nil {
+			a.log.ErrorContext(ctx, "a plugin's settings were forgotten but its table rows were not",
+				"plugin", name, "error", err)
+			return err
+		}
 	}
-	return a.settings.Apply(ctx, actor, changes)
+	return nil
 }
 
 // RestoreInstance adds a plugin the configuration file still declares back to
@@ -385,7 +425,15 @@ func (a *App) forgetInstance(ctx context.Context, actor, name string, also ...se
 // config.yaml declares today is what comes back. Anything else would be this
 // host holding a copy of an old declaration and serving from it.
 func (a *App) RestoreInstance(ctx context.Context, actor, name string) error {
-	if err := a.pluginOverrides.Restore(ctx, actor, name); err != nil {
+	// Whether there is a declaration to come back to is only knowable here and
+	// only now: the file may have lost the entry since the removal, and then
+	// this call forgets a record rather than adding anything. The trail is read
+	// long afterwards, so the answer is written down rather than inferred.
+	_, declared := a.cfg.Plugins[name]
+	if _, fromDir := a.externalManifests[name]; fromDir {
+		declared = true
+	}
+	if err := a.pluginOverrides.Restore(ctx, actor, name, declared); err != nil {
 		if errors.Is(err, sqlite.ErrNotRemoved) {
 			return fmt.Errorf("%q is not removed", name)
 		}

@@ -691,11 +691,12 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 						Name: inst.Name, Type: inst.Type,
 						Runtime:  string(inst.Runtime),
 						FromFile: inst.FromFile, Enabled: inst.Enabled,
-						Required:  inst.Required,
-						Removed:   inst.Removed,
-						RemovedBy: inst.RemovedBy,
-						RemovedAt: inst.RemovedAt,
-						Problem:   a.reconcileProblem(inst.Name),
+						Required:       inst.Required,
+						Removed:        inst.Removed,
+						RemovedBy:      inst.RemovedBy,
+						RemovedAt:      inst.RemovedAt,
+						StoredSettings: inst.StoredSettings,
+						Problem:        a.reconcileProblem(inst.Name),
 					}
 					// A removed instance is not waiting on anything: it is not
 					// going to mount whatever is filled in, and listing its
