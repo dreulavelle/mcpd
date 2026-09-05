@@ -106,6 +106,20 @@ describe("who acted", () => {
     expect(describeActor("key:key_993f").word).toBe("a key");
   });
 
+  /**
+   * `principalWords` is the same question asked without a name book, so it is
+   * the same answer. Two functions for "who is this" drift, and the page that
+   * drifted would be the one nobody was looking at.
+   */
+  it("is the one authority principalWords reads", () => {
+    for (const actor of [
+      "system:policy", "system:executor", "system:registration",
+      "svc:chatgpt:work", "svc:assistant", "user:sam@example.com", "key:k-17",
+    ]) {
+      expect(principalWords(actor)).toBe(describeActor(actor).word);
+    }
+  });
+
   // Housekeeping is in the record and not in the foreground.
   it("marks only the scheduled tidying as housekeeping", () => {
     expect(describeActor("system:retention").housekeeping).toBe(true);
@@ -132,6 +146,10 @@ describe("an action as words", () => {
     ["device.setRadioChannel", "set the radio channel"],
     // An unknown first word is not a verb on a guess.
     ["foo.bar_baz", "bar baz the foo"],
+    // Through the shared parser, so the audit trail gets the resource table
+    // the Approvals page already had: the one irreversible bookstack action
+    // destroys an item in the bin, not the bin.
+    ["recycle_bin.destroy", "destroy the item in the recycle bin"],
   ])("reads %s as %s", (action, want) => {
     expect(actionWords(action)).toBe(want);
   });

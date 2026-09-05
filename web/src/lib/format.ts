@@ -161,8 +161,10 @@ export function describeActor(actor: string, book: NameBook = {}): ActorWords {
     }
     case "svc": {
       const [service, ...where] = tail.split(":");
-      const workspace = where.join(":");
-      const named = service === "chatgpt" ? "ChatGPT" : service ?? tail;
+      const workspace = where.filter(Boolean).join(" ");
+      const named = service === "chatgpt"
+        ? "ChatGPT"
+        : capitalise(words(service ?? tail));
       return {
         word: workspace ? `${named} (${workspace})` : named,
         kind: "service",
@@ -674,10 +676,6 @@ function list(d: Record<string, unknown>, key: string): unknown[] {
   return Array.isArray(d[key]) ? d[key] : [];
 }
 
-function quoted(text: string): string {
-  return `“${text}”`;
-}
-
 function person(subject: string, book: NameBook): Phrase {
   const name = book.users?.[subject] ?? (subject.includes("@") ? subject : "");
   return { text: name || "an account", to: "/settings/users" };
@@ -739,54 +737,24 @@ function operationPath(r: AuditRecord): string | null {
 }
 
 /**
- * A mutation's action as an infinitive phrase.
+ * A mutation's action as an infinitive phrase: `label.set` is "set the label".
  *
  * `MutationSpec.Action` is `resource.verb` and stays that way, because the
  * approval policy matches on it and reordering the words would silently stop
- * a stored exclusion matching. The words are still derivable: the last segment
- * is the verb, whatever comes before it is the thing acted on.
+ * a stored exclusion matching. The words are still derivable, and `parseAction`
+ * is the one place that derives them -- the same split the Approvals page reads
+ * a change by. Two builders of their own would eventually disagree about one
+ * action in front of somebody deciding whether to run it.
+ *
+ * The audit trail wants the infinitive because every sentence it builds puts
+ * this after "to" or after a modal, so no verb is ever conjugated.
  */
 export function actionWords(action?: string): string | null {
-  const segments = (action ?? "").split(".").map((s) => s.trim()).filter(Boolean);
-  if (segments.length === 0) return null;
-
-  const last = machineWords(segments[segments.length - 1]!);
-  const before = segments.slice(0, -1);
-
-  // A last segment of several words carries its own resource, so
-  // `device.set_radio_channel` is "set the radio channel" rather than "set
-  // radio channel the device". The segments before it named the thing that
-  // owns the setting, and the setting is the more specific noun.
-  const parts = last.split(" ").filter(Boolean);
-  if (parts.length > 1 && CHANGE_VERBS.has(parts[0]!)) {
-    return `${parts[0]} the ${parts.slice(1).join(" ")}`;
-  }
-
-  const resource = before.map(machineWords).filter(Boolean).join(" ");
-  return resource ? `${last} the ${resource}` : last;
-}
-
-/**
- * The verbs a mutation's action is allowed to begin with.
- *
- * Only consulted to split a compound last segment, so an unknown verb costs
- * nothing: `foo.bar_baz` stays "bar_baz the foo" rather than becoming "bar the
- * baz" on a guess. The same set decides the same split on the Approvals page,
- * so a change is described the same way wherever it is read.
- */
-const CHANGE_VERBS = new Set([
-  "set", "update", "change", "create", "add", "delete", "remove", "enable",
-  "disable", "reset", "rotate", "revoke", "assign", "rename", "move",
-  "restart", "reboot", "pause", "resume", "silence", "acknowledge", "clear",
-]);
-
-/** Machine casing to words: `radio_channel` and `radioChannel` both read out. */
-function machineWords(segment: string): string {
-  return segment
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .trim()
-    .toLowerCase();
+  const parsed = parseAction(action ?? "");
+  if (!parsed) return null;
+  return parsed.resource
+    ? `${parsed.verb} the ${parsed.resource}`
+    : parsed.verb;
 }
 
 function pushReason(facts: string[], d: Record<string, unknown>): void {
@@ -1181,14 +1149,17 @@ function parseAction(action: string): { verb: string; resource: string } | null 
   const segments = action.split(".").map((s) => s.trim()).filter(Boolean);
   if (segments.length === 0) return null;
 
-  const last = segments[segments.length - 1]!.toLowerCase();
+  // Worded before it is lowercased, not after: lowercasing first destroys the
+  // boundary in `setRadioChannel`, and the segment then reads as one unknown
+  // verb rather than a verb and the thing it acts on.
+  const last = words(segments[segments.length - 1]!);
   const before = segments.slice(0, -1);
 
   // A last segment that is several words carries its own resource:
   // `device.set_radio_channel` is "set the radio channel", not "set radio
   // channel the device". The earlier segments named the thing that owns it,
   // and the segment itself is more specific than they are.
-  const parts = words(last).split(" ").filter(Boolean);
+  const parts = last.split(" ").filter(Boolean);
   if (parts.length > 1 && CHANGE_VERBS[parts[0]!]) {
     return { verb: parts[0]!, resource: parts.slice(1).join(" ") };
   }
@@ -1283,21 +1254,10 @@ export function deltaWords(delta: ChangeDelta): string {
  * `Principal` component makes it where the session is allowed to.
  */
 export function principalWords(actor: string): string {
-  if (actor === "system:policy") return "a standing rule";
-  if (actor.startsWith("system:")) return "mcpd";
-
-  if (actor.startsWith("svc:")) {
-    const [service, ...rest] = actor.slice(4).split(":");
-    const name = service === "chatgpt" ? "ChatGPT" : capitalise(words(service ?? ""));
-    const workspace = rest.filter(Boolean).join(" ");
-    return workspace ? `${name} (${workspace})` : name;
-  }
-  if (actor.startsWith("key:")) return "a key";
-  if (actor.startsWith("user:")) {
-    const email = actor.slice(5);
-    return email.split("@")[0] || email;
-  }
-  return actor;
+  // The same vocabulary the audit trail reads a principal by, without a name
+  // book: two functions answering "who is this" would drift, and the page that
+  // drifted would be the one nobody was looking at.
+  return describeActor(actor).word;
 }
 
 /**
