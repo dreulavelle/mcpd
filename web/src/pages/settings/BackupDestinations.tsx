@@ -120,6 +120,10 @@ function DestinationRow({ destination, admin, onChanged }: {
   const confirm = useConfirm();
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
+  // Separate from busy, which every control on the row shares. One flag had
+  // the switch being flipped relabel the button to "Testing…", which is a
+  // sentence about something that is not happening.
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
   // The answer, and whether a key was already pinned when it was asked for.
@@ -136,6 +140,11 @@ function DestinationRow({ destination, admin, onChanged }: {
   async function act(run: () => Promise<unknown>, done?: string) {
     setBusy(true);
     setError("");
+    // An answer describes the destination as it was when it was asked. Anything
+    // that changes the row makes it a claim about something else -- and the one
+    // that matters is Forget host key, after which "it is now the only one mcpd
+    // will accept" is left on screen about a key that is no longer stored.
+    setTest(null);
     try {
       await run();
       if (done) notify("good", done);
@@ -155,6 +164,7 @@ function DestinationRow({ destination, admin, onChanged }: {
    */
   async function runTest() {
     setBusy(true);
+    setTesting(true);
     setError("");
     setTest(null);
     // Read before the request, not after: the reload below can give this row a
@@ -169,6 +179,7 @@ function DestinationRow({ destination, admin, onChanged }: {
       setError(problemText(e, "Couldn't reach that destination."));
     } finally {
       setBusy(false);
+      setTesting(false);
     }
   }
 
@@ -224,7 +235,7 @@ function DestinationRow({ destination, admin, onChanged }: {
               )}
             />
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => void runTest()}>
-              {busy ? "Testing…" : "Test connection"}
+              {testing ? "Testing…" : "Test connection"}
             </Button>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(true)}>
               Edit
@@ -250,7 +261,7 @@ function DestinationRow({ destination, admin, onChanged }: {
                 Ask the server, from a machine you trust:
               </p>
               <CodeBlock>
-                {`ssh-keyscan ${destination.settings.host || "nas.example.com"} | ssh-keygen -lf -`}
+                {keyscanCommand(destination.settings.host, destination.settings.port)}
               </CodeBlock>
             </div>
           )}
@@ -263,7 +274,9 @@ function DestinationRow({ destination, admin, onChanged }: {
           destination={destination}
           kinds={[destination.kind]}
           onClose={() => setEditing(false)}
-          onSaved={() => { setEditing(false); onChanged(); }}
+          // Forget host key settles through here rather than through act(), so
+          // the stale answer is dropped here too.
+          onSaved={() => { setEditing(false); setTest(null); onChanged(); }}
         />
       )}
     </li>
@@ -512,6 +525,7 @@ export function DestinationSheet({ destination, kinds, onClose, onSaved }: {
               <HostKey
                 fingerprint={destination?.host_key}
                 host={settings.host}
+                port={settings.port}
                 onForget={editing ? () => void forgetHostKey() : undefined}
                 busy={busy}
               />
@@ -719,6 +733,20 @@ export function DestinationSheet({ destination, kinds, onClose, onSaved }: {
   );
 }
 
+/**
+ * The command that asks a server for its own key, so the two can be compared.
+ *
+ * The port is in it whenever it is not 22. Without it the operator scans the
+ * wrong port and gets either nothing or the fingerprint of whatever else is
+ * listening -- and the comparison this whole exercise exists for is then made
+ * against a different service and passes or fails for no reason.
+ */
+function keyscanCommand(host?: string, port?: number): string {
+  const at = host?.trim() || "nas.example.com";
+  const on = port && port !== 22 ? `-p ${port} ` : "";
+  return `ssh-keyscan ${on}${at} | ssh-keygen -lf -`;
+}
+
 /** One Test connection answer, with what was pinned when it was asked for. */
 interface Tested {
   result: BackupTestResult;
@@ -771,9 +799,10 @@ function testTone({ result, hadPin }: Tested): Tone {
  * server presented while a person was watching, and the act that replaces it
  * is deliberately separate and deliberately switches the destination off.
  */
-function HostKey({ fingerprint, host, onForget, busy }: {
+function HostKey({ fingerprint, host, port, onForget, busy }: {
   fingerprint?: string;
   host?: string;
+  port?: number;
   onForget?: () => void;
   busy: boolean;
 }) {
@@ -787,13 +816,16 @@ function HostKey({ fingerprint, host, onForget, busy }: {
   }
   return (
     <div className="space-y-1.5">
-      <Label>Server key</Label>
+      {/* Not a Label: there is no control here to label, and one pointing at
+          nothing is read out by a screen reader as a field that cannot be
+          found. It is a heading over something read rather than typed. */}
+      <p className="text-sm font-medium">Server key</p>
       <CodeBlock>{fingerprint}</CodeBlock>
       <p className="text-xs text-muted-foreground">
         A server presenting anything else is refused and the backup is not sent.
         Ask the server itself, from a machine you trust, and compare the two:
       </p>
-      <CodeBlock>{`ssh-keyscan ${host || "nas.example.com"} | ssh-keygen -lf -`}</CodeBlock>
+      <CodeBlock>{keyscanCommand(host, port)}</CodeBlock>
       {onForget && (
         <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onForget}>
           Forget host key

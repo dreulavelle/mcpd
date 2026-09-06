@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type BackupDestination, type BackupKind } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
@@ -273,6 +273,88 @@ describe("the backup destinations list", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Test connection" }));
     expect(await screen.findByText(/it is the one already recorded/)).toBeInTheDocument();
+  });
+
+  /**
+   * A Test connection answer describes the destination as it was when it was
+   * asked. Forgetting the key it had just recorded left "it is now the only
+   * one mcpd will accept" on screen about a key no longer stored -- the exact
+   * opposite of what had happened, beside the button that had just done it.
+   */
+  it("drops a test answer once the row it describes has changed", async () => {
+    // The row as it really moves: unpinned when the button is pressed, pinned
+    // once the answer has landed and the list has been reloaded.
+    vi.spyOn(api, "backupDestinations")
+      .mockResolvedValueOnce({ destinations: [destination({ host_key: "" })], kinds: ALL_KINDS })
+      .mockResolvedValue({ destinations: [destination()], kinds: ALL_KINDS });
+    vi.spyOn(api, "testBackupDestination").mockResolvedValue({
+      ok: true,
+      message: "mcpd reached this destination, and wrote and removed a test file.",
+      host_key: "SHA256:abcdef0123456789",
+      host_key_recorded: true,
+    });
+    vi.spyOn(api, "updateBackupDestination")
+      .mockResolvedValue(destination({ host_key: "", enabled: false }));
+    renderWith(<BackupDestinations />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText(/it is now the only one mcpd will accept/))
+      .toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(await screen.findByRole("button", { name: "Forget host key" }));
+    await user.click(await screen.findByRole("button", { name: "Forget" }));
+
+    await waitFor(() => expect(
+      screen.queryByText(/it is now the only one mcpd will accept/),
+    ).not.toBeInTheDocument());
+  });
+
+  /**
+   * The command has to name the port when it is not 22, or the operator scans
+   * whatever else is listening on 22 and compares the fingerprint of a
+   * different service -- which is the one way this exercise can pass or fail
+   * for no reason at all.
+   */
+  it("names a non-standard port in the command that asks the server", async () => {
+    stub([destination({
+      settings: { host: "nas.example.com", port: 2222, username: "mcpd" },
+    })]);
+    vi.spyOn(api, "testBackupDestination").mockResolvedValue({
+      ok: true,
+      message: "mcpd reached this destination, and wrote and removed a test file.",
+      host_key: "SHA256:pinned0000000000000000000000000000000000000",
+      host_key_recorded: false,
+    });
+    renderWith(<BackupDestinations />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText(
+      "ssh-keyscan -p 2222 nas.example.com | ssh-keygen -lf -")).toBeInTheDocument();
+  });
+
+  // Port 22 is the default and naming it is noise in a line meant to be copied.
+  it("leaves the port out of the command when it is the usual one", async () => {
+    stub([destination()]);
+    renderWith(<BackupDestinations />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(await screen.findByText(
+      "ssh-keyscan nas.example.com | ssh-keygen -lf -")).toBeInTheDocument();
+  });
+
+  // The editor shows it too, and that is where somebody looks after a NAS has
+  // been rebuilt and the recorded key has to be checked again.
+  it("names a non-standard port in the host key editor", async () => {
+    stub([destination({
+      settings: { host: "nas.example.com", port: 2222, username: "mcpd" },
+    })]);
+    renderWith(<BackupDestinations />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(await screen.findByText(
+      "ssh-keyscan -p 2222 nas.example.com | ssh-keygen -lf -")).toBeInTheDocument();
   });
 
   // A failed test is still an answer, so the sentence is shown and the
