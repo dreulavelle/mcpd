@@ -42,6 +42,28 @@ func newBypassID() string {
 	return "byp_" + hex.EncodeToString(b[:])
 }
 
+// newDestinationID returns a random identifier for a backup destination.
+//
+// Generated rather than derived from the name, for the reason every other id
+// here is: a destination can be renamed, and the run history records which one
+// it reached by id.
+func newDestinationID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("sqlite: system entropy unavailable: " + err.Error())
+	}
+	return "dst_" + hex.EncodeToString(b[:])
+}
+
+// newBackupRunID returns a random identifier for one backup run.
+func newBackupRunID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("sqlite: system entropy unavailable: " + err.Error())
+	}
+	return "bkr_" + hex.EncodeToString(b[:])
+}
+
 // newRowID returns a random identifier for a plugin collection row.
 //
 // Generated rather than derived from the row's name: a customer can be
