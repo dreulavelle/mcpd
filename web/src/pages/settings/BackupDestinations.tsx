@@ -335,8 +335,14 @@ export function DestinationSheet({ destination, kinds, onClose, onSaved }: {
    * password being offered as a PEM key, or a key sent as a password. Compared
    * against what is stored rather than tracked as "was toggled", so switching
    * back and forth and landing where it started asks for nothing.
+   *
+   * And only when there is something stored to be misread. A destination saved
+   * without a credential has nothing to keep, so demanding a replacement --
+   * under a sentence about a stored credential that is not there -- would
+   * refuse a change that is only ever the operator deciding how they are going
+   * to sign in.
    */
-  const authChanged = editing && kind === "sftp"
+  const authChanged = editing && kind === "sftp" && Boolean(destination.has_secret)
     && Boolean(settings.key_auth) !== Boolean(destination.settings.key_auth);
   // Refused at the button rather than saved half-done. Clearing the stored
   // credential instead would leave a destination that cannot sign in and says
