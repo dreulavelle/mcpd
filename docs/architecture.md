@@ -1097,7 +1097,7 @@ Tables: `operations`, `operation_transitions`, `execution_attempts`,
 `plugin_state`, `plugin_overrides`, `settings`, `settings_history`, `users`,
 `user_sessions`, `user_identities`, `sso_states`, `groups`, `group_members`,
 `api_keys`, `mcp_servers`, `mcp_server_tools`, `ca_certificates`,
-`chatgpt_accounts`.
+`chatgpt_accounts`, `backup_destinations`, `backup_runs`.
 
 Migrations are forward-only and checksummed; a changed file that has already
 run is an error rather than a silent divergence. There is no down path —
@@ -1115,6 +1115,65 @@ a different body is refused. `ux_operations_idem` is a *partial* unique index
 scoped to live states — one live operation per intent, while a settled one may
 be proposed again. It was once permanent and blind to state, which made an
 expired proposal un-retryable forever.
+
+## Backup
+
+`internal/backup` writes the whole instance as one encrypted file and reads one
+back. [`docs/backup.md`](backup.md) is the operator's view; the decisions worth
+knowing here are these.
+
+**An archive is taken once and sent to every destination.** The snapshot is the
+expensive part, and one per destination would be three different instants
+pretending to be one backup. So a run spools the archive to a `backup-` work
+directory under the storage directory — the same prefix `SweepWorkDirs` already
+collects at a cold start — and reads it back from a fresh handle per
+destination.
+
+**One run at a time, decided by the database.** `backup_runs` carries a partial
+unique index over `status = 'running'`, and a run begins with an
+`INSERT … WHERE NOT EXISTS`. Two administrators pressing the button together, or
+one pressing it as the schedule fires, produce one run and one refusal — and it
+holds across processes rather than only inside the one holding a lock.
+
+**Interrupted is not failed.** A process that stops mid-run may have uploaded to
+some destinations and not others. The next start settles those rows as
+`interrupted` with one guarded `UPDATE`, because a reader told the backup failed
+would conclude nothing was written and go looking for one that is there.
+
+**Four transports behind one interface.** `Transport` is Put, List, Delete,
+Check, and `local`, `sftp`, `s3` and `webdav` implement it. `List` only ever
+returns names matching mcpd's own archive pattern: a destination is very often
+a shared folder, and retention reads that listing.
+
+**Retention is a pure function over a listing**, keyed on the timestamp in the
+name rather than on the file's modified time — a NAS with a wrong clock, an S3
+copy and a restore from the destination's own snapshot all rewrite the second
+and none rewrites the first. It aborts, recording why against the run rather
+than failing it, on an empty listing, on a listing missing the archive just
+uploaded, and on one holding far fewer archives than the last successful run
+saw.
+
+**An SFTP destination is pinned to a host key and there is no trust on first
+use.** The table refuses to enable one with no key recorded; only
+`POST /api/backup/destinations/{id}/test` writes one, guarded on the column
+still being empty, so a run can never learn an identity from whatever answers
+that night and a mismatch is never one button press from being accepted.
+
+**The schedule is cadence, weekday, time and an IANA zone**, and the next
+instant is calendar arithmetic in that zone — never `last.Add(7 * 24h)`, which
+drifts an hour every time the clocks change. Catch-up after downtime happens
+once, and only when a scheduled run has happened before: switching the schedule
+on must not take a backup because this morning's four o'clock is in the past.
+`cmd/mcpd` imports `time/tzdata`, without which the container has no zoneinfo
+and every zone but UTC silently becomes UTC.
+
+**Plugin binaries travel in the archive** as restored members with the owner's
+mode bits, so a restored host is not configured for integrations whose
+executables are missing. The walk skips anything that is not an ordinary file —
+a symlink in a tar is a write-outside primitive `safeName` cannot see — and a
+size budget refuses a plugins directory somebody has been keeping build
+artefacts in. A restore merges per file, so a plugin installed since the backup
+survives it.
 
 ## Plugins
 
