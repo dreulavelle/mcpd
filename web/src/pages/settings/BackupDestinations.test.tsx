@@ -231,6 +231,25 @@ describe("the backup destinations list", () => {
     expect(body.secret).toBe("-----BEGIN KEY-----");
   });
 
+  /**
+   * With nothing stored there is nothing to be misread, so the switch is just
+   * the operator deciding how they will sign in. Demanding a replacement here
+   * -- under a sentence about a stored credential that is not there -- would
+   * refuse a change that costs nothing.
+   */
+  it("asks for nothing when the auth mode changes and no credential is stored", async () => {
+    stub([destination({ has_secret: false })]);
+    renderWith(<BackupDestinations />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.click(await screen.findByLabelText("Sign in with a private key"));
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.queryByText(/stored credential is the other kind/))
+      .not.toBeInTheDocument();
+  });
+
   // Switching and switching back lands where it started, so there is nothing
   // to replace. Tracking "was toggled" rather than comparing with what is
   // stored would demand a credential for a change that was never made.

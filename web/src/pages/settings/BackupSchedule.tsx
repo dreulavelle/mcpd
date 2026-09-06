@@ -7,7 +7,7 @@ import {
 import { browserZone, WEEKDAYS } from "@/lib/backup";
 import { relative, whenExact } from "@/lib/format";
 import { useLoader } from "@/lib/hooks";
-import { useCan } from "@/lib/session";
+import { useCanFn } from "@/lib/session";
 import { Loading, Notice } from "@/components/chrome";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -49,7 +49,12 @@ export function BackupSchedule({ schedule, onSaved }: {
   // system:write, but every control on it is written through the settings API,
   // which takes settings:write -- and a control drawn for somebody the server
   // will refuse is a form filled in twice.
-  const canEdit = useCan("system:write") && useCan("settings:write");
+  //
+  // Through useCanFn rather than two useCan calls: `&&` short-circuits, so the
+  // second hook would go uncalled whenever the first answered false, which is
+  // a hook that runs on some renders and not others.
+  const can = useCanFn();
+  const canEdit = can("system:write") && can("settings:write");
   const notify = useNotify();
   const load = useCallback(() => api.settings(), []);
   const { data: settings, error, reload } = useLoader(
