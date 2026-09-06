@@ -668,7 +668,8 @@ export type SettingSection =
   | "chatgpt"
   | "approvals"
   | "advanced"
-  | "diagnostics";
+  | "diagnostics"
+  | "backup";
 
 export interface SettingField {
   key: string;
@@ -1145,6 +1146,172 @@ export interface BackupStatus {
   pending?: BackupPending;
   /** The floor the host enforces, so the form does not name its own number. */
   min_passphrase: number;
+  /**
+   * The out-of-process plugins the archive carries. The one part of an archive
+   * whose size an operator controls.
+   *
+   * `plugins_truncated` says the host stopped counting early — the walk is
+   * bounded because it runs on a page load over a bind mount — so the two
+   * numbers above are a floor and must be rendered as one.
+   */
+  plugin_files: number;
+  plugin_bytes: number;
+  plugins_truncated?: boolean;
+  /** What happens without anybody pressing anything. Absent on a host with no runner. */
+  schedule?: BackupSchedule;
+}
+
+/** Which transport a destination speaks. */
+export type BackupKind = "local" | "sftp" | "s3" | "webdav";
+
+/**
+ * A destination's non-secret fields, all of them in one shape.
+ *
+ * One object for four kinds rather than four, because the host stores it that
+ * way: a form fills in the fields its kind uses and leaves the rest alone.
+ */
+export interface BackupDestinationSettings {
+  /** A directory on this host. */
+  path?: string;
+
+  /** SFTP. */
+  host?: string;
+  port?: number;
+  username?: string;
+  remote_path?: string;
+  /** The stored credential is a private key rather than a password. */
+  key_auth?: boolean;
+
+  /** S3-compatible. */
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  prefix?: string;
+  access_key?: string;
+  path_style?: boolean;
+
+  /** WebDAV. */
+  url?: string;
+
+  /** Plain HTTP, asked for by name. Never implied. */
+  allow_insecure?: boolean;
+}
+
+/**
+ * How much history one destination keeps. Four rules, OR-ed; zero switches one
+ * off, and keep_last is never zero.
+ */
+export interface BackupPolicy {
+  keep_last: number;
+  keep_daily: number;
+  keep_weekly: number;
+  keep_monthly: number;
+}
+
+/** One stored place archives are sent. Never carries the credential. */
+export interface BackupDestination {
+  id: string;
+  name: string;
+  kind: BackupKind;
+  /** Where it points, in one line, with no credential in it. */
+  where: string;
+  settings: BackupDestinationSettings;
+  enabled: boolean;
+  policy: BackupPolicy;
+  /** The SFTP server's pinned fingerprint. Empty until Test connection records one. */
+  host_key?: string;
+  /** Whether a credential is stored. The value itself never leaves the host. */
+  has_secret: boolean;
+  created_at: string;
+  last_run_at?: string;
+  /** Absent is "never ran", which is a different fact from "ran and failed". */
+  last_ok?: boolean;
+  /** The sentence a person reads, and the evidence behind it. */
+  last_error?: string;
+  last_detail?: string;
+}
+
+/**
+ * What the form sends. Every field optional, so "not sent" and "set to empty"
+ * stay different instructions -- which matters most for `secret`: an edit that
+ * changes only the retention carries none, and an empty string would erase the
+ * stored credential.
+ */
+export interface BackupDestinationBody {
+  name?: string;
+  kind?: BackupKind;
+  settings?: BackupDestinationSettings;
+  secret?: string;
+  enabled?: boolean;
+  policy?: BackupPolicy;
+  host_key?: string;
+}
+
+/**
+ * What Test connection got back. Always a 200: "it did not work" is an answer
+ * to the question, not a failure of the request.
+ */
+export interface BackupTestResult {
+  ok: boolean;
+  message: string;
+  detail?: string;
+  /** What an SFTP server presented, to compare with what the server says of itself. */
+  host_key?: string;
+  /** Whether that fingerprint is now pinned, which is not the same as having been shown. */
+  host_key_recorded: boolean;
+}
+
+/** What happened at one destination during one run. */
+export interface BackupRunDestination {
+  id: string;
+  name: string;
+  kind: BackupKind;
+  ok: boolean;
+  error?: string;
+  detail?: string;
+  /** How many older archives retention took away here. */
+  removed: number;
+  /** Why it took none, when it took none. */
+  held?: string;
+}
+
+/**
+ * One attempt to back this host up to its destinations.
+ *
+ * `interrupted` is deliberately not `failed`: mcpd stopped while the run was
+ * going, so some destinations may hold that backup and some may not.
+ */
+export type BackupRunStatus =
+  | "running" | "ok" | "partial" | "failed" | "interrupted";
+
+export interface BackupRun {
+  id: string;
+  started_at: string;
+  finished_at?: string;
+  trigger: "schedule" | "manual";
+  archive_name?: string;
+  size_bytes: number;
+  status: BackupRunStatus;
+  error?: string;
+  detail?: string;
+  destinations: BackupRunDestination[];
+}
+
+/** The scheduled half of the page: what will happen with nobody present. */
+export interface BackupSchedule {
+  enabled: boolean;
+  cadence: string;
+  weekday: number;
+  time: string;
+  timezone: string;
+  /** Null whenever no run is coming. `reason` says which, in one sentence. */
+  next_run_at: string | null;
+  reason?: string;
+  last_run?: BackupRun;
+  destinations: number;
+  enabled_destinations: number;
+  passphrase_set: boolean;
+  running: boolean;
 }
 
 /**
@@ -1811,6 +1978,44 @@ export const api = {
 
   cancelRestore: () =>
     request<void>("/api/backup/restore", { method: "DELETE" }),
+
+  /** Where backups go, and the kinds this build can talk to. */
+  backupDestinations: () =>
+    request<{ destinations: BackupDestination[]; kinds: BackupKind[] }>(
+      "/api/backup/destinations"),
+
+  addBackupDestination: (body: BackupDestinationBody) =>
+    request<BackupDestination>("/api/backup/destinations", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateBackupDestination: (id: string, body: BackupDestinationBody) =>
+    request<BackupDestination>(
+      `/api/backup/destinations/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+
+  removeBackupDestination: (id: string) =>
+    request<void>(`/api/backup/destinations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+
+  /**
+   * Reaches the destination, lists it, and writes and removes a test file. For
+   * SFTP with nothing pinned this is what records the key the server presented.
+   */
+  testBackupDestination: (id: string) =>
+    request<BackupTestResult>(
+      `/api/backup/destinations/${encodeURIComponent(id)}/test`, { method: "POST" }),
+
+  /** Starts a backup to every enabled destination. 409 when one is already going. */
+  runBackup: () =>
+    request<BackupRun>("/api/backup/run", { method: "POST" }),
+
+  backupRuns: (limit = 25) =>
+    request<{ runs: BackupRun[] }>(`/api/backup/runs?limit=${limit}`),
 
   saveSettings: (values: Record<string, string>, clearSecrets: string[] = []) =>
     request<SaveResult>("/api/settings", {

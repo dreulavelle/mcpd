@@ -39,7 +39,7 @@ export const SETTINGS_GROUPS: TabGroup[] = [
       { path: "/settings", label: "General", section: "settings", requires: "settings:read" },
       { path: "/settings/diagnostics", label: "Diagnostics", section: "diagnostics", requires: "settings:write" },
       { path: "/settings/advanced", label: "Advanced", section: "advanced", requires: "settings:write" },
-      { path: "/settings/backup", label: "Backup & Restore", requires: "system:write" },
+      { path: "/settings/backup", label: "Backup & Restore", section: "backup", requires: "system:write" },
     ],
   },
   {

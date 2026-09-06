@@ -16,21 +16,28 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { BackupDestinations } from "./BackupDestinations";
+import { BackupHistory } from "./BackupHistory";
+import { BackupSchedule } from "./BackupSchedule";
 
 /**
- * One instance, in one file.
+ * One instance, in one file -- taken by hand, or taken for you.
  *
- * The two halves are deliberately not symmetrical. Taking a backup is
- * immediate and changes nothing, so it is a form and a button. Restoring
- * replaces everything this host knows, so the archive is checked first, while
- * nothing has moved -- a bad one is refused with the working instance still
- * running -- and the host then restarts to apply it, because the database
- * cannot be swapped under a process holding it open.
+ * The halves are deliberately not symmetrical. Taking a backup is immediate
+ * and changes nothing, so it is a form and a button. Restoring replaces
+ * everything this host knows, so the archive is checked first, while nothing
+ * has moved -- a bad one is refused with the working instance still running --
+ * and the host then restarts to apply it, because the database cannot be
+ * swapped under a process holding it open.
  *
  * The restart is not a second thing to press. A checked archive is an operator
  * who has said what they want, and a restore left waiting would apply itself
  * on the next start of any kind: a reboot, a compose up, a crash loop. That is
  * a change firing at a moment nobody connected to a restore.
+ *
+ * The scheduled half sits above Restore and below the download, in the order
+ * the questions get asked: take one now, arrange for one to be taken, see
+ * whether the arrangement worked, and put one back.
  */
 export function BackupRestore() {
   const [status, setStatus] = useState<BackupStatus | null>(null);
@@ -59,6 +66,13 @@ export function BackupRestore() {
             <Staged pending={status.pending} onChanged={load} />
           )}
           <TakeBackup status={status} />
+          {/* Each of the three loads and reloads itself. `load` is passed on
+              so that a change in one -- a destination switched on, a schedule
+              saved, a run started -- refreshes the summary the other two read
+              their next-run line and their counts from. */}
+          <BackupDestinations onChanged={load} />
+          <BackupSchedule schedule={status.schedule} onSaved={load} />
+          <BackupHistory onRan={load} />
           <Restore status={status} onStaged={load} />
         </div>
       )}
@@ -228,6 +242,18 @@ function Contents({ status }: { status: BackupStatus }) {
       {status.tls_files > 0 && (
         <Row label="Certificates">
           This host's own authority, so clients keep trusting it
+        </Row>
+      )}
+      {status.plugin_files > 0 && (
+        <Row label="Plugins">
+          {/* A floor, not a count, when the host stopped walking early. Saying
+              "12 files" of a directory it gave up counting would be a number
+              that is quietly wrong on exactly the installs where it matters. */}
+          {status.plugins_truncated ? "At least " : ""}
+          {status.plugin_files} file{status.plugin_files === 1 ? "" : "s"},{" "}
+          {status.plugins_truncated ? "over " : ""}
+          {megabytes(status.plugin_bytes)} — the plugins installed by hand, so
+          a restored host is not configured for systems that are not on it
         </Row>
       )}
       {status.config_included && (

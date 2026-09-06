@@ -16,12 +16,26 @@ function statusView(overrides: Partial<BackupStatus> = {}): BackupStatus {
     mcpd_version: "0.6.1",
     instance: "https://mcp.example",
     min_passphrase: 12,
+    plugin_files: 0,
+    plugin_bytes: 0,
     ...overrides,
   };
 }
 
+/**
+ * The page mounts three sections that load themselves. Their own tests are
+ * beside this one; here they are stubbed empty so that a test about the
+ * download form is not also a test of the destination list, and so that an
+ * unstubbed fetch cannot reject in the background.
+ */
 function stub(status: BackupStatus) {
   vi.spyOn(api, "backupStatus").mockResolvedValue(status);
+  vi.spyOn(api, "backupDestinations").mockResolvedValue({ destinations: [], kinds: [] });
+  vi.spyOn(api, "backupRuns").mockResolvedValue({ runs: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({
+    groups: [], values: {}, secrets_set: {},
+    encryption_available: true, bootstrap: [],
+  });
 }
 
 describe("the backup and restore page", () => {
@@ -39,6 +53,31 @@ describe("the backup and restore page", () => {
 
     expect(await screen.findByText("0badcafe0badcafe")).toBeInTheDocument();
     expect(screen.getByText(/needs a host using this same\s+key/)).toBeInTheDocument();
+  });
+
+  /**
+   * The plugins walk is bounded, because it runs on a page load over a bind
+   * mount. A count the host gave up on rendered as a number would be quietly
+   * wrong on exactly the installs where the size matters.
+   */
+  it("says a plugin count the host stopped early is a floor", async () => {
+    stub(statusView({
+      plugin_files: 500, plugin_bytes: 52_428_800, plugins_truncated: true,
+    }));
+    renderWith(<BackupRestore />);
+
+    const row = (await screen.findByText("Plugins")).closest("div")!;
+    expect(row).toHaveTextContent("At least 500 files");
+    expect(row).toHaveTextContent("over 50.0 MB");
+  });
+
+  it("gives the plugin count plainly when the host counted them all", async () => {
+    stub(statusView({ plugin_files: 3, plugin_bytes: 52_428_800 }));
+    renderWith(<BackupRestore />);
+
+    const row = (await screen.findByText("Plugins")).closest("div")!;
+    expect(row).toHaveTextContent("3 files, 50.0 MB");
+    expect(row).not.toHaveTextContent("At least");
   });
 
   // config.yaml travels so the archive is a complete record, and is not
