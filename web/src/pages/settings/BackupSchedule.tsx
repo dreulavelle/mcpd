@@ -129,7 +129,11 @@ function ScheduleForm({ settings, readOnly, onSaved }: {
     setDraft((d) => ({ ...d, [key]: next }));
 
   const on = value(ENABLED) === "true";
-  const weekly = value(CADENCE) === "weekly";
+  // When a day is worth asking for is the catalog's decision, not this form's.
+  // Writing "weekly" down here as well would be a second copy to keep in step
+  // with a rule the host already states.
+  const showWhen = field(WEEKDAY)?.show_when;
+  const weekly = !showWhen || showWhen.equals.includes(value(showWhen.field));
   const zone = browserZone();
   const passphraseSet = settings.secrets_set[PASSPHRASE] ?? false;
   const dirty = Object.keys(draft).length > 0;
@@ -250,6 +254,9 @@ function ScheduleForm({ settings, readOnly, onSaved }: {
         </>
       )}
 
+      {/* Asked for whether or not the schedule is on. Back up now seals its
+          archive with the same stored passphrase, so a host with a passphrase
+          and no schedule is a perfectly ordinary thing to have. */}
       <div className="space-y-1.5">
         <Label htmlFor="sched-passphrase">
           {field(PASSPHRASE)?.label ?? "Passphrase"}
