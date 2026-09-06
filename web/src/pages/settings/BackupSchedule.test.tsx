@@ -195,6 +195,46 @@ describe("the backup schedule", () => {
     });
   });
 
+  /**
+   * The bug this guards. Typing into the passphrase box and then clearing it
+   * left an empty string in the draft, and the catalog only enforces the
+   * length floor on a value that is there -- so the empty string was stored,
+   * every scheduled backup afterwards failed for want of a passphrase, and the
+   * page had said "Saved." in green.
+   *
+   * Blank means keep the stored one, which is what the placeholder promises.
+   */
+  it("does not erase a stored passphrase by clearing the box", async () => {
+    stub(settings({}, true));
+    const save = vi.spyOn(api, "saveSettings").mockResolvedValue({ applied: [] });
+    renderWith(<BackupSchedule schedule={schedule()} onSaved={() => {}} />);
+    const user = userEvent.setup();
+
+    const box = await screen.findByLabelText("Passphrase");
+    await user.type(box, "a-long-enough-passphrase");
+    await user.clear(box);
+    // Something else has to have moved, or there would be nothing to save.
+    await user.selectOptions(screen.getByLabelText("How often"), "daily");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(save).toHaveBeenCalledWith({ "backup.schedule.cadence": "daily" });
+    expect(save.mock.calls[0]![0]).not.toHaveProperty("backup.passphrase");
+  });
+
+  // Clearing it is not a way to save nothing, either: with only the box
+  // touched there is nothing to save at all.
+  it("has nothing to save when the passphrase box is the only thing touched and left blank", async () => {
+    stub(settings({}, true));
+    renderWith(<BackupSchedule schedule={schedule()} onSaved={() => {}} />);
+    const user = userEvent.setup();
+
+    const box = await screen.findByLabelText("Passphrase");
+    await user.type(box, "abc");
+    await user.clear(box);
+
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
   // A weekday means nothing on a daily schedule, and it is the catalog that
   // says so -- the field carries the condition, and the form reads it rather
   // than writing "weekly" down a second time.

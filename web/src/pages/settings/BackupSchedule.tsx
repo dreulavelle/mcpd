@@ -126,7 +126,18 @@ function ScheduleForm({ settings, readOnly, onSaved }: {
     return stored === undefined || stored === null ? "" : String(stored);
   };
   const set = (key: string, next: string) =>
-    setDraft((d) => ({ ...d, [key]: next }));
+    setDraft((d) => {
+      // An empty passphrase box means "keep the stored one", which is what its
+      // placeholder says and what leaving it alone does. Sending "" stores the
+      // empty string -- the catalog only enforces the length floor on a value
+      // that is there -- and every scheduled backup afterwards fails for want
+      // of a passphrase, behind a green "Saved."
+      if (key === PASSPHRASE && next === "") {
+        const { [key]: _dropped, ...rest } = d;
+        return rest;
+      }
+      return { ...d, [key]: next };
+    });
 
   const on = value(ENABLED) === "true";
   // When a day is worth asking for is the catalog's decision, not this form's.
