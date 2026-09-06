@@ -45,7 +45,11 @@ export function BackupSchedule({ schedule, onSaved }: {
   schedule?: ScheduleStatus;
   onSaved: () => void;
 }) {
-  const admin = useCan("system:write");
+  // Both, because both are true of this form. The page is reached with
+  // system:write, but every control on it is written through the settings API,
+  // which takes settings:write -- and a control drawn for somebody the server
+  // will refuse is a form filled in twice.
+  const canEdit = useCan("system:write") && useCan("settings:write");
   const notify = useNotify();
   const load = useCallback(() => api.settings(), []);
   const { data: settings, error, reload } = useLoader(
@@ -62,9 +66,18 @@ export function BackupSchedule({ schedule, onSaved }: {
       <CardContent className="space-y-5">
         <NextRun schedule={schedule} />
         {error && <Notice tone="problem">{error}</Notice>}
+        {/* Said rather than left to be worked out from controls that do
+            nothing. Somebody who can take a backup but not change a setting
+            can still read what the schedule is. */}
+        {!canEdit && (
+          <Notice tone="neutral">
+            You can see this schedule but not change it. Changing it needs
+            permission to edit settings.
+          </Notice>
+        )}
         {!settings ? <Loading rows={3} /> : (
           <ScheduleForm
-            settings={settings} readOnly={!admin}
+            settings={settings} readOnly={!canEdit}
             onSaved={() => { reload(); onSaved(); notify("good", "Saved."); }}
           />
         )}

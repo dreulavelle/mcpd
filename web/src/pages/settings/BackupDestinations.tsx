@@ -326,7 +326,23 @@ export function DestinationSheet({ destination, kinds, onClose, onSaved }: {
   // mcpd would have no way to tell the server apart from anything else
   // answering at that address. Test connection is what records it.
   const pinned = kind !== "sftp" || Boolean(destination?.host_key);
-  const ready = name.trim() !== "" && addressed(kind, settings);
+
+  /**
+   * Whether this edit switches SFTP between a password and a private key.
+   *
+   * The stored credential is one column and this switch is what says how to
+   * read it, so changing the switch without replacing the credential leaves a
+   * password being offered as a PEM key, or a key sent as a password. Compared
+   * against what is stored rather than tracked as "was toggled", so switching
+   * back and forth and landing where it started asks for nothing.
+   */
+  const authChanged = editing && kind === "sftp"
+    && Boolean(settings.key_auth) !== Boolean(destination.settings.key_auth);
+  // Refused at the button rather than saved half-done. Clearing the stored
+  // credential instead would leave a destination that cannot sign in and says
+  // nothing about it until four in the morning.
+  const ready = name.trim() !== "" && addressed(kind, settings)
+    && (!authChanged || secret.trim() !== "");
 
   async function forgetHostKey() {
     if (!destination) return;
@@ -488,12 +504,12 @@ export function DestinationSheet({ destination, kinds, onClose, onSaved }: {
               {settings.key_auth ? (
                 <Row
                   label="Private key" id="dest-key"
-                  help={secretHelp(editing, destination?.has_secret,
+                  help={secretHelp(editing, destination?.has_secret, authChanged,
                     "The whole key, including its BEGIN and END lines. Stored encrypted.")}
                 >
                   <Textarea
                     id="dest-key" rows={4} value={secret}
-                    placeholder={placeholderFor(editing, destination?.has_secret,
+                    placeholder={placeholderFor(editing, destination?.has_secret, authChanged,
                       "-----BEGIN OPENSSH PRIVATE KEY-----")}
                     onChange={(e) => setSecret(e.target.value)}
                   />
@@ -501,12 +517,13 @@ export function DestinationSheet({ destination, kinds, onClose, onSaved }: {
               ) : (
                 <Row
                   label="Password" id="dest-password"
-                  help={secretHelp(editing, destination?.has_secret, "Stored encrypted.")}
+                  help={secretHelp(editing, destination?.has_secret, authChanged,
+                    "Stored encrypted.")}
                 >
                   <Input
                     id="dest-password" type="password" autoComplete="new-password"
                     value={secret}
-                    placeholder={placeholderFor(editing, destination?.has_secret, "")}
+                    placeholder={placeholderFor(editing, destination?.has_secret, authChanged, "")}
                     onChange={(e) => setSecret(e.target.value)}
                   />
                 </Row>
@@ -585,12 +602,12 @@ export function DestinationSheet({ destination, kinds, onClose, onSaved }: {
               </Row>
               <Row
                 label="Secret key" id="dest-secret"
-                help={secretHelp(editing, destination?.has_secret, "Stored encrypted.")}
+                help={secretHelp(editing, destination?.has_secret, false, "Stored encrypted.")}
               >
                 <Input
                   id="dest-secret" type="password" autoComplete="new-password"
                   value={secret}
-                  placeholder={placeholderFor(editing, destination?.has_secret, "")}
+                  placeholder={placeholderFor(editing, destination?.has_secret, false, "")}
                   onChange={(e) => setSecret(e.target.value)}
                 />
               </Row>
@@ -639,12 +656,12 @@ export function DestinationSheet({ destination, kinds, onClose, onSaved }: {
               </Row>
               <Row
                 label="Password" id="dest-dav-password"
-                help={secretHelp(editing, destination?.has_secret, "Stored encrypted.")}
+                help={secretHelp(editing, destination?.has_secret, false, "Stored encrypted.")}
               >
                 <Input
                   id="dest-dav-password" type="password" autoComplete="new-password"
                   value={secret}
-                  placeholder={placeholderFor(editing, destination?.has_secret, "")}
+                  placeholder={placeholderFor(editing, destination?.has_secret, false, "")}
                   onChange={(e) => setSecret(e.target.value)}
                 />
               </Row>
@@ -869,15 +886,28 @@ function Toggle({ id, label, help, checked, disabled, onChange }: {
   );
 }
 
-/** What an empty credential box means, which is not the same on both paths. */
-function secretHelp(editing: boolean, hasSecret: boolean | undefined, base: string): string {
+/**
+ * What an empty credential box means, which is not the same on all three paths.
+ *
+ * On a new destination it is simply missing. On an edit it means "keep the
+ * stored one" -- unless the switch above it has just changed what the stored
+ * one would be read as, in which case keeping it is the one thing that cannot
+ * be done, because a password offered as a PEM key is not a credential at all.
+ */
+function secretHelp(
+  editing: boolean, hasSecret: boolean | undefined, authChanged: boolean, base: string,
+): string {
+  if (authChanged) {
+    return `The stored credential is the other kind, so it cannot be kept. ${base}`;
+  }
   if (editing && hasSecret) return `Leave it blank to keep the stored one. ${base}`;
   return base;
 }
 
 function placeholderFor(
-  editing: boolean, hasSecret: boolean | undefined, fallback: string,
+  editing: boolean, hasSecret: boolean | undefined, authChanged: boolean, fallback: string,
 ): string {
+  if (authChanged) return fallback;
   return editing && hasSecret ? "leave blank to keep the stored one" : fallback;
 }
 

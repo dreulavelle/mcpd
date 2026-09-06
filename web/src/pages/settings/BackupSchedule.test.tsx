@@ -296,4 +296,37 @@ describe("the backup schedule", () => {
     expect(await screen.findByLabelText("Time")).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
   });
+
+  /**
+   * Every control here is written through the settings API, which takes
+   * settings:write -- so a composed role carrying system:write without it
+   * could fill the form in and be refused by the server on Save. The page is
+   * reached with system:write, which is why both are asked for.
+   */
+  it("is read-only for somebody who can back up but not change a setting", async () => {
+    stub(settings());
+    renderWith(
+      <BackupSchedule schedule={schedule()} onSaved={() => {}} />,
+      {
+        session: sessionFor("admin", {
+          permissions: ["system:write", "system:read", "settings:read"],
+        }),
+      },
+    );
+
+    expect(await screen.findByText(/but not change it/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Time")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+  });
+
+  // And the ordinary case still edits, or the gate above would be a page
+  // nobody can use.
+  it("is editable for somebody holding both", async () => {
+    stub(settings());
+    renderWith(<BackupSchedule schedule={schedule()} onSaved={() => {}} />);
+
+    expect(await screen.findByLabelText("Time")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
+    expect(screen.queryByText(/but not change it/)).not.toBeInTheDocument();
+  });
 });

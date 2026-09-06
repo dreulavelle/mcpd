@@ -188,6 +188,65 @@ describe("the backup destinations list", () => {
       .toBeInTheDocument();
   });
 
+  /**
+   * The stored credential is one column and the switch above it is what says
+   * how to read it. Flipping the switch and saving without replacing the
+   * credential left a password being offered to the server as a PEM key --
+   * accepted by the form, saved by the host, and failing every night after.
+   *
+   * Refused at the button rather than saved half-done, and rather than
+   * clearing the stored credential: a destination that cannot sign in says
+   * nothing about it until four in the morning either.
+   */
+  it("will not switch SFTP between a password and a key without a new one", async () => {
+    stub([destination()]);
+    const update = vi.spyOn(api, "updateBackupDestination")
+      .mockResolvedValue(destination());
+    renderWith(<BackupDestinations />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.click(await screen.findByLabelText("Sign in with a private key"));
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByText(/stored credential is the other kind/)).toBeInTheDocument();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  // With the replacement typed in, both halves of the change go together.
+  it("sends the new credential with the auth mode it belongs to", async () => {
+    stub([destination()]);
+    const update = vi.spyOn(api, "updateBackupDestination")
+      .mockResolvedValue(destination());
+    renderWith(<BackupDestinations />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.click(await screen.findByLabelText("Sign in with a private key"));
+    await user.type(await screen.findByLabelText("Private key"), "-----BEGIN KEY-----");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const [, body] = update.mock.calls[0]!;
+    expect(body.settings?.key_auth).toBe(true);
+    expect(body.secret).toBe("-----BEGIN KEY-----");
+  });
+
+  // Switching and switching back lands where it started, so there is nothing
+  // to replace. Tracking "was toggled" rather than comparing with what is
+  // stored would demand a credential for a change that was never made.
+  it("asks for nothing when the auth mode ends where it started", async () => {
+    stub([destination()]);
+    renderWith(<BackupDestinations />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const toggle = await screen.findByLabelText("Sign in with a private key");
+    await user.click(toggle);
+    await user.click(toggle);
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
   // A retyped one is sent, or there would be no way to replace a password.
   it("sends a credential that was retyped", async () => {
     stub([destination()]);
