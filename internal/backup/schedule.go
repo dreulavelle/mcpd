@@ -151,15 +151,21 @@ func (s Schedule) Next(after time.Time) time.Time {
 // and what came back is exactly the length of the gap, so adding it lands on
 // the first instant that exists -- 03:30 in that example.
 //
+// The difference is taken around the clock rather than as a plain subtraction,
+// because a gap that starts at midnight normalises to the *previous* evening --
+// Havana and Santiago both move 00:00 to 23:00 the day before -- and a plain
+// subtraction of that is negative and would be left alone.
+//
 // Bounded to two hours so that a zone rule this does not anticipate leaves the
 // time alone rather than moving it somewhere arbitrary. And a no-op on every
 // other day of the year, including the day the clocks go back, where time.Date
 // answers with the wall clock that was asked for.
 func skipGap(candidate time.Time, hour, minute int) time.Time {
+	const day = 24 * 60
 	asked := hour*60 + minute
 	got := candidate.Hour()*60 + candidate.Minute()
-	gap := asked - got
-	if gap <= 0 || gap > 120 {
+	gap := ((asked-got)%day + day) % day
+	if gap == 0 || gap > 120 {
 		return candidate
 	}
 	return candidate.Add(time.Duration(gap) * time.Minute)

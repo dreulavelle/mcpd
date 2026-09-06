@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -296,6 +298,79 @@ func TestSFTPExplainsAKeyItCannotRead(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "without .pub") {
 		t.Errorf("the refusal does not say what to paste instead: %v", err)
+	}
+}
+
+// A cancelled context stops an operation now rather than at its deadline.
+//
+// pkg/sftp's calls take no context and block on a reply that may never come, so
+// the socket is the only thing that can end one. Without this, a shutdown or an
+// abandoned Test connection waits out the whole budget, and the single worker
+// waits with it.
+func TestSFTPStopsWhenTheCallerGivesUp(t *testing.T) {
+	srv := startSSHServer(t)
+	transport, err := OpenDestination(srv.destination(srv.fingerprint), TransportOptions{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer transport.Close()
+
+	// Connected first, so what is being tested is an operation on a live
+	// session rather than a dial that never happened.
+	if err := transport.Check(t.Context()); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { _, err := transport.List(ctx); done <- err }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a listing with a cancelled context came back successfully")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a listing with a cancelled context did not return; the 60-second " +
+			"operation budget is not what should have ended it")
+	}
+}
+
+// A dial with a cancelled context fails before anything is sent.
+func TestSFTPRefusesToDialForACallerThatHasGivenUp(t *testing.T) {
+	srv := startSSHServer(t)
+	transport, err := OpenDestination(srv.destination(srv.fingerprint), TransportOptions{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer transport.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := transport.List(ctx); err == nil {
+		t.Error("a listing with a cancelled context came back successfully")
+	}
+}
+
+// An upload's budget grows with the archive, because an archive is the one
+// thing here whose size nobody knows in advance.
+//
+// A fixed minute would fail every real backup; a fixed day would be no bound at
+// all on a listing. The rate is deliberately slower than any link somebody
+// would put a NAS on: this is a ceiling on being stuck, not a target.
+func TestTheUploadBudgetGrowsWithTheArchive(t *testing.T) {
+	small := uploadTimeout(1 << 20) // 1 MiB
+	if small < uploadBase || small > uploadBase+time.Minute {
+		t.Errorf("a 1 MiB archive gets %s, want about the %s base", small, uploadBase)
+	}
+	large := uploadTimeout(4 << 30) // 4 GiB
+	if large <= uploadBase {
+		t.Errorf("a 4 GiB archive gets %s, which is no more than the floor", large)
+	}
+	if capped := uploadTimeout(1 << 50); capped != 24*time.Hour {
+		t.Errorf("an absurd size gets %s, want it capped at a day", capped)
 	}
 }
 

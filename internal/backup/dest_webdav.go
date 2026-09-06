@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 )
 
 // WebDAV: Synology's WebDAV Server package, Nextcloud, a Hetzner Storage Box.
@@ -22,11 +23,34 @@ import (
 // which errors are worth retrying. A dependency is a thing to keep in step, and
 // this one would be kept in step for about ninety lines.
 
+// responseHeaderTimeout bounds the wait for the first byte of a reply, on both
+// of the transports that speak HTTP.
+//
+// Separate from the operation budgets because it answers a different question:
+// how long a server may think before it says anything, which does not depend on
+// how large the thing being sent is. A minute is long for a NAS waking a disk
+// and short compared to a run that never returns.
+const responseHeaderTimeout = 60 * time.Second
+
 type webdavTransport struct {
 	base     *url.URL
 	user     string
 	password string
 	client   *http.Client
+}
+
+// budget wraps an operation's context in the deadline it should have.
+//
+// The runner hands the same context to every destination and does not bound it
+// itself -- a backup can legitimately take an hour -- so each transport says
+// what "too long" means for the thing it is about to do.
+func budget(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		// A caller with a deadline of its own has already decided. The Test
+		// connection endpoint is the one that does.
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, d)
 }
 
 func openWebDAV(d Destination, opts TransportOptions) (Transport, error) {
@@ -46,6 +70,12 @@ func openWebDAV(d Destination, opts TransportOptions) (Transport, error) {
 	if opts.Pool != nil {
 		transport.TLSClientConfig = &tls.Config{RootCAs: opts.Pool, MinVersion: tls.VersionTLS12}
 	}
+	// A server that accepts the connection and then never answers is the shape
+	// that hangs a run: no client timeout can tell it apart from a large upload
+	// still going. This bounds the wait for the *first* byte of the response,
+	// which is the part that has nothing to do with how big the archive is; how
+	// long the body itself may take is the caller's deadline below.
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
 
 	return &webdavTransport{
 		base:     base,
@@ -121,6 +151,9 @@ func (d *webdavTransport) do(req *http.Request, ok ...int) (*http.Response, erro
 }
 
 func (d *webdavTransport) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	ctx, cancel := budget(ctx, uploadTimeout(size))
+	defer cancel()
+
 	req, err := d.request(ctx, http.MethodPut, d.url(name), r)
 	if err != nil {
 		return err
@@ -164,6 +197,9 @@ const propfindBody = `<?xml version="1.0" encoding="utf-8"?>
 </d:propfind>`
 
 func (d *webdavTransport) List(ctx context.Context) ([]Object, error) {
+	ctx, cancel := budget(ctx, opTimeout)
+	defer cancel()
+
 	req, err := d.request(ctx, "PROPFIND", d.base.String(), strings.NewReader(propfindBody))
 	if err != nil {
 		return nil, err
@@ -218,6 +254,9 @@ func (d *webdavTransport) List(ctx context.Context) ([]Object, error) {
 }
 
 func (d *webdavTransport) Delete(ctx context.Context, name string) error {
+	ctx, cancel := budget(ctx, opTimeout)
+	defer cancel()
+
 	if _, ours := TimeFromName(name); !ours {
 		return fmt.Errorf("backup: %q is not an archive mcpd wrote", name)
 	}
@@ -234,6 +273,9 @@ func (d *webdavTransport) Delete(ctx context.Context, name string) error {
 }
 
 func (d *webdavTransport) Check(ctx context.Context) error {
+	ctx, cancel := budget(ctx, opTimeout)
+	defer cancel()
+
 	if _, err := d.List(ctx); err != nil {
 		// A folder that is not there yet is the one failure worth acting on
 		// rather than reporting: an operator who typed a path under a share

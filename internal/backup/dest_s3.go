@@ -72,14 +72,16 @@ func openS3(d Destination, opts TransportOptions) (Transport, error) {
 // roots so a MinIO behind a company authority or an appliance's own
 // certificate is reachable without anybody being told to switch verification
 // off.
+//
+// It also bounds the wait for the first byte of a reply. minio-go's own client
+// has no timeout, and a service that accepts a connection and then says nothing
+// would hold the single backup worker for the life of the process.
 func s3HTTPTransport(opts TransportOptions, secure bool) http.RoundTripper {
-	if !secure || opts.Pool == nil {
-		// nil leaves minio-go to build its own default, which is what a host
-		// with nothing extra to trust wants.
-		return nil
-	}
 	base := http.DefaultTransport.(*http.Transport).Clone()
-	base.TLSClientConfig = &tls.Config{RootCAs: opts.Pool, MinVersion: tls.VersionTLS12}
+	base.ResponseHeaderTimeout = responseHeaderTimeout
+	if secure && opts.Pool != nil {
+		base.TLSClientConfig = &tls.Config{RootCAs: opts.Pool, MinVersion: tls.VersionTLS12}
+	}
 	return base
 }
 
@@ -96,6 +98,9 @@ func s3Prefix(p string) string {
 func (s *s3Transport) key(name string) string { return s.prefix + name }
 
 func (s *s3Transport) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	ctx, cancel := budget(ctx, uploadTimeout(size))
+	defer cancel()
+
 	_, err := s.client.PutObject(ctx, s.bucket, s.key(name), r, size,
 		minio.PutObjectOptions{ContentType: "application/octet-stream"})
 	if err != nil {
@@ -105,7 +110,10 @@ func (s *s3Transport) Put(ctx context.Context, name string, r io.Reader, size in
 }
 
 func (s *s3Transport) List(ctx context.Context) ([]Object, error) {
-	ctx, cancel := context.WithCancel(ctx)
+	// Cancelled on the way out as well as bounded: minio-go lists over a
+	// channel and a caller that stops reading it leaks the goroutine filling
+	// it, which is what an early return from the loop below would be.
+	ctx, cancel := budget(ctx, opTimeout)
 	defer cancel()
 
 	var out []Object
@@ -125,6 +133,9 @@ func (s *s3Transport) List(ctx context.Context) ([]Object, error) {
 }
 
 func (s *s3Transport) Delete(ctx context.Context, name string) error {
+	ctx, cancel := budget(ctx, opTimeout)
+	defer cancel()
+
 	if _, ours := TimeFromName(name); !ours {
 		return fmt.Errorf("backup: %q is not an archive mcpd wrote", name)
 	}
@@ -136,6 +147,9 @@ func (s *s3Transport) Delete(ctx context.Context, name string) error {
 }
 
 func (s *s3Transport) Check(ctx context.Context) error {
+	ctx, cancel := budget(ctx, opTimeout)
+	defer cancel()
+
 	if _, err := s.List(ctx); err != nil {
 		return err
 	}

@@ -115,7 +115,7 @@ func TestActingOnADestinationThatIsGoneIsARefusal(t *testing.T) {
 	if err := store.DeleteDestination(ctx, "user:someone", "dst_missing"); !errors.Is(err, ErrNoSuchDestination) {
 		t.Errorf("delete: got %v, want a refusal", err)
 	}
-	if err := store.RecordHostKey(ctx, "user:someone", "dst_missing", "SHA256:x"); !errors.Is(err, ErrNoSuchDestination) {
+	if _, err := store.RecordHostKey(ctx, "user:someone", "dst_missing", "SHA256:x"); !errors.Is(err, ErrNoSuchDestination) {
 		t.Errorf("record host key: got %v, want a refusal", err)
 	}
 }
@@ -178,7 +178,7 @@ func TestAnSFTPDestinationCannotBeEnabledWithNoHostKey(t *testing.T) {
 
 	// Recording the key is what makes it usable, and only Test connection does
 	// that.
-	if err := store.RecordHostKey(ctx, "user:someone", created.ID, "SHA256:abcdef"); err != nil {
+	if _, err := store.RecordHostKey(ctx, "user:someone", created.ID, "SHA256:abcdef"); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	enabled, err := store.UpdateDestination(ctx, "user:someone", created.ID,
@@ -209,8 +209,16 @@ func TestRecordHostKeyNeverOverwritesAPin(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	if err := store.RecordHostKey(ctx, "user:someone", created.ID, "SHA256:different"); err != nil {
+	// It reports that it recorded nothing rather than failing, and the caller
+	// has to read that: a Test connection answering "recorded" on a destination
+	// that already has a different key pinned would tell an operator the
+	// fingerprint on their screen is the one mcpd checks against.
+	recorded, err := store.RecordHostKey(ctx, "user:someone", created.ID, "SHA256:different")
+	if err != nil {
 		t.Fatalf("record: %v", err)
+	}
+	if recorded {
+		t.Error("recording over a pinned key was reported as having worked")
 	}
 	read, _, err := store.Destination(ctx, created.ID)
 	if err != nil {
@@ -525,22 +533,62 @@ func TestRecordDestinationOnlyMovesTheSeenCountOnSuccess(t *testing.T) {
 		t.Fatalf("record a failure: %v", err)
 	}
 
+	// A run that succeeded but came away with no count it trusts -- a listing
+	// that failed, or one retention held back -- also leaves it alone. This is
+	// the condition that stops a truncated listing being made the standard the
+	// next run measures itself against, and with it gone the check never fires
+	// again and the following short listing deletes real backups.
+	if err := store.RecordDestination(ctx, backup.DestinationOutcome{
+		ID: created.ID, At: now.Add(2 * time.Hour), OK: true, Seen: backup.UnknownSeen,
+	}); err != nil {
+		t.Fatalf("record a held listing: %v", err)
+	}
+
 	read, _, err := store.Destination(ctx, created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if read.LastSeen != 6 {
-		t.Errorf("last_seen is %d after a failed run, want the 6 the last good one saw", read.LastSeen)
+		t.Errorf("last_seen is %d, want the 6 the last run with a trustworthy "+
+			"listing saw", read.LastSeen)
 	}
-	if read.LastOK == nil || *read.LastOK {
-		t.Errorf("last_ok is %v, want false", read.LastOK)
+	// The last write was a success with an unknown count, so that is the state
+	// the row reports.
+	if read.LastOK == nil || !*read.LastOK {
+		t.Errorf("last_ok is %v, want true", read.LastOK)
 	}
-	// The sentence and the evidence stay apart.
-	if strings.Contains(read.LastError, "403") {
-		t.Errorf("the sentence carries evidence: %q", read.LastError)
+}
+
+// The guarded update tells "gone" and "changed" apart by asking the database
+// inside the same transaction, rather than guessing from zero rows.
+func TestTheGuardedUpdateTellsGoneApartFromChanged(t *testing.T) {
+	ctx := context.Background()
+	store := newBackupStore(t, t.TempDir())
+	created, err := store.CreateDestination(ctx, "user:someone", localDest(t, "nas"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
 	}
-	if !strings.Contains(read.LastDetail, "403") {
-		t.Errorf("the evidence is missing: %q", read.LastDetail)
+
+	// The row is still there, and the version this write was built from is not
+	// the one stored: exactly what a second administrator's save looks like.
+	stale := created
+	stale.UpdatedAt = created.UpdatedAt.Add(-time.Second)
+	name := "renamed"
+
+	_, err = store.applyUpdate(ctx, "user:someone", stale,
+		backup.DestinationUpdate{Name: &name})
+	if !errors.Is(err, ErrDestinationChanged) {
+		t.Errorf("got %v, want a refusal saying somebody else changed it", err)
+	}
+
+	// And with the row gone, the same call says so instead.
+	if err := store.DeleteDestination(ctx, "user:someone", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.applyUpdate(ctx, "user:someone", stale,
+		backup.DestinationUpdate{Name: &name})
+	if !errors.Is(err, ErrNoSuchDestination) {
+		t.Errorf("got %v, want a refusal saying it is gone", err)
 	}
 }
 

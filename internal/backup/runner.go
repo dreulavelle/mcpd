@@ -83,9 +83,15 @@ type DestinationOutcome struct {
 	OK     bool
 	Error  string
 	Detail string
-	// Seen is how many archives were listed, and is only recorded on success:
-	// a failed run's listing is not a number the next run should compare
-	// against.
+	// Seen is how many of this instance's archives were listed here, and it is
+	// UnknownSeen whenever this run has no trustworthy count -- a listing that
+	// failed, or one retention held back as not the whole picture.
+	//
+	// The store leaves the stored baseline alone for UnknownSeen, and that is
+	// the whole point of the value. Recording the small count a distrusted
+	// listing produced would make it the number the *next* run measures itself
+	// against, so the check that caught this one would never fire again and the
+	// following truncated listing would delete real backups.
 	Seen int
 }
 
@@ -97,8 +103,13 @@ type DestinationOutcome struct {
 // store's to keep in a WHERE clause.
 type RunStore interface {
 	// Destinations returns every stored destination, enabled or not, with its
-	// credential in the clear.
+	// credential in the clear. Only a run calls it.
 	Destinations(ctx context.Context) ([]Destination, error)
+	// ListDestinations is the same set without the credentials, for counting
+	// them. The status is read on every page load and has no use for a secret,
+	// and a host whose encryption key has been rotated without the credentials
+	// being re-entered should still be able to draw the page that says so.
+	ListDestinations(ctx context.Context) ([]Destination, error)
 	// StartRun inserts a running row. It returns ErrRunInProgress when one is
 	// already running, which is the only thing that decides whether a second
 	// run may begin.
@@ -234,7 +245,9 @@ func (r *Runner) SettingsChanged() {
 // decided by a guarded statement rather than by a lock this process holds and
 // the database knows nothing about.
 func (r *Runner) Trigger(ctx context.Context, trigger string) (Run, error) {
-	dests, err := r.cfg.Store.Destinations(ctx)
+	// Counted without decrypting: this only decides whether a run has anywhere
+	// to go, and the credentials are read by the run itself.
+	dests, err := r.cfg.Store.ListDestinations(ctx)
 	if err != nil {
 		return Run{}, err
 	}
@@ -295,7 +308,7 @@ func (r *Runner) Status(ctx context.Context) *ScheduleStatus {
 	}
 	out.PassphraseSet = len(r.cfg.Passphrase(ctx)) >= MinPassphrase
 
-	dests, err := r.cfg.Store.Destinations(ctx)
+	dests, err := r.cfg.Store.ListDestinations(ctx)
 	if err != nil {
 		r.cfg.Log.ErrorContext(ctx, "could not read the backup destinations", "error", err)
 	}
@@ -530,11 +543,11 @@ func (r *Runner) writeArchive(ctx context.Context, run *Run) (spool, name string
 		return "", "", 0, fmt.Errorf("create a working directory: %w", err)
 	}
 
-	instance := ""
-	if svc.cfg.Instance != nil {
-		instance = svc.cfg.Instance(ctx)
-	}
-	name = ArchiveName(instance, run.StartedAt)
+	// The run's id goes on the end of the name. The timestamp is only to the
+	// second, and two runs in one second -- a schedule firing as somebody
+	// presses the button -- would otherwise write the same name twice, with the
+	// second replacing the first while the history showed two successes.
+	name = ArchiveName(svc.Instance(ctx), run.StartedAt, run.ID)
 	spool = filepath.Join(dir, name)
 
 	f, err := os.OpenFile(spool, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -592,7 +605,10 @@ func (r *Runner) send(
 		out.OK = true
 		out.Held = "The backup was uploaded. Old backups were not removed, because " +
 			"the destination could not be listed."
-		r.record(ctx, d, out, 0)
+		// UnknownSeen, not zero. A listing that failed says nothing about how
+		// many archives are here, and writing a number over the baseline would
+		// disarm the check that stops a truncated listing being acted on.
+		r.record(ctx, d, out, UnknownSeen)
 		return out
 	}
 
@@ -622,7 +638,7 @@ func (r *Runner) failed(ctx context.Context, d Destination, out *RunDestination,
 	out.Error, out.Detail = describe(err)
 	r.cfg.Log.ErrorContext(ctx, "a backup could not be sent to a destination",
 		"destination", d.Name, "kind", string(d.Kind), "error", err)
-	r.record(ctx, d, *out, 0)
+	r.record(ctx, d, *out, UnknownSeen)
 	return *out
 }
 
@@ -658,6 +674,10 @@ func describe(err error) (sentence, evidence string) {
 }
 
 // record writes a destination's outcome onto its row.
+//
+// seen is UnknownSeen whenever this run has no trustworthy count of what is
+// here, and the store leaves the stored baseline alone for exactly that value.
+// See DestinationOutcome.Seen.
 func (r *Runner) record(ctx context.Context, d Destination, out RunDestination, seen int) {
 	err := r.cfg.Store.RecordDestination(ctx, DestinationOutcome{
 		ID:     d.ID,

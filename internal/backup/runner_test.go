@@ -43,6 +43,19 @@ func (f *fakeStore) Destinations(context.Context) ([]Destination, error) {
 	return append([]Destination(nil), f.dests...), nil
 }
 
+// ListDestinations answers the same set with the credentials left out, which is
+// what the real store does and what everything but a run should be asking for.
+func (f *fakeStore) ListDestinations(context.Context) ([]Destination, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]Destination, 0, len(f.dests))
+	for _, d := range f.dests {
+		d.SecretSet, d.Secret = d.Secret != "", ""
+		out = append(out, d)
+	}
+	return out, nil
+}
+
 func (f *fakeStore) StartRun(_ context.Context, run Run) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -91,7 +104,9 @@ func (f *fakeStore) RecordDestination(_ context.Context, out DestinationOutcome)
 	defer f.mu.Unlock()
 	f.outcomes = append(f.outcomes, out)
 	for i := range f.dests {
-		if f.dests[i].ID == out.ID && out.OK {
+		// The same two conditions the store's own statement carries: a run that
+		// failed, or one with no count it trusts, leaves the baseline alone.
+		if f.dests[i].ID == out.ID && out.OK && out.Seen >= 0 {
 			f.dests[i].LastSeen = out.Seen
 		}
 	}
@@ -510,6 +525,11 @@ func TestRetentionRunsPerDestinationAfterTheUpload(t *testing.T) {
 // A listing that could not be read leaves the destination a success. The backup
 // got there, which is the thing that mattered; not pruning is worth saying and
 // not worth failing over.
+//
+// And it must not touch the count the next run compares against. A run that
+// recorded zero here would leave a baseline the "far fewer than last time"
+// check can never trip on again, and the next truncated listing would delete
+// real backups.
 func TestADestinationThatCannotBeListedStillCountsAsUploaded(t *testing.T) {
 	h := newHarness(t, dest("dst_1", "nas", true))
 	run, _ := h.runner.Trigger(t.Context(), TriggerManual)
@@ -525,6 +545,47 @@ func TestADestinationThatCannotBeListedStillCountsAsUploaded(t *testing.T) {
 	}
 	if len(h.notified) != 0 {
 		t.Errorf("a successful upload raised a failure notification: %v", h.notified)
+	}
+	if len(h.store.outcomes) != 1 || h.store.outcomes[0].Seen != UnknownSeen {
+		t.Errorf("recorded %+v; a listing that failed must leave the baseline alone",
+			h.store.outcomes)
+	}
+}
+
+// A run whose listing retention held back leaves the baseline alone too.
+//
+// This is the same safety property from the other direction: the abort fired
+// because the listing was not the whole picture, and writing the small count it
+// produced would make that partial listing the standard the next run is
+// measured against.
+func TestARunWhoseListingWasHeldBackLeavesTheBaselineAlone(t *testing.T) {
+	h := newHarness(t, dest("dst_1", "nas", true))
+	// The destination has seen twelve archives before and now lists two, which
+	// is what retention refuses to act on.
+	h.store.dests[0].LastSeen = 12
+	h.transports["dst_1"].objects = []Object{
+		{Name: "mcpd-nas-example-com-20260201T040000Z.mcpdbak"},
+	}
+
+	run, _ := h.runner.Trigger(t.Context(), TriggerManual)
+	h.runner.execute(t.Context(), run.ID, TriggerManual)
+
+	settled, _ := h.store.run(run.ID)
+	if settled.Status != StatusOK {
+		t.Fatalf("status %q: %s", settled.Status, settled.Error)
+	}
+	if settled.Destinations[0].Held == "" {
+		t.Fatal("retention ran on a listing that had lost most of its archives")
+	}
+	if _, deleted := h.transports["dst_1"].snapshot(); len(deleted) != 0 {
+		t.Errorf("deleted %v from a listing it did not believe", deleted)
+	}
+	if len(h.store.outcomes) != 1 || h.store.outcomes[0].Seen != UnknownSeen {
+		t.Errorf("recorded %+v; a held listing must leave the baseline at 12",
+			h.store.outcomes)
+	}
+	if h.store.dests[0].LastSeen != 12 {
+		t.Errorf("the baseline moved to %d", h.store.dests[0].LastSeen)
 	}
 }
 

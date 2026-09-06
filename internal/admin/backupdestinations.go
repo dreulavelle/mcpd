@@ -30,14 +30,21 @@ import (
 // testable without a database, and it says exactly what the dashboard may ask
 // for. *sqlite.BackupStore is the implementation.
 type BackupDestinations interface {
-	Destinations(ctx context.Context) ([]backup.Destination, error)
+	// ListDestinations never decrypts a credential, because nothing this
+	// package renders needs one -- only whether one is set.
+	ListDestinations(ctx context.Context) ([]backup.Destination, error)
+	// Destination returns one with its credential, which an edit reads before
+	// it writes back and which Test connection hands to a transport.
 	Destination(ctx context.Context, id string) (backup.Destination, bool, error)
 	CreateDestination(ctx context.Context, actor string, d backup.Destination) (backup.Destination, error)
 	UpdateDestination(ctx context.Context, actor, id string, up backup.DestinationUpdate) (backup.Destination, error)
 	DeleteDestination(ctx context.Context, actor, id string) error
-	// RecordHostKey pins what an SFTP server presented. Only Test connection
-	// calls it, and only when nothing is pinned yet.
-	RecordHostKey(ctx context.Context, actor, id, fingerprint string) error
+	// RecordHostKey pins what an SFTP server presented, and reports whether it
+	// did. Only Test connection calls it, and it records nothing when a key is
+	// already pinned -- so a false is the difference between showing an
+	// operator the key mcpd will check against and showing them one it will
+	// refuse.
+	RecordHostKey(ctx context.Context, actor, id, fingerprint string) (bool, error)
 	Runs(ctx context.Context, limit int) ([]backup.Run, error)
 	Run(ctx context.Context, id string) (backup.Run, bool, error)
 }
@@ -86,7 +93,7 @@ func newDestinationView(d backup.Destination) destinationView {
 		Enabled:    d.Enabled,
 		Policy:     d.Policy,
 		HostKey:    d.HostKey,
-		HasSecret:  d.Secret != "",
+		HasSecret:  d.SecretSet,
 		CreatedAt:  d.CreatedAt,
 		LastRunAt:  d.LastRunAt,
 		LastOK:     d.LastOK,
@@ -126,7 +133,7 @@ func (s *Server) handleListBackupDestinations(w http.ResponseWriter, r *http.Req
 			"this host cannot store backup destinations; no encryption key is configured")
 		return
 	}
-	dests, err := store.Destinations(r.Context())
+	dests, err := store.ListDestinations(r.Context())
 	if err != nil {
 		s.writeProblem(w, r, http.StatusInternalServerError, err,
 			"The list of backup destinations could not be read.")
@@ -205,7 +212,7 @@ func (s *Server) handleAddBackupDestination(w http.ResponseWriter, r *http.Reque
 
 	created, err := store.CreateDestination(r.Context(), auth.FromContext(r.Context()).ID, d)
 	if err != nil {
-		s.writeError(w, r, destinationStatus(err), destinationMessage(err))
+		s.writeDestinationError(w, r, err)
 		return
 	}
 	s.writeJSON(w, r, http.StatusCreated, newDestinationView(created))
@@ -242,7 +249,7 @@ func (s *Server) handleUpdateBackupDestination(w http.ResponseWriter, r *http.Re
 			HostKey:  body.HostKey,
 		})
 	if err != nil {
-		s.writeError(w, r, destinationStatus(err), destinationMessage(err))
+		s.writeDestinationError(w, r, err)
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, newDestinationView(updated))
@@ -262,7 +269,7 @@ func (s *Server) handleRemoveBackupDestination(w http.ResponseWriter, r *http.Re
 	}
 	err := store.DeleteDestination(r.Context(), auth.FromContext(r.Context()).ID, r.PathValue("id"))
 	if err != nil {
-		s.writeError(w, r, destinationStatus(err), destinationMessage(err))
+		s.writeDestinationError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -345,13 +352,27 @@ func (s *Server) handleTestBackupDestination(w http.ResponseWriter, r *http.Requ
 	// Recorded even when the probe afterwards failed: the identity was
 	// established by the handshake, and a user who can sign in but not write is
 	// a separate problem with its own sentence. RecordHostKey is guarded on the
-	// key still being empty, so this can never overwrite a pin.
+	// key still being empty, so this can never overwrite a pin -- and it says
+	// so by reporting false rather than by failing, which is why the answer
+	// follows what it reported rather than merely that it did not error.
 	if learn && result.HostKey != "" {
-		if err := store.RecordHostKey(ctx, auth.FromContext(r.Context()).ID, id, result.HostKey); err != nil {
+		recorded, err := store.RecordHostKey(ctx, auth.FromContext(r.Context()).ID, id, result.HostKey)
+		switch {
+		case err != nil:
 			s.opts.Log.ErrorContext(r.Context(), "could not record a backup destination's host key",
 				"destination", d.Name, "error", err)
-		} else {
+		case recorded:
 			result.HostKeyRecorded = true
+		default:
+			// Somebody pinned a key between this request reading the row and
+			// writing to it. Saying it was recorded would tell an operator the
+			// fingerprint on their screen is the one mcpd will check against,
+			// when the stored one may be a different key entirely.
+			result.Message = "This destination already has a host key recorded, " +
+				"so the one the server just presented was not stored."
+			result.Detail = "presented " + result.HostKey
+			s.writeJSON(w, r, http.StatusOK, result)
+			return
 		}
 	}
 
@@ -398,6 +419,11 @@ func (s *Server) handleRunBackup(w http.ResponseWriter, r *http.Request) {
 
 	s.opts.Log.WarnContext(r.Context(), "a backup to this host's destinations was started",
 		"principal", auth.FromContext(r.Context()).ID, "run_id", run.ID)
+	// An empty list rather than a null: a run that has only just started has
+	// reached no destination yet, and the page maps over this.
+	if run.Destinations == nil {
+		run.Destinations = []backup.RunDestination{}
+	}
 	// 202: the run is under way and the page follows it in the history.
 	s.writeJSON(w, r, http.StatusAccepted, run)
 }
@@ -456,8 +482,12 @@ func backupProblem(err error) (sentence, detail string) {
 	if errors.As(err, &written) {
 		return written.Error(), written.Evidence()
 	}
+	var invalid *backup.InvalidDestination
+	if errors.As(err, &invalid) {
+		return invalid.Sentence, ""
+	}
 	if errors.Is(err, backup.ErrNoHostKey) {
-		return backup.ErrNoHostKey.Error(), ""
+		return noHostKeySentence, ""
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "The destination did not answer in time.", err.Error()
@@ -465,28 +495,53 @@ func backupProblem(err error) (sentence, detail string) {
 	return "mcpd could not reach this destination.", err.Error()
 }
 
-// destinationStatus maps a store refusal onto the status that describes it.
-func destinationStatus(err error) int {
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "already exists"):
-		return http.StatusConflict
-	case strings.Contains(msg, "no such backup destination"):
-		return http.StatusNotFound
-	case strings.Contains(msg, "backup destination:"), errors.Is(err, backup.ErrNoHostKey):
-		return http.StatusBadRequest
-	case strings.Contains(msg, "no encryption key"):
-		return http.StatusNotImplemented
-	}
-	return http.StatusInternalServerError
-}
+// The sentences the known refusals reach a person as.
+//
+// Written here rather than carried by the sentinels, which stay ordinary Go
+// errors for the log. This is the one place that knows both what failed and
+// that somebody is reading the answer -- the same division handleStageRestore
+// makes for a wrong passphrase.
+const (
+	noHostKeySentence = "This destination has no recorded host key, so mcpd " +
+		"cannot tell the server apart from anything else answering at that " +
+		"address. Press Test connection to record the key it presents, or paste " +
+		"the fingerprint from the server itself."
+	changedSentence = "Somebody else changed this destination while you had it " +
+		"open. Reopen it and make the change again."
+)
 
-// destinationMessage strips the package prefix off a refusal already written
-// for a person, and leaves anything else to say what it says.
-func destinationMessage(err error) string {
-	msg := err.Error()
-	for _, prefix := range []string{"backup destination: ", "backup: ", "sqlite: "} {
-		msg = strings.TrimPrefix(msg, prefix)
+// writeDestinationError answers a store refusal.
+//
+// Classified by asking the error what it is, never by looking for a substring
+// in its text. Substrings were how `sqlite: create backup destination: database
+// is locked` came to be answered 400 with that sentence in a toast, which tells
+// the reader nothing and the operator no more.
+//
+// Anything unrecognised is a 500 through writeProblem, so its text is logged
+// with the correlation id the caller was given and the caller is told what this
+// handler knows.
+func (s *Server) writeDestinationError(w http.ResponseWriter, r *http.Request, err error) {
+	var invalid *backup.InvalidDestination
+	switch {
+	case errors.As(err, &invalid):
+		// Already written for a person, field by field.
+		s.writeError(w, r, http.StatusBadRequest, invalid.Sentence)
+	case errors.Is(err, backup.ErrDestinationExists):
+		s.writeError(w, r, http.StatusConflict,
+			"A backup destination with that name already exists.")
+	case errors.Is(err, backup.ErrNoSuchDestination):
+		s.writeError(w, r, http.StatusNotFound,
+			"There is no backup destination with that id.")
+	case errors.Is(err, backup.ErrDestinationChanged):
+		s.writeError(w, r, http.StatusConflict, changedSentence)
+	case errors.Is(err, backup.ErrNoHostKey):
+		s.writeError(w, r, http.StatusBadRequest, noHostKeySentence)
+	case errors.Is(err, backup.ErrNoCipher):
+		s.writeError(w, r, http.StatusNotImplemented,
+			"This host has no encryption key, so it cannot store a destination's "+
+				"password or key. Set one and restart mcpd.")
+	default:
+		s.writeProblem(w, r, http.StatusInternalServerError, err,
+			"That backup destination could not be saved.")
 	}
-	return msg
 }

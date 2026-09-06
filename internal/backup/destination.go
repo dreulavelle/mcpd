@@ -124,7 +124,13 @@ type Destination struct {
 	// Secret is the destination's one credential, in the clear. It is filled
 	// by the store on the way out and is never rendered: the API's own view
 	// type has no field for it.
+	//
+	// Empty does not mean there is none. The listing the dashboard reads never
+	// decrypts, so anything rendering "is a credential set" must read SecretSet.
 	Secret string `json:"-"`
+	// SecretSet reports whether a credential is stored, and is filled whether
+	// or not it was decrypted.
+	SecretSet bool `json:"-"`
 
 	Enabled bool   `json:"enabled"`
 	Policy  Policy `json:"policy"`
@@ -265,6 +271,50 @@ var ErrNoHostKey = errors.New(
 		"Test connection to record the key it presents, or paste the " +
 		"fingerprint from the server itself")
 
+// The refusals a caller has to tell apart.
+//
+// Sentinels and a type rather than sentences to match on. A handler deciding
+// between 404, 409 and 400 by looking for a substring answers `sqlite: create
+// backup destination: database is locked` with a 400 and puts that text in a
+// toast, which tells the reader nothing and the operator no more.
+var (
+	// ErrNoSuchDestination reports an operation against a destination that is
+	// not stored, or is no longer.
+	ErrNoSuchDestination = errors.New("backup: no such destination")
+	// ErrDestinationExists reports a name already taken.
+	ErrDestinationExists = errors.New("backup: a destination with that name already exists")
+	// ErrDestinationChanged reports an edit against a destination somebody else
+	// wrote to first.
+	//
+	// Distinct from ErrNoSuchDestination, which the guarded update used to
+	// collapse it into: "it is gone" and "somebody got there first" are
+	// different things to be told, and only one of them means reopening the
+	// form will help.
+	ErrDestinationChanged = errors.New("backup: this destination was changed by somebody else")
+	// ErrNoCipher reports that a credential cannot be handled without an
+	// encryption key.
+	ErrNoCipher = errors.New(
+		"backup: no encryption key is configured, so a destination's " +
+			"credentials cannot be stored or read")
+)
+
+// InvalidDestination is a refusal an operator can act on: a field left empty,
+// a path that cannot be used, an address that is not encrypted.
+//
+// A type rather than a sentence with a package prefix, so a handler can tell it
+// apart from a wrapped database error by asking rather than by reading. Its
+// Sentence is written for a person and goes straight into the answer.
+type InvalidDestination struct {
+	Sentence string
+}
+
+func (e *InvalidDestination) Error() string { return "backup destination: " + e.Sentence }
+
+// invalid builds one.
+func invalid(format string, args ...any) error {
+	return &InvalidDestination{Sentence: fmt.Sprintf(format, args...)}
+}
+
 // OpenDestination builds the transport for a destination. It does no I/O: what
 // it can refuse -- a kind this build does not have, an SFTP destination with no
 // recorded host key -- is refused before anything is dialled.
@@ -290,17 +340,17 @@ func OpenDestination(d Destination, opts TransportOptions) (Transport, error) {
 func (d *Destination) Validate(storageDir string) error {
 	d.Name = strings.TrimSpace(d.Name)
 	if d.Name == "" {
-		return errors.New("backup destination: give it a name")
+		return invalid("give it a name")
 	}
 	if !d.Kind.Valid() {
-		return fmt.Errorf("backup destination: %q is not a kind of destination this build has", d.Kind)
+		return invalid("%q is not a kind of destination this build has", d.Kind)
 	}
 	if d.Policy.KeepLast < 1 {
-		return errors.New("backup destination: keep at least one archive; " +
+		return invalid("keep at least one archive; " +
 			"a destination that keeps none deletes the backup it has just written")
 	}
 	if d.Policy.KeepDaily < 0 || d.Policy.KeepWeekly < 0 || d.Policy.KeepMonthly < 0 {
-		return errors.New("backup destination: a retention count cannot be negative")
+		return invalid("a retention count cannot be negative")
 	}
 
 	switch d.Kind {
@@ -313,66 +363,66 @@ func (d *Destination) Validate(storageDir string) error {
 
 	case KindSFTP:
 		if strings.TrimSpace(d.Settings.Host) == "" {
-			return errors.New("backup destination: give the server's address")
+			return invalid("give the server's address")
 		}
 		if strings.TrimSpace(d.Settings.Username) == "" {
-			return errors.New("backup destination: give the user mcpd signs in as")
+			return invalid("give the user mcpd signs in as")
 		}
 		if d.Settings.Port == 0 {
 			d.Settings.Port = 22
 		}
 		if d.Settings.Port < 1 || d.Settings.Port > 65535 {
-			return errors.New("backup destination: that is not a port number")
+			return invalid("that is not a port number")
 		}
 		if d.Enabled && strings.TrimSpace(d.HostKey) == "" {
 			return ErrNoHostKey
 		}
 		if hk := strings.TrimSpace(d.HostKey); hk != "" && !strings.HasPrefix(hk, "SHA256:") {
-			return errors.New("backup destination: the host key should be the " +
+			return invalid("the host key should be the " +
 				"SHA256: fingerprint ssh-keygen prints, not the key itself")
 		}
 
 	case KindS3:
 		if strings.TrimSpace(d.Settings.Bucket) == "" {
-			return errors.New("backup destination: give the bucket")
+			return invalid("give the bucket")
 		}
 		if strings.TrimSpace(d.Settings.Endpoint) == "" {
-			return errors.New("backup destination: give the service's address")
+			return invalid("give the service's address")
 		}
 		if strings.Contains(d.Settings.Endpoint, "://") {
-			return errors.New("backup destination: the address is a host, " +
+			return invalid("the address is a host, " +
 				"without http:// or https:// in front of it")
 		}
 		if d.Settings.AllowInsecure && !isLoopback(d.Settings.Endpoint) {
 			// Refused rather than warned about. An S3 secret key signs every
 			// request and is worth as much as the bucket.
-			return errors.New("backup destination: mcpd will only talk to a " +
+			return invalid("mcpd will only talk to a " +
 				"bucket over plain HTTP when the service is on this machine")
 		}
 
 	case KindWebDAV:
 		u, err := url.Parse(strings.TrimSpace(d.Settings.URL))
 		if err != nil || u.Host == "" {
-			return errors.New("backup destination: give the full address of the " +
+			return invalid("give the full address of the " +
 				"folder, like https://nas.example.com/backups/mcpd")
 		}
 		if u.User != nil {
 			// A credential in the address ends up in a log line, a copied
 			// link, and this row's own configuration column.
-			return errors.New("backup destination: put the user name and " +
+			return invalid("put the user name and " +
 				"password in their own boxes, not in the address")
 		}
 		switch u.Scheme {
 		case "https":
 		case "http":
 			if !d.Settings.AllowInsecure {
-				return errors.New("backup destination: that address is not " +
+				return invalid("that address is not " +
 					"encrypted. The archive is, but the password is not, and it " +
 					"crosses the network on every run. Use https, or tick the box " +
 					"to send it in the clear anyway")
 			}
 		default:
-			return errors.New("backup destination: the address must start with https://")
+			return invalid("the address must start with https://")
 		}
 		d.Settings.URL = strings.TrimSuffix(u.String(), "/")
 	}

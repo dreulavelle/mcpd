@@ -8,10 +8,17 @@ import (
 // Retention is the only thing in this package that deletes, so these tests are
 // mostly about what it refuses to do.
 
-// obj builds one of mcpd's own archives at an instant, with a modified time
-// deliberately unrelated to it -- because nothing here may read ModTime.
+// obj builds one of this instance's archives at an instant, with a modified
+// time deliberately unrelated to it -- because nothing here may read ModTime.
 func obj(stamp string, modTime time.Time) Object {
-	return Object{Name: "mcpd-nas-" + stamp + ".mcpdbak", Size: 1024, ModTime: modTime}
+	return named("nas", stamp, modTime)
+}
+
+// named builds an archive belonging to a given instance.
+func named(slug, stamp string, modTime time.Time) Object {
+	return Object{
+		Name: "mcpd-" + slug + "-" + stamp + ".mcpdbak", Size: 1024, ModTime: modTime,
+	}
 }
 
 func names(objs []Object) []string {
@@ -250,6 +257,118 @@ func TestRetentionIgnoresFilesThatAreNotOurs(t *testing.T) {
 	want := []string{"mcpd-nas-20260201T040000Z.mcpdbak"}
 	if !equal(names(got.Remove), want) {
 		t.Errorf("removed %v, want %v", names(got.Remove), want)
+	}
+}
+
+// Two hosts backing up to one folder do not delete each other's archives.
+//
+// A destination is shared as easily with another mcpd as with a person -- one
+// bucket, one prefix, two hosts -- and their names differ only by the slug in
+// the middle. Pooling them makes each host's listing look twice as healthy as
+// it is, and with keep-last one it has whichever host runs second delete the
+// other's only backup.
+func TestRetentionIgnoresAnotherInstancesArchives(t *testing.T) {
+	// Newest first: the other host's are newer, which is what would make them
+	// the ones kept if they were counted at all.
+	objects := []Object{
+		named("other-host", "20260208T050000Z", time.Time{}),
+		named("other-host", "20260201T050000Z", time.Time{}),
+		named("nas", "20260208T040000Z", time.Time{}),
+		named("nas", "20260201T040000Z", time.Time{}),
+		named("nas", "20260125T040000Z", time.Time{}),
+	}
+	uploaded := "mcpd-nas-20260208T040000Z.mcpdbak"
+
+	got := Retain(objects, Policy{KeepLast: 1}, uploaded, 0, time.UTC)
+	if got.Held != "" {
+		t.Fatalf("retention was held back: %s", got.Held)
+	}
+	if got.Seen != 3 {
+		t.Errorf("saw %d archives, want the 3 belonging to this host", got.Seen)
+	}
+	want := []string{
+		"mcpd-nas-20260125T040000Z.mcpdbak",
+		"mcpd-nas-20260201T040000Z.mcpdbak",
+	}
+	if !equal(names(got.Remove), want) {
+		t.Fatalf("removed %v, want %v -- another host's archives are not ours to "+
+			"keep or to delete", names(got.Remove), want)
+	}
+
+	// And from the other host's point of view, symmetrically.
+	got = Retain(objects, Policy{KeepLast: 1},
+		"mcpd-other-host-20260208T050000Z.mcpdbak", 0, time.UTC)
+	if !equal(names(got.Remove), []string{"mcpd-other-host-20260201T050000Z.mcpdbak"}) {
+		t.Errorf("the other host removed %v", names(got.Remove))
+	}
+}
+
+// A host with no slug -- one nobody has given a public address -- owns only the
+// names that have none either.
+func TestRetentionScopesAHostWithNoSlugToTheNamesWithNoSlug(t *testing.T) {
+	objects := []Object{
+		{Name: "mcpd-20260208T040000Z.mcpdbak"},
+		{Name: "mcpd-20260201T040000Z.mcpdbak"},
+		named("someone-else", "20260208T040000Z", time.Time{}),
+		named("someone-else", "20260201T040000Z", time.Time{}),
+	}
+	got := Retain(objects, Policy{KeepLast: 1}, "mcpd-20260208T040000Z.mcpdbak", 0, time.UTC)
+	if got.Seen != 2 {
+		t.Errorf("saw %d archives, want the 2 with no slug", got.Seen)
+	}
+	if !equal(names(got.Remove), []string{"mcpd-20260201T040000Z.mcpdbak"}) {
+		t.Errorf("removed %v", names(got.Remove))
+	}
+}
+
+// Every abort reports UnknownSeen, never the count it reached.
+//
+// The count a distrusted listing produced is a symptom of the listing, and
+// recording it would make it the baseline the *next* run measures itself
+// against -- so the check that just fired would never fire again, and the
+// following truncated listing would delete real backups. This is the safety
+// property the whole abort exists for, and it is one line away from being
+// disarmed.
+func TestRetentionReportsAnUnknownCountWheneverItHeldBack(t *testing.T) {
+	cases := []struct {
+		name       string
+		objects    []Object
+		uploaded   string
+		seenBefore int
+	}{
+		{
+			name:     "an empty listing",
+			objects:  nil,
+			uploaded: "mcpd-nas-20260208T040000Z.mcpdbak",
+		},
+		{
+			name:     "a listing missing the upload",
+			objects:  []Object{obj("20260201T040000Z", time.Time{})},
+			uploaded: "mcpd-nas-20260208T040000Z.mcpdbak",
+		},
+		{
+			name: "a listing that has lost most of its archives",
+			objects: []Object{
+				obj("20260208T040000Z", time.Time{}),
+				obj("20260201T040000Z", time.Time{}),
+			},
+			uploaded:   "mcpd-nas-20260208T040000Z.mcpdbak",
+			seenBefore: 12,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Retain(tc.objects, Policy{KeepLast: 1}, tc.uploaded, tc.seenBefore, time.UTC)
+			if got.Held == "" {
+				t.Fatal("retention ran on a listing it should have held back")
+			}
+			if got.Seen != UnknownSeen {
+				t.Errorf("reported %d archives seen, want UnknownSeen -- writing a "+
+					"count from a listing it distrusts is what disarms this check "+
+					"for every run afterwards", got.Seen)
+			}
+		})
 	}
 }
 

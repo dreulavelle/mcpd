@@ -1,6 +1,11 @@
 package settings
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/spoked/mcpd/internal/backup"
+)
 
 // The address a client secret is sent to, and whose signatures are believed
 // for an identity. Every refusal here is a mistake somebody makes with a
@@ -44,5 +49,37 @@ func TestValidate_RefusesAnIssuerTheFlowCouldNotUse(t *testing.T) {
 	if err := Validate(KeyOIDCIssuer,
 		"https://auth.example.com/realms/main/.well-known/openid-configuration"); err == nil {
 		t.Error("the discovery address was accepted as an issuer")
+	}
+}
+
+// This package's copies of two backup rules still agree with the package that
+// enforces them.
+//
+// The passphrase minimum and the shape of a time of day used to be imported
+// from internal/backup. That package carries the S3 and SSH clients, and
+// importing it put both in the dependency graph of everything that reads a
+// setting -- which is nearly all of mcpd. So they are restated here, and this
+// test is what stops the two drifting: a value the form accepts and the archive
+// writer refuses is a scheduled backup that fails every night at four.
+//
+// The import lives in this test file, so it does not reach a built binary
+// through this package.
+func TestTheBackupRulesRestatedHereStillAgree(t *testing.T) {
+	if minBackupPassphrase != backup.MinPassphrase {
+		t.Errorf("this package requires %d characters and internal/backup requires %d",
+			minBackupPassphrase, backup.MinPassphrase)
+	}
+
+	// Both parsers over one table: what either accepts, the other must.
+	for _, value := range []string{
+		"04:00", "00:00", "23:59", "09:05",
+		"4:00", "24:00", "04:60", "0400", "", "aa:bb", "04:00:00", " 04:00 ",
+	} {
+		_, _, err := backup.ParseClock(value)
+		mine := clockPattern.MatchString(strings.TrimSpace(value))
+		if mine != (err == nil) {
+			t.Errorf("%q: this package says %v, internal/backup says %v",
+				value, mine, err == nil)
+		}
 	}
 }

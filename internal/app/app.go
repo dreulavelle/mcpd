@@ -652,21 +652,30 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			Pruner:             a.audit,
 			Backup:             a.backups,
 			BackupDestinations: a.backupStore,
-			BackupRunner:       a.backupRunner,
-			TrustPool:          a.trustPool.get,
-			Calls:              a.calls,
-			Bypasses:           a.bypasses,
-			BypassOpened:       a.notifyBypassOpened,
-			NotifyTest:         a.sendTestNotification,
-			PublicURL:          a.publicURL,
-			ListenAddr:         cfg.Server.Listen,
-			FrontendPublicURL:  a.frontendPublicURL,
-			Accounts:           a.accounts,
-			Identities:         a.accounts,
-			Groups:             a.groups,
-			Keys:               a.keys,
-			Certificates:       a.trust,
-			TrustChanged:       a.trustChanged,
+			// Only when there is one. A nil *backup.Runner assigned to an
+			// interface field is a non-nil interface holding a nil pointer,
+			// which gets past the handler's own guard and panics on the first
+			// request.
+			BackupRunner: func() admin.BackupRunner {
+				if a.backupRunner == nil {
+					return nil
+				}
+				return a.backupRunner
+			}(),
+			TrustPool:         a.trustPool.get,
+			Calls:             a.calls,
+			Bypasses:          a.bypasses,
+			BypassOpened:      a.notifyBypassOpened,
+			NotifyTest:        a.sendTestNotification,
+			PublicURL:         a.publicURL,
+			ListenAddr:        cfg.Server.Listen,
+			FrontendPublicURL: a.frontendPublicURL,
+			Accounts:          a.accounts,
+			Identities:        a.accounts,
+			Groups:            a.groups,
+			Keys:              a.keys,
+			Certificates:      a.trust,
+			TrustChanged:      a.trustChanged,
 			KeyAccess: func(ctx context.Context, keyID string) (groups.Resolved, error) {
 				return a.groups.Resolve(ctx, groups.Key(keyID))
 			},
