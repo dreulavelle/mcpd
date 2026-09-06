@@ -126,8 +126,10 @@ presenting a different key is refused and the backup is not sent — mcpd will
 not quietly learn a new one, because anything that can put itself on that
 address would get a complete copy of this instance if it could.
 
-If you rebuild the NAS or replace its keys, clear the recorded key on the
-destination and test again. It is deliberately a separate, deliberate act.
+If you rebuild the NAS or replace its keys, edit the destination and press
+**Forget host key**, then test again. It switches the destination off at the
+same time, and switching it back on is a separate, deliberate act — because
+between the two you are meant to compare the new fingerprint with the server.
 
 ### S3, and its cousins
 

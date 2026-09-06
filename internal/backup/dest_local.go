@@ -44,17 +44,17 @@ func openLocal(d Destination, _ TransportOptions) (Transport, error) {
 func resolveLocalPath(path, storageDir string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return "", invalid("give the directory to write into")
+		return "", invalid("Give the directory to write into.")
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return "", invalid("%s is not a path this host can resolve", path)
+		return "", invalid("%s is not a path this host can resolve.", path)
 	}
 	info, err := os.Stat(abs)
 	if err != nil || !info.IsDir() {
 		return "", invalid(
-			"there is no directory at %s. Create it, and make sure mcpd can "+
-				"write to it", abs)
+			"There is no directory at %s. Create it, and make sure mcpd can "+
+				"write to it.", abs)
 	}
 	// After the symlinks, because a link into the data directory is the way
 	// this check is passed by accident.
@@ -72,7 +72,7 @@ func resolveLocalPath(path, storageDir string) (string, error) {
 					"%s is mcpd's own data directory, or holds it. A backup "+
 						"written there is in the next backup, and it is lost with "+
 						"the disk it is meant to survive. Choose a directory "+
-						"outside %s", abs, data)
+						"outside %s.", abs, data)
 			}
 		}
 	}

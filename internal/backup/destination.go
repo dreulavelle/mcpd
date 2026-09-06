@@ -340,17 +340,17 @@ func OpenDestination(d Destination, opts TransportOptions) (Transport, error) {
 func (d *Destination) Validate(storageDir string) error {
 	d.Name = strings.TrimSpace(d.Name)
 	if d.Name == "" {
-		return invalid("give it a name")
+		return invalid("Give this destination a name.")
 	}
 	if !d.Kind.Valid() {
-		return invalid("%q is not a kind of destination this build has", d.Kind)
+		return invalid("%q is not a kind of destination this build has.", d.Kind)
 	}
 	if d.Policy.KeepLast < 1 {
-		return invalid("keep at least one archive; " +
-			"a destination that keeps none deletes the backup it has just written")
+		return invalid("Keep at least one archive. A destination that keeps " +
+			"none deletes the backup it has just written.")
 	}
 	if d.Policy.KeepDaily < 0 || d.Policy.KeepWeekly < 0 || d.Policy.KeepMonthly < 0 {
-		return invalid("a retention count cannot be negative")
+		return invalid("A retention count cannot be negative.")
 	}
 
 	switch d.Kind {
@@ -363,66 +363,66 @@ func (d *Destination) Validate(storageDir string) error {
 
 	case KindSFTP:
 		if strings.TrimSpace(d.Settings.Host) == "" {
-			return invalid("give the server's address")
+			return invalid("Give the server's address.")
 		}
 		if strings.TrimSpace(d.Settings.Username) == "" {
-			return invalid("give the user mcpd signs in as")
+			return invalid("Give the user mcpd signs in as.")
 		}
 		if d.Settings.Port == 0 {
 			d.Settings.Port = 22
 		}
 		if d.Settings.Port < 1 || d.Settings.Port > 65535 {
-			return invalid("that is not a port number")
+			return invalid("That is not a port number.")
 		}
 		if d.Enabled && strings.TrimSpace(d.HostKey) == "" {
 			return ErrNoHostKey
 		}
 		if hk := strings.TrimSpace(d.HostKey); hk != "" && !strings.HasPrefix(hk, "SHA256:") {
-			return invalid("the host key should be the " +
-				"SHA256: fingerprint ssh-keygen prints, not the key itself")
+			return invalid("The host key should be the SHA256: fingerprint " +
+				"ssh-keygen prints, not the key itself.")
 		}
 
 	case KindS3:
 		if strings.TrimSpace(d.Settings.Bucket) == "" {
-			return invalid("give the bucket")
+			return invalid("Give the bucket name.")
 		}
 		if strings.TrimSpace(d.Settings.Endpoint) == "" {
-			return invalid("give the service's address")
+			return invalid("Give the service's address.")
 		}
 		if strings.Contains(d.Settings.Endpoint, "://") {
-			return invalid("the address is a host, " +
-				"without http:// or https:// in front of it")
+			return invalid("The address is a host name, without http:// or " +
+				"https:// in front of it.")
 		}
 		if d.Settings.AllowInsecure && !isLoopback(d.Settings.Endpoint) {
 			// Refused rather than warned about. An S3 secret key signs every
 			// request and is worth as much as the bucket.
-			return invalid("mcpd will only talk to a " +
-				"bucket over plain HTTP when the service is on this machine")
+			return invalid("mcpd only talks to a bucket over plain HTTP when the " +
+				"service is on this machine.")
 		}
 
 	case KindWebDAV:
 		u, err := url.Parse(strings.TrimSpace(d.Settings.URL))
 		if err != nil || u.Host == "" {
-			return invalid("give the full address of the " +
-				"folder, like https://nas.example.com/backups/mcpd")
+			return invalid("Give the full address of the folder, like " +
+				"https://nas.example.com/backups/mcpd.")
 		}
 		if u.User != nil {
 			// A credential in the address ends up in a log line, a copied
 			// link, and this row's own configuration column.
-			return invalid("put the user name and " +
-				"password in their own boxes, not in the address")
+			return invalid("Put the user name and password in their own boxes, " +
+				"not in the address.")
 		}
 		switch u.Scheme {
 		case "https":
 		case "http":
 			if !d.Settings.AllowInsecure {
-				return invalid("that address is not " +
-					"encrypted. The archive is, but the password is not, and it " +
-					"crosses the network on every run. Use https, or tick the box " +
-					"to send it in the clear anyway")
+				return invalid("That address is not encrypted. The archive is, but " +
+					"the password is not, and it crosses the network on every " +
+					"run. Use https, or tick the box to send it in the clear " +
+					"anyway.")
 			}
 		default:
-			return invalid("the address must start with https://")
+			return invalid("The address must start with https://.")
 		}
 		d.Settings.URL = strings.TrimSuffix(u.String(), "/")
 	}
