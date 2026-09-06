@@ -668,7 +668,8 @@ export type SettingSection =
   | "chatgpt"
   | "approvals"
   | "advanced"
-  | "diagnostics";
+  | "diagnostics"
+  | "backup";
 
 export interface SettingField {
   key: string;
