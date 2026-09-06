@@ -103,6 +103,7 @@ func TestEveryGroupIsOnAPageThatExists(t *testing.T) {
 		SectionApprovals:      true,
 		SectionAdvanced:       true,
 		SectionDiagnostics:    true,
+		SectionBackup:         true,
 	}
 	for _, g := range Schema() {
 		if g.Section == "" {

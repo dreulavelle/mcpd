@@ -689,18 +689,22 @@ func TestArchiveCannotWriteOutsideStaging(t *testing.T) {
 
 // A member this build has no home for is refused rather than dropped, so an
 // older binary cannot half-restore an archive from a newer format.
+//
+// The example used to be plugins/, which this build now knows where to put.
+// Any name outside the closed set does; what the test defends is the closed
+// set, not the example.
 func TestUnknownMemberIsRefused(t *testing.T) {
 	body := []byte("something new")
 	database := []byte("db")
 	archive := forge(t, map[string][]byte{
 		databaseName:         database,
-		"plugins/thing.wasm": body,
+		"secrets/thing.json": body,
 	}, Manifest{
 		SchemaVersion:  19,
 		KeyFingerprint: Fingerprint("a-generated-settings-key-of-some-length"),
 		Files: []FileInfo{
 			{Name: databaseName, Size: int64(len(database)), SHA256: digestOf(database), Restored: true},
-			{Name: "plugins/thing.wasm", Size: int64(len(body)), SHA256: digestOf(body), Restored: true},
+			{Name: "secrets/thing.json", Size: int64(len(body)), SHA256: digestOf(body), Restored: true},
 		},
 	})
 
