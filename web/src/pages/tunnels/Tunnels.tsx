@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import {
   Copyable, EmptyState, Loading, Notice, Out, PageHeader,
 } from "@/components/chrome";
+import { Evidence, EvidenceText } from "@/components/evidence";
 import { Chip, StatusDot, type Tone } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -918,35 +919,29 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
           every line of it -- but it is not the first thing on the page
           either, which is what it was when the log line sat under the
           Notice. */}
+      {/* Everything is a child rather than Evidence's own `detail`, so the
+          three kinds keep the order they are read in and stay one
+          disclosure. */}
       {(s?.code || s?.detail || s?.trouble) && (
-        <details className="border-t pt-4">
-          <summary className="cursor-pointer text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-            Technical details
-          </summary>
-          <div className="mt-2 space-y-2">
-            {s?.code && (
-              <p className="font-mono text-[11px] break-all text-muted-foreground">{s.code}</p>
-            )}
-            {s?.detail && (
-              <p className="rounded-md border bg-muted/50 p-2 font-mono text-[11px] break-all text-muted-foreground">
-                {s.detail}
-              </p>
-            )}
-            {s?.trouble && (
-              <div className="space-y-1">
-                <p className="text-[11px] text-muted-foreground">Last line from the connection</p>
-                <p className="rounded-md border bg-muted/50 p-2 font-mono text-[11px] break-all text-muted-foreground">
-                  {s.trouble_at ? `${when(s.trouble_at)} ` : ""}{s.trouble}
-                </p>
-              </div>
-            )}
-            {admin && (
-              <Link to="/logs" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-                Every line from this host, on Logs <ArrowRight className="size-3" aria-hidden="true" />
-              </Link>
-            )}
-          </div>
-        </details>
+        <Evidence className="border-t pt-4">
+          {s?.code && (
+            <p className="font-mono text-[11px] break-all text-muted-foreground">{s.code}</p>
+          )}
+          {s?.detail && <EvidenceText>{s.detail}</EvidenceText>}
+          {s?.trouble && (
+            <div className="space-y-1">
+              <p className="text-[11px] text-muted-foreground">Last line from the connection</p>
+              <EvidenceText>
+                {s.trouble_at ? `${when(s.trouble_at)} ` : ""}{s.trouble}
+              </EvidenceText>
+            </div>
+          )}
+          {admin && (
+            <Link to="/logs" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+              Every line from this host, on Logs <ArrowRight className="size-3" aria-hidden="true" />
+            </Link>
+          )}
+        </Evidence>
       )}
     </div>
   );
