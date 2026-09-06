@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.21.0](https://github.com/dreulavelle/mcpd/compare/v0.20.0...v0.21.0) (2026-09-06)
+
+
+### Features
+
+* **web:** destinations, a schedule and a history on Backup & Restore ([8fc9596](https://github.com/dreulavelle/mcpd/commit/8fc9596d04310dd3ffc8f8c405e6632620eaf9f5))
+
+
+### Fixes
+
+* **backup:** a refusal an operator reads is a sentence ([237a988](https://github.com/dreulavelle/mcpd/commit/237a98817758079295c3882a1e7e0cd94b1c8c4d))
+* **web:** a credential kept across an auth switch, and a gate on the wrong permission ([87e44ab](https://github.com/dreulavelle/mcpd/commit/87e44ab7f7416347eb83fd024c0b40aafc8396d0))
+* **web:** a credential that is not there, and a hook behind a short circuit ([c2cdc94](https://github.com/dreulavelle/mcpd/commit/c2cdc94b426afa5fdd4d76962d98a1c8f9d663ee))
+* **web:** stop the backup page claiming a host key it cannot vouch for ([1fa8122](https://github.com/dreulavelle/mcpd/commit/1fa8122f4182d343e0562b2dcb910eb17642cd6e))
+* **web:** three ways the backup page said something untrue ([e2945bd](https://github.com/dreulavelle/mcpd/commit/e2945bdec8d569613b5af43aee621effbb976e3a))
+
+
+### Refactoring
+
+* **web:** let the catalog say when a backup day is worth asking for ([5bbedab](https://github.com/dreulavelle/mcpd/commit/5bbedab8a8c0f042aa79ca1a9d4bb15a0c459202))
+* **web:** one Technical details block, and drop two helpers nobody calls ([6b9bfea](https://github.com/dreulavelle/mcpd/commit/6b9bfea7276b5fb2d2db3498d634be2e47ace1aa))
+
+
+### Documentation
+
+* **backup:** name the control that forgets a pinned host key ([f7b8351](https://github.com/dreulavelle/mcpd/commit/f7b835163da8b548e407d8f2f56a5df33342bd52))
+
 ## [0.20.0](https://github.com/dreulavelle/mcpd/compare/v0.19.1...v0.20.0) (2026-09-06)
 
 
