@@ -112,8 +112,14 @@ type RunStore interface {
 	LastScheduledRun(ctx context.Context) (time.Time, bool, error)
 	// LatestRun is the most recent run of any kind, for the summary.
 	LatestRun(ctx context.Context) (Run, bool, error)
-	// MarkInterrupted settles every row left running by a process that stopped.
-	MarkInterrupted(ctx context.Context, at time.Time) (int, error)
+	// MarkInterrupted settles rows left running by a process that stopped.
+	//
+	// `before` is when this process's runner was built, and it is in the
+	// statement's WHERE clause rather than assumed: the dashboard's listener
+	// and this worker both start during App.Run, so a backup asked for over the
+	// API in that window has a running row of its own -- and a sweep that took
+	// every running row would settle the run it is about to carry out.
+	MarkInterrupted(ctx context.Context, before, at time.Time) (int, error)
 	// NewRunID mints an identifier, so the store keeps the one convention this
 	// database uses for them.
 	NewRunID() string
@@ -179,6 +185,12 @@ type Runner struct {
 	// the runner's own tests can hand it a transport that does what the test
 	// says, and stay about the runner's decisions rather than about SFTP.
 	openDestination func(Destination, TransportOptions) (Transport, error)
+
+	// builtAt is when this process's runner was constructed, which is what
+	// divides a run left by a previous process from one this one has just been
+	// asked for. Captured here rather than when the worker starts: the two are
+	// not the same moment, and the API can be answering in between.
+	builtAt time.Time
 }
 
 // NewRunner builds the runner. It does no I/O.
@@ -197,6 +209,7 @@ func NewRunner(cfg RunnerConfig) *Runner {
 		manual:          make(chan string, 1),
 		wake:            make(chan struct{}, 1),
 		openDestination: OpenDestination,
+		builtAt:         cfg.Now().UTC(),
 	}
 }
 
@@ -326,7 +339,12 @@ func (r *Runner) Status(ctx context.Context) *ScheduleStatus {
 func (r *Runner) Run(ctx context.Context) error {
 	// A run the process did not survive is settled first, so the history has no
 	// row claiming to be running and the guarded insert is not blocked by one.
-	if n, err := r.cfg.Store.MarkInterrupted(ctx, r.now()); err != nil {
+	//
+	// Only rows older than this runner. A backup asked for over the API between
+	// the dashboard's listener coming up and this worker reaching this line has
+	// a running row of its own, and sweeping it would settle the very run this
+	// worker is about to be handed.
+	if n, err := r.cfg.Store.MarkInterrupted(ctx, r.builtAt, r.now()); err != nil {
 		r.cfg.Log.ErrorContext(ctx, "could not settle backup runs left by a previous process",
 			"error", err)
 	} else if n > 0 {

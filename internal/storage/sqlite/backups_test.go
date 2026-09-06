@@ -363,7 +363,7 @@ func TestFinishRunOnlyTouchesARunThatIsStillRunning(t *testing.T) {
 	if err := store.StartRun(ctx, run); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	if _, err := store.MarkInterrupted(ctx, now.Add(time.Minute)); err != nil {
+	if _, err := store.MarkInterrupted(ctx, now.Add(time.Minute), now.Add(time.Minute)); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
 
@@ -394,7 +394,7 @@ func TestMarkInterruptedSettlesRunsLeftByAStoppedProcess(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	n, err := store.MarkInterrupted(ctx, now.Add(time.Minute))
+	n, err := store.MarkInterrupted(ctx, now.Add(time.Minute), now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
@@ -417,8 +417,45 @@ func TestMarkInterruptedSettlesRunsLeftByAStoppedProcess(t *testing.T) {
 	}
 
 	// And running it again is a no-op rather than a second settlement.
-	if n, err := store.MarkInterrupted(ctx, now.Add(2*time.Minute)); err != nil || n != 0 {
+	if n, err := store.MarkInterrupted(ctx, now.Add(2*time.Minute), now.Add(2*time.Minute)); err != nil || n != 0 {
 		t.Errorf("settled %d more rows (%v)", n, err)
+	}
+}
+
+// A run that started after this process's runner was built is left alone.
+//
+// The dashboard's listener and the backup worker both come up during App.Run,
+// so a backup asked for over the API in that window has a running row of its
+// own. A sweep that took every running row would settle the run it is about to
+// carry out, and the operator who pressed the button would watch it be
+// recorded as interrupted by a process that had only just started.
+func TestMarkInterruptedLeavesARunThisProcessStarted(t *testing.T) {
+	ctx := context.Background()
+	store := newBackupStore(t, t.TempDir())
+	built := time.Unix(1700000000, 0).UTC()
+
+	run := backup.Run{
+		ID: store.NewRunID(), StartedAt: built.Add(time.Second),
+		Trigger: backup.TriggerManual,
+	}
+	if err := store.StartRun(ctx, run); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	n, err := store.MarkInterrupted(ctx, built, built.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("settled %d rows, want none", n)
+	}
+
+	still, _, err := store.Run(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if still.Status != backup.StatusRunning {
+		t.Errorf("status %q; the sweep took a run this process had just started", still.Status)
 	}
 }
 
