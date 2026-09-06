@@ -16,12 +16,26 @@ function statusView(overrides: Partial<BackupStatus> = {}): BackupStatus {
     mcpd_version: "0.6.1",
     instance: "https://mcp.example",
     min_passphrase: 12,
+    plugin_files: 0,
+    plugin_bytes: 0,
     ...overrides,
   };
 }
 
+/**
+ * The page mounts three sections that load themselves. Their own tests are
+ * beside this one; here they are stubbed empty so that a test about the
+ * download form is not also a test of the destination list, and so that an
+ * unstubbed fetch cannot reject in the background.
+ */
 function stub(status: BackupStatus) {
   vi.spyOn(api, "backupStatus").mockResolvedValue(status);
+  vi.spyOn(api, "backupDestinations").mockResolvedValue({ destinations: [], kinds: [] });
+  vi.spyOn(api, "backupRuns").mockResolvedValue({ runs: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({
+    groups: [], values: {}, secrets_set: {},
+    encryption_available: true, bootstrap: [],
+  });
 }
 
 describe("the backup and restore page", () => {
