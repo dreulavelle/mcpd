@@ -136,6 +136,35 @@ func TestScheduleRunsAtTheNextRealInstantWhenTheClockSkipsTheOneAsked(t *testing
 	}
 }
 
+// A gap that starts at midnight moves forward like any other.
+//
+// Havana and Santiago put their spring-forward change at 00:00, so midnight
+// itself does not exist and time.Date normalises it to 23:00 the *previous
+// day*. A plain subtraction of that difference is negative, which the first
+// version of skipGap left alone -- and a backup asked for at midnight would
+// have run an hour before the day it was asked for, once a year.
+func TestScheduleHandlesAGapThatStartsAtMidnight(t *testing.T) {
+	loc, err := time.LoadLocation("America/Havana")
+	if err != nil {
+		t.Skipf("America/Havana will not load: %v", err)
+	}
+	s := Schedule{Enabled: true, Cadence: CadenceDaily, Hour: 0, Minute: 0, Location: loc}
+
+	// Cuba moves the clocks forward at midnight on the second Sunday in March.
+	after := time.Date(2026, 3, 7, 12, 0, 0, 0, loc)
+	got := s.Next(after).In(loc)
+
+	if got.Day() != 8 {
+		t.Fatalf("fired on the %d of %s, want the 8th", got.Day(), got.Month())
+	}
+	if got.Hour() == 23 {
+		t.Fatalf("fired at 23:00, an hour before the day it was asked for")
+	}
+	if !got.After(after) {
+		t.Errorf("fired at %s, which is not after %s", got, after)
+	}
+}
+
 // Daily and weekly, and a schedule that is off.
 func TestScheduleNext(t *testing.T) {
 	loc := chicago(t)

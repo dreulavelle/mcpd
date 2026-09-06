@@ -22,14 +22,24 @@ type dated struct {
 // the truth, a shared folder holding somebody else's files -- is a property of
 // its input, and can be given to it in a test.
 
+// UnknownSeen is the count to record when a listing was not accepted.
+//
+// Negative rather than zero, because zero is a number the next run's "far fewer
+// than last time" check would believe. A run whose listing failed, or whose
+// listing was held back as untrustworthy, must leave the baseline where it was:
+// writing a small count over a good one disarms the check permanently, and the
+// next truncated listing then deletes real backups.
+const UnknownSeen = -1
+
 // Retained is what retention decided, and why it decided nothing when it did.
 type Retained struct {
 	// Remove is what may be deleted, oldest first.
 	Remove []Object
-	// Kept is how many of mcpd's own archives are staying.
+	// Kept is how many of this instance's archives are staying.
 	Kept int
 	// Seen is how many of them were in the listing at all, which is what the
-	// next run compares against.
+	// next run compares against -- or UnknownSeen when this listing is not one
+	// to measure the next against.
 	Seen int
 	// Held is empty when retention ran, and otherwise says in one sentence why
 	// it did not. It is recorded against the run rather than failing it: a
@@ -50,26 +60,48 @@ func Retain(objects []Object, p Policy, uploaded string, seenBefore int, loc *ti
 		loc = time.UTC
 	}
 
-	// Only mcpd's own, and only ones whose name carries a time. A destination
-	// is usually a shared folder; a file this cannot read the date out of is
-	// not one of ours and is invisible from here on.
+	// Which instance's archives these are is settled by the name of the one
+	// just uploaded, so the two can never disagree. An empty uploaded name is
+	// only reachable from a test, and means "do not filter".
+	scope, scoped := parseArchive(uploaded)
+
+	// This instance's own, and only ones whose name carries a time.
+	//
+	// A destination is usually shared -- a folder on a NAS, a prefix in a
+	// bucket -- and it can be shared with another mcpd as easily as with a
+	// person. Another host's archives are as invisible from here as somebody's
+	// holiday photos: counting them would make this listing look healthier than
+	// it is, and selecting them would have one host delete another's newest
+	// backup the first time their retention counts disagreed.
 	ours := make([]dated, 0, len(objects))
 	for _, o := range objects {
-		if at, ok := TimeFromName(o.Name); ok {
-			ours = append(ours, dated{obj: o, at: at})
+		parsed, ok := parseArchive(o.Name)
+		if !ok {
+			continue
 		}
+		if scoped && parsed.Slug != scope.Slug {
+			continue
+		}
+		ours = append(ours, dated{obj: o, at: parsed.At})
 	}
 
+	// Every abort below reports UnknownSeen rather than what it counted. The
+	// count it reached is a symptom of the listing it distrusts, and recording
+	// it would overwrite the baseline the next run measures itself against --
+	// which is the one thing standing between a truncated listing and a
+	// destination emptied of real backups.
 	out := Retained{Seen: len(ours)}
 	switch {
 	case len(ours) == 0:
 		// Not "nothing to do": a listing that came back empty moments after an
 		// upload is a server that answered wrongly.
+		out.Seen = UnknownSeen
 		out.Held = "Nothing was deleted here. The listing came back empty, which " +
 			"cannot be true of a place mcpd has just written a backup to."
 		return out
 
 	case uploaded != "" && !containsName(ours, uploaded):
+		out.Seen = UnknownSeen
 		out.Held = "Nothing was deleted here. The backup that was just uploaded " +
 			"is not in the listing, so mcpd cannot tell what else is."
 		return out
@@ -77,6 +109,7 @@ func Retain(objects []Object, p Policy, uploaded string, seenBefore int, loc *ti
 	case seenBefore >= 4 && len(ours) < seenBefore/2:
 		// A destination that has genuinely lost half its archives has a
 		// problem retention should not compound by deleting more.
+		out.Seen = UnknownSeen
 		out.Held = "Nothing was deleted here. Far fewer backups are listed than " +
 			"there were last time, so mcpd is not treating this listing as the " +
 			"whole picture."

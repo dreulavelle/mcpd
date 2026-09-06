@@ -31,6 +31,36 @@ import (
 // that a scheduled run does not sit on it, long enough for a NAS waking a disk.
 const dialTimeout = 30 * time.Second
 
+// opTimeout bounds a listing, a delete or a connection test.
+//
+// Every one of these is a round trip against a directory, so a server that has
+// not answered in a minute is not slow, it is stuck. The runner is a single
+// worker: without a bound, one wedged NAS holds every other destination's
+// backup and the next night's as well.
+const opTimeout = 60 * time.Second
+
+// uploadBase and uploadRate bound an upload.
+//
+// Scaled, because an archive is the one thing here whose size nobody knows in
+// advance and a fixed minute would fail every real backup. 256 KiB/s is
+// deliberately slower than any link somebody would put a NAS on -- this is a
+// ceiling on being stuck, not a performance target.
+const (
+	uploadBase = 10 * time.Minute
+	uploadRate = 256 << 10
+)
+
+// uploadTimeout is how long an archive of this size may take.
+func uploadTimeout(size int64) time.Duration {
+	budget := uploadBase + time.Duration(size/uploadRate)*time.Second
+	// A day is longer than any backup that is going to finish, and it stops an
+	// absurd size producing a deadline in the next century.
+	if budget > 24*time.Hour {
+		return 24 * time.Hour
+	}
+	return budget
+}
+
 type sftpTransport struct {
 	dir    string
 	addr   string
@@ -42,6 +72,10 @@ type sftpTransport struct {
 	mu        sync.Mutex
 	presented string
 
+	// conn is the socket under the SSH connection, held because it is the only
+	// thing here that can be given a deadline or shut. pkg/sftp's calls take no
+	// context and block on a reply that may never come.
+	conn   net.Conn
 	client *sftp.Client
 	ssh    *ssh.Client
 }
@@ -189,24 +223,74 @@ func (t *sftpTransport) connect(ctx context.Context) (*sftp.Client, error) {
 		}
 		return nil, fmt.Errorf("sign in to %s: %w", t.addr, err)
 	}
-	_ = conn.SetDeadline(time.Time{})
-
 	t.ssh = ssh.NewClient(c, chans, reqs)
+	// Still under the handshake's deadline: starting the subsystem is another
+	// round trip, and a server that accepts a connection and then never answers
+	// the request is exactly the shape this is here to bound.
 	client, err := sftp.NewClient(t.ssh)
 	if err != nil {
 		t.ssh.Close()
-		t.ssh = nil
+		t.ssh, t.conn = nil, nil
+		conn.Close()
 		return nil, fmt.Errorf("start SFTP on %s: %w", t.addr, err)
 	}
-	t.client = client
+	_ = conn.SetDeadline(time.Time{})
+	t.conn, t.client = conn, client
 	return client, nil
 }
 
-func (t *sftpTransport) Put(ctx context.Context, name string, r io.Reader, _ int64) error {
+// session connects and puts one operation under a deadline.
+//
+// Two bounds, because they answer different failures. The deadline stops a
+// server that has gone quiet: pkg/sftp's calls take no context and block on a
+// reply, so the socket is the only thing that can time them out. The watcher
+// closes the socket when the caller gives up, which is what makes a shutdown or
+// an abandoned Test connection return now rather than at the deadline.
+//
+// The returned function must be called: it stops the watcher, and a watcher per
+// operation that never stopped would be a goroutine per operation for the life
+// of the run.
+func (t *sftpTransport) session(ctx context.Context, budget time.Duration) (*sftp.Client, func(), error) {
 	client, err := t.connect(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	deadline := time.Now().Add(budget)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = t.conn.SetDeadline(deadline)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-ctx.Done():
+			// Closed rather than merely deadlined, because the caller has
+			// stopped waiting and the connection is not going to be reused.
+			t.conn.Close()
+		case <-stop:
+		}
+	}()
+	return client, func() {
+		close(stop)
+		<-done
+		_ = t.conn.SetDeadline(time.Time{})
+	}, nil
+}
+
+func (t *sftpTransport) Put(ctx context.Context, name string, r io.Reader, size int64) error {
+	client, release, err := t.session(ctx, uploadTimeout(size))
 	if err != nil {
 		return err
 	}
+	defer release()
+
 	final := path.Join(t.dir, name)
 	// A partial upload must not wear the final name: retention counts by name,
 	// and a person restoring picks by name.
@@ -233,10 +317,12 @@ func (t *sftpTransport) Put(ctx context.Context, name string, r io.Reader, _ int
 }
 
 func (t *sftpTransport) List(ctx context.Context) ([]Object, error) {
-	client, err := t.connect(ctx)
+	client, release, err := t.session(ctx, opTimeout)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
+
 	entries, err := client.ReadDir(t.dir)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", t.dir, err)
@@ -258,10 +344,12 @@ func (t *sftpTransport) Delete(ctx context.Context, name string) error {
 	if _, ours := TimeFromName(name); !ours {
 		return fmt.Errorf("backup: %q is not an archive mcpd wrote", name)
 	}
-	client, err := t.connect(ctx)
+	client, release, err := t.session(ctx, opTimeout)
 	if err != nil {
 		return err
 	}
+	defer release()
+
 	if err := client.Remove(path.Join(t.dir, name)); err != nil {
 		return fmt.Errorf("remove %s: %w", name, err)
 	}
@@ -269,10 +357,12 @@ func (t *sftpTransport) Delete(ctx context.Context, name string) error {
 }
 
 func (t *sftpTransport) Check(ctx context.Context) error {
-	client, err := t.connect(ctx)
+	client, release, err := t.session(ctx, opTimeout)
 	if err != nil {
 		return err
 	}
+	defer release()
+
 	if _, err := client.ReadDir(t.dir); err != nil {
 		return fmt.Errorf("read %s: %w", t.dir, err)
 	}
@@ -299,6 +389,12 @@ func (t *sftpTransport) Close() error {
 	if t.ssh != nil {
 		errs = append(errs, t.ssh.Close())
 		t.ssh = nil
+	}
+	if t.conn != nil {
+		// Last, and its error dropped: closing the SSH client closes this too,
+		// so the second close is the ordinary "already closed".
+		_ = t.conn.Close()
+		t.conn = nil
 	}
 	return errors.Join(errs...)
 }

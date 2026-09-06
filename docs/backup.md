@@ -160,8 +160,9 @@ rules are OR-ed, so anything any rule keeps is kept.
 Three things it will never do:
 
 - Delete the newest archive, whatever the numbers say.
-- Touch a file mcpd did not write. Only names matching its own pattern are
-  considered, so a shared folder is safe.
+- Touch a file this host did not write. Only names matching its own pattern
+  *and carrying its own name* are considered, so a shared folder is safe — from
+  somebody else's files and from another mcpd's backups alike.
 - Prune on a listing it does not believe — one that came back empty, one
   missing the backup just uploaded, or one holding far fewer archives than last
   time. It records why and leaves everything alone.
@@ -177,9 +178,11 @@ Every day, or every week on a day you pick, at a time, in a time zone you
 choose. The zone is stored rather than taken from the machine, so the time
 means the same thing all year.
 
-Avoid anything between 01:00 and 03:00. Those hours do not exist on the day the
-clocks go forward, and a backup scheduled at one of them is a backup that
-quietly does not happen twice a year. The default is 04:00.
+Avoid midnight, and anything between 01:00 and 03:00. Those hours do not exist
+on the day the clocks go forward — midnight itself is the one that vanishes in
+Cuba and Chile — so a backup scheduled at one of them runs at a time nobody
+asked for, once a year. mcpd moves it forward to the next hour that does exist
+rather than skipping it, and says so in the log. The default is 04:00.
 
 Switching the schedule on does not take a backup straight away — the first one
 is at the next time you named. If mcpd was down when a backup was due, it takes
@@ -208,8 +211,23 @@ they stop opening.
 ### If none of this fits
 
 Point a **folder on this machine** at a directory, and point rclone, restic or
-rsync at the same directory. mcpd writes a finished, encrypted file with a
-timestamped name and nothing else has to understand it.
+rsync at the same directory. mcpd writes a finished, encrypted file and nothing
+else has to understand it.
+
+### What the files are called
+
+```
+mcpd-nas-example-com-20260208T040000Z-a1b2c3d4.mcpdbak
+     └── this host ──┘ └─ when, UTC ─┘ └ the run ┘
+```
+
+Only the timestamp is required; a host with no address configured has no middle
+part. mcpd considers a file only if the name fits this shape **and** the host
+part is its own, so two mcpds writing into one folder never touch each other's
+backups, and a file anybody else put there is invisible.
+
+The run identifier on the end is what keeps two backups taken in the same second
+— a schedule firing as somebody presses the button — from being one file.
 
 ## Restoring
 

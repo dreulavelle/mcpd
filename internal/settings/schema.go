@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/spoked/mcpd/internal/backup"
 )
 
 // The schema is what makes dashboard management safe. Every editable setting
@@ -453,6 +452,21 @@ const (
 	KeyBackupPassphrase       = "backup.passphrase"
 )
 
+// minBackupPassphrase is the shortest passphrase an archive may be sealed with.
+//
+// Written here rather than imported from internal/backup, which is what this
+// used to do. That package carries the S3 and SSH clients, and importing it
+// dragged both into the dependency graph of everything that reads a setting --
+// which is nearly all of mcpd. A constant is a smaller thing to keep in step
+// than a dependency, and schema_test.go asserts the two still agree.
+const minBackupPassphrase = 12
+
+// clockPattern matches the time of day a schedule fires at.
+//
+// The same shape backup.ParseClock accepts, restated for the same reason as the
+// constant above; schema_test.go holds them together across a table.
+var clockPattern = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
+
 func intPtr(i int) *int { return &i }
 
 // PluginTunnelKey builds the key holding a plugin's own tunnel id.
@@ -848,10 +862,10 @@ func schema() []Group {
 					Key: KeyBackupScheduleTime, Label: "Time",
 					Kind: KindString, Group: "backup", Apply: ApplyLive,
 					Default: "04:00", Placeholder: "04:00",
-					Help: "As HH:MM, in the time zone below. Avoid anything between " +
-						"01:00 and 03:00: those hours do not exist on the day the " +
-						"clocks go forward, and a backup at one of them would be a " +
-						"backup that quietly does not happen twice a year.",
+					Help: "As HH:MM, in the time zone below. Avoid midnight and " +
+						"anything between 01:00 and 03:00: those hours do not exist " +
+						"on the day the clocks go forward, so a backup at one of " +
+						"them runs at a time nobody asked for, once a year.",
 				},
 				{
 					Key: KeyBackupScheduleTimezone, Label: "Time zone",
@@ -1314,10 +1328,10 @@ func validateAgainst(f Field, key, value string) error {
 		// one is the whole of the protection. Checked here as well as where an
 		// archive is written, because a passphrase stored now is used months
 		// later by a worker nobody is watching.
-		if key == KeyBackupPassphrase && value != "" && len(value) < backup.MinPassphrase {
+		if key == KeyBackupPassphrase && value != "" && len(value) < minBackupPassphrase {
 			return fmt.Errorf(
 				"settings: %s must be at least %d characters. It is the only thing "+
-					"protecting the archive", f.Label, backup.MinPassphrase)
+					"protecting the archive", f.Label, minBackupPassphrase)
 		}
 
 	case KindString:
@@ -1350,11 +1364,9 @@ func validateAgainst(f Field, key, value string) error {
 		// A time of day and a zone name, checked here so a typo is a message
 		// beside the box rather than a schedule that silently runs at 04:00 UTC
 		// on a host nobody looks at.
-		if key == KeyBackupScheduleTime {
-			if _, _, err := backup.ParseClock(value); err != nil {
-				return fmt.Errorf("settings: %s must be a time of day, written as "+
-					"HH:MM -- for example 04:00", f.Label)
-			}
+		if key == KeyBackupScheduleTime && !clockPattern.MatchString(strings.TrimSpace(value)) {
+			return fmt.Errorf("settings: %s must be a time of day, written as "+
+				"HH:MM -- for example 04:00", f.Label)
 		}
 		if key == KeyBackupScheduleTimezone && strings.TrimSpace(value) != "" {
 			if _, err := time.LoadLocation(strings.TrimSpace(value)); err != nil {

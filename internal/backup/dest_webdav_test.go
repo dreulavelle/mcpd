@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -317,6 +318,56 @@ func TestWebDAVCheckWritesAndRemovesAProbe(t *testing.T) {
 	}
 	if _, ours := TimeFromName(".mcpd-check"); ours {
 		t.Error("the probe's name parses as an archive, so retention could delete it")
+	}
+}
+
+// A server that accepts the connection and then never answers does not hold a
+// run open.
+//
+// This is the shape no client timeout catches by accident: the socket is fine,
+// bytes are flowing in one direction, and nothing distinguishes it from a large
+// upload still going. The transport's ResponseHeaderTimeout bounds the wait for
+// the reply's first byte, and each operation carries a deadline of its own on
+// top -- so a caller with no deadline still gets an answer.
+func TestWebDAVDoesNotWaitForeverOnAServerThatNeverAnswers(t *testing.T) {
+	stalled := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		// Never writes a status, which is the failure being reproduced: the
+		// socket is fine and the server is simply not answering.
+		<-stalled
+	}))
+	// Closed before the server is, because httptest.Server.Close waits for the
+	// handler above to return. Deferred calls run last in, first out.
+	defer srv.Close()
+	defer close(stalled)
+
+	transport, err := OpenDestination(Destination{
+		Kind: KindWebDAV,
+		Settings: Settings{
+			URL: srv.URL + "/backups", Username: "ops", AllowInsecure: true,
+		},
+		Secret: "hunter2",
+	}, TransportOptions{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer transport.Close()
+
+	// A second, rather than the minute the transport would otherwise wait: what
+	// is being defended is that the operation observes a deadline at all.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { _, err := transport.List(ctx); done <- err }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a server that never answered produced a listing")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a listing against a server that never answers did not return")
 	}
 }
 

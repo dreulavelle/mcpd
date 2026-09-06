@@ -90,6 +90,11 @@ func (s *Service) fingerprint() string {
 	return s.cfg.KeyFingerprint()
 }
 
+// maxStatusPluginFiles bounds the walk Status does on every page load. Far
+// more than any real plugins directory holds, and far fewer than a directory
+// somebody has been keeping build output in.
+const maxStatusPluginFiles = 5000
+
 // Status is what the dashboard shows before anybody presses anything.
 type Status struct {
 	// DatabaseBytes is the live database's size on disk. The archive is
@@ -117,8 +122,12 @@ type Status struct {
 	// archive carries. Worth showing because they are the one part of an
 	// archive whose size an operator controls, and the one part that can make
 	// a backup refuse itself.
-	PluginFiles int   `json:"plugin_files"`
-	PluginBytes int64 `json:"plugin_bytes"`
+	//
+	// PluginsTruncated says the count stopped early, so a page renders "at
+	// least this many" rather than a number that is quietly wrong.
+	PluginFiles      int   `json:"plugin_files"`
+	PluginBytes      int64 `json:"plugin_bytes"`
+	PluginsTruncated bool  `json:"plugins_truncated,omitempty"`
 	// Schedule is what will happen without anybody pressing anything. Nil when
 	// this host has no runner wired.
 	Schedule *ScheduleStatus `json:"schedule,omitempty"`
@@ -183,6 +192,12 @@ func (s *Service) Status(ctx context.Context) Status {
 		// directory is the one place in an archive with subdirectories in it.
 		// A failure is not reported: the page is describing what a backup would
 		// hold, and Create is where an unreadable directory becomes a refusal.
+		//
+		// Bounded, because this runs on a page load and the directory is a bind
+		// mount an operator writes into. A tree with a hundred thousand files
+		// in it should make the page say "a lot" rather than make the page slow;
+		// Create is the one that has to walk all of it, and it does that once
+		// per run rather than once per request.
 		_ = filepath.WalkDir(s.cfg.PluginsDir, func(_ string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !d.Type().IsRegular() {
 				return nil //nolint:nilerr // a listing, not a check
@@ -190,6 +205,10 @@ func (s *Service) Status(ctx context.Context) Status {
 			if info, err := d.Info(); err == nil {
 				status.PluginFiles++
 				status.PluginBytes += info.Size()
+			}
+			if status.PluginFiles >= maxStatusPluginFiles {
+				status.PluginsTruncated = true
+				return fs.SkipAll
 			}
 			return nil
 		})

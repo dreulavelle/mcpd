@@ -54,18 +54,18 @@ func NewBackupStore(db *DB, cipher Cipher, now func() time.Time, storageDir stri
 	return &BackupStore{db: db, cipher: cipher, now: now, storageDir: storageDir}
 }
 
-// ErrNoSuchDestination reports an operation against a destination that is not
-// stored.
-var ErrNoSuchDestination = errors.New("sqlite: no such backup destination")
-
-// ErrDestinationExists reports a name already taken.
-var ErrDestinationExists = errors.New(
-	"sqlite: a backup destination with that name already exists")
-
-// ErrNoBackupCipher reports that a credential cannot be handled without a key.
-var ErrNoBackupCipher = errors.New(
-	"sqlite: no encryption key is configured, so a backup destination's " +
-		"credentials cannot be stored or read")
+// The refusals this store hands back are the backup package's own.
+//
+// One identity rather than two, so the dashboard can classify with errors.Is
+// against a domain error without importing storage, and so a sentence written
+// for a person lives beside the rules that produce it. Named here as well
+// because that is what the callers in this package read.
+var (
+	ErrNoSuchDestination  = backup.ErrNoSuchDestination
+	ErrDestinationExists  = backup.ErrDestinationExists
+	ErrDestinationChanged = backup.ErrDestinationChanged
+	ErrNoBackupCipher     = backup.ErrNoCipher
+)
 
 // NewRunID mints an identifier for a run.
 func (s *BackupStore) NewRunID() string { return newBackupRunID() }
@@ -133,7 +133,19 @@ func (s *BackupStore) UpdateDestination(
 	if !ok {
 		return backup.Destination{}, ErrNoSuchDestination
 	}
+	return s.applyUpdate(ctx, actor, current, up)
+}
 
+// applyUpdate writes an edit against the version the caller read.
+//
+// Split from the read above so the guard has a seam a test can reach: what it
+// defends is a write built on a row somebody else has since replaced, and
+// UpdateDestination reads immediately before writing, so through that door the
+// two versions always agree.
+func (s *BackupStore) applyUpdate(
+	ctx context.Context, actor string, current backup.Destination, up backup.DestinationUpdate,
+) (backup.Destination, error) {
+	id := current.ID
 	next := current
 	changed := map[string]any{}
 	if up.Name != nil && strings.TrimSpace(*up.Name) != current.Name {
@@ -191,22 +203,20 @@ func (s *BackupStore) UpdateDestination(
 		// one destination at once do not have the second silently overwrite a
 		// change the first made and nobody saw.
 		//
-		// And guarded on the host key: an SFTP destination cannot be switched
-		// on without one. The condition is here rather than only in Go because
-		// the row is what has to be true, and a check made before the write is
-		// a check something else can invalidate between the two.
+		// An SFTP destination being switched on with no host key is refused by
+		// Validate above and by the table's own CHECK below, so it is not a
+		// condition here: repeating it would only make zero rows mean a third
+		// thing this has to guess between.
 		res, err := u.exec(`
 			UPDATE backup_destinations
 			   SET name = ?, config_json = ?, secret = ?, enabled = ?,
 			       keep_last = ?, keep_daily = ?, keep_weekly = ?, keep_monthly = ?,
 			       host_key = ?, updated_at = ?
-			 WHERE id = ? AND updated_at = ?
-			   AND (? = 0 OR kind <> 'sftp' OR trim(?) <> '')`,
+			 WHERE id = ? AND updated_at = ?`,
 			next.Name, string(config), sealed, boolToInt(next.Enabled),
 			next.Policy.KeepLast, next.Policy.KeepDaily, next.Policy.KeepWeekly,
 			next.Policy.KeepMonthly, next.HostKey, now.UnixMilli(),
-			id, current.UpdatedAt.UnixMilli(),
-			boolToInt(next.Enabled), next.HostKey)
+			id, current.UpdatedAt.UnixMilli())
 		if err != nil {
 			if isUniqueViolation(err, "ux_backup_destinations_name") {
 				return ErrDestinationExists
@@ -214,13 +224,21 @@ func (s *BackupStore) UpdateDestination(
 			return fmt.Errorf("sqlite: update backup destination: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			// Either it is gone, somebody else wrote first, or an SFTP
-			// destination was asked to switch on with no key recorded. All
-			// three are refusals rather than a silent no-op.
-			if next.Kind == backup.KindSFTP && next.Enabled && next.HostKey == "" {
-				return backup.ErrNoHostKey
+			// Zero rows is two different things, and they are two different
+			// things to be told: the destination is gone, or somebody else
+			// wrote to it between this caller's read and this write. Only the
+			// second is worth reopening the form for, so the row is asked for
+			// again inside this transaction rather than guessed at.
+			var exists int
+			if err := u.queryRow(
+				`SELECT COUNT(*) FROM backup_destinations WHERE id = ?`, id).
+				Scan(&exists); err != nil {
+				return fmt.Errorf("sqlite: read backup destination after a lost write: %w", err)
 			}
-			return ErrNoSuchDestination
+			if exists == 0 {
+				return ErrNoSuchDestination
+			}
+			return ErrDestinationChanged
 		}
 		return auditDestination(u, "backup.destination.updated", actor, next, "update", changed)
 	})
@@ -267,13 +285,18 @@ func (s *BackupStore) DeleteDestination(ctx context.Context, actor, id string) e
 // first contact rather than overwriting a pin. A server that has changed its
 // key is a refusal an operator has to clear deliberately; if this could
 // overwrite, a mismatch would be one button press away from being accepted.
-func (s *BackupStore) RecordHostKey(ctx context.Context, actor, id, fingerprint string) error {
+// It reports whether it actually recorded one. Zero rows means the destination
+// already has a key pinned, or is not an SFTP destination -- neither is an
+// error, and both mean the caller must not tell an operator that the key they
+// are looking at is now the one mcpd will check against.
+func (s *BackupStore) RecordHostKey(ctx context.Context, actor, id, fingerprint string) (bool, error) {
 	fingerprint = strings.TrimSpace(fingerprint)
 	if fingerprint == "" {
-		return errors.New("sqlite: no host key to record")
+		return false, errors.New("sqlite: no host key to record")
 	}
 	now := s.now()
-	return s.db.WriteTx(ctx, now.UnixMilli(), func(u *UnitOfWork) error {
+	recorded := false
+	err := s.db.WriteTx(ctx, now.UnixMilli(), func(u *UnitOfWork) error {
 		var name string
 		err := u.queryRow(`SELECT name FROM backup_destinations WHERE id = ?`, id).Scan(&name)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -291,15 +314,14 @@ func (s *BackupStore) RecordHostKey(ctx context.Context, actor, id, fingerprint 
 			return fmt.Errorf("sqlite: record host key: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			// Already pinned, or not an SFTP destination. Neither is an error
-			// the caller has to handle: the fingerprint it holds is what the
-			// server presented either way.
 			return nil
 		}
+		recorded = true
 		return auditDestination(u, "backup.destination.updated", actor,
 			backup.Destination{ID: id, Name: name}, "update",
 			map[string]any{"host_key": fingerprint, "recorded_by": "test connection"})
 	})
+	return recorded, err
 }
 
 // ClearHostKey forgets the pinned key, so a rebuilt server can be pinned again.
@@ -335,7 +357,26 @@ func (s *BackupStore) ClearHostKey(ctx context.Context, actor, id string) error 
 
 // Destinations returns every destination, by name, with credentials in the
 // clear for the runner that is about to authenticate with them.
+//
+// Only the runner should call this. Everything that merely renders or counts
+// destinations wants ListDestinations, which never decrypts.
 func (s *BackupStore) Destinations(ctx context.Context) ([]backup.Destination, error) {
+	return s.listDestinations(ctx, true)
+}
+
+// ListDestinations returns every destination without decrypting anything.
+//
+// The dashboard and the schedule summary read this on every page load, and
+// neither has any use for a credential: what they render is whether one is set,
+// which SecretSet answers. Decrypting on that path would run the cipher over
+// every stored secret to produce a boolean, and would put a host with an
+// unreadable key -- a key rotated without re-entering the credentials -- in the
+// position of not being able to draw the page that fixes it.
+func (s *BackupStore) ListDestinations(ctx context.Context) ([]backup.Destination, error) {
+	return s.listDestinations(ctx, false)
+}
+
+func (s *BackupStore) listDestinations(ctx context.Context, decrypt bool) ([]backup.Destination, error) {
 	rows, err := s.db.Reader().QueryContext(ctx, destinationColumns+
 		` FROM backup_destinations ORDER BY lower(name)`)
 	if err != nil {
@@ -345,7 +386,7 @@ func (s *BackupStore) Destinations(ctx context.Context) ([]backup.Destination, e
 
 	var out []backup.Destination
 	for rows.Next() {
-		d, err := s.scanDestination(rows)
+		d, err := s.scanDestination(rows, decrypt)
 		if err != nil {
 			return nil, err
 		}
@@ -354,11 +395,14 @@ func (s *BackupStore) Destinations(ctx context.Context) ([]backup.Destination, e
 	return out, rows.Err()
 }
 
-// Destination returns one.
+// Destination returns one, with its credential in the clear.
+//
+// The credential is needed here: this is what an edit reads before it writes
+// back, and what Test connection hands to a transport.
 func (s *BackupStore) Destination(ctx context.Context, id string) (backup.Destination, bool, error) {
 	row := s.db.Reader().QueryRowContext(ctx, destinationColumns+
 		` FROM backup_destinations WHERE id = ?`, id)
-	d, err := s.scanDestination(row)
+	d, err := s.scanDestination(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return backup.Destination{}, false, nil
 	}
@@ -373,7 +417,7 @@ const destinationColumns = `
 	       keep_weekly, keep_monthly, host_key, created_at, updated_at,
 	       last_run_at, last_ok, last_error, last_detail, last_seen`
 
-func (s *BackupStore) scanDestination(sc scanner) (backup.Destination, error) {
+func (s *BackupStore) scanDestination(sc scanner, decrypt bool) (backup.Destination, error) {
 	var (
 		d                   backup.Destination
 		kind, config        string
@@ -406,7 +450,10 @@ func (s *BackupStore) scanDestination(sc scanner) (backup.Destination, error) {
 		return backup.Destination{}, fmt.Errorf(
 			"sqlite: decode settings for backup destination %q: %w", d.Name, err)
 	}
-	if secret != "" {
+	// Always, and without the cipher: whether a credential is set is a fact the
+	// page renders, and it is readable from the column's length alone.
+	d.SecretSet = secret != ""
+	if secret != "" && decrypt {
 		if s.cipher == nil {
 			return backup.Destination{}, ErrNoBackupCipher
 		}
@@ -534,17 +581,21 @@ func (s *BackupStore) MarkInterrupted(ctx context.Context, before, at time.Time)
 
 // RecordDestination writes what a run found at one destination.
 //
-// last_seen only moves on success. A failed run's listing is not a number the
-// next run's retention should measure itself against.
+// last_seen moves only when this run both succeeded and came away with a count
+// it trusts -- which is what backup.UnknownSeen says it did not. Both
+// conditions are in the statement rather than in Go beforehand, because this is
+// the value that stops a truncated listing from being acted on: a run that
+// wrote its own small count over the baseline would disarm that check for good,
+// and the next short listing would delete real backups.
 func (s *BackupStore) RecordDestination(ctx context.Context, out backup.DestinationOutcome) error {
 	return s.db.WriteTx(ctx, out.At.UnixMilli(), func(u *UnitOfWork) error {
 		_, err := u.exec(`
 			UPDATE backup_destinations
 			   SET last_run_at = ?, last_ok = ?, last_error = ?, last_detail = ?,
-			       last_seen = CASE WHEN ? = 1 THEN ? ELSE last_seen END
+			       last_seen = CASE WHEN ? = 1 AND ? >= 0 THEN ? ELSE last_seen END
 			 WHERE id = ?`,
 			out.At.UnixMilli(), boolToInt(out.OK), out.Error, out.Detail,
-			boolToInt(out.OK), out.Seen, out.ID)
+			boolToInt(out.OK), out.Seen, out.Seen, out.ID)
 		if err != nil {
 			return fmt.Errorf("sqlite: record a backup destination's outcome: %w", err)
 		}

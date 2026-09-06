@@ -1143,7 +1143,16 @@ would conclude nothing was written and go looking for one that is there.
 **Four transports behind one interface.** `Transport` is Put, List, Delete,
 Check, and `local`, `sftp`, `s3` and `webdav` implement it. `List` only ever
 returns names matching mcpd's own archive pattern: a destination is very often
-a shared folder, and retention reads that listing.
+a shared folder, and retention reads that listing. Every operation carries a
+deadline — the socket's for SFTP, whose library takes no context, and the
+context's for the two that speak HTTP — because the runner is a single worker
+and one wedged NAS would otherwise hold every other destination's backup.
+
+**An archive name is `mcpd-[<slug>-]<timestamp>[-<run>].mcpdbak`** and all three
+parts are load-bearing. The slug scopes retention to *this* instance, so two
+hosts sharing a bucket are invisible to each other; the timestamp is what
+retention sorts by; the run id stops two backups in the same second becoming
+one file with the history reporting two successes.
 
 **Retention is a pure function over a listing**, keyed on the timestamp in the
 name rather than on the file's modified time — a NAS with a wrong clock, an S3
@@ -1152,6 +1161,13 @@ and none rewrites the first. It aborts, recording why against the run rather
 than failing it, on an empty listing, on a listing missing the archive just
 uploaded, and on one holding far fewer archives than the last successful run
 saw.
+
+That last check is the one with a trap in it. Its baseline is `last_seen` on the
+destination row, and an abort reports `UnknownSeen` rather than the count it
+reached — so the statement that writes it (`CASE WHEN ok AND seen >= 0`) leaves
+the baseline alone. A run that wrote the small count from a listing it had just
+distrusted would make that partial listing the standard the *next* run measures
+itself against, and the check would never fire again.
 
 **An SFTP destination is pinned to a host key and there is no trust on first
 use.** The table refuses to enable one with no key recorded; only
