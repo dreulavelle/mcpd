@@ -227,6 +227,54 @@ describe("the backup destinations list", () => {
     expect(screen.getByText(/ssh-keyscan nas\.example\.com/)).toBeInTheDocument();
   });
 
+  /**
+   * The bug this guards, and the reason the page keeps what was pinned when
+   * the button was pressed.
+   *
+   * RecordHostKey declines by matching zero rows rather than by failing, so a
+   * second administrator pinning a key between this request reading the row
+   * and writing to it gets an answer that reached the destination, carries a
+   * fingerprint, and did not store it. Reading that as a match told an
+   * operator the key on their screen was the one mcpd would check against --
+   * when the stored one may be a different key entirely, and every backup from
+   * then on would be refused for exactly the reason the page had just denied.
+   */
+  it("does not call an unstored key a match", async () => {
+    stub([destination({ host_key: "" })]);
+    vi.spyOn(api, "testBackupDestination").mockResolvedValue({
+      ok: true,
+      message: "This destination already has a host key recorded, so the one "
+        + "the server just presented was not stored.",
+      detail: "presented SHA256:abcdef0123456789",
+      host_key: "SHA256:abcdef0123456789",
+      host_key_recorded: false,
+    });
+    renderWith(<BackupDestinations />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText(/was not stored/)).toBeInTheDocument();
+    expect(screen.getByText(/not what a backup will be checked against/))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/it is the one already recorded/)).not.toBeInTheDocument();
+  });
+
+  // A destination that already had a key pinned was checked against it by the
+  // handshake, so a test that worked does prove the server presented that one.
+  // This is the only case where a match may be claimed.
+  it("says a key matches only when the handshake checked it", async () => {
+    stub([destination()]);
+    vi.spyOn(api, "testBackupDestination").mockResolvedValue({
+      ok: true,
+      message: "mcpd reached this destination, and wrote and removed a test file.",
+      host_key: "SHA256:pinned0000000000000000000000000000000000000",
+      host_key_recorded: false,
+    });
+    renderWith(<BackupDestinations />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText(/it is the one already recorded/)).toBeInTheDocument();
+  });
+
   // A failed test is still an answer, so the sentence is shown and the
   // evidence goes where evidence goes.
   it("says what went wrong when a test did not work", async () => {

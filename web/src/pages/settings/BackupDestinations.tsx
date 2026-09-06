@@ -18,7 +18,7 @@ import { CodeBlock, Loading, Notice } from "@/components/chrome";
 import { useConfirm } from "@/components/confirm";
 import { Disclosure } from "@/components/disclosure";
 import { Evidence } from "@/components/evidence";
-import { Chip, StatusDot } from "@/components/status";
+import { Chip, StatusDot, type Tone } from "@/components/status";
 import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import {
@@ -122,7 +122,14 @@ function DestinationRow({ destination, admin, onChanged }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
-  const [test, setTest] = useState<BackupTestResult | null>(null);
+  // The answer, and whether a key was already pinned when it was asked for.
+  //
+  // The second half cannot be read off the response and cannot be read off the
+  // row afterwards: a successful test on a pinned destination proves the
+  // server presented that key, and a successful test on an unpinned one proves
+  // nothing about it -- and by the time the answer lands, the row has been
+  // reloaded and may itself carry a key this test never saw.
+  const [test, setTest] = useState<Tested | null>(null);
 
   const last = lastRunWords(destination);
 
@@ -150,9 +157,12 @@ function DestinationRow({ destination, admin, onChanged }: {
     setBusy(true);
     setError("");
     setTest(null);
+    // Read before the request, not after: the reload below can give this row a
+    // key that arrived while the test was running.
+    const hadPin = Boolean(destination.host_key);
     try {
       const result = await api.testBackupDestination(destination.id);
-      setTest(result);
+      setTest({ result, hadPin });
       // The list is reloaded either way: a recorded host key changes the row.
       onChanged();
     } catch (e) {
@@ -229,20 +239,13 @@ function DestinationRow({ destination, admin, onChanged }: {
       {test && (
         <div className="mt-3 rounded-md border bg-muted/30 p-3 text-xs">
           <p className="flex items-start gap-1.5">
-            <StatusDot tone={test.ok ? "good" : "problem"} className="mt-1" />
-            <span>{test.message}</span>
+            <StatusDot tone={testTone(test)} className="mt-1" />
+            <span>{test.result.message}</span>
           </p>
-          {test.host_key && (
+          {test.result.host_key && (
             <div className="mt-2 space-y-1">
-              <p className="text-muted-foreground">
-                {test.host_key_recorded
-                  ? "This is the key the server presented, and it is now the only "
-                    + "one mcpd will accept. Compare it with what the server says "
-                    + "of itself before switching this destination on."
-                  : "This is the key the server presented. It matches the one "
-                    + "already recorded."}
-              </p>
-              <CodeBlock>{test.host_key}</CodeBlock>
+              <p className="text-muted-foreground">{keyWords(test)}</p>
+              <CodeBlock>{test.result.host_key}</CodeBlock>
               <p className="text-muted-foreground">
                 Ask the server, from a machine you trust:
               </p>
@@ -251,7 +254,7 @@ function DestinationRow({ destination, admin, onChanged }: {
               </CodeBlock>
             </div>
           )}
-          <Evidence detail={test.detail} />
+          <Evidence detail={test.result.detail} />
         </div>
       )}
 
@@ -714,6 +717,51 @@ export function DestinationSheet({ destination, kinds, onClose, onSaved }: {
       </SheetContent>
     </Sheet>
   );
+}
+
+/** One Test connection answer, with what was pinned when it was asked for. */
+interface Tested {
+  result: BackupTestResult;
+  hadPin: boolean;
+}
+
+/**
+ * What may honestly be said about the key a server just presented.
+ *
+ * Three cases, and only one of them is a match. A destination that already had
+ * a key pinned was checked against it by the handshake, so a test that worked
+ * does prove the server presented that key. A destination that had none was
+ * reached with checking turned off, so nothing about the key is proved -- and
+ * when the host declines to store it, because somebody pinned a different one
+ * in between, the fingerprint on screen is not the one a backup will be
+ * checked against. That last case used to read as a match.
+ */
+function keyWords({ result, hadPin }: Tested): string {
+  if (result.host_key_recorded) {
+    return "This is the key the server presented, and it is now the only one "
+      + "mcpd will accept. Compare it with what the server says of itself "
+      + "before switching this destination on.";
+  }
+  if (hadPin && result.ok) {
+    return "This is the key the server presented, and it is the one already "
+      + "recorded for this destination.";
+  }
+  return "This is the key the server presented. It has not been recorded, so "
+    + "it is not what a backup will be checked against.";
+}
+
+/**
+ * How the answer is coloured.
+ *
+ * A test that reached the destination but did not record the key it was asked
+ * to record is not a success: the sentence above it says a different key is
+ * pinned, and a green dot beside that would have somebody switch the
+ * destination on and every backup afterwards refused.
+ */
+function testTone({ result, hadPin }: Tested): Tone {
+  if (!result.ok) return "problem";
+  if (!hadPin && result.host_key && !result.host_key_recorded) return "attention";
+  return "good";
 }
 
 /**

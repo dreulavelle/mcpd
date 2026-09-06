@@ -246,7 +246,12 @@ function Contents({ status }: { status: BackupStatus }) {
       )}
       {status.plugin_files > 0 && (
         <Row label="Plugins">
+          {/* A floor, not a count, when the host stopped walking early. Saying
+              "12 files" of a directory it gave up counting would be a number
+              that is quietly wrong on exactly the installs where it matters. */}
+          {status.plugins_truncated ? "At least " : ""}
           {status.plugin_files} file{status.plugin_files === 1 ? "" : "s"},{" "}
+          {status.plugins_truncated ? "over " : ""}
           {megabytes(status.plugin_bytes)} — the plugins installed by hand, so
           a restored host is not configured for systems that are not on it
         </Row>
