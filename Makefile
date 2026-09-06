@@ -46,7 +46,21 @@ race:
 	CGO_ENABLED=1 go test -race -count=1 ./...
 
 .PHONY: check
-check: fmt vet test verify-deps
+check: fmt vet scan test verify-deps
+
+# Nothing from a real deployment goes into the repository. The rules are in
+# the script; the point is that the check that would have refused the commit
+# runs before anybody reads the diff.
+.PHONY: scan
+scan:
+	@sh scripts/check-fixtures.sh
+
+# Installs the same check as a pre-commit hook, and a commit-msg hook that
+# refuses a trailer naming a machine. Once per clone.
+.PHONY: hooks
+hooks:
+	git config core.hooksPath scripts/hooks
+	@echo "hooks installed: scripts/hooks"
 
 .PHONY: fmt
 # The packages go knows about rather than the whole tree, so ./data -- which

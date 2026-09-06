@@ -162,7 +162,7 @@ func TestWindowsBundleDoesNotReportLinuxFilesMissing(t *testing.T) {
 func TestReadsTheMetricSeries(t *testing.T) {
 	csv := "time,cpu_usage,total_virt_mem,free_virt_mem,total_phys_mem,free_phys_mem,total_disk_space,free_disk_space,tick_count\n"
 	for i := range 5 {
-		csv += fmt.Sprintf("2026-08-05 1%d:02:00.039293+00,12.5,1,1,4105482240,1821032448,51510796288,43856441344,1\n", i)
+		csv += fmt.Sprintf("2026-08-05 1%d:02:00.039293+00,12.5,1,1,4105482240,1821032448,51510796288,43856441344,1\n", i) // fixture-ok: byte counts, not phone numbers
 	}
 	r, size := bundle(t, map[string]string{
 		"ExtraLogging/tcxSystemInfo_1.txt": systemInfo,
@@ -190,7 +190,7 @@ func TestNoticesADiskFilling(t *testing.T) {
 	csv := "time,cpu_usage,total_virt_mem,free_virt_mem,total_phys_mem,free_phys_mem,total_disk_space,free_disk_space,tick_count\n"
 	free := 20 << 30
 	for day := range 12 {
-		csv += fmt.Sprintf("2026-08-%02d 10:00:00+00,5,1,1,4105482240,1821032448,51510796288,%d,1\n", day+1, free)
+		csv += fmt.Sprintf("2026-08-%02d 10:00:00+00,5,1,1,4105482240,1821032448,51510796288,%d,1\n", day+1, free) // fixture-ok: byte counts, not phone numbers
 		free -= 1 << 30
 	}
 	r, size := bundle(t, map[string]string{
