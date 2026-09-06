@@ -553,7 +553,7 @@ func TestDestinationRefusalsAreClassifiedByType(t *testing.T) {
 	}{
 		{
 			name: "a field an operator can fix",
-			err:  &backup.InvalidDestination{Sentence: "give the directory to write into"},
+			err:  &backup.InvalidDestination{Sentence: "Give the directory to write into."},
 			want: http.StatusBadRequest,
 			says: "directory to write into",
 		},
