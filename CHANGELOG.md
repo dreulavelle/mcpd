@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.20.0](https://github.com/dreulavelle/mcpd/compare/v0.19.1...v0.20.0) (2026-09-06)
+
+
+### Features
+
+* **backup:** send archives to destinations, on a schedule ([bbcd1c6](https://github.com/dreulavelle/mcpd/commit/bbcd1c62fd1d243cf07c88c91975ea3762d8956f))
+* **backup:** store destinations and the record of every run ([f6fe9f0](https://github.com/dreulavelle/mcpd/commit/f6fe9f09724082838cf63cc2d2c3ff25add59d09))
+* **backup:** the destination API, and the worker that uses it ([61ade26](https://github.com/dreulavelle/mcpd/commit/61ade26de292c5c13f812a95a4541d0336d86246))
+* **settings:** the backup schedule and the passphrase it seals with ([28c2abd](https://github.com/dreulavelle/mcpd/commit/28c2abdad8275863dc8dadbe3b6ae7d5845279b5))
+
+
+### Fixes
+
+* **backup:** do not sweep a run this process has just been asked for ([dd07399](https://github.com/dreulavelle/mcpd/commit/dd07399991ec08a43201ee691b5ab883e4a98fc7))
+* **backup:** the first review round ([3453aba](https://github.com/dreulavelle/mcpd/commit/3453aba2d8876b3bceb84d9adc2e03d0e1c04bb1))
+
+
+### Documentation
+
+* **backup:** destinations, the schedule, and what is kept ([4a27f9a](https://github.com/dreulavelle/mcpd/commit/4a27f9a703a473febc3935bfdffac9a6b9121256))
+
 ## [0.19.1](https://github.com/dreulavelle/mcpd/compare/v0.19.0...v0.19.1) (2026-09-05)
 
 
