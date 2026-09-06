@@ -59,7 +59,14 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
 			"this host is not configured to write backups")
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, s.opts.Backup.Status(r.Context()))
+	status := s.opts.Backup.Status(r.Context())
+	// The schedule on the same response as the contents, because they are two
+	// halves of one question: what this host would send, and whether it is
+	// going to send it without being asked.
+	if s.opts.BackupRunner != nil {
+		status.Schedule = s.opts.BackupRunner.Status(r.Context())
+	}
+	s.writeJSON(w, r, http.StatusOK, status)
 }
 
 // handleCreateBackup streams an encrypted archive of this instance.

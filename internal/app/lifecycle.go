@@ -106,6 +106,13 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.startWorker("sso-state-housekeeper", workerCtx, a.purgeSSOStates)
 
+	// One worker, which is what makes "one backup at a time" true of the
+	// process as well as of the database. It settles any run a previous process
+	// left running before it arms its timer.
+	if a.backupRunner != nil {
+		a.startWorker("backup-runner", workerCtx, a.backupRunner.Run)
+	}
+
 	a.startWorker("history-retention", workerCtx, a.pruneHistory)
 	a.startWorker("call-retention", workerCtx, a.pruneToolCalls)
 	// Delivers queued events. Started always: it costs one idle goroutine and
