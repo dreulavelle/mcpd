@@ -1149,9 +1149,14 @@ export interface BackupStatus {
   /**
    * The out-of-process plugins the archive carries. The one part of an archive
    * whose size an operator controls.
+   *
+   * `plugins_truncated` says the host stopped counting early — the walk is
+   * bounded because it runs on a page load over a bind mount — so the two
+   * numbers above are a floor and must be rendered as one.
    */
   plugin_files: number;
   plugin_bytes: number;
+  plugins_truncated?: boolean;
   /** What happens without anybody pressing anything. Absent on a host with no runner. */
   schedule?: BackupSchedule;
 }
