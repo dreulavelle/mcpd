@@ -37,6 +37,7 @@ function settings(values: Record<string, unknown> = {}, secretsSet = false): Set
           key: "backup.schedule.weekday", label: "Day",
           kind: "int", group: "backup", apply: "live", default: 0,
           min: 0, max: 6, help: "Sunday is 0.",
+          show_when: { field: "backup.schedule.cadence", equals: ["weekly"] },
         },
         {
           key: "backup.schedule.time", label: "Time",
@@ -194,7 +195,9 @@ describe("the backup schedule", () => {
     });
   });
 
-  // A weekday is meaningless every day, and the catalog hides it there too.
+  // A weekday means nothing on a daily schedule, and it is the catalog that
+  // says so -- the field carries the condition, and the form reads it rather
+  // than writing "weekly" down a second time.
   it("does not ask for a day when the cadence is daily", async () => {
     stub(settings({ "backup.schedule.cadence": "daily" }));
     renderWith(<BackupSchedule schedule={schedule()} onSaved={() => {}} />);

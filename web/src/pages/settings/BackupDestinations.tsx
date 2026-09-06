@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
 /**
  * Where backups go when nobody is watching.
@@ -184,8 +185,11 @@ function DestinationRow({ destination, admin, onChanged }: {
           <p className="font-mono text-xs break-all text-muted-foreground">
             {destination.where}
           </p>
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <StatusDot tone={last.tone} />
+          <p className={cn(
+            "flex items-start gap-1.5 text-xs",
+            last.tone === "problem" ? "text-problem" : "text-muted-foreground",
+          )}>
+            <StatusDot tone={last.tone} className="mt-1" />
             {last.words}
           </p>
           {/* The sentence is above; the host's own words for it are here. */}
