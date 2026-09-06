@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The schema is what makes dashboard management safe. Every editable setting
@@ -207,6 +209,10 @@ const (
 	// SectionDiagnostics is what this host says about itself and to whom --
 	// how much it logs, and whether a crash leaves the machine.
 	SectionDiagnostics = "diagnostics"
+	// SectionBackup is the Backup & Restore page. The schedule belongs beside
+	// the destinations it sends to and the history it produces, which are on
+	// that page and not in a general settings list.
+	SectionBackup = "backup"
 	// SectionAuthentication is the page deciding who can sign in and how.
 	// Separate from the general settings page because the pending queue lives
 	// beside these fields and answers the question they raise.
@@ -434,7 +440,32 @@ const (
 	KeyOIDCIssuer   = "auth.oidc.issuer"
 	KeyOIDCClientID = "auth.oidc.client_id"
 	KeyOIDCSecret   = "auth.oidc.client_secret"
+
+	// When a backup happens, and what seals it. There is one schedule and one
+	// passphrase, so both are settings in the ordinary sense; the destinations
+	// they apply to are a collection and live in their own table.
+	KeyBackupScheduleEnabled  = "backup.schedule.enabled"
+	KeyBackupScheduleCadence  = "backup.schedule.cadence"
+	KeyBackupScheduleWeekday  = "backup.schedule.weekday"
+	KeyBackupScheduleTime     = "backup.schedule.time"
+	KeyBackupScheduleTimezone = "backup.schedule.timezone"
+	KeyBackupPassphrase       = "backup.passphrase"
 )
+
+// minBackupPassphrase is the shortest passphrase an archive may be sealed with.
+//
+// Written here rather than imported from internal/backup, which is what this
+// used to do. That package carries the S3 and SSH clients, and importing it
+// dragged both into the dependency graph of everything that reads a setting --
+// which is nearly all of mcpd. A constant is a smaller thing to keep in step
+// than a dependency, and schema_test.go asserts the two still agree.
+const minBackupPassphrase = 12
+
+// clockPattern matches the time of day a schedule fires at.
+//
+// The same shape backup.ParseClock accepts, restated for the same reason as the
+// constant above; schema_test.go holds them together across a table.
+var clockPattern = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
 func intPtr(i int) *int { return &i }
 
@@ -795,6 +826,62 @@ func schema() []Group {
 					Default: 7, Min: intPtr(0), Max: intPtr(3650),
 					Help: "Days. Older entries are removed once a day, and the removal " +
 						"is itself recorded. Zero keeps everything.",
+				},
+			},
+		},
+		{
+			Name:      "backup",
+			Title:     "Scheduled backups",
+			Section:   SectionBackup,
+			EnabledBy: KeyBackupScheduleEnabled,
+			Help: "mcpd takes one encrypted archive and sends it to every " +
+				"destination that is switched on. Add a destination below first; " +
+				"a schedule with nowhere to send a backup does nothing.",
+			Fields: []Field{
+				{
+					Key: KeyBackupScheduleEnabled, Label: "Back up on a schedule",
+					Kind: KindBool, Group: "backup", Apply: ApplyLive,
+					Default: false,
+					Help: "Off until you turn it on. Switching it on does not take a " +
+						"backup straight away; the first one is at the next time below.",
+				},
+				{
+					Key: KeyBackupScheduleCadence, Label: "How often",
+					Kind: KindEnum, Group: "backup", Apply: ApplyLive,
+					Default: "weekly", Options: []string{"daily", "weekly"},
+					OptionLabels: map[string]string{"daily": "Every day", "weekly": "Every week"},
+				},
+				{
+					Key: KeyBackupScheduleWeekday, Label: "Day",
+					Kind: KindInt, Group: "backup", Apply: ApplyLive,
+					Default: 0, Min: intPtr(0), Max: intPtr(6),
+					ShowWhen: &ShowWhen{Field: KeyBackupScheduleCadence, Equals: []string{"weekly"}},
+					Help:     "Sunday is 0.",
+				},
+				{
+					Key: KeyBackupScheduleTime, Label: "Time",
+					Kind: KindString, Group: "backup", Apply: ApplyLive,
+					Default: "04:00", Placeholder: "04:00",
+					Help: "As HH:MM, in the time zone below. Avoid midnight and " +
+						"anything between 01:00 and 03:00: those hours do not exist " +
+						"on the day the clocks go forward, so a backup at one of " +
+						"them runs at a time nobody asked for, once a year.",
+				},
+				{
+					Key: KeyBackupScheduleTimezone, Label: "Time zone",
+					Kind: KindString, Group: "backup", Apply: ApplyLive,
+					Default: "UTC", Placeholder: "America/Chicago",
+					Help: "A zone name, such as Europe/London or America/Chicago. " +
+						"Stored rather than taken from the machine, so the time above " +
+						"means the same thing all year.",
+				},
+				{
+					Key: KeyBackupPassphrase, Label: "Passphrase",
+					Kind: KindSecret, Group: "backup", Apply: ApplyLive,
+					Help: "Write this down and keep it with the backup. It is stored " +
+						"here so a scheduled backup can run when nobody is present, " +
+						"and it will not be shown again. A host that has lost its " +
+						"database cannot tell you what it was.",
 				},
 			},
 		},
@@ -1237,6 +1324,15 @@ func validateAgainst(f Field, key, value string) error {
 		if f.Required && strings.TrimSpace(value) == "" {
 			return fmt.Errorf("settings: %s is required", f.Label)
 		}
+		// The archive is encrypted with this and with nothing else, so a short
+		// one is the whole of the protection. Checked here as well as where an
+		// archive is written, because a passphrase stored now is used months
+		// later by a worker nobody is watching.
+		if key == KeyBackupPassphrase && value != "" && len(value) < minBackupPassphrase {
+			return fmt.Errorf(
+				"settings: %s must be at least %d characters. It is the only thing "+
+					"protecting the archive", f.Label, minBackupPassphrase)
+		}
 
 	case KindString:
 		if f.Required && strings.TrimSpace(value) == "" {
@@ -1263,6 +1359,20 @@ func validateAgainst(f Field, key, value string) error {
 		if key == KeyOIDCIssuer && strings.TrimSpace(value) != "" {
 			if err := ValidateIssuerURL(value); err != nil {
 				return fmt.Errorf("settings: %s %w", f.Label, err)
+			}
+		}
+		// A time of day and a zone name, checked here so a typo is a message
+		// beside the box rather than a schedule that silently runs at 04:00 UTC
+		// on a host nobody looks at.
+		if key == KeyBackupScheduleTime && !clockPattern.MatchString(strings.TrimSpace(value)) {
+			return fmt.Errorf("settings: %s must be a time of day, written as "+
+				"HH:MM -- for example 04:00", f.Label)
+		}
+		if key == KeyBackupScheduleTimezone && strings.TrimSpace(value) != "" {
+			if _, err := time.LoadLocation(strings.TrimSpace(value)); err != nil {
+				return fmt.Errorf("settings: %s is not a time zone this build "+
+					"knows. Use a zone name such as Europe/London or "+
+					"America/Chicago", f.Label)
 			}
 		}
 		if key == KeyTunnelDiagnostics && strings.TrimSpace(value) != "" {

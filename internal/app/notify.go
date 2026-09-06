@@ -61,6 +61,24 @@ func (a *App) notifyDiscoveryFailed(ctx context.Context, server string, err erro
 	})
 }
 
+// notifyBackupFailed reports that a backup did not reach where it was going.
+//
+// Only when something went wrong. A backup that worked is a row in the history
+// an operator can read whenever they want to, and a message every night is one
+// people filter into a folder they stop opening -- which is how the message
+// that mattered gets missed.
+func (a *App) notifyBackupFailed(ctx context.Context, title, text string) {
+	a.notifier.Notify(ctx, notify.Event{
+		Kind: "backup.failed",
+		// The highest severity this host sends. Nothing red is ever sent, on
+		// purpose: everything here is a statement about something that already
+		// happened, and a channel full of red is one people mute.
+		Severity: notify.SeverityWarning,
+		Title:    title,
+		Text:     text,
+	})
+}
+
 // notifyBypassOpened reports that this host has stopped asking.
 //
 // The event the whole notification feature earns its place with. A window

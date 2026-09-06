@@ -25,7 +25,14 @@ Every event is a statement about something that already happened.
 | `mcpservers.discovery_failed` | A scheduled check of what a server offers failed, so its tool list is no longer being confirmed. Only from the schedule — somebody who pressed **Discover** is already looking at the failure. |
 | `approvals.bypass_opened` | Somebody stopped the asking. This is the one the feature earns its place with: a window opened and forgotten is what the banner and this both exist to prevent, and a message is the half that reaches somebody who has closed the tab. |
 | `tunnels.disconnected` | A connector stopped serving. Nothing restarts one that has stopped, and the container's healthcheck validates the configuration rather than the connection — so without this, a dead tunnel is discovered by somebody trying to use it. |
+| `backup.failed` | A backup did not reach where it was going — none of its destinations, or some of them. A backup that worked sends nothing: the history on the Backup page answers that whenever you want it to, and a message every night is one people filter into a folder they stop opening. |
 | `notifications.test` | You pressed **Send a test**. |
+
+A `backup.failed` message names the destinations that did not take it and
+nothing else. What the far end actually said is on the Backup page beside the
+run it belongs to, under **Technical details** — a chat channel is the wrong
+place for a status code, and the right place for "the Tuesday backup did not
+reach the NAS".
 
 ## Where it sends
 

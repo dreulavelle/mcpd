@@ -105,7 +105,11 @@ type App struct {
 	// backups writes and stages whole-instance archives. keyFingerprint
 	// identifies the settings encryption key its archives are readable under;
 	// empty when this host has no key.
-	backups        *backup.Service
+	backups *backup.Service
+	// backupStore holds the destinations archives are sent to and the record of
+	// what happened when they were; backupRunner is the worker that sends them.
+	backupStore    *sqlite.BackupStore
+	backupRunner   *backup.Runner
 	keyFingerprint string
 
 	// mcpStore holds the imported remote MCP servers and their tool
@@ -325,9 +329,11 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	if cipher != nil {
 		a.chatgpt = sqlite.NewChatGPTAccountStore(db, cipher, time.Now)
 		a.pluginRows = sqlite.NewPluginRowStore(db, cipher, time.Now)
+		a.backupStore = sqlite.NewBackupStore(db, cipher, time.Now, cfg.StorageDir())
 	} else {
 		a.chatgpt = sqlite.NewChatGPTAccountStore(db, nil, time.Now)
 		a.pluginRows = sqlite.NewPluginRowStore(db, nil, time.Now)
+		a.backupStore = sqlite.NewBackupStore(db, nil, time.Now, cfg.StorageDir())
 	}
 	a.limiters = newAccountLimiters()
 
@@ -449,6 +455,17 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	// the client it was constructed with, so a pool loaded afterwards would be
 	// believed by nothing that was already running.
 	a.loadTrustPool(ctx)
+
+	// After the trust pool and the settings store, both of which it reads.
+	a.backupRunner = a.newBackupRunner(log)
+	// A schedule saved on the page has to reach the worker's timer, not just
+	// the database. The callback runs synchronously inside the write path, so
+	// it does nothing but a send that cannot block.
+	a.settings.Watch(func(changed []string) {
+		if containsPrefix(changed, "backup.") {
+			a.backupRunner.SettingsChanged()
+		}
+	})
 
 	fileTokens, err := buildVerifier(ctx, cfg, a.roles, log)
 	if err != nil {
@@ -632,8 +649,20 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 				}
 				return a.metrics.Performance
 			}(),
-			Pruner:            a.audit,
-			Backup:            a.backups,
+			Pruner:             a.audit,
+			Backup:             a.backups,
+			BackupDestinations: a.backupStore,
+			// Only when there is one. A nil *backup.Runner assigned to an
+			// interface field is a non-nil interface holding a nil pointer,
+			// which gets past the handler's own guard and panics on the first
+			// request.
+			BackupRunner: func() admin.BackupRunner {
+				if a.backupRunner == nil {
+					return nil
+				}
+				return a.backupRunner
+			}(),
+			TrustPool:         a.trustPool.get,
 			Calls:             a.calls,
 			Bypasses:          a.bypasses,
 			BypassOpened:      a.notifyBypassOpened,

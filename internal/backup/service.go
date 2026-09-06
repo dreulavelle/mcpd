@@ -44,6 +44,9 @@ type ServiceConfig struct {
 	DatabasePath string
 	TLSDir       string
 	ConfigPath   string
+	// PluginsDir holds the out-of-process plugins that travel in the archive
+	// and are laid back down by a restore. Empty leaves them out.
+	PluginsDir string
 
 	// KeyFingerprint identifies this host's settings encryption key, or is
 	// empty when none is configured.
@@ -87,6 +90,11 @@ func (s *Service) fingerprint() string {
 	return s.cfg.KeyFingerprint()
 }
 
+// maxStatusPluginFiles bounds the walk Status does on every page load. Far
+// more than any real plugins directory holds, and far fewer than a directory
+// somebody has been keeping build output in.
+const maxStatusPluginFiles = 5000
+
 // Status is what the dashboard shows before anybody presses anything.
 type Status struct {
 	// DatabaseBytes is the live database's size on disk. The archive is
@@ -110,6 +118,42 @@ type Status struct {
 	// MinPassphrase is the floor the form should enforce, so the browser and
 	// the host agree on it without the number being written down twice.
 	MinPassphrase int `json:"min_passphrase"`
+	// PluginFiles and PluginBytes describe the out-of-process plugins the
+	// archive carries. Worth showing because they are the one part of an
+	// archive whose size an operator controls, and the one part that can make
+	// a backup refuse itself.
+	//
+	// PluginsTruncated says the count stopped early, so a page renders "at
+	// least this many" rather than a number that is quietly wrong.
+	PluginFiles      int   `json:"plugin_files"`
+	PluginBytes      int64 `json:"plugin_bytes"`
+	PluginsTruncated bool  `json:"plugins_truncated,omitempty"`
+	// Schedule is what will happen without anybody pressing anything. Nil when
+	// this host has no runner wired.
+	Schedule *ScheduleStatus `json:"schedule,omitempty"`
+}
+
+// ScheduleStatus is the scheduled-backup half of the page.
+type ScheduleStatus struct {
+	Enabled  bool   `json:"enabled"`
+	Cadence  string `json:"cadence"`
+	Weekday  int    `json:"weekday"`
+	Time     string `json:"time"`
+	Timezone string `json:"timezone"`
+	// NextRunAt is null whenever no run is going to happen, whether because
+	// the schedule is off or because something is missing. Reason says which,
+	// in one sentence.
+	NextRunAt *time.Time `json:"next_run_at"`
+	Reason    string     `json:"reason,omitempty"`
+	// LastRun is the most recent attempt, scheduled or manual.
+	LastRun *Run `json:"last_run,omitempty"`
+	// Destinations counts what is stored; Enabled counts what a run would
+	// actually reach.
+	Destinations        int  `json:"destinations"`
+	EnabledDestinations int  `json:"enabled_destinations"`
+	PassphraseSet       bool `json:"passphrase_set"`
+	// Running is a backup happening right now.
+	Running bool `json:"running"`
 }
 
 // Status describes what a backup taken now would hold.
@@ -143,6 +187,32 @@ func (s *Service) Status(ctx context.Context) Status {
 	if s.cfg.Instance != nil {
 		status.Instance = s.cfg.Instance(ctx)
 	}
+	if s.cfg.PluginsDir != "" {
+		// Walked rather than measured from a listing, because the plugins
+		// directory is the one place in an archive with subdirectories in it.
+		// A failure is not reported: the page is describing what a backup would
+		// hold, and Create is where an unreadable directory becomes a refusal.
+		//
+		// Bounded, because this runs on a page load and the directory is a bind
+		// mount an operator writes into. A tree with a hundred thousand files
+		// in it should make the page say "a lot" rather than make the page slow;
+		// Create is the one that has to walk all of it, and it does that once
+		// per run rather than once per request.
+		_ = filepath.WalkDir(s.cfg.PluginsDir, func(_ string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !d.Type().IsRegular() {
+				return nil //nolint:nilerr // a listing, not a check
+			}
+			if info, err := d.Info(); err == nil {
+				status.PluginFiles++
+				status.PluginBytes += info.Size()
+			}
+			if status.PluginFiles >= maxStatusPluginFiles {
+				status.PluginsTruncated = true
+				return fs.SkipAll
+			}
+			return nil
+		})
+	}
 	if pending, err := ReadPending(s.cfg.StorageDir); err == nil {
 		status.Pending = pending
 	}
@@ -173,13 +243,23 @@ func (s *Service) Create(ctx context.Context, w io.Writer, passphrase string) er
 		WorkDir:        s.cfg.StorageDir,
 		TLSDir:         s.cfg.TLSDir,
 		ConfigPath:     s.cfg.ConfigPath,
+		PluginsDir:     s.cfg.PluginsDir,
 		KeyFingerprint: s.fingerprint(),
 		Instance:       instance,
 		Version:        s.cfg.Version,
 		SchemaVersion:  schema,
 		Passphrase:     passphrase,
 		Now:            s.cfg.Now,
+		Log:            s.cfg.Log,
 	})
+}
+
+// Instance reports how this host is reached, for the slug in an archive's name.
+func (s *Service) Instance(ctx context.Context) string {
+	if s.cfg.Instance == nil {
+		return ""
+	}
+	return s.cfg.Instance(ctx)
 }
 
 // Stage validates an uploaded archive and lays it out for the next start.
@@ -195,6 +275,7 @@ func (s *Service) Stage(ctx context.Context, r io.Reader, passphrase, actor stri
 		StorageDir:     s.cfg.StorageDir,
 		DatabasePath:   s.cfg.DatabasePath,
 		TLSDir:         s.cfg.TLSDir,
+		PluginsDir:     s.cfg.PluginsDir,
 		KeyFingerprint: s.fingerprint(),
 		MaxSchema:      s.cfg.MaxSchema,
 		Verify:         s.cfg.VerifyDatabase,

@@ -19,6 +19,17 @@ import (
 	"strings"
 	"syscall"
 
+	// The timezone database, compiled in.
+	//
+	// The container image is alpine with ca-certificates and nothing else, so
+	// there is no /usr/share/zoneinfo for time.LoadLocation to read -- and the
+	// root filesystem is read-only, so installing one is not an option either.
+	// Without this, every zone but UTC fails to load, and a backup schedule set
+	// to 04:00 America/Chicago would silently run at 04:00 UTC: an hour that is
+	// right for half the year and wrong for the other half, on a host nobody is
+	// watching. About 450 KB, which is the whole cost.
+	_ "time/tzdata"
+
 	"github.com/spoked/mcpd/internal/app"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/observability"

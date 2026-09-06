@@ -57,6 +57,12 @@ type Pending struct {
 type Placement struct {
 	Staged string `json:"staged"`
 	Target string `json:"target"`
+	// Mode is the permission bits the archive recorded, masked to the owner's.
+	// Zero leaves whatever staging wrote, which is 0600 and is right for
+	// everything but a plugin: the external runner refuses a plugin without its
+	// executable bit, so a restore that dropped it would come up with the
+	// integration configured and unable to start.
+	Mode uint32 `json:"mode,omitempty"`
 }
 
 // StageOptions is what staging needs to know about this host.
@@ -69,6 +75,14 @@ type StageOptions struct {
 	DatabasePath string
 	// TLSDir is where restored TLS material belongs.
 	TLSDir string
+	// PluginsDir is where restored out-of-process plugins belong.
+	//
+	// The restore merges into it per file rather than replacing it: a plugin
+	// this host has and the archive does not survives, because a directory an
+	// operator manages by hand is not something a restore should be able to
+	// empty. Empty here refuses an archive that carries plugins, rather than
+	// dropping them silently -- see targetFor.
+	PluginsDir string
 	// KeyFingerprint is this host's settings encryption key. An archive
 	// written under a different one is refused; see Stage.
 	KeyFingerprint string
@@ -132,13 +146,13 @@ func Stage(ctx context.Context, r io.Reader, opts StageOptions) (Pending, error)
 		return Pending{}, err
 	}
 
-	manifest, hashes, err := unpack(archive, staging)
+	manifest, hashes, modes, err := unpack(archive, staging)
 	if err != nil {
 		os.RemoveAll(staging)
 		return Pending{}, err
 	}
 
-	pending, err := validate(ctx, manifest, hashes, staging, opts)
+	pending, err := validate(ctx, manifest, hashes, modes, staging, opts)
 	if err != nil {
 		os.RemoveAll(staging)
 		return Pending{}, err
@@ -154,12 +168,19 @@ func Stage(ctx context.Context, r io.Reader, opts StageOptions) (Pending, error)
 }
 
 // unpack writes the archive's members into the staging directory and returns
-// what it found, along with each member's hash as written.
-func unpack(archive *tar.Reader, staging string) (Manifest, map[string]string, error) {
+// what it found, along with each member's hash as written and the permission
+// bits the archive recorded for it.
+//
+// A member that is not an ordinary file is skipped rather than unpacked. Create
+// writes none, but an archive is a file somebody hands this host, and a symlink
+// laid down here would place a later member outside the staging directory --
+// which safeName, checking names rather than following links, would not see.
+func unpack(archive *tar.Reader, staging string) (Manifest, map[string]string, map[string]uint32, error) {
 	var (
 		manifest Manifest
 		found    bool
 		hashes   = map[string]string{}
+		modes    = map[string]uint32{}
 	)
 
 	for {
@@ -169,41 +190,46 @@ func unpack(archive *tar.Reader, staging string) (Manifest, map[string]string, e
 		}
 		if err != nil {
 			if errors.Is(err, ErrPassphrase) {
-				return Manifest{}, nil, ErrPassphrase
+				return Manifest{}, nil, nil, ErrPassphrase
 			}
-			return Manifest{}, nil, fmt.Errorf("backup: read the archive: %w", err)
+			return Manifest{}, nil, nil, fmt.Errorf("backup: read the archive: %w", err)
 		}
 		if header.Typeflag != tar.TypeReg {
 			continue
 		}
 		name, err := safeName(header.Name)
 		if err != nil {
-			return Manifest{}, nil, err
+			return Manifest{}, nil, nil, err
 		}
 
 		if name == manifestName {
 			if err := json.NewDecoder(archive).Decode(&manifest); err != nil {
-				return Manifest{}, nil, fmt.Errorf("backup: read the manifest: %w", err)
+				return Manifest{}, nil, nil, fmt.Errorf("backup: read the manifest: %w", err)
 			}
 			found = true
 			continue
 		}
 
-		digest, err := writeStaged(archive, filepath.Join(staging, filepath.FromSlash(name)))
+		// The owner's bits, whatever the archive said. Group and other, setuid
+		// and setgid are dropped here rather than trusted, because the mode in
+		// a tar header is a number in a file somebody uploaded.
+		mode := uint32(header.Mode) & 0o700
+		digest, err := writeStaged(archive, filepath.Join(staging, filepath.FromSlash(name)), mode)
 		if err != nil {
-			return Manifest{}, nil, err
+			return Manifest{}, nil, nil, err
 		}
 		hashes[name] = digest
+		modes[name] = mode
 	}
 
 	if !found {
-		return Manifest{}, nil, errors.New(
+		return Manifest{}, nil, nil, errors.New(
 			"backup: the archive has no manifest, so there is no way to say what it holds")
 	}
-	return manifest, hashes, nil
+	return manifest, hashes, modes, nil
 }
 
-func writeStaged(r io.Reader, dest string) (string, error) {
+func writeStaged(r io.Reader, dest string, mode uint32) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return "", fmt.Errorf("backup: create %s: %w", filepath.Dir(dest), err)
 	}
@@ -212,6 +238,14 @@ func writeStaged(r io.Reader, dest string) (string, error) {
 		return "", fmt.Errorf("backup: write %s: %w", dest, err)
 	}
 	defer f.Close()
+	if mode != 0 && mode != 0o600 {
+		// Chmod rather than the open mode, which the process umask would eat --
+		// and the umask taking the executable bit off a plugin is exactly the
+		// failure this is here to prevent.
+		if err := f.Chmod(fs.FileMode(mode)); err != nil {
+			return "", fmt.Errorf("backup: set permissions on %s: %w", dest, err)
+		}
+	}
 
 	digest := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(f, digest), r); err != nil {
@@ -231,6 +265,7 @@ func validate(
 	ctx context.Context,
 	manifest Manifest,
 	hashes map[string]string,
+	modes map[string]uint32,
 	staging string,
 	opts StageOptions,
 ) (Pending, error) {
@@ -267,7 +302,7 @@ func validate(
 		if err != nil {
 			return Pending{}, err
 		}
-		files = append(files, Placement{Staged: want.Name, Target: target})
+		files = append(files, Placement{Staged: want.Name, Target: target, Mode: modes[want.Name]})
 	}
 
 	// The placements, not the manifest's list: a database the manifest carries
@@ -305,6 +340,11 @@ func targetFor(name string, opts StageOptions) (string, error) {
 			return "", errors.New("backup: the archive holds TLS material, but this host has nowhere to put it")
 		}
 		return filepath.Join(opts.TLSDir, filepath.FromSlash(strings.TrimPrefix(name, tlsPrefix))), nil
+	case strings.HasPrefix(name, pluginsPrefix):
+		if opts.PluginsDir == "" {
+			return "", errors.New("backup: the archive holds plugins, but this host has nowhere to put them")
+		}
+		return filepath.Join(opts.PluginsDir, filepath.FromSlash(strings.TrimPrefix(name, pluginsPrefix))), nil
 	default:
 		return "", fmt.Errorf(
 			"backup: this build does not know where %s belongs, so it will not "+
@@ -422,6 +462,15 @@ func ApplyPending(storageDir, databasePath string, log *slog.Logger) error {
 		}
 		if err := movePath(staged, file.Target); err != nil {
 			return err
+		}
+		// Again after the move, because movePath falls back to a copy across
+		// filesystems and the copy creates at 0600. A plugin arriving without
+		// its executable bit is an integration that is configured and cannot
+		// start, which is a confusing way to come back from a restore.
+		if file.Mode != 0 && file.Mode != 0o600 {
+			if err := os.Chmod(file.Target, fs.FileMode(file.Mode)); err != nil {
+				return fmt.Errorf("backup: set permissions on %s: %w", file.Target, err)
+			}
 		}
 	}
 

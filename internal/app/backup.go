@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/spoked/mcpd/internal/backup"
 	"github.com/spoked/mcpd/internal/config"
+	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
 )
 
@@ -34,6 +36,10 @@ func (a *App) newBackupService(cfg *config.Config, db *sqlite.DB, log *slog.Logg
 		DatabasePath:   cfg.Storage.Path,
 		TLSDir:         cfg.TLSDir(),
 		ConfigPath:     cfg.Path(),
+		// The out-of-process plugins. They are executables an operator put on
+		// the host by hand, and an instance restored without them comes up
+		// configured for integrations that are not there.
+		PluginsDir:     cfg.PluginsDir(),
 		KeyFingerprint: func() string { return a.keyFingerprint },
 		SchemaVersion: func(ctx context.Context) int {
 			v, err := sqlite.SchemaVersion(ctx, db)
@@ -46,6 +52,35 @@ func (a *App) newBackupService(cfg *config.Config, db *sqlite.DB, log *slog.Logg
 		Instance:  a.publicURL,
 		Version:   Version,
 		Log:       log.With("component", "backup"),
+	})
+}
+
+// newBackupRunner wires the worker that takes backups without anybody asking.
+//
+// It reads the schedule and the passphrase per run rather than holding them, so
+// a change on the page takes effect at the next fire instead of the next
+// restart -- and it takes the trust pool as a function for the same reason a
+// plugin does: an operator can add a certificate while mcpd runs.
+func (a *App) newBackupRunner(log *slog.Logger) *backup.Runner {
+	return backup.NewRunner(backup.RunnerConfig{
+		Service: a.backups,
+		Store:   a.backupStore,
+		Schedule: func(ctx context.Context) backup.Schedule {
+			return backup.ParseSchedule(
+				a.settings.FieldBool(ctx, settings.KeyBackupScheduleEnabled),
+				a.settings.FieldString(ctx, settings.KeyBackupScheduleCadence),
+				a.settings.Int(ctx, settings.KeyBackupScheduleWeekday, 0),
+				a.settings.FieldString(ctx, settings.KeyBackupScheduleTime),
+				a.settings.FieldString(ctx, settings.KeyBackupScheduleTimezone),
+			)
+		},
+		Passphrase: func(ctx context.Context) string {
+			return a.settings.Secret(ctx, settings.KeyBackupPassphrase, "")
+		},
+		Pool:   func(context.Context) *x509.CertPool { return a.trustPool.get() },
+		Failed: a.notifyBackupFailed,
+		Log:    log.With("component", "backup-runner"),
+		Now:    time.Now,
 	})
 }
 

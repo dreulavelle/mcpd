@@ -9,6 +9,7 @@ package admin
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +86,18 @@ type Options struct {
 	// Nil leaves the routes answering "not configured" rather than offering a
 	// page whose every button fails.
 	Backup BackupService
+
+	// BackupDestinations is where archives are sent on a schedule, and the
+	// record of what happened when they were. Nil on a host with no encryption
+	// key, which cannot hold a destination's credential.
+	BackupDestinations BackupDestinations
+	// BackupRunner takes those backups. Nil leaves the run route answering
+	// "not configured".
+	BackupRunner BackupRunner
+	// TrustPool is this host's roots -- the system ones plus every certificate
+	// an operator added -- for reaching a NAS or a MinIO behind a company
+	// authority. A function because that set changes while mcpd runs.
+	TrustPool func() *x509.CertPool
 
 	// Metrics serves the Prometheus exposition format, or is nil when the
 	// endpoint is switched off. MetricsPublic serves it unauthenticated.
@@ -547,6 +560,21 @@ func (s *Server) routes() {
 	api("POST /api/backup", s.handleCreateBackup, auth.PermSystemWrite)
 	api("POST /api/backup/restore", s.handleStageRestore, auth.PermSystemWrite)
 	api("DELETE /api/backup/restore", s.handleCancelRestore, auth.PermSystemWrite)
+
+	// Where a backup goes without anybody pressing anything. The same right as
+	// the routes above, for the same reason: a destination receives every
+	// account, every grant and every stored credential this host has, so naming
+	// one is the same decision as taking an archive and carrying it out of the
+	// building.
+	api("GET /api/backup/destinations", s.handleListBackupDestinations, auth.PermSystemWrite)
+	api("POST /api/backup/destinations", s.handleAddBackupDestination, auth.PermSystemWrite)
+	api("GET /api/backup/destinations/{id}", s.handleGetBackupDestination, auth.PermSystemWrite)
+	api("PATCH /api/backup/destinations/{id}", s.handleUpdateBackupDestination, auth.PermSystemWrite)
+	api("DELETE /api/backup/destinations/{id}", s.handleRemoveBackupDestination, auth.PermSystemWrite)
+	api("POST /api/backup/destinations/{id}/test", s.handleTestBackupDestination, auth.PermSystemWrite)
+	api("POST /api/backup/run", s.handleRunBackup, auth.PermSystemWrite)
+	api("GET /api/backup/runs", s.handleListBackupRuns, auth.PermSystemWrite)
+	api("GET /api/backup/runs/{id}", s.handleGetBackupRun, auth.PermSystemWrite)
 
 	// The ChatGPT accounts tunnels connect with. Reading the list is an
 	// operator's business -- it holds no credential, only whether one is set --
