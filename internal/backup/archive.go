@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -56,7 +57,21 @@ const (
 	databaseName = "mcpd.db"
 	tlsPrefix    = "tls/"
 	configName   = "config.yaml"
+	// pluginsPrefix holds the out-of-process plugins. They are executables an
+	// operator put on the host by hand, so an instance restored without them
+	// comes up configured for integrations that are not there.
+	pluginsPrefix = "plugins/"
 )
+
+// MaxPluginBytes is how much the plugins directory may contribute to an archive
+// before Create refuses.
+//
+// A limit rather than none, because the directory is a bind mount an operator
+// writes into and nothing stops a build artefact, a core dump or a copy of a
+// container image landing in it. maxArchive already bounds what a restore will
+// read; without this the first anybody would know is a backup that cannot be
+// restored by the host that wrote it.
+const MaxPluginBytes = 512 << 20 // 512 MiB
 
 // maxArchive bounds what Open will read, so a hostile upload cannot ask this
 // host to allocate its way out of memory. Generous for a control plane whose
@@ -142,6 +157,15 @@ type Options struct {
 	SchemaVersion  int
 	Passphrase     string
 	Now            func() time.Time
+	// PluginsDir holds out-of-process plugins. Empty leaves them out, which is
+	// the right answer for a host that has none.
+	PluginsDir string
+	// MaxPluginBytes bounds what that directory may add. Zero takes the
+	// package's own MaxPluginBytes.
+	MaxPluginBytes int64
+	// Log records what was skipped. Optional: nothing here fails for want of a
+	// logger.
+	Log *slog.Logger
 }
 
 func (o Options) now() time.Time {
@@ -232,6 +256,10 @@ type member struct {
 	name     string
 	source   string
 	restored bool
+	// mode is the permission bits to record. Zero means 0600, which is what
+	// everything but a plugin gets; only a plugin has to be executable on the
+	// way back out. See writeMember.
+	mode int64
 }
 
 // collect decides what goes in, and hashes each member so the manifest can say
@@ -263,7 +291,91 @@ func collect(opts Options, snapshot string) ([]member, error) {
 			})
 		}
 	}
-	return members, nil
+
+	plugins, err := collectPlugins(opts)
+	if err != nil {
+		return nil, err
+	}
+	return append(members, plugins...), nil
+}
+
+// collectPlugins gathers the out-of-process plugins.
+//
+// Recursive and operator-managed, which is why it is the one part of collect
+// that walks rather than reading a flat directory -- and why it is the one part
+// that has to be careful about what it finds. A symlink written into a tar is a
+// write-outside primitive on the way back: safeName checks a member's own name
+// and has nothing to say about where a link points. So anything that is not an
+// ordinary file is skipped and named in the log, rather than silently not
+// travelling.
+func collectPlugins(opts Options) ([]member, error) {
+	if opts.PluginsDir == "" {
+		return nil, nil
+	}
+	budget := opts.MaxPluginBytes
+	if budget <= 0 {
+		budget = MaxPluginBytes
+	}
+
+	var (
+		out   []member
+		total int64
+	)
+	err := filepath.WalkDir(opts.PluginsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// A host with no plugins directory at all is not an error; it is
+			// the ordinary state of one that has never had an external plugin.
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("backup: read %s: %w", path, err)
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			if opts.Log != nil {
+				opts.Log.Warn("a backup left out something in the plugins directory "+
+					"that is not an ordinary file",
+					"path", path, "type", d.Type().String())
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("backup: read %s: %w", path, err)
+		}
+		total += info.Size()
+		if total > budget {
+			return fmt.Errorf(
+				"backup: the plugins directory %s holds more than %d MiB, which is "+
+					"more than a backup will carry. Move whatever does not belong to "+
+					"a plugin out of it and take the backup again",
+				opts.PluginsDir, budget>>20)
+		}
+
+		rel, err := filepath.Rel(opts.PluginsDir, path)
+		if err != nil {
+			return fmt.Errorf("backup: read %s: %w", path, err)
+		}
+		out = append(out, member{
+			name:   pluginsPrefix + filepath.ToSlash(rel),
+			source: path,
+			// Restored: an instance without its plugin binaries comes up
+			// configured for integrations that are not on the host.
+			restored: true,
+			// The owner's bits, and only those. A plugin has to keep its
+			// executable bit -- the external runner refuses one without it --
+			// and must not gain setuid, setgid, or anything for group or other
+			// because the machine it came from was careless.
+			mode: int64(info.Mode().Perm() & 0o700),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // writeBody builds the tarball inside the encryption.
@@ -326,10 +438,16 @@ func writeMember(tw *tar.Writer, m member) (FileInfo, error) {
 		return FileInfo{}, fmt.Errorf("backup: stat %s: %w", m.source, err)
 	}
 
-	// Mode 0600 for everything, not the mode on disk. A restored private key
-	// must not become world-readable because the source host was careless.
+	// 0600 unless the member said otherwise, and never the mode on disk by
+	// default: a restored private key must not become world-readable because
+	// the source host was careless. A plugin is the exception and says so, with
+	// its owner bits already masked; see collectPlugins.
+	mode := m.mode
+	if mode == 0 {
+		mode = 0o600
+	}
 	if err := tw.WriteHeader(&tar.Header{
-		Name: m.name, Mode: 0o600, Size: stat.Size(),
+		Name: m.name, Mode: mode, Size: stat.Size(),
 		ModTime: stat.ModTime().UTC(), Typeflag: tar.TypeReg,
 	}); err != nil {
 		return FileInfo{}, fmt.Errorf("backup: write header for %s: %w", m.name, err)
