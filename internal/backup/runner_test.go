@@ -29,6 +29,9 @@ type fakeStore struct {
 	// whether one has ever happened.
 	lastScheduled time.Time
 	everScheduled bool
+	// settled is signalled by FinishRun, so a test can wait for the worker to
+	// finish a run rather than sleeping until it probably has.
+	settled chan string
 	// failStart makes StartRun refuse, standing in for a row already running.
 	failStart bool
 	nextID    int
@@ -60,16 +63,27 @@ func (f *fakeStore) StartRun(_ context.Context, run Run) error {
 
 func (f *fakeStore) FinishRun(_ context.Context, run Run) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	settle := f.settled
+	found := false
 	for i := range f.runs {
 		if f.runs[i].ID == run.ID && f.runs[i].Status == StatusRunning {
 			started, trigger := f.runs[i].StartedAt, f.runs[i].Trigger
 			f.runs[i] = run
 			f.runs[i].StartedAt, f.runs[i].Trigger = started, trigger
-			return nil
+			found = true
+			break
 		}
 	}
-	return errors.New("no running row with that id")
+	f.mu.Unlock()
+
+	if !found {
+		return errors.New("no running row with that id")
+	}
+	if settle != nil {
+		// Outside the lock: the test reads the run back through this store.
+		settle <- run.ID
+	}
+	return nil
 }
 
 func (f *fakeStore) RecordDestination(_ context.Context, out DestinationOutcome) error {
@@ -99,12 +113,12 @@ func (f *fakeStore) LatestRun(context.Context) (Run, bool, error) {
 	return f.runs[len(f.runs)-1], true, nil
 }
 
-func (f *fakeStore) MarkInterrupted(_ context.Context, at time.Time) (int, error) {
+func (f *fakeStore) MarkInterrupted(_ context.Context, before, at time.Time) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n := 0
 	for i := range f.runs {
-		if f.runs[i].Status == StatusRunning {
+		if f.runs[i].Status == StatusRunning && f.runs[i].StartedAt.Before(before) {
 			f.runs[i].Status = StatusInterrupted
 			finished := at
 			f.runs[i].FinishedAt = &finished
@@ -330,6 +344,53 @@ func TestARunSendsOneArchiveToEveryEnabledDestination(t *testing.T) {
 	}
 }
 
+// A run asked for over the API is carried out by the worker.
+//
+// Trigger inserts the row and posts the id; the worker picks it up and does the
+// work. It is the one handoff in this package that crosses a goroutine, and
+// everything else here tests the two halves separately.
+func TestAManualRunIsCarriedOutByTheWorker(t *testing.T) {
+	h := newHarness(t, dest("dst_1", "nas", true))
+	h.store.settled = make(chan string, 1)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	// A timer that never fires, so nothing but the manual run wakes the loop.
+	// No clock, and therefore no sleeping: the test waits on the store.
+	h.runner.cfg.Timer = func(time.Duration) <-chan time.Time { return nil }
+
+	done := make(chan error, 1)
+	go func() { done <- h.runner.Run(ctx) }()
+
+	run, err := h.runner.Trigger(ctx, TriggerManual)
+	if err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+
+	select {
+	case id := <-h.store.settled:
+		if id != run.ID {
+			t.Fatalf("the worker settled %s, want %s", id, run.ID)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the worker never ran the backup that was asked for")
+	}
+
+	settled, _ := h.store.run(run.ID)
+	if settled.Status != StatusOK {
+		t.Errorf("status %q: %s", settled.Status, settled.Error)
+	}
+	if put, _ := h.transports["dst_1"].snapshot(); len(put) != 1 {
+		t.Errorf("the destination received %v", put)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("the worker stopped with %v", err)
+	}
+}
+
 // Some destinations and not others is 'partial', not 'failed'. There is a
 // backup; it is just not everywhere it should be.
 func TestARunThatReachesSomeDestinationsIsPartial(t *testing.T) {
@@ -507,11 +568,13 @@ func TestARunIsRefusedBeforeItStartsWhenThereIsNothingToDo(t *testing.T) {
 func TestARunInterruptedByACrashIsNotRecordedAsFailed(t *testing.T) {
 	h := newHarness(t, dest("dst_1", "nas", true))
 
-	// A row left running by a previous process.
-	run, err := h.runner.Trigger(t.Context(), TriggerManual)
-	if err != nil {
-		t.Fatalf("trigger: %v", err)
+	// A row left running by a previous process: it started before this runner
+	// was built, which is what tells the two apart.
+	stale := Run{
+		ID: "bkr_stale", StartedAt: h.now.Add(-time.Hour),
+		Trigger: TriggerSchedule, Status: StatusRunning,
 	}
+	h.store.runs = append(h.store.runs, stale)
 
 	// The worker starts, settles it, and stops when its context is cancelled.
 	ctx, cancel := context.WithCancel(t.Context())
@@ -520,7 +583,7 @@ func TestARunInterruptedByACrashIsNotRecordedAsFailed(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	settled, _ := h.store.run(run.ID)
+	settled, _ := h.store.run(stale.ID)
 	if settled.Status != StatusInterrupted {
 		t.Fatalf("status %q, want interrupted", settled.Status)
 	}
@@ -529,6 +592,39 @@ func TestARunInterruptedByACrashIsNotRecordedAsFailed(t *testing.T) {
 	}
 	if settled.Status == StatusFailed {
 		t.Error("an interrupted run was recorded as a failure")
+	}
+}
+
+// A backup asked for over the API while the worker is still starting is not
+// swept away by the worker's own startup sweep.
+//
+// The dashboard's listener and this worker both come up during App.Run, so
+// there is a window in which a run exists and nothing is watching the channel
+// yet. A sweep that took every running row would settle the run it is about to
+// be handed, and the operator who pressed the button would see it recorded as
+// interrupted by a process that had only just started.
+func TestTheStartupSweepLeavesARunThisProcessJustStarted(t *testing.T) {
+	h := newHarness(t, dest("dst_1", "nas", true))
+
+	// Asked for after the runner was built, which is the window in question.
+	h.now = h.now.Add(time.Second)
+	run, err := h.runner.Trigger(t.Context(), TriggerManual)
+	if err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := h.runner.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Still running, or already carried out -- the worker may pick the run out
+	// of the channel before it notices the cancelled context, and both of those
+	// are right. What must not happen is the sweep calling it interrupted.
+	settled, _ := h.store.run(run.ID)
+	if settled.Status == StatusInterrupted {
+		t.Errorf("the startup sweep settled a run this process had just been asked for")
 	}
 }
 

@@ -501,13 +501,19 @@ func (s *BackupStore) FinishRun(ctx context.Context, run backup.Run) error {
 	})
 }
 
-// MarkInterrupted settles every run a stopped process left behind.
+// MarkInterrupted settles runs a stopped process left behind.
 //
 // 'interrupted' rather than 'failed', because a run that was halfway through
 // may have uploaded to some destinations and not others. Indeterminate is not
 // terminal, and a reader told the backup failed would conclude nothing was
 // written.
-func (s *BackupStore) MarkInterrupted(ctx context.Context, at time.Time) (int, error) {
+//
+// `before` is when this process's runner was built, and it is in the WHERE
+// clause rather than assumed. The dashboard's listener and the backup worker
+// both start during App.Run, so a backup asked for over the API in that window
+// has a running row of its own -- and a sweep that took every running row would
+// settle the run it is about to carry out.
+func (s *BackupStore) MarkInterrupted(ctx context.Context, before, at time.Time) (int, error) {
 	var n int64
 	err := s.db.WriteTx(ctx, at.UnixMilli(), func(u *UnitOfWork) error {
 		res, err := u.exec(`
@@ -515,7 +521,8 @@ func (s *BackupStore) MarkInterrupted(ctx context.Context, at time.Time) (int, e
 			   SET status = 'interrupted', finished_at = ?,
 			       error = 'mcpd stopped while this backup was running. Some ' ||
 			               'destinations may hold it and some may not.'
-			 WHERE status = 'running'`, at.UnixMilli())
+			 WHERE status = 'running' AND started_at < ?`,
+			at.UnixMilli(), before.UnixMilli())
 		if err != nil {
 			return fmt.Errorf("sqlite: settle interrupted backup runs: %w", err)
 		}
