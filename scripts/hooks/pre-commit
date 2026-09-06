@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs the fixture check over what is about to be committed. Installed by
+# `make hooks`; see scripts/check-fixtures.sh for what it refuses and why.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+printf '%s\n' "$staged" | xargs sh scripts/check-fixtures.sh

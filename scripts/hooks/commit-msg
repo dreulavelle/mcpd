@@ -1,0 +1,22 @@
+#!/bin/sh
+# Refuses a commit message that names a machine or a customer.
+#
+# A tool that adds a Co-authored-by trailer takes the name from the machine it
+# runs on, and a machine on a corporate network is named after the company.
+# That is how a company's name, at a machine on its own network, reached
+# thirteen public commits. Trailers may name people at addresses that are not
+# private hostnames, and nothing else.
+msg="$1"
+if grep -q -E 'Co-authored-by:.*@[^ >]*\.(local|lan|corp|intranet)\b' "$msg"; then
+    echo "commit-msg: a Co-authored-by trailer names a machine on a private network."
+    echo "  Remove it, or set the tool's identity to a person at a public address."
+    exit 1
+fi
+terms_file=${MCPD_SENSITIVE_TERMS:-$HOME/.config/mcpd/sensitive-terms}
+if [ -f "$terms_file" ]; then
+    if grep -v -E '^\s*(#|$)' "$terms_file" | grep -q -i -F -f /dev/stdin "$msg"; then
+        echo "commit-msg: the message contains a term from $terms_file."
+        exit 1
+    fi
+fi
+exit 0

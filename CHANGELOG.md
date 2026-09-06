@@ -5,359 +5,359 @@
 
 ### Features
 
-* **web:** destinations, a schedule and a history on Backup & Restore ([8fc9596](https://github.com/dreulavelle/mcpd/commit/8fc9596d04310dd3ffc8f8c405e6632620eaf9f5))
+* **web:** destinations, a schedule and a history on Backup & Restore ([7795975](https://github.com/dreulavelle/mcpd/commit/7795975417341d23514e8cc41d7fe41de5166e8a))
 
 
 ### Fixes
 
-* **backup:** a refusal an operator reads is a sentence ([237a988](https://github.com/dreulavelle/mcpd/commit/237a98817758079295c3882a1e7e0cd94b1c8c4d))
-* **web:** a credential kept across an auth switch, and a gate on the wrong permission ([87e44ab](https://github.com/dreulavelle/mcpd/commit/87e44ab7f7416347eb83fd024c0b40aafc8396d0))
-* **web:** a credential that is not there, and a hook behind a short circuit ([c2cdc94](https://github.com/dreulavelle/mcpd/commit/c2cdc94b426afa5fdd4d76962d98a1c8f9d663ee))
-* **web:** stop the backup page claiming a host key it cannot vouch for ([1fa8122](https://github.com/dreulavelle/mcpd/commit/1fa8122f4182d343e0562b2dcb910eb17642cd6e))
-* **web:** three ways the backup page said something untrue ([e2945bd](https://github.com/dreulavelle/mcpd/commit/e2945bdec8d569613b5af43aee621effbb976e3a))
+* **backup:** a refusal an operator reads is a sentence ([3621af8](https://github.com/dreulavelle/mcpd/commit/3621af8822c378e52c0cc129af11632b51b7a3ca))
+* **web:** a credential kept across an auth switch, and a gate on the wrong permission ([127b88d](https://github.com/dreulavelle/mcpd/commit/127b88dfe50fa6caf20881a98e7ddae0e4d56147))
+* **web:** a credential that is not there, and a hook behind a short circuit ([2a6a935](https://github.com/dreulavelle/mcpd/commit/2a6a93519052dfea8af535f3cbcac443c8816f16))
+* **web:** stop the backup page claiming a host key it cannot vouch for ([c72330c](https://github.com/dreulavelle/mcpd/commit/c72330caa1f94e588ff513489dc940e98a0956e8))
+* **web:** three ways the backup page said something untrue ([e03eebb](https://github.com/dreulavelle/mcpd/commit/e03eebb31d68185fa4d3d5c7a66506b501aef186))
 
 
 ### Refactoring
 
-* **web:** let the catalog say when a backup day is worth asking for ([5bbedab](https://github.com/dreulavelle/mcpd/commit/5bbedab8a8c0f042aa79ca1a9d4bb15a0c459202))
-* **web:** one Technical details block, and drop two helpers nobody calls ([6b9bfea](https://github.com/dreulavelle/mcpd/commit/6b9bfea7276b5fb2d2db3498d634be2e47ace1aa))
+* **web:** let the catalog say when a backup day is worth asking for ([6c8cf36](https://github.com/dreulavelle/mcpd/commit/6c8cf360ebc4a306d88dfde1aeddc3284a2f3927))
+* **web:** one Technical details block, and drop two helpers nobody calls ([97aef25](https://github.com/dreulavelle/mcpd/commit/97aef25ecf33f81fde8c1c8682f7af94b6eecff1))
 
 
 ### Documentation
 
-* **backup:** name the control that forgets a pinned host key ([f7b8351](https://github.com/dreulavelle/mcpd/commit/f7b835163da8b548e407d8f2f56a5df33342bd52))
+* **backup:** name the control that forgets a pinned host key ([defdf32](https://github.com/dreulavelle/mcpd/commit/defdf32b9dcdb2883677248aeed69a54a57c4be8))
 
 ## [0.20.0](https://github.com/dreulavelle/mcpd/compare/v0.19.1...v0.20.0) (2026-09-06)
 
 
 ### Features
 
-* **backup:** send archives to destinations, on a schedule ([bbcd1c6](https://github.com/dreulavelle/mcpd/commit/bbcd1c62fd1d243cf07c88c91975ea3762d8956f))
-* **backup:** store destinations and the record of every run ([f6fe9f0](https://github.com/dreulavelle/mcpd/commit/f6fe9f09724082838cf63cc2d2c3ff25add59d09))
-* **backup:** the destination API, and the worker that uses it ([61ade26](https://github.com/dreulavelle/mcpd/commit/61ade26de292c5c13f812a95a4541d0336d86246))
-* **settings:** the backup schedule and the passphrase it seals with ([28c2abd](https://github.com/dreulavelle/mcpd/commit/28c2abdad8275863dc8dadbe3b6ae7d5845279b5))
+* **backup:** send archives to destinations, on a schedule ([17295ff](https://github.com/dreulavelle/mcpd/commit/17295ffae1c638890ca104908d132e1c4878fc51))
+* **backup:** store destinations and the record of every run ([948dc0a](https://github.com/dreulavelle/mcpd/commit/948dc0a7306f624ca111835c807545d14f803373))
+* **backup:** the destination API, and the worker that uses it ([1603a2a](https://github.com/dreulavelle/mcpd/commit/1603a2a4d931c5c339cb8794845c8fb15af2f4a2))
+* **settings:** the backup schedule and the passphrase it seals with ([f8ab1b5](https://github.com/dreulavelle/mcpd/commit/f8ab1b5bc01facb9e9acbae2c7cb881f271348b3))
 
 
 ### Fixes
 
-* **backup:** do not sweep a run this process has just been asked for ([dd07399](https://github.com/dreulavelle/mcpd/commit/dd07399991ec08a43201ee691b5ab883e4a98fc7))
-* **backup:** the first review round ([3453aba](https://github.com/dreulavelle/mcpd/commit/3453aba2d8876b3bceb84d9adc2e03d0e1c04bb1))
+* **backup:** do not sweep a run this process has just been asked for ([da45dbb](https://github.com/dreulavelle/mcpd/commit/da45dbb9de88d7188f4be3d71047306271f862a7))
+* **backup:** the first review round ([434c2a8](https://github.com/dreulavelle/mcpd/commit/434c2a8ac0c0dfb4ef370bc74eeae219f13433ef))
 
 
 ### Documentation
 
-* **backup:** destinations, the schedule, and what is kept ([4a27f9a](https://github.com/dreulavelle/mcpd/commit/4a27f9a703a473febc3935bfdffac9a6b9121256))
+* **backup:** destinations, the schedule, and what is kept ([d8faf77](https://github.com/dreulavelle/mcpd/commit/d8faf77914609760c158a0df71b0c9823a0b20c4))
 
 ## [0.19.1](https://github.com/dreulavelle/mcpd/compare/v0.19.0...v0.19.1) (2026-09-05)
 
 
 ### Fixes
 
-* **auth:** an existing account is offered the link before the registration policy is asked ([7ec71ad](https://github.com/dreulavelle/mcpd/commit/7ec71ad3a14977494a61ccd6503d4ea5c944838d))
+* **auth:** an existing account is offered the link before the registration policy is asked ([73afd76](https://github.com/dreulavelle/mcpd/commit/73afd76e75c210d1edd1d462ada3931e255c8f52))
 
 ## [0.19.0](https://github.com/dreulavelle/mcpd/compare/v0.18.0...v0.19.0) (2026-09-05)
 
 
 ### Features
 
-* **auth:** connect a provider at sign-in, and invite a person to sign in with one ([#133](https://github.com/dreulavelle/mcpd/issues/133)) ([7af4403](https://github.com/dreulavelle/mcpd/commit/7af440327c1ce1b281aaa365e6216389a4019683))
+* **auth:** connect a provider at sign-in, and invite a person to sign in with one ([#133](https://github.com/dreulavelle/mcpd/issues/133)) ([9d7d39e](https://github.com/dreulavelle/mcpd/commit/9d7d39ebd73547adb0b5d830035a00177622fdc0))
 
 ## [0.18.0](https://github.com/dreulavelle/mcpd/compare/v0.17.1...v0.18.0) (2026-09-05)
 
 
 ### Features
 
-* **web:** a masthead on the overview ([9b286ef](https://github.com/dreulavelle/mcpd/commit/9b286ef9fb1af69457c140abf9db149d5afce52d))
-* **web:** a sign-in panel that is the brand's own night ([d1fe44d](https://github.com/dreulavelle/mcpd/commit/d1fe44d774e831b2d3b7a9c9a8a0df43000b2a5f))
-* **web:** Nord palette, and the brand mark inside the console ([8b8e0f4](https://github.com/dreulavelle/mcpd/commit/8b8e0f4793b6bf9f10315d32fa29d79113e05780))
+* **web:** a masthead on the overview ([bbac8c6](https://github.com/dreulavelle/mcpd/commit/bbac8c6c4c0e6fdfaa0dda2233cae03f572ae8b3))
+* **web:** a sign-in panel that is the brand's own night ([512d69c](https://github.com/dreulavelle/mcpd/commit/512d69cc9e5748f09cdc2767acf81ad3cbdcc20f))
+* **web:** Nord palette, and the brand mark inside the console ([495dd76](https://github.com/dreulavelle/mcpd/commit/495dd76d02e3f16fbd874cc6296bebf4bc65a52a))
 
 ## [0.17.1](https://github.com/dreulavelle/mcpd/compare/v0.17.0...v0.17.1) (2026-09-05)
 
 
 ### Documentation
 
-* polish README and introduce matching mcpd branding ([#129](https://github.com/dreulavelle/mcpd/issues/129)) ([779756b](https://github.com/dreulavelle/mcpd/commit/779756b5dc3134690fa954d840e386cbcddc7e20))
+* polish README and introduce matching mcpd branding ([#129](https://github.com/dreulavelle/mcpd/issues/129)) ([d949cbb](https://github.com/dreulavelle/mcpd/commit/d949cbb33308d02eab2d9f93a08bebcddd50bba3))
 
 ## [0.17.0](https://github.com/dreulavelle/mcpd/compare/v0.16.0...v0.17.0) (2026-09-05)
 
 
 ### Features
 
-* **approvals:** a queue you can read, and the record behind it ([#124](https://github.com/dreulavelle/mcpd/issues/124)) ([70d838e](https://github.com/dreulavelle/mcpd/commit/70d838ed81469a4bcd0a3117d88374b96b4d27ea))
-* **audit:** a timeline of who did what ([#125](https://github.com/dreulavelle/mcpd/issues/125)) ([878793e](https://github.com/dreulavelle/mcpd/commit/878793ec9e22c7403fac1ac194af24d58e78e581))
-* **dashboard:** say what happened in plain words ([#120](https://github.com/dreulavelle/mcpd/issues/120)) ([1e8dc16](https://github.com/dreulavelle/mcpd/commit/1e8dc163021332d9a76fa73abc1a6319d0a412ad))
-* **overview:** a first screen that says what is happening ([#123](https://github.com/dreulavelle/mcpd/issues/123)) ([98c129e](https://github.com/dreulavelle/mcpd/commit/98c129eb1ad72558563187809f65483281c2c7b1))
+* **approvals:** a queue you can read, and the record behind it ([#124](https://github.com/dreulavelle/mcpd/issues/124)) ([dcf721e](https://github.com/dreulavelle/mcpd/commit/dcf721e356577dfa9f80bbb323e2d5e491c4f072))
+* **audit:** a timeline of who did what ([#125](https://github.com/dreulavelle/mcpd/issues/125)) ([b02029e](https://github.com/dreulavelle/mcpd/commit/b02029e3d7f37e9dfebb34b0a35d0bd974192c9a))
+* **dashboard:** say what happened in plain words ([#120](https://github.com/dreulavelle/mcpd/issues/120)) ([0107653](https://github.com/dreulavelle/mcpd/commit/01076533a6713c0b2871c13fada89b7d0ec6a6be))
+* **overview:** a first screen that says what is happening ([#123](https://github.com/dreulavelle/mcpd/issues/123)) ([b9a9f8c](https://github.com/dreulavelle/mcpd/commit/b9a9f8c69d4aabcf1b6ecd1ed7b7b8a717a68850))
 
 
 ### Fixes
 
-* **plugins:** removing a plugin forgets its settings ([#126](https://github.com/dreulavelle/mcpd/issues/126)) ([9ab22b0](https://github.com/dreulavelle/mcpd/commit/9ab22b09df7b0da1449f95b43bce7228467e9f1c))
-* **web:** a plugin is enabled or disabled with a switch, and removed in one line ([#127](https://github.com/dreulavelle/mcpd/issues/127)) ([ea0b930](https://github.com/dreulavelle/mcpd/commit/ea0b9307df4345692f72764a83ad73457c813d21))
+* **plugins:** removing a plugin forgets its settings ([#126](https://github.com/dreulavelle/mcpd/issues/126)) ([d8b73ef](https://github.com/dreulavelle/mcpd/commit/d8b73ef155205db7b267887b08502e5e80f5bc68))
+* **web:** a plugin is enabled or disabled with a switch, and removed in one line ([#127](https://github.com/dreulavelle/mcpd/issues/127)) ([ecd7ab7](https://github.com/dreulavelle/mcpd/commit/ecd7ab73be3f265467702018341bd55587c8b93c))
 
 
 ### Refactoring
 
-* **dashboard:** plain words on every page ([#122](https://github.com/dreulavelle/mcpd/issues/122)) ([83bf8ce](https://github.com/dreulavelle/mcpd/commit/83bf8ce07bfc42e43c3d771e8993d228cf857098))
+* **dashboard:** plain words on every page ([#122](https://github.com/dreulavelle/mcpd/issues/122)) ([a0bae08](https://github.com/dreulavelle/mcpd/commit/a0bae08480e377d3681708459574adc1e2e58585))
 
 ## [0.16.0](https://github.com/dreulavelle/mcpd/compare/v0.15.0...v0.16.0) (2026-09-05)
 
 
 ### Features
 
-* **bookstack:** read the knowledge base, and write to it under approval ([d6f5a6a](https://github.com/dreulavelle/mcpd/commit/d6f5a6a646e52c8c4bbae9f915f329f8cb1cea78))
+* **bookstack:** read the knowledge base, and write to it under approval ([e1963b6](https://github.com/dreulavelle/mcpd/commit/e1963b68f63f7d4f92a522aa5bf4448aaf01fb09))
 
 
 ### Fixes
 
-* **threecx:** two customers spelt the same are refused ([fe9ac3c](https://github.com/dreulavelle/mcpd/commit/fe9ac3c9893afb232a7ee29e0162800ef6bffbf7))
+* **threecx:** two customers spelt the same are refused ([0fcc66b](https://github.com/dreulavelle/mcpd/commit/0fcc66b21ecd0de7596e169cb8a0ada84358b38d))
 
 ## [0.15.0](https://github.com/dreulavelle/mcpd/compare/v0.14.1...v0.15.0) (2026-09-05)
 
 
 ### Features
 
-* **flowroute:** read your customers' carrier accounts, one key each ([5ce30fc](https://github.com/dreulavelle/mcpd/commit/5ce30fc067778df67a4e29ad9d3ea7753029ce66))
+* **flowroute:** read your customers' carrier accounts, one key each ([7d8dd99](https://github.com/dreulavelle/mcpd/commit/7d8dd993f18cb89776ab5c67323f47464fecc404))
 
 
 ### Documentation
 
-* write down the customer roster design, and table it ([e0f0516](https://github.com/dreulavelle/mcpd/commit/e0f05166aa94ce4329d6e26e910af6c60cc21afa))
+* write down the customer roster design, and table it ([f2a2376](https://github.com/dreulavelle/mcpd/commit/f2a23766a6a39cfa6a10000cef650d156ce7df7a))
 
 ## [0.14.1](https://github.com/dreulavelle/mcpd/compare/v0.14.0...v0.14.1) (2026-09-04)
 
 
 ### Fixes
 
-* **bandwidth:** read every 10DLC campaign, not the second page onward ([7eb0309](https://github.com/dreulavelle/mcpd/commit/7eb0309bb3ebd12549615777fbad748627b4f290))
+* **bandwidth:** read every 10DLC campaign, not the second page onward ([876df2d](https://github.com/dreulavelle/mcpd/commit/876df2dd19a938df66cf1c2767a742d8b9450f45))
 
 ## [0.14.0](https://github.com/dreulavelle/mcpd/compare/v0.13.0...v0.14.0) (2026-09-04)
 
 
 ### Features
 
-* **plugins:** a type can say how to use it ([96fc9c6](https://github.com/dreulavelle/mcpd/commit/96fc9c6bc4722b0e9968c1df037a3c361bd1b943))
-* **sdk:** an out-of-process plugin is a type, and its settings reach it ([cda9e24](https://github.com/dreulavelle/mcpd/commit/cda9e24614d97bacbd4a115209240cfbe94f4cf7))
-* **settings:** a plugin setting can be a table of rows ([e69327a](https://github.com/dreulavelle/mcpd/commit/e69327a578080f78a1d76901a9b0baceba58b885))
-* **threecx:** one instance serves many customers ([de38380](https://github.com/dreulavelle/mcpd/commit/de3838030f6aeeb4d1e8096dd2d5eeb08ec61342))
-* **threecx:** probe customers together, and prove the plugin through the host ([d8de4b0](https://github.com/dreulavelle/mcpd/commit/d8de4b0d2bfeb239f83cf15bfc2efaa3fbd1b9ba))
-* **threecx:** read a 3CX v20 phone system ([989260f](https://github.com/dreulavelle/mcpd/commit/989260f4abdd2386bf2fb7702befa4063824d4ef))
-* **threecx:** read the support bundle as a digest, as a last resort ([be72fc8](https://github.com/dreulavelle/mcpd/commit/be72fc81600d6eb29188c33d6c8d0891829211c1))
-* **threecx:** read what the phone system is refusing, and remote connectivity ([bed47ff](https://github.com/dreulavelle/mcpd/commit/bed47ff005ea8f369fb834dc07711ba7e2da22ae))
+* **plugins:** a type can say how to use it ([32efcd9](https://github.com/dreulavelle/mcpd/commit/32efcd9f50f5c9acd145ac70b4f01daf08151f04))
+* **sdk:** an out-of-process plugin is a type, and its settings reach it ([e785fa9](https://github.com/dreulavelle/mcpd/commit/e785fa919ea763e36404145a8c327bac265527e5))
+* **settings:** a plugin setting can be a table of rows ([71c8aee](https://github.com/dreulavelle/mcpd/commit/71c8aeea31c14fb5f550067dcf52ddde233f4659))
+* **threecx:** one instance serves many customers ([2c42250](https://github.com/dreulavelle/mcpd/commit/2c42250adf3a35a0c7781ed142c96163fa310d5c))
+* **threecx:** probe customers together, and prove the plugin through the host ([89634df](https://github.com/dreulavelle/mcpd/commit/89634df4e2f304701882bc26cfed497b42dfde92))
+* **threecx:** read a 3CX v20 phone system ([402de9a](https://github.com/dreulavelle/mcpd/commit/402de9ae763084128fe886b2c36e5af4592e9bd5))
+* **threecx:** read the support bundle as a digest, as a last resort ([5486dc3](https://github.com/dreulavelle/mcpd/commit/5486dc3978e2f13e1c2d6dc99ff393ab4e6f6b64))
+* **threecx:** read what the phone system is refusing, and remote connectivity ([2ab0327](https://github.com/dreulavelle/mcpd/commit/2ab0327f080b3fa5086b7e4ca887b267149bac1a))
 
 
 ### Fixes
 
-* **settings:** an https address reads without its scheme ([9ba6647](https://github.com/dreulavelle/mcpd/commit/9ba6647cc50738ff0c05dc0dcb4a1623808e79e4))
-* **threecx:** a port is part of the address, and a trailing slash is not ([5432868](https://github.com/dreulavelle/mcpd/commit/543286863c41beae29eabe803087fc476e79a9e7))
-* **threecx:** an unknown customer says where to add it ([9bbf7b5](https://github.com/dreulavelle/mcpd/commit/9bbf7b5f31a0246786553c6c4770c384222db495))
-* **threecx:** reach a customer's phone system only when asked ([e3fe9b9](https://github.com/dreulavelle/mcpd/commit/e3fe9b920b2fb5b5613cf090103786085a0fcbee))
-* **threecx:** read a capture's state under the lock that guards it ([350608e](https://github.com/dreulavelle/mcpd/commit/350608ea45208b059b63efcf07a03a1d3a34012a))
-* **threecx:** say what it does in a sentence ([aa62a99](https://github.com/dreulavelle/mcpd/commit/aa62a99f638f8adfbf9efe23fb25ac230e9850ec))
+* **settings:** an https address reads without its scheme ([2cef303](https://github.com/dreulavelle/mcpd/commit/2cef303e23c69feaa06cd907ab0522ec89f94166))
+* **threecx:** a port is part of the address, and a trailing slash is not ([7a92da2](https://github.com/dreulavelle/mcpd/commit/7a92da2276c963619e10827e48ebe3cb5ad1a0bf))
+* **threecx:** an unknown customer says where to add it ([4ab34ea](https://github.com/dreulavelle/mcpd/commit/4ab34eae77bdfbd3bddeca426b5ca1e83723fa3b))
+* **threecx:** reach a customer's phone system only when asked ([4de4666](https://github.com/dreulavelle/mcpd/commit/4de4666b80db1da4af90aeed3d519928b35a7c5f))
+* **threecx:** read a capture's state under the lock that guards it ([53a8054](https://github.com/dreulavelle/mcpd/commit/53a805485b55f4f2e8d7f82e4365f6ce15547190))
+* **threecx:** say what it does in a sentence ([b100fbd](https://github.com/dreulavelle/mcpd/commit/b100fbd1321ad4ba72ee89a7773e88695998a3a3))
 
 ## [0.13.0](https://github.com/dreulavelle/mcpd/compare/v0.12.0...v0.13.0) (2026-09-03)
 
 
 ### Features
 
-* **auth:** editable roles, per-plugin grants, and additive groups ([8fb423b](https://github.com/dreulavelle/mcpd/commit/8fb423b73cc0adb580b99e1b95368d7dc436bf3c))
-* **tunnel:** an account owns its workspaces, and a tunnel may belong to several accounts ([cc53897](https://github.com/dreulavelle/mcpd/commit/cc53897516745e70a4f6efb6edc473b81a0bff6d))
-* **tunnel:** making a tunnel is one call, and the host supplies the workspaces ([655c387](https://github.com/dreulavelle/mcpd/commit/655c38725d8e20dfad6fed9bea9ccecee5b877c7))
-* **tunnel:** one authority per tunnel, and the account that owns it is a fact ([a0cdaf3](https://github.com/dreulavelle/mcpd/commit/a0cdaf33d2e67b818f96ac71f3b5a64a21e101cc))
-* **web:** a Clients page for reaching this host from Claude Code, Codex and an IDE ([acdbffc](https://github.com/dreulavelle/mcpd/commit/acdbffcd82f34db22ad0f7dd62b68fa63a4a3240))
-* **web:** a settings rail, and access pages that read as a set ([e1f7eda](https://github.com/dreulavelle/mcpd/commit/e1f7eda099887c8b39a00d6e56422090477fe668))
-* **web:** an unset address falls back to the host this page is on ([d553869](https://github.com/dreulavelle/mcpd/commit/d5538690be25fbd75be8ab34bc22c7a102979c31))
-* **web:** the Clients page is one panel ([7f0bf28](https://github.com/dreulavelle/mcpd/commit/7f0bf2898490c5b092b49f5fdd6b77105f5c68eb))
+* **auth:** editable roles, per-plugin grants, and additive groups ([40bd2fd](https://github.com/dreulavelle/mcpd/commit/40bd2fd164443e4d12141ac3f52b4665e9ca3041))
+* **tunnel:** an account owns its workspaces, and a tunnel may belong to several accounts ([f9547db](https://github.com/dreulavelle/mcpd/commit/f9547db9420df8d3ee73878463eecaa17f841579))
+* **tunnel:** making a tunnel is one call, and the host supplies the workspaces ([bd66a71](https://github.com/dreulavelle/mcpd/commit/bd66a7134eaf0549f6cd64b39ac5b740088c1d1f))
+* **tunnel:** one authority per tunnel, and the account that owns it is a fact ([3518863](https://github.com/dreulavelle/mcpd/commit/351886366dbb508baa44e4240c5d692b515793aa))
+* **web:** a Clients page for reaching this host from Claude Code, Codex and an IDE ([6729a3d](https://github.com/dreulavelle/mcpd/commit/6729a3d738b68255fa172726de178bcdf8a8af5b))
+* **web:** a settings rail, and access pages that read as a set ([61ab74c](https://github.com/dreulavelle/mcpd/commit/61ab74c12d3f822841282d6f4b2e8b113327a22c))
+* **web:** an unset address falls back to the host this page is on ([99cb6dc](https://github.com/dreulavelle/mcpd/commit/99cb6dc1aa39d41f201c2879ea00ab5c97323031))
+* **web:** the Clients page is one panel ([7b2f7a0](https://github.com/dreulavelle/mcpd/commit/7b2f7a06839e5a91d30881171dcbf20f67c8015e))
 
 
 ### Fixes
 
-* **tunnel:** a tunnel assigned to the wrong account is named as such, and moved with one press ([3e2ae4f](https://github.com/dreulavelle/mcpd/commit/3e2ae4f5936141e8becfbbe29b51fee9a9655b84))
-* **tunnel:** a tunnel OpenAI has already deleted can be removed here ([4307e92](https://github.com/dreulavelle/mcpd/commit/4307e9239f1614a5fa0d354db4fc96382f9912d1))
-* **tunnel:** say which of two things a refused create means ([3b87020](https://github.com/dreulavelle/mcpd/commit/3b87020d8f43ab1ed969fffafbdf67ae5ca8fbc4))
-* **web:** a client snippet never prints a bare path ([ecb2570](https://github.com/dreulavelle/mcpd/commit/ecb2570e8753d9ff13ee46cb0a5f2f30e3c1c0bd))
-* **web:** a plugin's diagnosis stays on its page; a table cell gets the first lines ([0eb4c6c](https://github.com/dreulavelle/mcpd/commit/0eb4c6c4fcbeb2f58414dfe681be1970a7dcf768))
-* **web:** a table shows the upstream's status number; the plugin's page shows the diagnosis ([8808334](https://github.com/dreulavelle/mcpd/commit/8808334ad9a1a3f8cb6651429a08c3c60338b6a2))
-* **web:** settings pages are centred like every other, in a wider column ([c862a54](https://github.com/dreulavelle/mcpd/commit/c862a54ceabf785691ae76e120d09c52eebaeea5))
-* **web:** settings pages take the full width, with the rail at the left edge ([9c3b150](https://github.com/dreulavelle/mcpd/commit/9c3b1503211811f7d00e9793fc39dd3c7c9b6e0d))
-* **web:** several tunnels for one plugin is not something to flag ([e04341e](https://github.com/dreulavelle/mcpd/commit/e04341efc1bca6cac4732eb66ab3c1e88a460d3b))
+* **tunnel:** a tunnel assigned to the wrong account is named as such, and moved with one press ([07ae8a5](https://github.com/dreulavelle/mcpd/commit/07ae8a5e5ab394662c9c7c86e38a9cc1b608c3fb))
+* **tunnel:** a tunnel OpenAI has already deleted can be removed here ([b7d69ad](https://github.com/dreulavelle/mcpd/commit/b7d69adb2cdba6ff72060ec56b7f45865f40352d))
+* **tunnel:** say which of two things a refused create means ([d2a68d7](https://github.com/dreulavelle/mcpd/commit/d2a68d7e20828d7787a54daebb7d85bf3940418d))
+* **web:** a client snippet never prints a bare path ([72dd3bc](https://github.com/dreulavelle/mcpd/commit/72dd3bcf69cbda893e09471f4e9ea1af424d94e5))
+* **web:** a plugin's diagnosis stays on its page; a table cell gets the first lines ([06fc66d](https://github.com/dreulavelle/mcpd/commit/06fc66d040fea4f166ef01802998f4fc6ed8efee))
+* **web:** a table shows the upstream's status number; the plugin's page shows the diagnosis ([5e48077](https://github.com/dreulavelle/mcpd/commit/5e480772dba6673cbf0f0ca1c20ea1e2c7ecf994))
+* **web:** settings pages are centred like every other, in a wider column ([004643e](https://github.com/dreulavelle/mcpd/commit/004643ed8263056bd11f9ecc636163f277e51ccc))
+* **web:** settings pages take the full width, with the rail at the left edge ([c490cae](https://github.com/dreulavelle/mcpd/commit/c490caeedaf48e7e55a2b81be47b0b4f9416c9bd))
+* **web:** several tunnels for one plugin is not something to flag ([72b24b6](https://github.com/dreulavelle/mcpd/commit/72b24b6a91d6382e8ff8b1aff4a344cf6cb21e17))
 
 ## [0.12.0](https://github.com/dreulavelle/mcpd/compare/v0.11.0...v0.12.0) (2026-09-02)
 
 
 ### Features
 
-* **tunnel:** supervise a tunnel, and stop taking "connected" at its word ([ca20173](https://github.com/dreulavelle/mcpd/commit/ca20173570271e2fa690d1ececf26944c1d3cb1d))
-* **web:** a tunnel's detail as a sheet, metrics behind the bars, and the calls that explain them ([4a4027a](https://github.com/dreulavelle/mcpd/commit/4a4027a77b7366612f389f8d15bf0c729d1c0ffc))
-* **web:** the tunnels page as a list and an inspector ([9ad79ee](https://github.com/dreulavelle/mcpd/commit/9ad79eeca70c8ff6128da0b0428bd385f866f2c1))
-* **web:** tunnels by account, what each is doing, and the step ChatGPT needs ([b779caf](https://github.com/dreulavelle/mcpd/commit/b779cafe97ea74ecd9d4dbdc3cbaf80c3a37dcbe))
+* **tunnel:** supervise a tunnel, and stop taking "connected" at its word ([5d1ba98](https://github.com/dreulavelle/mcpd/commit/5d1ba98292d81819d156c5cd1557256a33f395eb))
+* **web:** a tunnel's detail as a sheet, metrics behind the bars, and the calls that explain them ([be76d46](https://github.com/dreulavelle/mcpd/commit/be76d46a8dce9cfa45c42674cf08a75f28ee4c20))
+* **web:** the tunnels page as a list and an inspector ([da595f0](https://github.com/dreulavelle/mcpd/commit/da595f01cbc7e6e7e6f85179b4f29c9ecb14e210))
+* **web:** tunnels by account, what each is doing, and the step ChatGPT needs ([684f165](https://github.com/dreulavelle/mcpd/commit/684f165c87aa3a9fadd9b49302124b22a72df044))
 
 
 ### Fixes
 
-* **tunnel:** report a rejected key once ([9fb9d1f](https://github.com/dreulavelle/mcpd/commit/9fb9d1f601e0b423683c3f7d17cb185211a8cd4f))
-* **tunnel:** say what a refused key means, in one breath, and stop calling an idle connector unattached ([aa7f018](https://github.com/dreulavelle/mcpd/commit/aa7f0183c1cebfedadae377c8f010d6a218a5946))
+* **tunnel:** report a rejected key once ([71af191](https://github.com/dreulavelle/mcpd/commit/71af1917a4df6c98c2d91b707c773e95cec55a39))
+* **tunnel:** say what a refused key means, in one breath, and stop calling an idle connector unattached ([b77fff2](https://github.com/dreulavelle/mcpd/commit/b77fff2662e9d4bce7bcd6d181e2bb5d971d74ed))
 
 ## [0.11.0](https://github.com/dreulavelle/mcpd/compare/v0.10.0...v0.11.0) (2026-09-02)
 
 
 ### Features
 
-* **web:** a command palette and keyboard shortcuts ([0ee7f51](https://github.com/dreulavelle/mcpd/commit/0ee7f51834954d06a9f99678b63dc8c269afc707))
-* **web:** choose an appearance, or keep following the system ([504d9cb](https://github.com/dreulavelle/mcpd/commit/504d9cb04d9e66793bf75fe04b1b8fe2ba481e1f))
-* **web:** find a tool, follow a plugin to its calls, and keep a log line ([4773d46](https://github.com/dreulavelle/mcpd/commit/4773d46d0c91af38dc3feebf42e65faaf48a7cca))
-* **web:** the console's own confirmation, a warning before the session ends, and audit filters ([0147ac9](https://github.com/dreulavelle/mcpd/commit/0147ac9c91e355327b0efef6eddfcb81367b01f2))
-* **web:** titles that say where you are, a way past the sidebar, and a plugin finder ([515aaf8](https://github.com/dreulavelle/mcpd/commit/515aaf896f7f26d3594f06e4b39a31835f442b8d))
-* **web:** what each account may actually do, and keys that can be re-scoped ([17a2c00](https://github.com/dreulavelle/mcpd/commit/17a2c00451e0efdd2ab414ddfda757be3e402fe3))
-* **web:** what needs attention, first, and filters that live in the address ([3436e92](https://github.com/dreulavelle/mcpd/commit/3436e92a2bfb8f262bb7fe65e1baff083b5d3c8b))
+* **web:** a command palette and keyboard shortcuts ([9a91d05](https://github.com/dreulavelle/mcpd/commit/9a91d05bce4c4c9c8569e487852b972fc45862fe))
+* **web:** choose an appearance, or keep following the system ([912b288](https://github.com/dreulavelle/mcpd/commit/912b2883cf46cc2dddcb824fbeeac3549dccfa21))
+* **web:** find a tool, follow a plugin to its calls, and keep a log line ([9a18d0f](https://github.com/dreulavelle/mcpd/commit/9a18d0f9ff7eeea5dec84dcb97a72557aded7ab3))
+* **web:** the console's own confirmation, a warning before the session ends, and audit filters ([aa0d0d8](https://github.com/dreulavelle/mcpd/commit/aa0d0d85bf52708b6606591aced5701f367d0b3b))
+* **web:** titles that say where you are, a way past the sidebar, and a plugin finder ([c28d45f](https://github.com/dreulavelle/mcpd/commit/c28d45fd0329fe170a94005fe7c68a80db34a741))
+* **web:** what each account may actually do, and keys that can be re-scoped ([48ba9e5](https://github.com/dreulavelle/mcpd/commit/48ba9e5973380cba58e718a1c29a7229baf675c7))
+* **web:** what needs attention, first, and filters that live in the address ([6063af6](https://github.com/dreulavelle/mcpd/commit/6063af6dbd08bbc6eb927f7cd1cece9d9fe2af4d))
 
 ## [0.10.0](https://github.com/dreulavelle/mcpd/compare/v0.9.1...v0.10.0) (2026-09-02)
 
 
 ### Features
 
-* **auth:** a group may take capabilities away ([bb18bc1](https://github.com/dreulavelle/mcpd/commit/bb18bc1324f90ff211b01c4512eed4853a593d0d))
-* **bandwidth:** disconnect detail, and port-out passcodes behind a capability ([7a24cad](https://github.com/dreulavelle/mcpd/commit/7a24cade78e9c45bd5ebee0bdb21dc7095a4ab46))
-* **bandwidth:** per-number reads, line records, and Insights call events ([422ddc9](https://github.com/dreulavelle/mcpd/commit/422ddc9433e23f3a261d497dcd524a2765275408))
-* **bandwidth:** read port-outs and account entitlements ([83782e4](https://github.com/dreulavelle/mcpd/commit/83782e4617b2195f9fc91d2e3edfae5255d34775))
-* **textable:** read a Textable instance as a service account ([2a8b704](https://github.com/dreulavelle/mcpd/commit/2a8b704e10bbf26a694522cbd8a42d7eaa542df6))
+* **auth:** a group may take capabilities away ([9d16b43](https://github.com/dreulavelle/mcpd/commit/9d16b43ac1b22e202441c973854deb50d782a2ef))
+* **bandwidth:** disconnect detail, and port-out passcodes behind a capability ([8574849](https://github.com/dreulavelle/mcpd/commit/85748491e67f39dd8e81797e38051cc3f5249910))
+* **bandwidth:** per-number reads, line records, and Insights call events ([65cfe09](https://github.com/dreulavelle/mcpd/commit/65cfe0923d274bd2ac74d05ef62e7af8337bbbb8))
+* **bandwidth:** read port-outs and account entitlements ([3b1d908](https://github.com/dreulavelle/mcpd/commit/3b1d90839b6d3944c937b9dc8fa5e151dfddbfe0))
+* **textable:** read a Textable instance as a service account ([20205c8](https://github.com/dreulavelle/mcpd/commit/20205c89cb31d0e4ac8628728a3bde0be14f156b))
 
 
 ### Fixes
 
-* **auth:** a group ceiling may not strand the host without an administrator ([2f6fb81](https://github.com/dreulavelle/mcpd/commit/2f6fb812758e93e43ad469e53de597cc15ec8183))
-* **auth:** a group must not widen a subject's own grant ([904ed45](https://github.com/dreulavelle/mcpd/commit/904ed45a0a48d5a0f17e099445cbc1ac14eeb61d))
-* **auth:** the console draws its controls from what a session may actually do ([f5dc3fd](https://github.com/dreulavelle/mcpd/commit/f5dc3fdd59f6334791b0c409a46fcce34c455cdc))
-* **bandwidth:** read 10DLC from the API that serves it ([b5a24f6](https://github.com/dreulavelle/mcpd/commit/b5a24f6583733735d12f7fad8fabe9d2abbf05b2))
-* **bandwidth:** read a disconnect order's notes from the path the allow-list knows ([58d5efe](https://github.com/dreulavelle/mcpd/commit/58d5efe6b0e9ae1dcac72da54f423f314b68205b))
-* **textable:** a degraded instance is an answer, not a failed start ([cb12583](https://github.com/dreulavelle/mcpd/commit/cb12583ddb92bf1445970247869a0e359f668d1a))
-* **textable:** describe the token this integration actually takes ([7f64250](https://github.com/dreulavelle/mcpd/commit/7f64250ce5f0a13fa2c29b81d036877fd8cbd3d0))
-* **web:** an expired session returns to the sign-in form ([3fde267](https://github.com/dreulavelle/mcpd/commit/3fde2678425d5e4a4b2620482d32db1d9dce6491))
-* **web:** editing a ChatGPT account keeps its stored admin key ([c894651](https://github.com/dreulavelle/mcpd/commit/c89465189839ff5c0534e87b544da329a1f35b54))
-* **web:** smaller dashboard corrections ([440fde6](https://github.com/dreulavelle/mcpd/commit/440fde631da813d6464cbc43cadcc6ecfa3589f5))
-* **web:** the activity list keeps the pages it was asked for ([2d0722f](https://github.com/dreulavelle/mcpd/commit/2d0722fd4d4defcae743b5537e5d46cc891051e2))
+* **auth:** a group ceiling may not strand the host without an administrator ([00e3b13](https://github.com/dreulavelle/mcpd/commit/00e3b13ad94b96f3e6b19afc7a5830698909a93b))
+* **auth:** a group must not widen a subject's own grant ([c1d49df](https://github.com/dreulavelle/mcpd/commit/c1d49df7793fecb6b6f6ec710ae0e0cf6afff51f))
+* **auth:** the console draws its controls from what a session may actually do ([16a2592](https://github.com/dreulavelle/mcpd/commit/16a25924f4e79d8a9ec9f7abb871a56c61efe3b4))
+* **bandwidth:** read 10DLC from the API that serves it ([6f173bb](https://github.com/dreulavelle/mcpd/commit/6f173bb868e2cd9d79faa66d32865cfcdca77d3b))
+* **bandwidth:** read a disconnect order's notes from the path the allow-list knows ([b42b6ce](https://github.com/dreulavelle/mcpd/commit/b42b6ce2e878d3c1f94c26347292e13e20f997d3))
+* **textable:** a degraded instance is an answer, not a failed start ([8f6d0d6](https://github.com/dreulavelle/mcpd/commit/8f6d0d60c2b89aa97e29b3d98dc004cc475b8d93))
+* **textable:** describe the token this integration actually takes ([20b8226](https://github.com/dreulavelle/mcpd/commit/20b82269e7c3fa37dc88044442eee78322a6b454))
+* **web:** an expired session returns to the sign-in form ([4eba7cf](https://github.com/dreulavelle/mcpd/commit/4eba7cf89c1f1f59b27a7cfe23f1a145012d1a62))
+* **web:** editing a ChatGPT account keeps its stored admin key ([ed0ca3b](https://github.com/dreulavelle/mcpd/commit/ed0ca3b37936805bde12d4d4a182fc0bcabc6b1d))
+* **web:** smaller dashboard corrections ([6676aea](https://github.com/dreulavelle/mcpd/commit/6676aea22b362bab5c0807e3b84a5f60ba7b012f))
+* **web:** the activity list keeps the pages it was asked for ([dbb36ce](https://github.com/dreulavelle/mcpd/commit/dbb36ce878fcd0f58f6dd68adb6a9ca85c11d3fd))
 
 ## [0.9.1](https://github.com/dreulavelle/mcpd/compare/v0.9.0...v0.9.1) (2026-09-01)
 
 
 ### Fixes
 
-* **tunnel:** let two ChatGPT accounts share one plugin ([6fafb87](https://github.com/dreulavelle/mcpd/commit/6fafb874a766da5bcb7822a81ddda36ffccc9a7b))
-* **tunnel:** offer only the selected account's workspaces, and stop refetching them ([ad85a92](https://github.com/dreulavelle/mcpd/commit/ad85a92d8c94068f8972d607633d56732a82cc55))
-* **tunnel:** show an OpenAI refusal as a page, and say what it actually means ([#108](https://github.com/dreulavelle/mcpd/issues/108)) ([6838948](https://github.com/dreulavelle/mcpd/commit/6838948d5f680b988061567141a5007d710d4c44))
+* **tunnel:** let two ChatGPT accounts share one plugin ([f10388c](https://github.com/dreulavelle/mcpd/commit/f10388cfa82708e12083b819ee1c640cdd5ede6c))
+* **tunnel:** offer only the selected account's workspaces, and stop refetching them ([aaf138a](https://github.com/dreulavelle/mcpd/commit/aaf138adb1eccc5006361c6ae288d3664c527de8))
+* **tunnel:** show an OpenAI refusal as a page, and say what it actually means ([#108](https://github.com/dreulavelle/mcpd/issues/108)) ([5d47e38](https://github.com/dreulavelle/mcpd/commit/5d47e38c5ab5c55142c2c6c0644f4c7442db6d76))
 
 ## [0.9.0](https://github.com/dreulavelle/mcpd/compare/v0.8.0...v0.9.0) (2026-08-31)
 
 
 ### Features
 
-* **bandwidth:** read a Bandwidth estate — numbers, porting, messaging and 10DLC ([#106](https://github.com/dreulavelle/mcpd/issues/106)) ([11f6147](https://github.com/dreulavelle/mcpd/commit/11f614788d8282a513dc4dc3299178affaec6750))
+* **bandwidth:** read a Bandwidth estate — numbers, porting, messaging and 10DLC ([#106](https://github.com/dreulavelle/mcpd/issues/106)) ([cf24d91](https://github.com/dreulavelle/mcpd/commit/cf24d91bce51c01d34d079539bb5c2277b945762))
 
 ## [0.8.0](https://github.com/dreulavelle/mcpd/compare/v0.7.1...v0.8.0) (2026-08-31)
 
 
 ### Features
 
-* **notify:** a Discord shape that says how much attention it wants ([2a59d4e](https://github.com/dreulavelle/mcpd/commit/2a59d4e2989e1db4ef4039dae48960b0800ca025))
-* **observability:** keep the log in a file that outlives the container ([6f6f330](https://github.com/dreulavelle/mcpd/commit/6f6f330d03003ee4d543441b1e8da4efdb0a9816))
-* **tunnels:** tell somebody when a connector stops ([b67f4b4](https://github.com/dreulavelle/mcpd/commit/b67f4b48c20d9a9030a03c693a0b8d2e8a07d455))
+* **notify:** a Discord shape that says how much attention it wants ([c640947](https://github.com/dreulavelle/mcpd/commit/c64094788c1b1e028f4c04520b19530f29af1586))
+* **observability:** keep the log in a file that outlives the container ([225b296](https://github.com/dreulavelle/mcpd/commit/225b296428641c6aa305c2658e83de5e09fdf382))
+* **tunnels:** tell somebody when a connector stops ([84a03e8](https://github.com/dreulavelle/mcpd/commit/84a03e84e918cb4f80f018b66abcb4e2567778b5))
 
 
 ### Fixes
 
-* **extremecloudiq:** stop reporting a sliding session window as the key's expiry ([6f36f23](https://github.com/dreulavelle/mcpd/commit/6f36f23f41daacbc474c6de2ec701d8df49917a4))
+* **extremecloudiq:** stop reporting a sliding session window as the key's expiry ([33241b0](https://github.com/dreulavelle/mcpd/commit/33241b0b1855c5bcf2da32f9ee9178e94a849f78))
 
 ## [0.7.1](https://github.com/dreulavelle/mcpd/compare/v0.7.0...v0.7.1) (2026-08-31)
 
 
 ### Documentation
 
-* say why a merge commit must not repeat the branch's subject ([d58b358](https://github.com/dreulavelle/mcpd/commit/d58b358f1ae45a3399055238b7f73e353070f47f))
+* say why a merge commit must not repeat the branch's subject ([274a4fd](https://github.com/dreulavelle/mcpd/commit/274a4fd5d652e59ee3596a4da03ed3f516ab3530))
 
 ## [0.7.0](https://github.com/dreulavelle/mcpd/compare/v0.6.1...v0.7.0) (2026-08-30)
 
 
 ### Features
 
-* reach MCP servers whose documents declare no credential, and import client configs ([#99](https://github.com/dreulavelle/mcpd/issues/99)) ([478359a](https://github.com/dreulavelle/mcpd/commit/478359a46059d16840434839bfa5afcae27d593c))
-* **backup:** take a whole instance as one encrypted file, and put it back ([0bc381d](https://github.com/dreulavelle/mcpd/commit/0bc381d5c12a4c33914c3f2671292a465392285c))
-* **mcpservers:** re-ask each remote server what it offers, on a timer ([312e91f](https://github.com/dreulavelle/mcpd/commit/312e91f825bd026f76128d7cc30103917ea6ad4d))
-* **observability:** record who called what, and show it ([4150e98](https://github.com/dreulavelle/mcpd/commit/4150e9845a1860cefd4ac120f97ee4bce29255de))
-* **approvals:** a window that stops the asking, and closes on its own ([618acf7](https://github.com/dreulavelle/mcpd/commit/618acf721ce4dc15ad331775b59ba21b1ca69b26))
-* **notify:** tell an operator what happened, and never ask them to approve it ([ad86393](https://github.com/dreulavelle/mcpd/commit/ad86393f85fe1b5d1be877f5e3d68b896f4a2e2b))
-* **registry:** a catalogue of your own, fetched from wherever you keep it ([42c7aa2](https://github.com/dreulavelle/mcpd/commit/42c7aa2c5eccdc9055f8f2566413c7c485f97462))
+* reach MCP servers whose documents declare no credential, and import client configs ([#99](https://github.com/dreulavelle/mcpd/issues/99)) ([031c653](https://github.com/dreulavelle/mcpd/commit/031c6538f0587144901b6479ec9fdee39fe5156d))
+* **backup:** take a whole instance as one encrypted file, and put it back ([4f4e91c](https://github.com/dreulavelle/mcpd/commit/4f4e91c86bda0c9f8e0a9cf2c49078e3b61f460c))
+* **mcpservers:** re-ask each remote server what it offers, on a timer ([d1d1b6d](https://github.com/dreulavelle/mcpd/commit/d1d1b6d3e920a278bb8fb5404e489dcdd0c1a9eb))
+* **observability:** record who called what, and show it ([7ff8b03](https://github.com/dreulavelle/mcpd/commit/7ff8b03de63d47a091493964847b04cbaaf9d57d))
+* **approvals:** a window that stops the asking, and closes on its own ([68b11b1](https://github.com/dreulavelle/mcpd/commit/68b11b1eceae1bf80b53d348007a2685974e9a36))
+* **notify:** tell an operator what happened, and never ask them to approve it ([61976c4](https://github.com/dreulavelle/mcpd/commit/61976c479c827dc8327380598efd0a6b09dd0fd3))
+* **registry:** a catalogue of your own, fetched from wherever you keep it ([14a6aeb](https://github.com/dreulavelle/mcpd/commit/14a6aeb59528450f3f6ad6039deb0d3d2cd53946))
 
 
 ### Fixes
 
-* **dashboard:** let the Settings tab be the only way into users and groups ([e12233a](https://github.com/dreulavelle/mcpd/commit/e12233a72219241bc5dc381c6900cca71b508a02))
-* three bugs a review of the last four features turned up, and their docs ([cf6ed42](https://github.com/dreulavelle/mcpd/commit/cf6ed4232c275de36f5a2251ec495feb9a083d19))
+* **dashboard:** let the Settings tab be the only way into users and groups ([9d1fc79](https://github.com/dreulavelle/mcpd/commit/9d1fc79ce3c11826e4919d8d1279cb4c09c662a6))
+* three bugs a review of the last four features turned up, and their docs ([482a64d](https://github.com/dreulavelle/mcpd/commit/482a64df67f6eb19ad7d89881d439c9b871f5f27))
 
 ## [0.6.1](https://github.com/dreulavelle/mcpd/compare/v0.6.0...v0.6.1) (2026-08-27)
 
 
 ### Fixes
 
-* **deploy:** make ./data before the first start, or the container cannot write ([#97](https://github.com/dreulavelle/mcpd/issues/97)) ([9a0493f](https://github.com/dreulavelle/mcpd/commit/9a0493f50c40a00d9c2a58fa3302cc12ff719336))
+* **deploy:** make ./data before the first start, or the container cannot write ([#97](https://github.com/dreulavelle/mcpd/issues/97)) ([e5e0b8b](https://github.com/dreulavelle/mcpd/commit/e5e0b8b34e7902c2aa5ea903a6e30aec75a76cf8))
 
 ## [0.6.0](https://github.com/dreulavelle/mcpd/compare/v0.5.0...v0.6.0) (2026-08-27)
 
 
 ### Features
 
-* **deploy:** run a published release without building it first ([#94](https://github.com/dreulavelle/mcpd/issues/94)) ([ebd0c41](https://github.com/dreulavelle/mcpd/commit/ebd0c4111675ad5f2681490841d4b0d66b6a8f32))
-* **extremecloudiq:** read an Extreme Networks estate, and say what is wrong with it ([#94](https://github.com/dreulavelle/mcpd/issues/94)) ([ebd0c41](https://github.com/dreulavelle/mcpd/commit/ebd0c4111675ad5f2681490841d4b0d66b6a8f32))
+* **deploy:** run a published release without building it first ([#94](https://github.com/dreulavelle/mcpd/issues/94)) ([47ad408](https://github.com/dreulavelle/mcpd/commit/47ad4082181ffdd7596bc7b780893efeafc72a4d))
+* **extremecloudiq:** read an Extreme Networks estate, and say what is wrong with it ([#94](https://github.com/dreulavelle/mcpd/issues/94)) ([47ad408](https://github.com/dreulavelle/mcpd/commit/47ad4082181ffdd7596bc7b780893efeafc72a4d))
 
 
 ### Fixes
 
-* **tunnel:** serialise a tunnel's lifecycle so two settings changes cannot race ([#95](https://github.com/dreulavelle/mcpd/issues/95)) ([04845fd](https://github.com/dreulavelle/mcpd/commit/04845fd83107fd0630014762a9c25b1768811c62))
+* **tunnel:** serialise a tunnel's lifecycle so two settings changes cannot race ([#95](https://github.com/dreulavelle/mcpd/issues/95)) ([27b851e](https://github.com/dreulavelle/mcpd/commit/27b851ed2b860753abbfaa87a10bee9c0bba986d))
 
 
 ### Documentation
 
-* **readme:** lead with what mcpd does for somebody, not how it is built ([#94](https://github.com/dreulavelle/mcpd/issues/94)) ([ebd0c41](https://github.com/dreulavelle/mcpd/commit/ebd0c4111675ad5f2681490841d4b0d66b6a8f32))
+* **readme:** lead with what mcpd does for somebody, not how it is built ([#94](https://github.com/dreulavelle/mcpd/issues/94)) ([47ad408](https://github.com/dreulavelle/mcpd/commit/47ad4082181ffdd7596bc7b780893efeafc72a4d))
 
 ## [0.5.0](https://github.com/dreulavelle/mcpd/compare/v0.4.1...v0.5.0) (2026-08-27)
 
 
 ### Features
 
-* **chatgpt:** connect several ChatGPT accounts, each with its own identity ([#91](https://github.com/dreulavelle/mcpd/issues/91)) ([d8f0f91](https://github.com/dreulavelle/mcpd/commit/d8f0f91eb65a8c6f7135dd20c9f396e9b84f71e7))
-* **marketplace:** hold the catalogues rather than proxying them ([#92](https://github.com/dreulavelle/mcpd/issues/92)) ([4ce4ac1](https://github.com/dreulavelle/mcpd/commit/4ce4ac1b19ccfa38ecf91b73aba951e66f7e28c4))
-* **settings:** one navigation, and groups that say where they live ([#93](https://github.com/dreulavelle/mcpd/issues/93)) ([01af420](https://github.com/dreulavelle/mcpd/commit/01af4205f7b498edac0906ee16d9a2ab4cc57fda))
+* **chatgpt:** connect several ChatGPT accounts, each with its own identity ([#91](https://github.com/dreulavelle/mcpd/issues/91)) ([ef97f7f](https://github.com/dreulavelle/mcpd/commit/ef97f7f25b6ba6286c9b6d14205417512219b1fc))
+* **marketplace:** hold the catalogues rather than proxying them ([#92](https://github.com/dreulavelle/mcpd/issues/92)) ([0521ede](https://github.com/dreulavelle/mcpd/commit/0521ede7f372ac619c5da0b3a33dc0e64f09b442))
+* **settings:** one navigation, and groups that say where they live ([#93](https://github.com/dreulavelle/mcpd/issues/93)) ([8be1063](https://github.com/dreulavelle/mcpd/commit/8be106385cf3150c2bebfb093fb04aa098b8e1ff))
 
 
 ### Fixes
 
-* **dashboard:** let a dialog taller than the window be scrolled ([#90](https://github.com/dreulavelle/mcpd/issues/90)) ([77f3cfd](https://github.com/dreulavelle/mcpd/commit/77f3cfd498821fde8db0decd0dba8b28a0695ca9))
-* **performance:** report what was measured, not where a boundary fell ([#88](https://github.com/dreulavelle/mcpd/issues/88)) ([08b849b](https://github.com/dreulavelle/mcpd/commit/08b849b9771965cc33b1ce20bfabde37ab5bedb5))
+* **dashboard:** let a dialog taller than the window be scrolled ([#90](https://github.com/dreulavelle/mcpd/issues/90)) ([b7d8737](https://github.com/dreulavelle/mcpd/commit/b7d8737f3c6cd9712982df6b4430e2a7dd8ecec4))
+* **performance:** report what was measured, not where a boundary fell ([#88](https://github.com/dreulavelle/mcpd/issues/88)) ([169f9fa](https://github.com/dreulavelle/mcpd/commit/169f9fa049af2473b9731a4c31f66f064e93abd9))
 
 ## [0.4.1](https://github.com/dreulavelle/mcpd/compare/v0.4.0...v0.4.1) (2026-08-27)
 
 
 ### Fixes
 
-* **dashboard:** render release notes, and move the version off the account ([#86](https://github.com/dreulavelle/mcpd/issues/86)) ([b991a9a](https://github.com/dreulavelle/mcpd/commit/b991a9a7867e1be712eec036eaadea5f60170590))
+* **dashboard:** render release notes, and move the version off the account ([#86](https://github.com/dreulavelle/mcpd/issues/86)) ([3fb1a35](https://github.com/dreulavelle/mcpd/commit/3fb1a35193102cb1a230ec53444d850be97016af))
 
 ## [0.4.0](https://github.com/dreulavelle/mcpd/compare/v0.3.0...v0.4.0) (2026-08-27)
 
 
 ### Features
 
-* measure what a call costs, and stop paying twice ([#84](https://github.com/dreulavelle/mcpd/issues/84)) ([ec00c61](https://github.com/dreulavelle/mcpd/commit/ec00c618b65e5d59507777230b49eccd24cb2950))
+* measure what a call costs, and stop paying twice ([#84](https://github.com/dreulavelle/mcpd/issues/84)) ([6b77c2e](https://github.com/dreulavelle/mcpd/commit/6b77c2e429cfe48f00b1ed2c3d9ebc210fd4e54d))
 
 ## [0.3.0](https://github.com/dreulavelle/mcpd/compare/v0.2.0...v0.3.0) (2026-08-27)
 
 
 ### Features
 
-* **graylog:** read a log platform, and hold every plugin to one standard ([#80](https://github.com/dreulavelle/mcpd/issues/80)) ([4b07b28](https://github.com/dreulavelle/mcpd/commit/4b07b2835f0b7c72baf62d7d7ecc59942af35151))
-* **trust:** trust your own certificate authority, and say which instance is which ([#82](https://github.com/dreulavelle/mcpd/issues/82)) ([d1be8e8](https://github.com/dreulavelle/mcpd/commit/d1be8e8934ed09ae41d517dfe31cb7a4ee8e0521))
+* **graylog:** read a log platform, and hold every plugin to one standard ([#80](https://github.com/dreulavelle/mcpd/issues/80)) ([395892f](https://github.com/dreulavelle/mcpd/commit/395892f6417bcbd7f77044cc861943a589f52e68))
+* **trust:** trust your own certificate authority, and say which instance is which ([#82](https://github.com/dreulavelle/mcpd/issues/82)) ([f2143d8](https://github.com/dreulavelle/mcpd/commit/f2143d8ffb74c56f5fa8453f3552c313ba053a42))
 
 
 ### Fixes
 
-* **version:** the binary carries its own version, and there is no "dev" ([#83](https://github.com/dreulavelle/mcpd/issues/83)) ([456403b](https://github.com/dreulavelle/mcpd/commit/456403bb182e5949552e72df09a2303090229760))
+* **version:** the binary carries its own version, and there is no "dev" ([#83](https://github.com/dreulavelle/mcpd/issues/83)) ([12116a4](https://github.com/dreulavelle/mcpd/commit/12116a43c848f5e7c6e03630f7a48c494e82f6d1))
 
 ## [0.2.0](https://github.com/dreulavelle/mcpd/compare/v0.1.0...v0.2.0) (2026-08-26)
 
@@ -366,47 +366,47 @@
 
 * .env support, mcpd -init, and OpenAI Secure MCP Tunnel in compose ([a28cd01](https://github.com/dreulavelle/mcpd/commit/a28cd01489f5d81986baaff45242a89936054cbe))
 * a debug switch for the tunnel, and compare Debug in SameAs ([d584c82](https://github.com/dreulavelle/mcpd/commit/d584c8265377c98409a095d4ac5353bc8014a9c1))
-* a new instance asks for its first account, and there are two roles ([#5](https://github.com/dreulavelle/mcpd/issues/5)) ([25262d8](https://github.com/dreulavelle/mcpd/commit/25262d847a8bd5fd1a8fdf8ee9d40ab3d9d347a5))
-* a plugin's settings are declared by the plugin and edited in the dashboard ([#23](https://github.com/dreulavelle/mcpd/issues/23)) ([9719b36](https://github.com/dreulavelle/mcpd/commit/9719b3633f88f4b4a60d56666d550990c880bc6a))
-* add and remove plugin instances from the dashboard ([#25](https://github.com/dreulavelle/mcpd/issues/25)) ([ad28027](https://github.com/dreulavelle/mcpd/commit/ad280277e3712f8d9f27a71f8bec7cc62bd6dc05))
+* a new instance asks for its first account, and there are two roles ([#5](https://github.com/dreulavelle/mcpd/issues/5)) ([12013e6](https://github.com/dreulavelle/mcpd/commit/12013e68b5404198930a9000c0a758901ab746e5))
+* a plugin's settings are declared by the plugin and edited in the dashboard ([#23](https://github.com/dreulavelle/mcpd/issues/23)) ([9787bc0](https://github.com/dreulavelle/mcpd/commit/9787bc056b8d1faec0d08b5a60c3a73d71cf201d))
+* add and remove plugin instances from the dashboard ([#25](https://github.com/dreulavelle/mcpd/issues/25)) ([8f10873](https://github.com/dreulavelle/mcpd/commit/8f10873f53eb94dd6dd6e102beaa1d9f791f4875))
 * **admin:** operator dashboard on its own listener, port 80 by default ([3f8819c](https://github.com/dreulavelle/mcpd/commit/3f8819c718fc24f8875585209c7de0ea27aa7b4b))
 * aggregate /mcp endpoint, and run under Docker ([26929eb](https://github.com/dreulavelle/mcpd/commit/26929eb112387383ffc5b4268ed72bd586a4afc2))
 * **approval:** ask in the conversation instead of the dashboard ([19ea974](https://github.com/dreulavelle/mcpd/commit/19ea974a4da7305124abe7956530141c6c7f7058))
-* **approvals:** a change nobody wrote a rule about goes ahead ([#65](https://github.com/dreulavelle/mcpd/issues/65)) ([62021da](https://github.com/dreulavelle/mcpd/commit/62021da62354bcbf2f2069a658b3fbcc2d87bdd6))
+* **approvals:** a change nobody wrote a rule about goes ahead ([#65](https://github.com/dreulavelle/mcpd/issues/65)) ([f23a99c](https://github.com/dreulavelle/mcpd/commit/f23a99c0eb2ceaabf7c92b27be88389d502d6a1a))
 * **auth:** built-in OAuth 2.1 authorization server ([9b9bbf8](https://github.com/dreulavelle/mcpd/commit/9b9bbf8b508cf77ec5912f62820006b4acc475c5))
-* **cnmaestro:** authenticate, and read networks and devices ([#17](https://github.com/dreulavelle/mcpd/issues/17)) ([90c3aa8](https://github.com/dreulavelle/mcpd/commit/90c3aa84aa6cc04d2617e965260bc64c612b4de2))
-* **cnmaestro:** list managed accounts, and get managed_account right ([#18](https://github.com/dreulavelle/mcpd/issues/18)) ([ece0c8e](https://github.com/dreulavelle/mcpd/commit/ece0c8e282d63ad5344d561523200fe91323e843))
+* **cnmaestro:** authenticate, and read networks and devices ([#17](https://github.com/dreulavelle/mcpd/issues/17)) ([8051408](https://github.com/dreulavelle/mcpd/commit/8051408bc2c5962328337eec0f475ba4ee8bb463))
+* **cnmaestro:** list managed accounts, and get managed_account right ([#18](https://github.com/dreulavelle/mcpd/issues/18)) ([2bc0af2](https://github.com/dreulavelle/mcpd/commit/2bc0af2edb07fb9c4c296f67f212e57e5d2a67ac))
 * **cnmaestro:** reference plugin with read tools and typed mutations ([c2b2b0e](https://github.com/dreulavelle/mcpd/commit/c2b2b0ebe5fbde7c1edcde7f4ae63e9ea472e76c))
-* **cnmaestro:** thirteen more read tools, covering what the API actually offers ([#30](https://github.com/dreulavelle/mcpd/issues/30)) ([3d4a465](https://github.com/dreulavelle/mcpd/commit/3d4a4654960d9d4594720a294f9b2a45927e54db))
-* **config:** five lines in a file, and everything else where it is recorded ([#54](https://github.com/dreulavelle/mcpd/issues/54)) ([edf109d](https://github.com/dreulavelle/mcpd/commit/edf109dd3bfd3ae652cbe736ea5d787659633092))
+* **cnmaestro:** thirteen more read tools, covering what the API actually offers ([#30](https://github.com/dreulavelle/mcpd/issues/30)) ([0795d7d](https://github.com/dreulavelle/mcpd/commit/0795d7d3f3fb89a149c38fed7b396b7325d66a29))
+* **config:** five lines in a file, and everything else where it is recorded ([#54](https://github.com/dreulavelle/mcpd/issues/54)) ([2117868](https://github.com/dreulavelle/mcpd/commit/21178681902403ccb785d64b0f2fe7308bab66d1))
 * consistent database backups with mcpd -backup ([037bc2d](https://github.com/dreulavelle/mcpd/commit/037bc2dd598e6cb61a92921618b2752e649d77c0))
-* **dashboard:** the policy has a page, and an auto-approval says nobody was asked ([#41](https://github.com/dreulavelle/mcpd/issues/41)) ([79a64e3](https://github.com/dreulavelle/mcpd/commit/79a64e33bc212f1d56bbfca41be43f8db63e55e1))
+* **dashboard:** the policy has a page, and an auto-approval says nobody was asked ([#41](https://github.com/dreulavelle/mcpd/issues/41)) ([ec3ff22](https://github.com/dreulavelle/mcpd/commit/ec3ff22b422ce3a086db7b2228dd84b95fcc3d79))
 * expose the tunnel client's own diagnostics ([f344be5](https://github.com/dreulavelle/mcpd/commit/f344be59129e427cfdd7cfdada7c6b140b7a9931))
 * history retention and clearing; drop the second-approver rule ([4d581d7](https://github.com/dreulavelle/mcpd/commit/4d581d7372958511cc6a7f063a291a0cd103dd70))
-* link to where the last manual step happens ([#13](https://github.com/dreulavelle/mcpd/issues/13)) ([13589f4](https://github.com/dreulavelle/mcpd/commit/13589f444da5233ab46413e0e1b4ff4ae7ec807c))
-* **logs:** watch what this host is doing, from the dashboard ([#61](https://github.com/dreulavelle/mcpd/issues/61)) ([1d85120](https://github.com/dreulavelle/mcpd/commit/1d85120693e85c90837215182263937b32861d26))
+* link to where the last manual step happens ([#13](https://github.com/dreulavelle/mcpd/issues/13)) ([d1a2480](https://github.com/dreulavelle/mcpd/commit/d1a2480b60c70a97b2bf20fb2bf669161def60df))
+* **logs:** watch what this host is doing, from the dashboard ([#61](https://github.com/dreulavelle/mcpd/issues/61)) ([c5f5680](https://github.com/dreulavelle/mcpd/commit/c5f568022be0102406e0e5797621e6e8646bf4d3))
 * MCP host, per-plugin auth scoping, and Docker setup ([b73afc8](https://github.com/dreulavelle/mcpd/commit/b73afc8b8014afdd9be064ab83a863a2237e4dde))
-* **observability:** crash reporting that does not carry the customer with it ([#74](https://github.com/dreulavelle/mcpd/issues/74)) ([fbae64d](https://github.com/dreulavelle/mcpd/commit/fbae64d7fd26ada138f4236990390e5a40d2eed9))
-* **observability:** logs a support call can actually use ([#75](https://github.com/dreulavelle/mcpd/issues/75)) ([4545bcb](https://github.com/dreulavelle/mcpd/commit/4545bcb129f551bf78d570a621993dbe3a56742e))
-* **observium:** read an SNMP estate without pretending to have its history ([#67](https://github.com/dreulavelle/mcpd/issues/67)) ([2885e56](https://github.com/dreulavelle/mcpd/commit/2885e56a01e5f3665a17246624de8a3f41f38eb0))
-* **observium:** read Community Edition, where there is no API to read ([#69](https://github.com/dreulavelle/mcpd/issues/69)) ([5b3d129](https://github.com/dreulavelle/mcpd/commit/5b3d12925a6e6e23658085e2060f0f10d832ecf9))
-* **observium:** use the API we are actually pointed at ([#77](https://github.com/dreulavelle/mcpd/issues/77)) ([e231a3c](https://github.com/dreulavelle/mcpd/commit/e231a3c42ae26ad69ab350d277656fd45f122472))
-* one integration can be configured more than once ([#21](https://github.com/dreulavelle/mcpd/issues/21)) ([8416550](https://github.com/dreulavelle/mcpd/commit/8416550e1e9ee7be56b67d6689972a75209d00c8))
+* **observability:** crash reporting that does not carry the customer with it ([#74](https://github.com/dreulavelle/mcpd/issues/74)) ([b18c537](https://github.com/dreulavelle/mcpd/commit/b18c5375ffbcf4e17227649c154318612f7cefd7))
+* **observability:** logs a support call can actually use ([#75](https://github.com/dreulavelle/mcpd/issues/75)) ([a1508b5](https://github.com/dreulavelle/mcpd/commit/a1508b56a248c20f0df7a73420828e2119835b75))
+* **observium:** read an SNMP estate without pretending to have its history ([#67](https://github.com/dreulavelle/mcpd/issues/67)) ([9943ddc](https://github.com/dreulavelle/mcpd/commit/9943ddcc69a8eaaa689161b57cb17adbd27da785))
+* **observium:** read Community Edition, where there is no API to read ([#69](https://github.com/dreulavelle/mcpd/issues/69)) ([e24668c](https://github.com/dreulavelle/mcpd/commit/e24668c7245549b9e8c6d9c2c7405e4b0c48ee8e))
+* **observium:** use the API we are actually pointed at ([#77](https://github.com/dreulavelle/mcpd/issues/77)) ([b8c28ad](https://github.com/dreulavelle/mcpd/commit/b8c28ad41e6b3f982599601e83bceba2e43ebe56))
+* one integration can be configured more than once ([#21](https://github.com/dreulavelle/mcpd/issues/21)) ([230a77c](https://github.com/dreulavelle/mcpd/commit/230a77ccd896c4cf51ac894bfc2ec1e74a6b7fcd))
 * one tunnel per plugin, so a connector can serve one system ([4e6f4aa](https://github.com/dreulavelle/mcpd/commit/4e6f4aa00780f7726f5efac4f87f9759bda6ecd7))
 * operations domain and SQLite storage foundation ([386dcb7](https://github.com/dreulavelle/mcpd/commit/386dcb74dcaa78f7991e7ba1e935aa026692633a))
 * **operations:** approval service, executor, verifier, reaper, event bus ([b12550f](https://github.com/dreulavelle/mcpd/commit/b12550f768a337e41d3048d8576ba499657e4473))
 * people sign in with an email and a password ([#2](https://github.com/dreulavelle/mcpd/issues/2)) ([f59f5f2](https://github.com/dreulavelle/mcpd/commit/f59f5f210554852667ddceb7835cbecdfd5b8377))
-* pick the workspace when making a tunnel ([#12](https://github.com/dreulavelle/mcpd/issues/12)) ([2977d64](https://github.com/dreulavelle/mcpd/commit/2977d64edbb4846d595c4f760702abf61d56dc94))
-* **plugins:** resources, prompts, per-tool capability and rate limits ([#24](https://github.com/dreulavelle/mcpd/issues/24)) ([b4ded7e](https://github.com/dreulavelle/mcpd/commit/b4ded7ed7abdd94806b6aa0c1d140a663a5cd34e))
-* **registry:** read every published server.json format, and browse Docker's catalogue too ([#37](https://github.com/dreulavelle/mcpd/issues/37)) ([c95a7d4](https://github.com/dreulavelle/mcpd/commit/c95a7d45b9b853aa01e3ed29d72b9c6376de3177))
-* **registry:** two more catalogues, and one reader for the two that agree ([#39](https://github.com/dreulavelle/mcpd/issues/39)) ([3c24794](https://github.com/dreulavelle/mcpd/commit/3c2479479aa79d5b2274415b1f27c2733beed843))
-* scope new tunnels to a workspace, and stop asking for what we know ([#11](https://github.com/dreulavelle/mcpd/issues/11)) ([1fae540](https://github.com/dreulavelle/mcpd/commit/1fae540ad071bca1b5aea24fc1a90db856d2fc06))
+* pick the workspace when making a tunnel ([#12](https://github.com/dreulavelle/mcpd/issues/12)) ([0d7cd60](https://github.com/dreulavelle/mcpd/commit/0d7cd6091129da1ecf3ee0bc3d4a343fd4528fbe))
+* **plugins:** resources, prompts, per-tool capability and rate limits ([#24](https://github.com/dreulavelle/mcpd/issues/24)) ([c43020a](https://github.com/dreulavelle/mcpd/commit/c43020a129b8eea1a54b1fca6076a723e966255f))
+* **registry:** read every published server.json format, and browse Docker's catalogue too ([#37](https://github.com/dreulavelle/mcpd/issues/37)) ([3830ad0](https://github.com/dreulavelle/mcpd/commit/3830ad045a499c6bda4953e7978f60235b1cdf64))
+* **registry:** two more catalogues, and one reader for the two that agree ([#39](https://github.com/dreulavelle/mcpd/issues/39)) ([ab7de3e](https://github.com/dreulavelle/mcpd/commit/ab7de3eb5c5fd3555bdb330733e73d799654f36f))
+* scope new tunnels to a workspace, and stop asking for what we know ([#11](https://github.com/dreulavelle/mcpd/issues/11)) ([c1e5b86](https://github.com/dreulavelle/mcpd/commit/c1e5b86af02a07197a9f59c4b2b58948b7096427))
 * **sdk:** out-of-process plugins and the Go SDK for writing them ([c8a5443](https://github.com/dreulavelle/mcpd/commit/c8a54436ad7313e8c75507097b312bd7f2e4c7e6))
-* **settings:** a catalog, so a plugin can declare its own settings ([#22](https://github.com/dreulavelle/mcpd/issues/22)) ([fbbe2e0](https://github.com/dreulavelle/mcpd/commit/fbbe2e0e9182b74b77d7c28ebeb90b62a957c115))
-* **settings:** a field can depend on the answer to another one ([#68](https://github.com/dreulavelle/mcpd/issues/68)) ([6abd675](https://github.com/dreulavelle/mcpd/commit/6abd6750907f68a3c0cb2c10d267f1a039ac7031))
-* **settings:** an enum can name its values in the words an operator uses ([#71](https://github.com/dreulavelle/mcpd/issues/71)) ([d67b491](https://github.com/dreulavelle/mcpd/commit/d67b4919d63f8f1476a9cc40753b3eed00b0126c))
+* **settings:** a catalog, so a plugin can declare its own settings ([#22](https://github.com/dreulavelle/mcpd/issues/22)) ([004c98c](https://github.com/dreulavelle/mcpd/commit/004c98c548c9d7ddea00aec2d7073dca6db7d0d2))
+* **settings:** a field can depend on the answer to another one ([#68](https://github.com/dreulavelle/mcpd/issues/68)) ([42918b2](https://github.com/dreulavelle/mcpd/commit/42918b26e92f580a42adc4fba38ead70846542f4))
+* **settings:** an enum can name its values in the words an operator uses ([#71](https://github.com/dreulavelle/mcpd/issues/71)) ([794efdb](https://github.com/dreulavelle/mcpd/commit/794efdb2f255e864f4ad39e656a96a20dca5eab4))
 * **settings:** manage configuration from the dashboard ([4e8dd3a](https://github.com/dreulavelle/mcpd/commit/4e8dd3ac8d5c9a8e8eb39be59179a370e73f63e9))
-* **sso:** sign in through the provider you run yourself ([#57](https://github.com/dreulavelle/mcpd/issues/57)) ([1e22295](https://github.com/dreulavelle/mcpd/commit/1e222957e8516a021d1eb9868fe87af038851a56))
+* **sso:** sign in through the provider you run yourself ([#57](https://github.com/dreulavelle/mcpd/issues/57)) ([e8f8ad4](https://github.com/dreulavelle/mcpd/commit/e8f8ad49ffccf72bd78cd4a92833cb10d26ac4c8))
 * **tunnel:** embed OpenAI's Secure MCP Tunnel in the process ([61dc44d](https://github.com/dreulavelle/mcpd/commit/61dc44d216cfc13182e11c5dcfe312ffa4864c76))
 * **ui:** collapsible connections, per-plugin details, and a setup guide ([45ff318](https://github.com/dreulavelle/mcpd/commit/45ff31825dab6342e42160165ff51f2b7517cb88))
 * wire the approval engine end to end ([79666d9](https://github.com/dreulavelle/mcpd/commit/79666d94b05827ee7e9e2d6da64a4f4978cc9d9e))
@@ -415,57 +415,57 @@
 ### Fixes
 
 * a connector that cannot approve cannot apply anything ([14d71e2](https://github.com/dreulavelle/mcpd/commit/14d71e273e17cd3c9f555874c222ddda7aed0be9))
-* a first plugin can be configured, and tunnels tell the truth about themselves ([#28](https://github.com/dreulavelle/mcpd/issues/28)) ([e1e3abd](https://github.com/dreulavelle/mcpd/commit/e1e3abd4689eae7d85992c73216fdce0505b7d4e))
-* a page that throws no longer blanks the whole dashboard ([#29](https://github.com/dreulavelle/mcpd/issues/29)) ([3b4fafa](https://github.com/dreulavelle/mcpd/commit/3b4fafa7293b5aa9f280dc3efd4efcef72fdeb9b))
+* a first plugin can be configured, and tunnels tell the truth about themselves ([#28](https://github.com/dreulavelle/mcpd/issues/28)) ([b3bc27c](https://github.com/dreulavelle/mcpd/commit/b3bc27cc4ae9d213267fe0f6f93c77f02a24f221))
+* a page that throws no longer blanks the whole dashboard ([#29](https://github.com/dreulavelle/mcpd/issues/29)) ([2a9ea68](https://github.com/dreulavelle/mcpd/commit/2a9ea686bf3b89d5409be464e082311ad359d924))
 * a settled intent can be proposed again ([#1](https://github.com/dreulavelle/mcpd/issues/1)) ([6a628fb](https://github.com/dreulavelle/mcpd/commit/6a628fb9a86f7f662d344d6e777f6512f072606a))
 * a tunnel's identity must not be written into a shared server ([8759037](https://github.com/dreulavelle/mcpd/commit/8759037fe1684698500e6b7c359b5af0feceb25e))
-* **admin:** the dashboard's cookie follows the dashboard's scheme ([#45](https://github.com/dreulavelle/mcpd/issues/45)) ([9bff255](https://github.com/dreulavelle/mcpd/commit/9bff25560e57bae6977abe4223bd1568e1d55343))
+* **admin:** the dashboard's cookie follows the dashboard's scheme ([#45](https://github.com/dreulavelle/mcpd/issues/45)) ([4218c57](https://github.com/dreulavelle/mcpd/commit/4218c5712fa1fe2207c997bae808e1c031a028e0))
 * advertise plugin scopes, and ask for the ones each endpoint needs ([0208501](https://github.com/dreulavelle/mcpd/commit/0208501ad185f89a8f5eb899b527fd74dd7915ab))
 * advertise scopes_supported in protected-resource metadata ([361cad6](https://github.com/dreulavelle/mcpd/commit/361cad6d46b8ef49f40863f8f32db5930c25aa73))
-* **approvals:** the client's prompt is the only one a routine change needs ([#66](https://github.com/dreulavelle/mcpd/issues/66)) ([57084d8](https://github.com/dreulavelle/mcpd/commit/57084d81cf4fa0f49d153a77fbe00ff57e3758c7))
-* **catalog:** drop the remote icon the CSP has always blocked ([#48](https://github.com/dreulavelle/mcpd/issues/48)) ([cc0389e](https://github.com/dreulavelle/mcpd/commit/cc0389e9e1901b3355d637053096fe9fd318908c))
+* **approvals:** the client's prompt is the only one a routine change needs ([#66](https://github.com/dreulavelle/mcpd/issues/66)) ([1d51a0d](https://github.com/dreulavelle/mcpd/commit/1d51a0dea9b3ce96935708e9570f4fe6309dae65))
+* **catalog:** drop the remote icon the CSP has always blocked ([#48](https://github.com/dreulavelle/mcpd/issues/48)) ([a088871](https://github.com/dreulavelle/mcpd/commit/a08887186f87563c946a792f706be5dc3bf6d5cd))
 * **config:** permit plaintext public_url on private networks ([85bc5d2](https://github.com/dreulavelle/mcpd/commit/85bc5d2122c2e95581191089eb8dd6011445c239))
 * don't state the tunnel twice on Connections ([a078eff](https://github.com/dreulavelle/mcpd/commit/a078effa2577862096003cbc0eb12d637202db21))
-* drop the password advice from the account forms ([#7](https://github.com/dreulavelle/mcpd/issues/7)) ([0116f55](https://github.com/dreulavelle/mcpd/commit/0116f551a645b1a5117af9faaae146d07d80a4e5))
+* drop the password advice from the account forms ([#7](https://github.com/dreulavelle/mcpd/issues/7)) ([0be8f57](https://github.com/dreulavelle/mcpd/commit/0be8f57e70cc86d9a8c2f156b39e041ea629af28))
 * give each MCP endpoint its own OAuth identity, and connect after serving ([51cb945](https://github.com/dreulavelle/mcpd/commit/51cb9450652a1fe8a226fb20402214a8caac8443))
-* **logging:** both formats take turns at the one destination ([#56](https://github.com/dreulavelle/mcpd/issues/56)) ([89c6178](https://github.com/dreulavelle/mcpd/commit/89c6178d30a1cb22dd6bf1272f5325d81fee05c0))
-* **logs:** one record, one line, and the real message on it ([#64](https://github.com/dreulavelle/mcpd/issues/64)) ([b326038](https://github.com/dreulavelle/mcpd/commit/b326038f2797eec954c543b542159b827d62c669))
+* **logging:** both formats take turns at the one destination ([#56](https://github.com/dreulavelle/mcpd/issues/56)) ([b750850](https://github.com/dreulavelle/mcpd/commit/b750850486edc27b5ad8c81b67c8de65f781cf1f))
+* **logs:** one record, one line, and the real message on it ([#64](https://github.com/dreulavelle/mcpd/issues/64)) ([2551cab](https://github.com/dreulavelle/mcpd/commit/2551cab72b6776f20bc0f56e1111ad6206467dd1))
 * make tunnels from the plugin, and stop offering dead settings ([5ac76ad](https://github.com/dreulavelle/mcpd/commit/5ac76ad9cf6103c9ab8e01385aa71bfa36bedd75))
 * **mcp:** do not advertise an authorization server that is not mounted ([c5877ce](https://github.com/dreulavelle/mcpd/commit/c5877ce5fad780bf55ab129b67bc56cf41e55ec0))
-* **nav:** the keys page says which keys it means ([#55](https://github.com/dreulavelle/mcpd/issues/55)) ([9049302](https://github.com/dreulavelle/mcpd/commit/9049302744dbcde86fb91354946a6a5b956fd95e))
-* **observium:** a redirect means the wrong edition, and says so ([#73](https://github.com/dreulavelle/mcpd/issues/73)) ([63c83bc](https://github.com/dreulavelle/mcpd/commit/63c83bc5aa6f18ce2ee7f6e68e61e774f6efa2c0))
-* **observium:** filters that matched nothing, against a real CE 26.1 ([#72](https://github.com/dreulavelle/mcpd/issues/72)) ([dcbfbe0](https://github.com/dreulavelle/mcpd/commit/dcbfbe0a70fe1b15e41038e1d8cc71a935a93803))
+* **nav:** the keys page says which keys it means ([#55](https://github.com/dreulavelle/mcpd/issues/55)) ([d95408d](https://github.com/dreulavelle/mcpd/commit/d95408dfb17b9bfa68b692323df9e7d677e6579a))
+* **observium:** a redirect means the wrong edition, and says so ([#73](https://github.com/dreulavelle/mcpd/issues/73)) ([bbdfb54](https://github.com/dreulavelle/mcpd/commit/bbdfb54423e026932a4f6ee83e1da7f8b7e6047b))
+* **observium:** filters that matched nothing, against a real CE 26.1 ([#72](https://github.com/dreulavelle/mcpd/issues/72)) ([a21b135](https://github.com/dreulavelle/mcpd/commit/a21b13522030b99afb19526c1a6b52d2b7b67e9f))
 * **plugins:** use a plugin's published schema; recover registration panics ([589ac87](https://github.com/dreulavelle/mcpd/commit/589ac877c2fe0ed3eb714d76adc2b6b3023ccc72))
-* read-only is enforced where requests leave, not where paths are built ([#27](https://github.com/dreulavelle/mcpd/issues/27)) ([fe256ec](https://github.com/dreulavelle/mcpd/commit/fe256ec2a01b3dc0ace6c412ad1d4c18135ac614))
-* roles read as "User" and "Admin" ([#8](https://github.com/dreulavelle/mcpd/issues/8)) ([f60926e](https://github.com/dreulavelle/mcpd/commit/f60926e2facccf19630c3c5067ad9009344014c9))
+* read-only is enforced where requests leave, not where paths are built ([#27](https://github.com/dreulavelle/mcpd/issues/27)) ([aa99446](https://github.com/dreulavelle/mcpd/commit/aa99446c0ab729ac049fe714ebed9af407e9a65f))
+* roles read as "User" and "Admin" ([#8](https://github.com/dreulavelle/mcpd/issues/8)) ([88a7604](https://github.com/dreulavelle/mcpd/commit/88a76045629a172959370bedc5c1515ae7b8aad9))
 * scope tunnel requests to an organization, and cut the page down ([0fa1e3e](https://github.com/dreulavelle/mcpd/commit/0fa1e3ecef5aa9ef9194711c2d4778f0067be4e8))
 * serve https, because an OAuth issuer has to be one ([5b8f4ab](https://github.com/dreulavelle/mcpd/commit/5b8f4ab3b5a73bceeada7daa099c9a8d16c720a8))
 * serve OAuth to ChatGPT connectors, and fix overlapping UI ([563487c](https://github.com/dreulavelle/mcpd/commit/563487c122b0ba37062bb94bb43f303ad114e1f2))
-* settings roles, and rewrite the docs ([#6](https://github.com/dreulavelle/mcpd/issues/6)) ([ac2e2e1](https://github.com/dreulavelle/mcpd/commit/ac2e2e1eb3b89fca66198346fda18176eb11c4a9))
-* **settings:** a conditional field pointed at a key its own form did not have ([#70](https://github.com/dreulavelle/mcpd/issues/70)) ([7a21818](https://github.com/dreulavelle/mcpd/commit/7a21818e1ded82f1537acd6534a88aac77fa3f3a))
-* **sso:** a provider that is switched on either works or says why ([#60](https://github.com/dreulavelle/mcpd/issues/60)) ([0217963](https://github.com/dreulavelle/mcpd/commit/0217963dce87bbc73ef98c0981f273f65ce3f7a2))
-* **sso:** the operator's own provider can actually be used ([#59](https://github.com/dreulavelle/mcpd/issues/59)) ([8e3b772](https://github.com/dreulavelle/mcpd/commit/8e3b77212819ebd7e737ce6c3483f4812bae5e12))
-* the role collapse left two invalid defaults behind ([#10](https://github.com/dreulavelle/mcpd/issues/10)) ([1f8e158](https://github.com/dreulavelle/mcpd/commit/1f8e1581fe15f9627f6c50fa773b0dccdb83564a))
+* settings roles, and rewrite the docs ([#6](https://github.com/dreulavelle/mcpd/issues/6)) ([501117b](https://github.com/dreulavelle/mcpd/commit/501117bd7fe0cbeaa039289b168c85a90a181e5e))
+* **settings:** a conditional field pointed at a key its own form did not have ([#70](https://github.com/dreulavelle/mcpd/issues/70)) ([cc7798f](https://github.com/dreulavelle/mcpd/commit/cc7798fb031bf755641fa4d7586411df1256ce44))
+* **sso:** a provider that is switched on either works or says why ([#60](https://github.com/dreulavelle/mcpd/issues/60)) ([ab3914c](https://github.com/dreulavelle/mcpd/commit/ab3914caf0ab539b036ac16668a18b12a88e365c))
+* **sso:** the operator's own provider can actually be used ([#59](https://github.com/dreulavelle/mcpd/issues/59)) ([95d1624](https://github.com/dreulavelle/mcpd/commit/95d1624e0b67b922e2fdb13449a73525a19fd983))
+* the role collapse left two invalid defaults behind ([#10](https://github.com/dreulavelle/mcpd/issues/10)) ([5bba202](https://github.com/dreulavelle/mcpd/commit/5bba202aa67176c13f78d41f6434e4f8aa4a4df5))
 * the tunnel carries the connection, not the sign-in ([4c9d682](https://github.com/dreulavelle/mcpd/commit/4c9d68287e10dc584780131f4d80b92e3dc3e051))
-* the tunnel settings ask for credentials, not a tunnel id ([#9](https://github.com/dreulavelle/mcpd/issues/9)) ([8beefbb](https://github.com/dreulavelle/mcpd/commit/8beefbbb3aca40924534e5ae733ae7f025aa62c7))
+* the tunnel settings ask for credentials, not a tunnel id ([#9](https://github.com/dreulavelle/mcpd/issues/9)) ([b8f0cd0](https://github.com/dreulavelle/mcpd/commit/b8f0cd026d48996c57de9223609abc5ce390421f))
 * **tunnel:** make the settings form actually drive the tunnel ([bb46307](https://github.com/dreulavelle/mcpd/commit/bb46307e44a88f0a5dc777f393c03a2d6bb541bf))
-* **web:** a tunnel id sits in its row rather than towering over it ([#20](https://github.com/dreulavelle/mcpd/issues/20)) ([501b160](https://github.com/dreulavelle/mcpd/commit/501b1601c02958a5f0907ef4aabf627ef6f6f4b4))
+* **web:** a tunnel id sits in its row rather than towering over it ([#20](https://github.com/dreulavelle/mcpd/issues/20)) ([cf7714d](https://github.com/dreulavelle/mcpd/commit/cf7714d686d5024fbc495f578deaa107ec2acbd3))
 
 
 ### Refactoring
 
 * approvals belong in the conversation, so drop the Changes tab ([2715659](https://github.com/dreulavelle/mcpd/commit/2715659c65f172f153267a342a5acbf983727c51))
-* **dashboard:** plainer words, fewer comments, and no half-empty grid ([#47](https://github.com/dreulavelle/mcpd/issues/47)) ([1ed514f](https://github.com/dreulavelle/mcpd/commit/1ed514f6fce2e5a9dbf06d845222db3888a4b0d3))
-* **nav:** the administrative pages are siblings, not a drawer ([#58](https://github.com/dreulavelle/mcpd/issues/58)) ([6bc043a](https://github.com/dreulavelle/mcpd/commit/6bc043a832556ce0d9dd88a74b0b72881636efc8))
-* **observium:** subscription only, and one code path again ([#76](https://github.com/dreulavelle/mcpd/issues/76)) ([5e64e1b](https://github.com/dreulavelle/mcpd/commit/5e64e1b8de8149d822e1317ef45bd45f327469e8))
+* **dashboard:** plainer words, fewer comments, and no half-empty grid ([#47](https://github.com/dreulavelle/mcpd/issues/47)) ([56ad2d9](https://github.com/dreulavelle/mcpd/commit/56ad2d9374d1ce7090eb789aaf03883399c27b03))
+* **nav:** the administrative pages are siblings, not a drawer ([#58](https://github.com/dreulavelle/mcpd/issues/58)) ([30cec3b](https://github.com/dreulavelle/mcpd/commit/30cec3bdb61d037ece49b25270ff3574470f4247))
+* **observium:** subscription only, and one code path again ([#76](https://github.com/dreulavelle/mcpd/issues/76)) ([ab44573](https://github.com/dreulavelle/mcpd/commit/ab445735abbee8deb65136db580e120af4e684c9))
 * **ui:** plain language and a proper design pass ([032a41c](https://github.com/dreulavelle/mcpd/commit/032a41c28c938533846a1882485fa00d659bbd7b))
 * **web:** a page per job, and tunnels you can actually make ([aba07aa](https://github.com/dreulavelle/mcpd/commit/aba07aab2077799c488d25d1323f1bddc9da1b81))
-* **web:** one frame for signing in, one shape for a page ([#14](https://github.com/dreulavelle/mcpd/issues/14)) ([3585ce6](https://github.com/dreulavelle/mcpd/commit/3585ce6d9593147e84472ebd0c50bc639be3edf5))
+* **web:** one frame for signing in, one shape for a page ([#14](https://github.com/dreulavelle/mcpd/issues/14)) ([12bff26](https://github.com/dreulavelle/mcpd/commit/12bff266e6c794fb1fd84abba522a2fd904fc59b))
 
 
 ### Documentation
 
-* **cnmaestro:** say what gates the API Clients page ([#19](https://github.com/dreulavelle/mcpd/issues/19)) ([908b062](https://github.com/dreulavelle/mcpd/commit/908b062c315e0d91cfaadc4be6858919edd45999))
+* **cnmaestro:** say what gates the API Clients page ([#19](https://github.com/dreulavelle/mcpd/issues/19)) ([470518e](https://github.com/dreulavelle/mcpd/commit/470518e305c53fe8b4b5e09181765448cfa1f842))
 * revise cnMaestro findings against API 6.3.0; add endpoint deny-list ([10fd6cb](https://github.com/dreulavelle/mcpd/commit/10fd6cba858b72bb9f36c54d0c610dd7f5a7909b))
 * say which address ChatGPT actually uses ([e66e1c3](https://github.com/dreulavelle/mcpd/commit/e66e1c3c0a9e7782893509c9f5b4e8ce34d10b09))
-* the README describes the host as it is now ([#3](https://github.com/dreulavelle/mcpd/issues/3)) ([c57c957](https://github.com/dreulavelle/mcpd/commit/c57c957802ca48f50c6aafed4493fea8b587bf4e))
+* the README describes the host as it is now ([#3](https://github.com/dreulavelle/mcpd/issues/3)) ([036e99d](https://github.com/dreulavelle/mcpd/commit/036e99deca76f5633b24d60c3eeaa112d7e7cbba))

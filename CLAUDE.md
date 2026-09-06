@@ -158,6 +158,26 @@ the only thing somebody on a machine you cannot reach can quote back. Debug is
 for what a support call turns on: what was asked, what was decided, what the
 upstream said — never a response body or a query's arguments.
 
+**Nothing from a real deployment goes into the repository.** Not a
+customer's name, not the company's, not an account or site id, a phone number,
+a hostname, a MAC, an email address, or a value copied out of a live API
+response. Tests and docs are written against real integrations, and a
+"measured on a live instance" table is exactly where a real organisation's name
+lands; once, several did, along with a Bandwidth account id and an internal
+hostname in a commit trailer, and the public history had to be rewritten to
+remove them. Fixtures use reserved and obviously fictional values: `example.com`
+and `*.example` for hosts, `203.0.113.0/24` for addresses, `555-01xx` for phone
+numbers, `acme`/`globex`/`fabrikam` for organisations, round or sequential
+numbers for ids. A live measurement is still worth recording, with the names
+replaced and the numbers kept. `make scan` (part of `make check`) refuses a
+non-555 phone number, a hostname on a private suffix that is not a placeholder,
+and a co-author trailer naming a machine; a line that trips it for a good
+reason says so with `fixture-ok`. A denylist of your own names lives outside
+the repository, in `~/.config/mcpd/sensitive-terms` or the file
+`MCPD_SENSITIVE_TERMS` points at, so the list is not itself a leak. `make hooks` installs the same checks as pre-commit and
+commit-msg hooks -- run it once per clone, because a tool that adds a
+`Co-authored-by` trailer takes the name from the machine it runs on.
+
 **Nothing leaves the customer's machine that they did not ask to send.** mcpd
 runs on somebody else's hardware. Crash reporting is off until a DSN is set,
 the DSN is a setting rather than a constant, and everything is scrubbed at one
