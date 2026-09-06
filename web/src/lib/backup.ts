@@ -29,10 +29,6 @@ export const KIND_SHORT: Record<BackupKind, string> = {
 };
 
 /** A kind this build does not know renders as itself, which is the drift signal. */
-export function kindLabel(kind: BackupKind | string): string {
-  return KIND_LABELS[kind as BackupKind] ?? kind;
-}
-
 export function kindShort(kind: BackupKind | string): string {
   return KIND_SHORT[kind as BackupKind] ?? kind;
 }
@@ -141,10 +137,6 @@ export function sizeWords(bytes: number): string {
 export const WEEKDAYS = [
   "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 ];
-
-export function weekdayName(day: number | string): string {
-  return WEEKDAYS[Number(day)] ?? String(day);
-}
 
 /**
  * The zone this browser is in, offered beside the stored one.
