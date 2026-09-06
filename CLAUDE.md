@@ -165,6 +165,23 @@ gate in `BeforeSend` rather than at call sites. A stack trace carries no
 argument values and is safe; the error sentences name upstreams and hosts, so
 they are a separate opt-in. If you add a field to a report, scrub it there.
 
+**`cmd/mcpd` imports `time/tzdata`, and that import is load-bearing.** The
+image is alpine with ca-certificates and nothing else, so there is no
+`/usr/share/zoneinfo` for `time.LoadLocation` to read, and the root filesystem
+is read-only so installing one is not an option either. Without it every zone
+but UTC fails to load and a backup schedule set to 04:00 America/Chicago runs
+at 04:00 UTC — right for half the year, wrong for the other half, on a host
+nobody is watching. It costs about 450 KB. `cmd/mcpd/tzdata_test.go` is what
+stops somebody removing an import that looks unused.
+
+**A backup destination's host key is pinned and there is no trust on first
+use.** An SFTP destination with nothing recorded cannot be enabled — the table
+says so and so does the guarded `UPDATE` — and only
+`POST /api/backup/destinations/{id}/test` ever writes one, guarded on the
+column still being empty. A run that learned an identity would be trusting
+whatever answered that night, and anything that can put itself on that address
+gets every account, every grant and every credential this host holds.
+
 **A tunnel carries its own identity**, so it builds its own MCP server rather
 than sharing the cached one. Writing a principal into a shared server lets the
 first caller answer for everyone.
