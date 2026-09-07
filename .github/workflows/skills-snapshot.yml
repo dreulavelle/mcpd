@@ -1,0 +1,55 @@
+# Refreshes the Skills board the dashboard renders.
+#
+# It opens a pull request rather than pushing, because a scrape that quietly
+# started returning something else deserves a person looking at the diff. The
+# dashboard bundle is not committed -- the image build compiles it from
+# `web/` -- so this changes one file and the next release picks it up.
+name: Skills snapshot
+
+on:
+  schedule:
+    # Mondays, early. Nothing depends on the hour; it only wants to be a
+    # different one from every other job in this repository.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The script throws rather than writing a short or empty board, so a
+      # failure here leaves the committed snapshot standing.
+      - name: Fetch the boards
+        run: node web/scripts/fetch-skills.mjs
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/skills-snapshot
+          base: main
+          title: "chore(web): refresh the skills snapshot"
+          commit-message: |
+            chore(web): refresh the skills snapshot
+
+            Ranked installs from skills.sh, captured by the weekly job. The
+            dashboard reads this file rather than calling out from a customer's
+            host, so the numbers only move when this lands.
+          body: |
+            The weekly refresh of `web/src/data/skills.json`.
+
+            Worth a glance at the diff rather than a blind merge: the numbers
+            come out of a page's streamed payload, so a change in that page's
+            shape shows up here as a board full of something else rather than
+            as a failure.
+          add-paths: web/src/data/skills.json

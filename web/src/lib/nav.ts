@@ -1,6 +1,6 @@
 import {
   Activity, Boxes, ChartColumn, ClipboardCheck, Cog, Gauge, ScrollText,
-  ListChecks, Plug, ShieldCheck, Store, Terminal, UserRound, Waypoints,
+  ListChecks, Plug, ShieldCheck, Store, Terminal, TrendingUp, UserRound, Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import type { Permission } from "./permissions";
@@ -115,6 +115,17 @@ export const NAV: NavGroup[] = [
         lede: "One tunnel is one connector in ChatGPT.",
         icon: Waypoints,
         capability: "tunnels:read",
+      },
+      {
+        // Reference, not inventory: nothing here is installed on this host or
+        // reachable from it. It sits beside Marketplace, where every row *is*
+        // something this host can add, so the lede has to say which it is.
+        path: "/skills",
+        label: "Skills",
+        lede: "What the wider agent-skills ecosystem is installing. Reference only \u2014 nothing here is installed on this host.",
+        icon: TrendingUp,
+        // No host data on the page, so anybody with an account may read it.
+        capability: "signed-in",
       },
       {
         // The other way in. Tunnels and ChatGPT each had a page and every

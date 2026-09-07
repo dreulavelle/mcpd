@@ -13,6 +13,7 @@ import { Overview } from "@/pages/overview/Overview";
 import { PluginDetail } from "@/pages/plugins/PluginDetail";
 import { PluginsList } from "@/pages/plugins/PluginsList";
 import { Profile } from "@/pages/profile/Profile";
+import { Skills } from "@/pages/skills/Skills";
 import { ApprovalPolicy } from "@/pages/settings/ApprovalPolicy";
 import { Authentication } from "@/pages/settings/Authentication";
 import { Advanced } from "@/pages/settings/Advanced";
@@ -83,6 +84,9 @@ export function Routes() {
 
       case "clients":
         return <Clients />;
+
+      case "skills":
+        return <Skills />;
 
       case "system":
         return <System />;
