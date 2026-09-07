@@ -87,8 +87,18 @@ func TestGuard_HandlesAPrefix(t *testing.T) {
 	}
 	// The prefix has to be a whole segment. CutPrefix alone would accept this
 	// and hand the table "foo/devices".
-	if err := try(t, "/gateway", http.MethodGet, "http://host.invalid/gatewayfoo/devices"); err == nil {
-		t.Error("a path that only shares the prefix's letters was permitted")
+	//
+	// The reason is asserted, not just the refusal. Every pattern in a rule
+	// table is anchored with a leading slash, so "foo/devices" would fail to
+	// match anything and be refused regardless -- which means checking only
+	// that it was refused does not test this at all. The segment check is what
+	// must refuse it, and that is what the sentence says.
+	err := try(t, "/gateway", http.MethodGet, "http://host.invalid/gatewayfoo/devices")
+	if err == nil {
+		t.Fatal("a path that only shares the prefix's letters was permitted")
+	}
+	if !strings.Contains(err.Error(), "base path") {
+		t.Errorf("refused for the wrong reason -- the segment check did not catch it: %v", err)
 	}
 	// Not under the prefix at all: refused rather than trimmed to something
 	// that might match.
