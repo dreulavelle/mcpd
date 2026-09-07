@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spoked/mcpd/internal/cachestore"
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
@@ -15,13 +14,6 @@ import (
 // per process: two instances are two credentials reading two estates, and a
 // shared bound would let a busy one evict a quiet one's answers.
 const maxCacheEntries = 256
-
-// fetchCeiling bounds a fetch that has outlived the caller who started it.
-//
-// A shared fetch belongs to whoever is still waiting rather than to whoever
-// asked first, so it does not inherit that caller's cancellation. It has to
-// inherit a deadline from somewhere, and this is it.
-const fetchCeiling = 2 * time.Minute
 
 // Cache kinds, which are also the metrics label. A class rather than the path,
 // because a path carries a device id and a metric labelled with one is a new
@@ -55,24 +47,14 @@ const (
 // principal, so that Observium's own user levels did the filtering -- this
 // shape would become unsafe and the principal would have to enter the key.
 type readCache struct {
-	plugin string
-	store  *cachestore.Store
-	group  cachestore.Group
-	cfg    Config
-	now    func() time.Time
-	obs    plugins.CacheObserver
+	cfg  Config
+	core *plugins.ReadCache
 }
 
 func newReadCache(plugin string, cfg Config, now func() time.Time, obs plugins.CacheObserver) *readCache {
-	if now == nil {
-		now = time.Now
-	}
 	return &readCache{
-		plugin: plugin,
-		store:  cachestore.NewBounded(maxCacheEntries, maxCacheBytes),
-		cfg:    cfg,
-		now:    now,
-		obs:    obs,
+		cfg:  cfg,
+		core: plugins.NewReadCache(plugin, maxCacheEntries, maxCacheBytes, now, obs),
 	}
 }
 
@@ -135,52 +117,9 @@ func cacheKind(path string) string {
 func (c *readCache) reuse(ctx context.Context, path string, params url.Values,
 	ceiling int, fetch func(context.Context) (any, error)) (any, error) {
 
-	ttl := c.cfg.cacheTTL(path)
-	if ttl <= 0 {
-		return fetch(ctx)
-	}
 	kind := cacheKind(path)
-	key := cacheKey(kind, path, params, ceiling)
-
-	if hit := c.store.Get(key); hit != nil && hit.State(c.now()) == cachestore.Fresh {
-		c.event(kind, plugins.CacheHit)
-		return hit.Value, nil
-	}
-
-	value, shared, err := c.group.Do(ctx, key, fetchCeiling, func(ctx context.Context) (any, error) {
-		// Re-checked inside the flight: the caller this one is sharing with
-		// may have filled the entry between the miss above and getting here.
-		if hit := c.store.Get(key); hit != nil && hit.State(c.now()) == cachestore.Fresh {
-			return hit.Value, nil
-		}
-		v, err := fetch(ctx)
-		if err != nil {
-			// A failure is not an answer and is not held. An Observium that is
-			// down should be reported as down on every call rather than
-			// remembered as an empty estate.
-			return nil, err
-		}
-		c.store.Put(key, &cachestore.Entry{
-			Value: v, FetchedAt: c.now(), TTL: ttl, Bytes: cachestore.Size(v),
-		})
-		return v, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if shared {
-		c.event(kind, plugins.CacheShared)
-	} else {
-		c.event(kind, plugins.CacheMiss)
-	}
-	return value, nil
-}
-
-func (c *readCache) event(kind, event string) {
-	if c.obs == nil {
-		return
-	}
-	c.obs.CacheEvent(c.plugin, kind, event)
+	return c.core.Do(ctx, kind, cacheKey(kind, path, params, ceiling),
+		c.cfg.cacheTTL(path), fetch)
 }
 
 // cacheKey builds the key for one upstream request.

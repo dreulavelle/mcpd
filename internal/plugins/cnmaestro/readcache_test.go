@@ -84,7 +84,7 @@ func cachingClient(t *testing.T, f *fakeAPI, obs *recordingObserver, mutate func
 	if obs != nil {
 		observer = obs
 	}
-	cache := newReadCache("cnmaestro", cfg, clk.now, observer)
+	cache := newReadCache("cnmaestro", clk.now, observer)
 	// The token manager gets real time: expiry is not what these test, and a
 	// frozen clock would make every call look like the first.
 	return NewClient(f.server.Client(), cfg, "client-id", "client-secret",
@@ -490,7 +490,7 @@ func BenchmarkList(b *testing.B) {
 		cfg.withDefaults()
 		var cache *readCache
 		if cfg.DeviceCacheTTL > 0 {
-			cache = newReadCache("cnmaestro", cfg, time.Now, nil)
+			cache = newReadCache("cnmaestro", time.Now, nil)
 		}
 		return NewClient(f.server.Client(), cfg, "id", "secret",
 			discardLogger(), time.Now, cache, nil)

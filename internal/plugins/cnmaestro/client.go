@@ -155,7 +155,7 @@ func (c *Client) reuse(ctx context.Context, kind, path string, params url.Values
 		return fetch(ctx)
 	}
 	key := cacheKey(kind, path, c.resolveAccount(params))
-	return c.cache.do(ctx, cacheKind(path), key, ttl, fetch)
+	return c.cache.Do(ctx, cacheKind(path), key, ttl, fetch)
 }
 
 // Page is one page of a collection, plus what it took to get there.
