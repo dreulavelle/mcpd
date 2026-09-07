@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"math/rand/v2"
@@ -44,10 +45,6 @@ type PublisherConfig struct {
 	// BaseBackoff is the first retry delay after a publish failure.
 	BaseBackoff time.Duration
 	// MaxBackoff caps the retry delay.
-	//
-	// If a JetStream bus is ever introduced, this must stay well below the
-	// stream's duplicate window: a republish arriving after that window is no
-	// longer recognised as a duplicate and lands twice.
 	MaxBackoff time.Duration
 }
 
@@ -76,18 +73,18 @@ type PublishObserver func(result string)
 
 // Results a PublishObserver is called with.
 const (
-	// PublishDelivered is an event handed to the bus and marked published.
+	// PublishDelivered is an event the handler took and the mark landed on.
 	PublishDelivered = "delivered"
-	// PublishFailed is an event the bus refused; it will be retried.
+	// PublishFailed is an event the handler refused; it will be retried.
 	PublishFailed = "failed"
-	// PublishUnmarked is the awkward one: the bus took it and the mark did
+	// PublishUnmarked is the awkward one: the handler took it and the mark did
 	// not land, so it will be delivered again. Counted separately because a
 	// consumer seeing duplicates has this as its explanation, and nothing
 	// else in the system says it happened.
 	PublishUnmarked = "delivered_unmarked"
 )
 
-// Publisher drains the outbox onto the bus.
+// Publisher drains the outbox to its handler.
 //
 // It is the only component that turns a committed state change into a
 // delivered event, and it is restart-safe by construction: the drain query is
@@ -96,7 +93,7 @@ const (
 // a millisecond ago or before the last crash.
 type Publisher struct {
 	repo    OutboxReader
-	bus     Bus
+	deliver Handler
 	log     *slog.Logger
 	cfg     PublisherConfig
 	now     func() time.Time
@@ -108,7 +105,7 @@ type Publisher struct {
 }
 
 // NewPublisher builds the drain worker.
-func NewPublisher(repo OutboxReader, bus Bus, log *slog.Logger, cfg PublisherConfig, now func() time.Time, observe PublishObserver) *Publisher {
+func NewPublisher(repo OutboxReader, deliver Handler, log *slog.Logger, cfg PublisherConfig, now func() time.Time, observe PublishObserver) *Publisher {
 	cfg.withDefaults()
 	if now == nil {
 		now = time.Now
@@ -116,9 +113,12 @@ func NewPublisher(repo OutboxReader, bus Bus, log *slog.Logger, cfg PublisherCon
 	if observe == nil {
 		observe = func(string) {}
 	}
+	if deliver == nil {
+		deliver = func(context.Context, Event) error { return nil }
+	}
 	return &Publisher{
 		repo:    repo,
-		bus:     bus,
+		deliver: deliver,
 		log:     log,
 		cfg:     cfg,
 		now:     now,
@@ -202,7 +202,7 @@ func (p *Publisher) publishOne(ctx context.Context, ev PendingEvent) {
 		Payload:       ev.Payload,
 	}
 
-	if err := p.bus.Publish(ctx, event); err != nil {
+	if err := p.handle(ctx, event); err != nil {
 		delay := p.backoff(ev.Attempts)
 		p.log.Warn("event publication failed; will retry",
 			"event_id", ev.EventID, "subject", ev.Subject,
@@ -230,6 +230,19 @@ func (p *Publisher) publishOne(ctx context.Context, ev PendingEvent) {
 		return
 	}
 	p.observe(PublishDelivered)
+}
+
+// handle invokes the handler, converting a panic into an error.
+//
+// A bug in the consumer must fail its own event and leave it to be retried,
+// rather than take down the drain loop and stall every other event with it.
+func (p *Publisher) handle(ctx context.Context, e Event) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("messaging: handler panicked: %v", v)
+		}
+	}()
+	return p.deliver(ctx, e)
 }
 
 // backoff returns the retry delay for an attempt count, with jitter.
