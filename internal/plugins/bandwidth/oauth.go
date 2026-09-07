@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/spoked/mcpd/internal/plugins"
 )
 
 // tokenPath is where a client credential is exchanged for a bearer token.
@@ -105,12 +107,12 @@ func (t *tokenSource) exchange(ctx context.Context) error {
 	resp, err := t.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("bandwidth: reaching %s for a token: %w",
-			redactURL(t.tokenURL), redactSecret(err, t.secret))
+			plugins.RedactURL(t.tokenURL), redactSecret(err, t.secret))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return explainTokenFailure(resp.StatusCode, redactURL(t.tokenURL))
+		return explainTokenFailure(resp.StatusCode, plugins.RedactURL(t.tokenURL))
 	}
 
 	var out struct {
@@ -121,11 +123,11 @@ func (t *tokenSource) exchange(ctx context.Context) error {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return fmt.Errorf("bandwidth: %s answered the token request with "+
 			"something that is not JSON; the address may be reaching a proxy "+
-			"rather than the API", redactURL(t.tokenURL))
+			"rather than the API", plugins.RedactURL(t.tokenURL))
 	}
 	if out.AccessToken == "" {
 		return fmt.Errorf("bandwidth: %s answered the token request without a "+
-			"token", redactURL(t.tokenURL))
+			"token", plugins.RedactURL(t.tokenURL))
 	}
 
 	t.token = out.AccessToken

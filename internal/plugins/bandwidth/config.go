@@ -156,14 +156,3 @@ func redactSecret(err error, secret string) error {
 	}
 	return errors.New(strings.ReplaceAll(msg, secret, "[REDACTED]"))
 }
-
-// redactURL keeps the host and drops everything that could carry a credential.
-func redactURL(raw string) string {
-	if i := strings.Index(raw, "://"); i >= 0 {
-		rest := raw[i+3:]
-		if j := strings.IndexAny(rest, "/?#"); j >= 0 {
-			return raw[:i+3] + rest[:j]
-		}
-	}
-	return raw
-}

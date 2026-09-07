@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/spoked/mcpd/internal/plugins"
 )
 
 // host names which of Bandwidth's products a call is addressed to.
@@ -183,7 +185,7 @@ func (c *Client) get(ctx context.Context, h host, path string, query url.Values,
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
 		return fmt.Errorf("bandwidth: %s answered %s with something that is "+
-			"not the API's JSON: %s", redactURL(c.base(h)), path,
+			"not the API's JSON: %s", plugins.RedactURL(c.base(h)), path,
 			summarise(http.StatusOK, raw))
 	}
 	return nil
@@ -213,7 +215,7 @@ func (c *Client) do(ctx context.Context, h host, path string, query url.Values, 
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
 		return nil, fmt.Errorf("bandwidth: reaching %s: %w",
-			redactURL(c.base(h)), err)
+			plugins.RedactURL(c.base(h)), err)
 	}
 	defer resp.Body.Close()
 
@@ -237,7 +239,7 @@ func (c *Client) do(ctx context.Context, h host, path string, query url.Values, 
 	// shape appears on more than one of them, and a log line that names only
 	// the path cannot say which product refused a call.
 	c.log.DebugContext(ctx, "bandwidth API call",
-		"host", redactURL(c.base(h)), "path", path, "status", resp.StatusCode,
+		"host", plugins.RedactURL(c.base(h)), "path", path, "status", resp.StatusCode,
 		"bytes", len(body), "took", elapsed)
 
 	if resp.StatusCode >= 300 {
@@ -279,7 +281,7 @@ func (c *Client) getXMLAt(ctx context.Context, path string, query url.Values) (R
 	out, err := decodeXML(raw)
 	if err != nil {
 		return nil, fmt.Errorf("bandwidth: %s answered %s with something this "+
-			"integration could not read: %w", redactURL(c.api), path, err)
+			"integration could not read: %w", plugins.RedactURL(c.api), path, err)
 	}
 	// The Dashboard reports its own failures inside a 200 as often as through
 	// a status code, which is why this is checked here rather than left to the
@@ -354,7 +356,7 @@ func (c *Client) Describe() string {
 	}
 	return fmt.Sprintf("Bandwidth at %s, %s and %s, reading %s, restricted to "+
 		"a named list of read endpoints by its transport",
-		redactURL(c.api), redactURL(c.voice), redactURL(c.messaging), scope)
+		plugins.RedactURL(c.api), plugins.RedactURL(c.voice), plugins.RedactURL(c.messaging), scope)
 }
 
 // limit caps a caller's page size to what this instance allows.

@@ -130,3 +130,60 @@ func TestExplain_LeavesTheUnrecognisedAlone(t *testing.T) {
 		t.Error("Explain(nil) must be nil")
 	}
 }
+
+// RedactURL is the one function standing between a configured address and a log
+// line, and six integrations depend on it. Nothing covered it.
+func TestRedactURL(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{
+			// The reason this function exists. An operator may put credentials
+			// in a configured address, and nothing rejects one that does.
+			name: "strips userinfo",
+			in:   "https://someone:hunter2@api.example.com/v1/accounts",
+			want: "https://api.example.com/v1/accounts",
+		},
+		{
+			name: "strips a username with no password",
+			in:   "https://someone@api.example.com/v1",
+			want: "https://api.example.com/v1",
+		},
+		{
+			// A query string is where a token ends up when somebody follows an
+			// older integration guide.
+			name: "strips the query",
+			in:   "https://api.example.com/v1?access_token=abc123",
+			want: "https://api.example.com/v1",
+		},
+		{
+			name: "strips both at once",
+			in:   "https://someone:hunter2@api.example.com/v1?token=abc123",
+			want: "https://api.example.com/v1",
+		},
+		{
+			name: "keeps an ordinary address whole",
+			in:   "https://api.example.com",
+			want: "https://api.example.com",
+		},
+		{
+			// The path is kept: it says which endpoint was being reached, and
+			// it is the part an operator matches against their own config.
+			name: "keeps the path and the port",
+			in:   "https://api.example.com:8443/v1/accounts/9000001",
+			want: "https://api.example.com:8443/v1/accounts/9000001",
+		},
+		{
+			// An address that will not parse is the one most likely to be
+			// malformed *because* it carries something unexpected, so it is
+			// described rather than echoed.
+			name: "describes an address it cannot parse",
+			in:   "https://api.example.com/\x7f\x00",
+			want: "the configured address",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RedactURL(tc.in); got != tc.want {
+				t.Errorf("RedactURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
