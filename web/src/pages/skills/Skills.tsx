@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { BadgeCheck, Check, Copy, ExternalLink, Search } from "lucide-react";
-import { PageHeader } from "@/components/chrome";
+import { BadgeCheck, ExternalLink, Search } from "lucide-react";
+import { Copyable, PageHeader } from "@/components/chrome";
 import { Segmented } from "@/components/Segmented";
 import { Input } from "@/components/ui/input";
+import { day } from "@/lib/format";
 import { useQueryParam } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import {
@@ -38,6 +39,9 @@ export function Skills() {
   const meta = BOARDS.find((b) => b.key === board)!;
 
   const rows = SKILLS.boards[board];
+  // The rank a skill holds on the board. Built once rather than scanning the
+  // board for every rendered row on every keystroke.
+  const ranks = useMemo(() => new Map(rows.map((r, i) => [r, i + 1])), [rows]);
   const shown = useMemo(
     () => (query.trim() ? search(rows, query) : rows.slice(0, tier)),
     [rows, query, tier],
@@ -50,7 +54,7 @@ export function Skills() {
     <>
       <PageHeader
         title="Skills"
-        lede="What the wider ecosystem is installing. Nothing here runs on this host."
+        lede={`What the wider ecosystem is installing, as counted on ${day(SKILLS.captured)}. Nothing here runs on this host.`}
       />
 
       {board === "top"
@@ -87,7 +91,7 @@ export function Skills() {
         </div>
       </div>
 
-      {shown.length === 0 ? (
+      {shown.length === 0 && query.trim() ? (
         <p className="mt-8 text-sm text-muted-foreground">
           No skills match “{query}”.
         </p>
@@ -98,12 +102,13 @@ export function Skills() {
             return (
             <Row
               key={key}
+              id={`skill-${key.replace(/[^a-zA-Z0-9]+/g, "-")}`}
               open={open === key}
               onToggle={() => setOpen(open === key ? "" : key)}
               skill={skill}
-              // The rank it holds on the board, which is not its position in a
-              // filtered list -- a search must not renumber the leaderboard.
-              rank={rows.indexOf(skill) + 1}
+              // The rank it holds on the board, which is not its position in
+              // a filtered list -- a search must not renumber the leaderboard.
+              rank={ranks.get(skill) ?? 0}
               board={board}
               counts={meta.counts}
             />
@@ -228,13 +233,15 @@ function Leaders({ publishers }: { publishers: Publisher[] }) {
 }
 
 /** One skill, which opens to show how to install it. */
-function Row({ skill, rank, board, counts, open, onToggle }: {
+function Row({ skill, rank, board, counts, open, onToggle, id }: {
   skill: Skill;
   rank: number;
   board: BoardKey;
   counts: string;
   open: boolean;
   onToggle: () => void;
+  /** Ties the button to the panel it opens, for anything reading the page. */
+  id: string;
 }) {
   const movement = trend(skill.weekly);
 
@@ -244,6 +251,7 @@ function Row({ skill, rank, board, counts, open, onToggle }: {
         type="button"
         onClick={onToggle}
         aria-expanded={open}
+        aria-controls={`${id}-detail`}
         className={cn(
           "flex w-full items-center gap-3 px-3 py-2.5 text-left outline-none",
           "hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50",
@@ -273,8 +281,13 @@ function Row({ skill, rank, board, counts, open, onToggle }: {
         )}
 
         <span className="w-24 shrink-0 text-right">
+          {/* The hot board is ordered by the day's change, so that is the
+              number the column shows: printing installs there gives a ranked
+              list whose figures do not descend. */}
           <span className="block text-sm font-medium tabular-nums">
-            {skill.installs.toLocaleString()}
+            {board === "hot" && skill.change !== undefined
+              ? `${skill.change >= 0 ? "+" : "−"}${Math.abs(skill.change).toLocaleString()}`
+              : skill.installs.toLocaleString()}
           </span>
           {board === "top" && movement !== null && (
             <span
@@ -284,20 +297,20 @@ function Row({ skill, rank, board, counts, open, onToggle }: {
               )}
             >
               {movement >= 0 ? "+" : "−"}
-              {Math.abs(Math.round(movement * 100))}% over 8 weeks
+              {Math.abs(Math.round(movement * 100))}% over eight weeks
             </span>
           )}
-          {board === "hot" && skill.change !== undefined && (
+          {board === "hot" && skill.yesterday !== undefined && (
             <span className="block text-xs text-muted-foreground tabular-nums">
               {skill.yesterday === 0
-                ? "new today"
-                : `${skill.yesterday?.toLocaleString()} yesterday`}
+                ? `${skill.installs.toLocaleString()} today, new`
+                : `${skill.installs.toLocaleString()} today, ${skill.yesterday.toLocaleString()} yesterday`}
             </span>
           )}
         </span>
       </button>
 
-      {open && <Detail skill={skill} counts={counts} />}
+      {open && <Detail skill={skill} counts={counts} id={`${id}-detail`} />}
     </li>
   );
 }
@@ -330,54 +343,38 @@ function Trendline({ weekly, rising }: { weekly: number[] | undefined; rising: b
 }
 
 /** What the row opens to: how to install it, and where to read more. */
-function Detail({ skill, counts }: { skill: Skill; counts: string }) {
-  const [copied, setCopied] = useState(false);
+function Detail({ skill, counts, id }: { skill: Skill; counts: string; id: string }) {
   const command = installCommand(skill);
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard access can be refused. The command is on screen either way,
-      // so there is nothing to report and nothing to recover from.
-    }
-  }
-
   return (
-    <div className="border-t bg-muted/30 px-3 py-3 pl-13">
+    <div id={id} className="border-t bg-muted/30 px-3 py-3 pl-13">
       <p className="text-xs text-muted-foreground">
         {skill.installs.toLocaleString()} {counts}.
       </p>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <code className="flex-1 truncate rounded border bg-background px-2 py-1.5 font-mono text-xs">
-          {command}
-        </code>
-        <button
-          type="button"
-          onClick={copy}
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium",
-            "hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none",
-          )}
-        >
-          {copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-          {copied ? "Copied" : "Copy"}
-        </button>
-        <a
-          href={skillUrl(skill)}
-          target="_blank"
-          rel="noreferrer noopener"
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium",
-            "hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none",
-          )}
-        >
-          <ExternalLink className="size-3.5" aria-hidden="true" />
-          Read about it
-        </a>
-      </div>
+
+      {command
+        ? <Copyable value={command} label="the install command" className="mt-2" />
+        : (
+          // Some rows are published from a bare domain rather than a
+          // repository, and `skills add` has no form that reaches those.
+          <p className="mt-2 text-xs text-muted-foreground">
+            Published from {skill.source} rather than a repository, so there is
+            no one-line install for it.
+          </p>
+        )}
+
+      <a
+        href={skillUrl(skill)}
+        target="_blank"
+        rel="noreferrer noopener"
+        className={cn(
+          "mt-2 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium",
+          "hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none",
+        )}
+      >
+        <ExternalLink className="size-3.5" aria-hidden="true" />
+        Read about it
+      </a>
     </div>
   );
 }

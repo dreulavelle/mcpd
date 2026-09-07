@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  compact, movers, publishers, search, linePath, trend, type Skill,
+  compact, installCommand, movers, publishers, search, linePath, skillUrl,
+  trend, type Skill,
 } from "./board";
 
 function skill(over: Partial<Skill> = {}): Skill {
@@ -131,5 +132,59 @@ describe("publishers", () => {
   it("gives every share as zero rather than NaN when nothing was installed", () => {
     const quiet = publishers([skill({ installs: 0 }), skill({ id: "b", installs: 0 })]);
     expect(quiet.every((p) => p.share === 0)).toBe(true);
+  });
+});
+
+describe("installCommand", () => {
+  /**
+   * `skills add` takes a repository and picks the skill out of it with
+   * --skill. It does not take `owner/repo/skill`: that is neither of its
+   * accepted forms and installs nothing, which is the worst kind of wrong for
+   * a command whose only purpose is to be copied.
+   */
+  it("names the repository and the skill separately", () => {
+    expect(installCommand(skill({ source: "anthropics/skills", id: "pdf" })))
+      .toBe("npx skills add anthropics/skills --skill pdf");
+  });
+
+  /** Some rows are published from a bare domain, which is not a repository. */
+  it("gives no command for a publisher that is not a repository", () => {
+    expect(installCommand(skill({ source: "open.example", id: "thing" }))).toBeNull();
+  });
+});
+
+describe("skillUrl", () => {
+  /**
+   * The publisher sits directly under the origin. An extra "/skills" segment
+   * answers 200 with the site's front page, so the wrong link looks like a
+   * working one and nobody reports it.
+   */
+  it("puts the publisher directly under the origin", () => {
+    expect(skillUrl(skill({ source: "anthropics/skills", id: "pdf" })))
+      .toBe("https://www.skills.sh/anthropics/skills/pdf");
+  });
+});
+
+describe("movers, on the sign", () => {
+  /**
+   * Slicing the head and tail of a sorted list fills a column headed Falling
+   * with whatever is least positive, so a week where everything grew printed
+   * a green number under a red heading.
+   */
+  it("leaves the falling side empty when nothing fell", () => {
+    const rising = [
+      skill({ id: "a", weekly: [10, 10, 20, 20] }),
+      skill({ id: "b", weekly: [10, 10, 15, 15] }),
+    ];
+    const { climbing, falling } = movers(rising, 3);
+    expect(climbing).toHaveLength(2);
+    expect(falling).toHaveLength(0);
+  });
+});
+
+describe("trend, on an odd series", () => {
+  /** Three weeks against two reports the extra week as growth. */
+  it("compares halves of equal length", () => {
+    expect(trend([99, 10, 10, 20, 20])).toBeCloseTo(1);
   });
 });

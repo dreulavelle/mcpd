@@ -119,8 +119,8 @@ describe("the skills page", () => {
   it("names a hot row that came from nothing", async () => {
     renderWith(<Skills />, { path: "/skills" });
     await userEvent.click(screen.getByRole("radio", { name: "Hot" }));
-    expect(screen.getByText("new today")).toBeInTheDocument();
-    expect(screen.getByText("40 yesterday")).toBeInTheDocument();
+    expect(screen.getByText("14 today, new")).toBeInTheDocument();
+    expect(screen.getByText("286 today, 40 yesterday")).toBeInTheDocument();
   });
 
   it("says plainly when a search matches nothing", async () => {
@@ -138,7 +138,7 @@ describe("the skills page", () => {
     renderWith(<Skills />, { path: "/skills" });
 
     await userEvent.click(screen.getByRole("radio", { name: "Hot" }));
-    expect(screen.getByText("40 yesterday")).toBeInTheDocument();
+    expect(screen.getByText("286 today, 40 yesterday")).toBeInTheDocument();
     await userEvent.click(rows()[0]!);
     expect(screen.getByText(/286 installs so far today/)).toBeInTheDocument();
 
@@ -150,7 +150,7 @@ describe("the skills page", () => {
   it("opens a row onto the command that installs it", async () => {
     renderWith(<Skills />, { path: "/skills" });
     await userEvent.click(rows()[0]!);
-    expect(screen.getByText("npx skills add anthropics/skills/skill-0")).toBeInTheDocument();
+    expect(screen.getByText("npx skills add anthropics/skills --skill skill-0")).toBeInTheDocument();
   });
 
   /**
@@ -187,11 +187,11 @@ describe("the skills page", () => {
     renderWith(<Skills />, { path: "/skills" });
 
     await userEvent.click(rows()[0]!);
-    expect(screen.getByText("npx skills add anthropics/skills/skill-0")).toBeInTheDocument();
+    expect(screen.getByText("npx skills add anthropics/skills --skill skill-0")).toBeInTheDocument();
 
     await userEvent.click(rows()[0]!);
     expect(screen.getAllByText(/^npx skills add/)).toHaveLength(1);
-    expect(screen.getByText("npx skills add acme/pack-1/skill-1")).toBeInTheDocument();
+    expect(screen.getByText("npx skills add acme/pack-1 --skill skill-1")).toBeInTheDocument();
   });
 
   it("closes a row when it is clicked again", async () => {

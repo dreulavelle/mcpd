@@ -93,15 +93,20 @@ function arrayAfter(text, marker) {
   return JSON.parse(text.slice(from, end));
 }
 
-/** Keeps the fields the page draws, and drops a row missing any of them. */
+/**
+ * Keeps the fields the page draws, and drops a row missing any of them.
+ *
+ * Nothing here removes republished copies. The API documents an `isDuplicate`
+ * flag and these payloads do not carry it, so a filter on it would read as a
+ * defence while never having removed a row -- and the boards do visibly carry
+ * one skill under several publishers. The publishers panel on the page is what
+ * makes that legible instead of hiding it.
+ */
 function clean(raw) {
   const rows = [];
   for (const s of raw) {
     if (typeof s.source !== "string" || typeof s.skillId !== "string") continue;
     if (typeof s.installs !== "number") continue;
-    // A fork republishing somebody else's skill is noise in a ranking of what
-    // people install, and skills.sh has already worked out which those are.
-    if (s.isDuplicate) continue;
 
     const row = {
       source: s.source,

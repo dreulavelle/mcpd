@@ -30,7 +30,7 @@ fi
 # Only text a person wrote or captured. Bundles, lockfiles and the public
 # catalogue captures are somebody else's data, not this deployment's.
 files=$(printf '%s\n' "$files" | grep -v -E \
-    '^(web/node_modules/|web/package-lock\.json|internal/admin/dist/|internal/registry/testdata/|CHANGELOG\.md$)' \
+    '^(web/node_modules/|web/package-lock\.json|internal/admin/dist/|internal/registry/testdata/|web/src/data/skills\.json|CHANGELOG\.md$)' \
     | grep -E '\.(go|md|ts|tsx|sql|yaml|yml|json|txt|sh)$' || true)
 [ -z "$files" ] && exit 0
 

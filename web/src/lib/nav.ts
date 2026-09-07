@@ -122,7 +122,7 @@ export const NAV: NavGroup[] = [
         // something this host can add, so the lede has to say which it is.
         path: "/skills",
         label: "Skills",
-        lede: "What the wider agent-skills ecosystem is installing. Reference only \u2014 nothing here is installed on this host.",
+        lede: "What the wider agent-skills ecosystem is installing. Reference only — nothing here is installed on this host.",
         icon: TrendingUp,
         // No host data on the page, so anybody with an account may read it.
         capability: "signed-in",

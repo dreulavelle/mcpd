@@ -80,9 +80,12 @@ export const BOARDS: { key: BoardKey; label: string; counts: string }[] = [
  */
 export function trend(weekly: number[] | undefined): number | null {
   if (!weekly || weekly.length < 4) return null;
+  // Halves of equal length. An odd series compared three weeks against two and
+  // reported the extra week as growth.
   const half = Math.floor(weekly.length / 2);
-  const earlier = weekly.slice(0, half).reduce((a, b) => a + b, 0);
-  const later = weekly.slice(half).reduce((a, b) => a + b, 0);
+  const even = weekly.slice(weekly.length - half * 2);
+  const earlier = even.slice(0, half).reduce((a, b) => a + b, 0);
+  const later = even.slice(half).reduce((a, b) => a + b, 0);
   if (earlier === 0) return null;
   return (later - earlier) / earlier;
 }
@@ -114,12 +117,14 @@ export function movers(rows: Skill[], count = 3): { climbing: Mover[]; falling: 
   }
   scored.sort((a, b) => b.change - a.change);
 
+  // Split on the sign, not on position. Slicing the head and tail of a sorted
+  // list fills a column called Falling with whatever is least positive, so a
+  // week where everything grew printed "+10%" in red under that heading.
+  const up = scored.filter((m) => m.change > 0);
+  const down = scored.filter((m) => m.change < 0);
   return {
-    climbing: scored.slice(0, count),
-    // Never the same skill twice: with fewer than twice `count` to go round,
-    // the falling side gives up its rows rather than repeating the climbing
-    // side's back to front.
-    falling: scored.slice(Math.max(count, scored.length - count)).reverse(),
+    climbing: up.slice(0, count),
+    falling: down.slice(-count).reverse(),
   };
 }
 
@@ -169,14 +174,32 @@ export function search(rows: Skill[], query: string): Skill[] {
   );
 }
 
-/** The command that installs one, which is the same for every agent. */
-export function installCommand(skill: Skill): string {
-  return `npx skills add ${skill.source}/${skill.id}`;
+/**
+ * The command that installs one, or null when there is no honest one to give.
+ *
+ * `skills add` takes a repository and picks the skill out of it with --skill;
+ * it does not take `owner/repo/skill`, which is neither of its accepted forms
+ * and installs nothing. Verified against skills.sh's own copy button and the
+ * CLI's help at skills@1.5.24.
+ *
+ * A publisher without a slash is not a repository at all -- some rows are
+ * published from a bare domain -- and there is no shorthand that reaches those,
+ * so they get the link and no command rather than one that fails on paste.
+ */
+export function installCommand(skill: Skill): string | null {
+  if (!skill.source.includes("/")) return null;
+  return `npx skills add ${skill.source} --skill ${skill.id}`;
 }
 
-/** Where the skill is described in full. */
+/**
+ * Where the skill is described in full.
+ *
+ * The publisher and the skill sit directly under the origin. A `/skills`
+ * segment in front of them answers 200 with the site's front page, so a wrong
+ * link here looks like a working one.
+ */
 export function skillUrl(skill: Skill): string {
-  return `${SKILLS.source}/skills/${skill.source}/${skill.id}`;
+  return `${SKILLS.source}/${skill.source}/${skill.id}`;
 }
 
 /** A rounded, readable count: 3,293,855 becomes "3.3M". */

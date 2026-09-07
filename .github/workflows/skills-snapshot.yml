@@ -20,6 +20,8 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    # Three un-timed fetches; a hung one should not hold a runner all day.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -34,11 +36,22 @@ jobs:
       - name: Fetch the boards
         run: node web/scripts/fetch-skills.mjs
 
+      # A pull request opened with the default token does not start
+      # `on: pull_request`, so ci.yml never sees this branch. Without this the
+      # only thing between a changed page shape and main is somebody skimming
+      # a fifteen-thousand-line diff. The page's tests read the snapshot
+      # through resolveJsonModule, so a board of the wrong shape fails here.
+      - name: Check the snapshot against the page
+        run: cd web && npm ci --silent && npm test
+
       - uses: peter-evans/create-pull-request@v7
         with:
           branch: chore/skills-snapshot
           base: main
-          title: "chore(web): refresh the skills snapshot"
+          # Not a conventional commit: GitHub puts the PR title into the merge
+          # commit body and release-please reads that line too, which is how
+          # 0.18.0 and 0.19.1 each shipped one entry twice.
+          title: "Weekly skills snapshot"
           commit-message: |
             chore(web): refresh the skills snapshot
 
@@ -48,7 +61,8 @@ jobs:
           body: |
             The weekly refresh of `web/src/data/skills.json`.
 
-            Worth a glance at the diff rather than a blind merge: the numbers
+            Squash this rather than merging it, and read the diff rather than
+            taking it on trust: the numbers
             come out of a page's streamed payload, so a change in that page's
             shape shows up here as a board full of something else rather than
             as a failure.
