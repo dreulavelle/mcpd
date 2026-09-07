@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.22.0](https://github.com/dreulavelle/mcpd/compare/v0.21.1...v0.22.0) (2026-09-07)
+
+
+### Features
+
+* **web:** a Skills page, ranked from a committed snapshot ([74413de](https://github.com/dreulavelle/mcpd/commit/74413de09a054fc563f7cadd060e96d7d25b6515))
+
+
+### Fixes
+
+* **web:** the command palette fought the keyboard and read as a wall ([37889c6](https://github.com/dreulavelle/mcpd/commit/37889c6a49346e4b1f0e467e739ec696d4ec39de))
+
 ## [0.21.1](https://github.com/dreulavelle/mcpd/compare/v0.21.0...v0.21.1) (2026-09-07)
 
 
