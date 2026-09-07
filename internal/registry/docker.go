@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -265,11 +267,7 @@ func (d *Docker) GetIfChanged(ctx context.Context, name string, v Validators) (D
 // entries turns every row into an Entry, sorted by name so that paging over
 // the catalogue is stable.
 func (c dockerCatalog) entries() []Entry {
-	names := make([]string, 0, len(c.Registry))
-	for name := range c.Registry {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(c.Registry))
 	if len(names) > MaxCatalogEntries {
 		names = names[:MaxCatalogEntries]
 	}
@@ -577,10 +575,7 @@ func composeDockerDocument(name, title string, raw dockerEntry) (json.RawMessage
 // A header whose value carries no reference is a constant, and is passed
 // through as one.
 func dockerHeaders(raw dockerEntry) ([]any, error) {
-	names := make([]string, 0, len(raw.Remote.Headers))
-	for name := range raw.Remote.Headers {
-		names = append(names, name)
-	}
+	names := slices.Collect(maps.Keys(raw.Remote.Headers))
 	// Sorted so that the composed document is the same bytes every time. The
 	// import path hashes what it stores, and a map's iteration order would
 	// make the same catalogue entry two different documents.

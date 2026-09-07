@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/spoked/mcpd/internal/plugins"
@@ -249,7 +250,7 @@ func portOrderRow(item resource) (PortOrderRow, error) {
 				row.UnmappedFields = append(row.UnmappedFields, name)
 			}
 		}
-		sortStrings(row.UnmappedFields)
+		slices.Sort(row.UnmappedFields)
 	}
 	return row, nil
 }

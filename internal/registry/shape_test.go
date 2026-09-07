@@ -2,6 +2,7 @@ package registry
 
 import (
 	"encoding/json"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -139,10 +140,7 @@ func assertRawKeys(t *testing.T, what string, raw json.RawMessage, want ...strin
 }
 
 func keysOf(m map[string]json.RawMessage) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
+	out := slices.Collect(maps.Keys(m))
 	slices.Sort(out)
 	return out
 }

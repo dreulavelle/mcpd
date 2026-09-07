@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -354,10 +356,7 @@ func decodeCollection(raw json.RawMessage, key string) ([]map[string]any, error)
 		return nil, fmt.Errorf("%s was neither an array nor an object: %w", key, err)
 	}
 
-	ids := make([]string, 0, len(keyed))
-	for id := range keyed {
-		ids = append(ids, id)
-	}
+	ids := slices.Collect(maps.Keys(keyed))
 	sortIDs(ids)
 
 	out := make([]map[string]any, 0, len(keyed))

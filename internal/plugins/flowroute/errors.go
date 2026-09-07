@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -140,11 +142,8 @@ func renderDetail(raw json.RawMessage) string {
 	}
 	var fields map[string][]string
 	if json.Unmarshal(raw, &fields) == nil && len(fields) > 0 {
-		names := make([]string, 0, len(fields))
-		for k := range fields {
-			names = append(names, k)
-		}
-		sortStrings(names)
+		names := slices.Collect(maps.Keys(fields))
+		slices.Sort(names)
 		out := make([]string, 0, len(names))
 		for _, k := range names {
 			out = append(out, k+" "+strings.Join(fields[k], " "))
@@ -186,13 +185,4 @@ func explainRequestFailure(status int, body []byte) error {
 			"rather than the request. %s", status, msg)
 	}
 	return fmt.Errorf("flowroute answered %s", msg)
-}
-
-// sortStrings is sort.Strings, kept local so error rendering pulls in nothing.
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }

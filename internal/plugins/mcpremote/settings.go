@@ -18,6 +18,7 @@ package mcpremote
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/spoked/mcpd/internal/mcpservers"
 	"github.com/spoked/mcpd/internal/settings"
@@ -105,7 +106,7 @@ func fieldFor(in mcpservers.ConfigInput) (settings.Field, error) {
 	case len(in.Input.Choices) > 0:
 		f.Kind = settings.KindEnum
 		f.Options = append([]string(nil), in.Input.Choices...)
-		if d, ok := f.Default.(string); ok && !contains(f.Options, d) {
+		if d, ok := f.Default.(string); ok && !slices.Contains(f.Options, d) {
 			return settings.Field{}, fmt.Errorf(
 				"mcpremote: %q defaults to %q, which is not one of its choices", in.Name, d)
 		}
@@ -139,15 +140,6 @@ func label(in mcpservers.ConfigInput) string {
 		return in.Name + " header"
 	}
 	return in.Name
-}
-
-func contains(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }
 
 func intPtr(i int) *int { return &i }

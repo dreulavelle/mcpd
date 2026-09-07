@@ -3,8 +3,10 @@ package observium
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -111,11 +113,7 @@ func TestIntegration_ReadSurface(t *testing.T) {
 			continue
 		}
 
-		actual := make([]string, 0, len(fields))
-		for f := range fields {
-			actual = append(actual, f)
-		}
-		sort.Strings(actual)
+		actual := slices.Sorted(maps.Keys(fields))
 
 		declared, ok := summaryFields[entity]
 		if !ok {

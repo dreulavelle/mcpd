@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -703,11 +705,7 @@ func pickList(raw json.RawMessage, candidates ...string) (json.RawMessage, int, 
 		return items, total, nil
 	}
 
-	names := make([]string, 0, len(body))
-	for name := range body {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(body))
 	return nil, 0, fmt.Errorf("carried no %s -- it answered with %s. The API "+
 		"has renamed the field this reads, so the endpoint's answer is being "+
 		"read as an empty one",

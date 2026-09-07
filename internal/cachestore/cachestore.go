@@ -16,6 +16,8 @@ package cachestore
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 )
@@ -173,10 +175,7 @@ func (s *Store) Len() int {
 func (s *Store) Keys() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]string, 0, len(s.entries))
-	for k := range s.entries {
-		out = append(out, k)
-	}
+	out := slices.Collect(maps.Keys(s.entries))
 	return out
 }
 

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -629,11 +631,7 @@ func (a *App) declarationFor(name string) *admin.PluginDeclaration {
 	if !declared {
 		return nil
 	}
-	keys := make([]string, 0, len(pc.Settings))
-	for k := range pc.Settings {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(pc.Settings))
 	return &admin.PluginDeclaration{
 		Type:         pc.ResolvedType(name),
 		Enabled:      pc.Enabled,

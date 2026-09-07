@@ -4,8 +4,9 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -305,11 +306,7 @@ func hasContent(rec Record) bool {
 }
 
 func sortedKeys(rec Record) []string {
-	out := make([]string, 0, len(rec))
-	for k := range rec {
-		out = append(out, k)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(rec))
 	return out
 }
 

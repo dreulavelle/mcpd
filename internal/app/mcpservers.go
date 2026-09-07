@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -96,11 +97,7 @@ func (a *App) mcpServer(name string) (mcpservers.Server, bool) {
 func (a *App) mcpServerNames() []string {
 	a.mcpMu.RLock()
 	defer a.mcpMu.RUnlock()
-	out := make([]string, 0, len(a.mcpServers))
-	for name := range a.mcpServers {
-		out = append(out, name)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(a.mcpServers))
 	return out
 }
 

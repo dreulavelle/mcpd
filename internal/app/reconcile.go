@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -274,10 +276,7 @@ func (a *App) watchPluginSettings() {
 		if len(touched) == 0 {
 			return
 		}
-		names := make([]string, 0, len(touched))
-		for name := range touched {
-			names = append(names, name)
-		}
+		names := slices.Collect(maps.Keys(touched))
 		a.reconcileDetached(names...)
 	})
 }

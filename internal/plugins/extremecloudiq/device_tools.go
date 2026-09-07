@@ -3,6 +3,7 @@ package extremecloudiq
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -438,10 +439,7 @@ func pickView(field, given string, allowed map[string]string, fallback string) (
 	if view, ok := allowed[want]; ok {
 		return view, nil
 	}
-	names := make([]string, 0, len(allowed))
-	for name := range allowed {
-		names = append(names, name)
-	}
+	names := slices.Collect(maps.Keys(allowed))
 	slices.Sort(names)
 	return "", fmt.Errorf("extremecloudiq: %s is %q; it is one of %s",
 		field, given, strings.Join(names, ", "))

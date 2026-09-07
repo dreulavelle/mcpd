@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -118,7 +119,7 @@ func tagStrings(in []tag) []string {
 		}
 		out = append(out, t.Name+"="+t.Value)
 	}
-	sortStrings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -136,7 +137,7 @@ func wantTagStrings(in []tagPair) []string {
 		}
 		out = append(out, name)
 	}
-	sortStrings(out)
+	slices.Sort(out)
 	return out
 }
 
