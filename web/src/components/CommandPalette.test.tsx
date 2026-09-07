@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
@@ -90,5 +90,68 @@ describe("the command palette", () => {
     renderWith(<CommandPalette open onOpenChange={() => undefined} onSignOut={onSignOut} />);
     await userEvent.click(await screen.findByRole("option", { name: /Sign out/ }));
     expect(onSignOut).toHaveBeenCalled();
+  });
+
+  /**
+   * A palette that lists changes without saying which is critical makes you
+   * open each one to find out, which is slower than the page it saves.
+   */
+  it("says what a waiting change risks before it is opened", async () => {
+    renderWith(<CommandPalette open onOpenChange={() => undefined} onSignOut={() => undefined} />);
+    const row = await screen.findByRole("option", { name: /Restart the device on cnmaestro/ });
+    expect(within(row).getByText("high risk")).toBeInTheDocument();
+  });
+
+  /**
+   * Arrowing scrolls the highlighted row into view, which slides the list
+   * under a cursor that has not moved -- and the browser reports that as a
+   * pointer event over whatever is now beneath it. Acting on it snapped the
+   * selection back on every second keypress, and the palette felt broken.
+   */
+  it("does not let a stationary pointer overrule the arrow keys", async () => {
+    renderWith(<CommandPalette open onOpenChange={() => undefined} onSignOut={() => undefined} />);
+    await screen.findByRole("option", { name: /graylog/ });
+
+    const options = screen.getAllByRole("option");
+    // The cursor comes to rest over the first row.
+    fireEvent.pointerMove(options[0]!, { clientX: 40, clientY: 40 });
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+
+    await userEvent.keyboard("{ArrowDown}");
+    expect(options[1]).toHaveAttribute("aria-selected", "true");
+
+    // The list scrolls beneath the resting cursor: same coordinates, new row.
+    fireEvent.pointerMove(options[0]!, { clientX: 40, clientY: 40 });
+    expect(options[1]).toHaveAttribute("aria-selected", "true");
+
+    // A pointer that actually moves is somebody choosing.
+    fireEvent.pointerMove(options[0]!, { clientX: 41, clientY: 44 });
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("jumps to either end of the list", async () => {
+    renderWith(<CommandPalette open onOpenChange={() => undefined} onSignOut={() => undefined} />);
+    await screen.findByRole("option", { name: /graylog/ });
+    const options = screen.getAllByRole("option");
+
+    await userEvent.keyboard("{End}");
+    expect(options[options.length - 1]).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{Home}");
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  /**
+   * A ranking cannot carry headings without putting the best match under the
+   * third one, so a searched row says its own kind instead.
+   */
+  it("heads the groups when idle, and labels each row once a query ranks them", async () => {
+    renderWith(<CommandPalette open onOpenChange={() => undefined} onSignOut={() => undefined} />);
+    await screen.findByRole("option", { name: /graylog/ });
+    expect(screen.getByText("Waiting on you")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole("combobox"), "graylog");
+    expect(screen.queryByText("Plugins")).not.toBeInTheDocument();
+    const row = await screen.findByRole("option", { name: /graylog/ });
+    expect(within(row).getByText("Plugin")).toBeInTheDocument();
   });
 });

@@ -306,6 +306,36 @@
   }
 }
 
+/* A panel that scrolls inside a floating surface, with a bar that belongs to
+   that surface rather than to the operating system. The platform default is
+   drawn in the OS's own colours and sits against a dark popover as a bright
+   stripe, which is the one element on screen the theme does not reach. Thin,
+   in the surface's own border colour, and firmer under the pointer so it can
+   still be grabbed. */
+@utility scroll-panel {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+
+  &::-webkit-scrollbar {
+    width: 0.5rem;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 9999px;
+  }
+
+  &:hover::-webkit-scrollbar-thumb {
+    background-color: var(--muted-foreground);
+  }
+}
+
 /* A wide table scrolls inside its own box rather than pushing the page
    sideways. Approvals and audit are both wider than a narrow window. */
 @utility scroll-x {

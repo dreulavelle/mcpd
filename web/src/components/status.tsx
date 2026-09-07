@@ -57,6 +57,22 @@ export function Chip({ tone = "neutral", className, title, children }: {
   );
 }
 
+/**
+ * What a risk level looks like.
+ *
+ * Low is neutral rather than "good": a low-risk change is not a reassuring
+ * thing, it is an unremarkable one, and painting it green alongside a red
+ * critical implies the two are opposite verdicts on the same scale.
+ */
+export function riskTone(risk: string): Tone {
+  switch (risk) {
+    case "critical": return "problem";
+    case "high": return "attention";
+    case "medium": return "info";
+    default: return "neutral";
+  }
+}
+
 /* -- operations ------------------------------------------------------------ */
 
 /**
