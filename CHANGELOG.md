@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.21.1](https://github.com/dreulavelle/mcpd/compare/v0.21.0...v0.21.1) (2026-09-07)
+
+
+### Fixes
+
+* **bandwidth:** stop a credential in a configured address reaching the log ([9dc3a7b](https://github.com/dreulavelle/mcpd/commit/9dc3a7bc138a94d6c7590839f3c12e7b37f1058a))
+* **plugins:** restore a doc comment and a log field the consolidation moved ([629c552](https://github.com/dreulavelle/mcpd/commit/629c5522d033a12bddefeab0a854980f95679432))
+
+
+### Refactoring
+
+* drop the bus that carried events to one subscriber ([eea1e1b](https://github.com/dreulavelle/mcpd/commit/eea1e1b5b22ab6c77b067aade8ddaca80ba845b9))
+* enforce the read-only guarantee in one place ([08a18f9](https://github.com/dreulavelle/mcpd/commit/08a18f94c93bf04f99579e7429050e8e2f83dbbc))
+* one read cache, five plugins ([e916297](https://github.com/dreulavelle/mcpd/commit/e91629705d0daa1ee4f0907435cced953aaf4a08))
+* reach for the standard library where it was hand-rolled ([30950e4](https://github.com/dreulavelle/mcpd/commit/30950e4123cf6ef50af0fff58471cce5d58275a4))
+* single-source the helpers five plugins had each written out ([7023caa](https://github.com/dreulavelle/mcpd/commit/7023caa50e34be3b4cb89c01e51581c4acd12259))
+
 ## [0.21.0](https://github.com/dreulavelle/mcpd/compare/v0.20.0...v0.21.0) (2026-09-06)
 
 
