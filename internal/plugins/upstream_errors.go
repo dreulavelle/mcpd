@@ -100,8 +100,6 @@ func explanation(err error) string {
 	return ""
 }
 
-// upstreamHost digs out the address the failure was about, so the sentence can
-// name it once instead of the chain naming it twice.
 // RedactURL strips any credential and query string before a URL reaches a log
 // or an error a model will read back.
 //
@@ -123,6 +121,8 @@ func RedactURL(raw string) string {
 	return u.String()
 }
 
+// upstreamHost digs out the address the failure was about, so the sentence can
+// name it once instead of the chain naming it twice.
 func upstreamHost(err error) string {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {

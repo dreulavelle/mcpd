@@ -113,9 +113,6 @@ func NewPublisher(repo OutboxReader, deliver Handler, log *slog.Logger, cfg Publ
 	if observe == nil {
 		observe = func(string) {}
 	}
-	if deliver == nil {
-		deliver = func(context.Context, Event) error { return nil }
-	}
 	return &Publisher{
 		repo:    repo,
 		deliver: deliver,
@@ -206,6 +203,7 @@ func (p *Publisher) publishOne(ctx context.Context, ev PendingEvent) {
 		delay := p.backoff(ev.Attempts)
 		p.log.Warn("event publication failed; will retry",
 			"event_id", ev.EventID, "subject", ev.Subject,
+			"operation_id", ev.OperationID,
 			"attempts", ev.Attempts+1, "retry_in", delay, "error", err)
 
 		if mErr := p.repo.MarkFailed(ctx, ev.EventID, p.now().Add(delay), err.Error()); mErr != nil {
