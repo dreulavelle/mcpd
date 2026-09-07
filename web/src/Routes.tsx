@@ -1,8 +1,8 @@
-import { useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { capabilityFor, entryFor, redirectFor } from "@/lib/nav";
 import { useRouter, useSegments } from "@/lib/router";
 import { useCan } from "@/lib/session";
-import { Notice, PageHeader } from "@/components/chrome";
+import { Loading, Notice, PageHeader } from "@/components/chrome";
 import { ApprovalsList } from "@/pages/approvals/ApprovalsList";
 import { OperationDetail } from "@/pages/approvals/OperationDetail";
 import { Audit } from "@/pages/audit/Audit";
@@ -30,6 +30,16 @@ import { UsersAndGroups } from "@/pages/settings/UsersAndGroups";
 import { Performance } from "@/pages/performance/Performance";
 import { System } from "@/pages/system/System";
 import { Tunnels } from "@/pages/tunnels/Tunnels";
+
+/**
+ * Split out rather than bundled with the rest.
+ *
+ * It carries a ranking snapshot of its own -- tens of kilobytes gzipped, and
+ * the only page here whose weight is data rather than code. Every operator
+ * loading the console paid for it whether or not they ever opened the page.
+ */
+const Skills = lazy(() =>
+  import("@/pages/skills/Skills").then((m) => ({ default: m.Skills })));
 
 /**
  * What a path renders. `Gate` reads the capability out of `lib/nav.ts` and
@@ -84,6 +94,9 @@ export function Routes() {
       case "clients":
         return <Clients />;
 
+      case "skills":
+        return <Skills />;
+
       case "system":
         return <System />;
 
@@ -131,7 +144,11 @@ export function Routes() {
   // The settings rail belongs to the router rather than to each page, so a
   // page renders only what is its own and the rail is drawn exactly once.
   const framed = isSettingsTab(path) ? <SettingsLayout>{body}</SettingsLayout> : body;
-  return <Gate path={path}>{framed}</Gate>;
+  return (
+    <Gate path={path}>
+      <Suspense fallback={<Loading />}>{framed}</Suspense>
+    </Gate>
+  );
 }
 
 function Gate({ path, children }: { path: string; children: ReactNode }) {

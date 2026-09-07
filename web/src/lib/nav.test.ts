@@ -118,7 +118,9 @@ describe("navigation gating", () => {
   // the sidebar deciding on its behalf.
   it("shows only the signed-in entries to a principal holding no permission", () => {
     const labels = visibleNav(() => false).flatMap((g) => g.items.map((i) => i.label));
-    expect(labels).toEqual(["Overview"]);
+    // Skills too: it renders a snapshot in the bundle and no host data,
+    // so it asks for nothing beyond an account.
+    expect(labels).toEqual(["Overview", "Skills"]);
   });
 
   it("drops a group heading once its last entry is gone", () => {

@@ -1898,11 +1898,28 @@ rebuilding the bundle before the binary serves it.
 
 ### The dashboard's own decisions
 
-Four of them are worth writing down, because each was argued once and would
+Five of them are worth writing down, because each was argued once and would
 otherwise be argued again in a review. What the dashboard *says*, as opposed to
 how it is built, is [`dashboard-copy.md`](dashboard-copy.md): the voice, and
 the rule that a sentence says what happened and what to do while an error code,
 a status, a route or a log line goes under "Technical details".
+
+**The Skills page reads a file, not a service.** `/skills` ranks what the
+wider agent-skills ecosystem installs, from a snapshot committed at
+`web/src/data/skills.json` and compiled into the bundle — about 36 KB gzipped
+that every operator downloads whether or not they open the page. It is not
+fetched at runtime, because mcpd runs on somebody else's hardware and a
+ranking is not worth an outbound call from it; a page that reads a committed
+file is also a page whose numbers a support call can reproduce, since the list
+that shipped is the list in git. skills.sh has an API and it is deliberately
+unused: it authenticates only with a Vercel OIDC token, which Vercel mints for
+its own workloads, so reaching it would oblige this repository to keep a Vercel
+project alive to hold a credential — and its rows carry neither the weekly
+history nor the official flag that every trend line and badge on the page is
+drawn from. The leaderboard pages carry both, so a scheduled job scrapes them
+weekly and opens a pull request; the parse is deliberately loud, and a run that
+cannot find what it expects writes nothing and leaves the committed snapshot
+standing. Anybody wanting the full catalogue is sent to skills.sh itself.
 
 **One table decides what a route needs.** `web/src/lib/nav.ts` holds the
 sections as data, and `capabilityFor` is the single answer to "may this be
