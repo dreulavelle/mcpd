@@ -45,8 +45,9 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/settings` | Runtime configuration in the database |
 | `internal/mcpservers` | server.json, and the snapshot of a remote server's tools, with its age |
 | `internal/plugins/mcpremote` | Mounting a remote MCP server as a plugin |
+| `internal/plugins/httpguard` | The read-only guarantee: an allow-list transport, one rule table per plugin |
 | `internal/registry` | Browsing the public catalogues of MCP servers, and the operator's own |
-| `internal/messaging` | In-process bus and outbox publisher |
+| `internal/messaging` | The outbox publisher, and the one handler it drains to |
 | `internal/cachestore` | The bounded, timed map every cache is built on |
 | `internal/servertls` | Self-signed CA and certificate issuance |
 | `internal/notify` | Telling an operator what happened, when they have said where |
@@ -71,10 +72,12 @@ a row, never by a message. Every executor reloads and revalidates before
 acting, so a lost, duplicated, or forged event costs latency at worst.
 
 This is also why there is no broker. On one node a message bus carries a
-wake-up signal from the process to itself, which an in-process channel does for
-free. `internal/messaging` is that channel plus a transactional outbox; nothing
-about the design assumes it stays in-process, and the outbox is what makes
-swapping it a configuration change rather than a rewrite.
+wake-up signal from the process to itself, which a direct call does for free.
+`internal/messaging` is a transactional outbox and the drain that walks it,
+handing each event to one handler. There was a bus interface here once, kept
+against a second node that never arrived; the outbox is what makes delivery
+durable, so introducing a broker later is an addition rather than a rewrite,
+and the interface bought nothing in the meantime.
 
 **Nothing writes without an approval it can prove.** A mutation's payload is
 hashed at proposal and frozen. Before execution the hash is recomputed and

@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
+
+	"github.com/spoked/mcpd/internal/plugins"
 )
 
 // maxErrorBody bounds how much of a failure response is read. Enough for a
@@ -122,18 +123,6 @@ func summarise(status int, body []byte) string {
 	return fmt.Sprintf("HTTP %d: %s", status, text)
 }
 
-// redactURL strips any credential and query string before a URL reaches a log
-// or an error a model will read back.
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "the configured address"
-	}
-	u.User = nil
-	u.RawQuery = ""
-	return u.String()
-}
-
 // explainRequestFailure turns an API failure into something a person can act on
 // and a model can repeat without leaking anything.
 //
@@ -176,7 +165,7 @@ func explainRequestFailure(status int, path string, body []byte) error {
 			"account token is one opaque string, and one pasted short or with "+
 			"a stray character fails exactly like one that was revoked -- check "+
 			"it was copied whole before assuming it was revoked. Reaching %s",
-			summarise(status, body), redactURL(path))
+			summarise(status, body), plugins.RedactURL(path))
 
 	case http.StatusForbidden:
 		// The failure that means the plugin is working and the *key* is the

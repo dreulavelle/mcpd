@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -178,11 +180,7 @@ type advertisedTool struct {
 }
 
 func sortedPlugins() []string {
-	out := make([]string, 0, len(toolListBudget))
-	for name := range toolListBudget {
-		out = append(out, name)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(toolListBudget))
 	return out
 }
 

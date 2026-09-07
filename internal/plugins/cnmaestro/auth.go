@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/spoked/mcpd/internal/plugins"
 )
 
 // tokenResponse is the client-credentials response.
@@ -111,7 +113,7 @@ func (t *tokenManager) refresh(ctx context.Context) (string, string, error) {
 
 	resp, err := t.http.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("cnmaestro: reach %s: %w", redactURL(t.tokenURL), err)
+		return "", "", fmt.Errorf("cnmaestro: reach %s: %w", plugins.RedactURL(t.tokenURL), err)
 	}
 	defer resp.Body.Close()
 
@@ -199,7 +201,7 @@ func (t *tokenManager) host() string {
 // your credentials" sends someone to re-copy a client_id that was never the
 // problem.
 func explainTokenFailure(status int, tokenURL string, body []byte) error {
-	where := redactURL(tokenURL)
+	where := plugins.RedactURL(tokenURL)
 	upstream := ""
 	if p := oauthProblem(body); p != "" {
 		upstream = fmt.Sprintf(" It said: %s.", p)

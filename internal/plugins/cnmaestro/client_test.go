@@ -101,7 +101,7 @@ func testClient(t *testing.T, f *fakeAPI, mutate func(*Config)) *Client {
 
 	var cache *readCache
 	if cfg.InventoryCacheTTL > 0 || cfg.DeviceCacheTTL > 0 {
-		cache = newReadCache("cnmaestro", cfg, time.Now, nil)
+		cache = newReadCache("cnmaestro", time.Now, nil)
 	}
 	return NewClient(f.server.Client(), cfg, "client-id", "client-secret",
 		discardLogger(), time.Now, cache, nil)

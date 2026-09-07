@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -103,18 +102,6 @@ func mentionsManagedAccount(body []byte) string {
 		return msg
 	}
 	return ""
-}
-
-// redactURL strips any credential embedded in a URL before it reaches a log
-// or an error a model will read back.
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "the configured address"
-	}
-	u.User = nil
-	u.RawQuery = ""
-	return u.String()
 }
 
 // explainRequestFailure turns an API failure into something a person can act

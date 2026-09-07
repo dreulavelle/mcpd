@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -332,10 +334,7 @@ func paramNames(q url.Values) string {
 	if len(q) == 0 {
 		return ""
 	}
-	names := make([]string, 0, len(q))
-	for k := range q {
-		names = append(names, k)
-	}
-	sortStrings(names)
+	names := slices.Collect(maps.Keys(q))
+	slices.Sort(names)
 	return strings.Join(names, ",")
 }

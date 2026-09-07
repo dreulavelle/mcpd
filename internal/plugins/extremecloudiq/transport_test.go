@@ -146,7 +146,7 @@ func TestGuard_NormalisesBeforeMatching(t *testing.T) {
 // deployment, and its requests arrive as /gateway/devices. A guard that
 // trimmed a fixed prefix would refuse every single one of them.
 func TestGuard_HandlesAGatewayPrefix(t *testing.T) {
-	c := readOnly(nil, "/gateway")
+	c := readOnly(&http.Client{Transport: okTransport{}}, "/gateway")
 	if err := clientErr(c, http.MethodGet, "http://host.invalid/gateway/devices"); err != nil {
 		t.Errorf("a prefixed path was refused: %v", err)
 	}
@@ -185,7 +185,8 @@ func TestGuard_DoesNotFollowARedirect(t *testing.T) {
 // The transport underneath is never reached, so nothing here needs a server.
 func roundTrip(t *testing.T, method, path string) error {
 	t.Helper()
-	return clientErr(readOnly(nil, ""), method, "http://host.invalid"+path)
+	return clientErr(readOnly(&http.Client{Transport: okTransport{}}, ""), method,
+		"http://host.invalid"+path)
 }
 
 func clientErr(c *http.Client, method, target string) error {
@@ -193,15 +194,10 @@ func clientErr(c *http.Client, method, target string) error {
 	if err != nil {
 		return err
 	}
-	g, ok := c.Transport.(guard)
-	if !ok {
-		return errNotGuarded
-	}
-	// The guard's own decision, without a network underneath it: a permitted
-	// request would otherwise fail on DNS and be indistinguishable from a
-	// refused one.
-	g.base = okTransport{}
-	_, err = g.RoundTrip(req)
+	// The guard's own decision, without a network underneath it: the client is
+	// built over okTransport, so a permitted request cannot fail on DNS and be
+	// indistinguishable from a refused one.
+	_, err = c.Transport.RoundTrip(req)
 	return err
 }
 
@@ -211,12 +207,4 @@ func (okTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return &http.Response{
 		StatusCode: http.StatusOK, Body: http.NoBody, Request: r,
 	}, nil
-}
-
-var errNotGuarded = errNotGuardedType{}
-
-type errNotGuardedType struct{}
-
-func (errNotGuardedType) Error() string {
-	return "the client's transport is not the read-only guard"
 }

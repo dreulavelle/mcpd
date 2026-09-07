@@ -77,7 +77,6 @@ type App struct {
 	opsService    *operations.Service
 	executor      *operations.Executor
 	reaper        *operations.Reaper
-	bus           *messaging.InProcessBus
 	publisher     *messaging.Publisher
 	tunnels       *tunnel.Group
 	tunnelFactory tunnel.ServerFactory
@@ -481,11 +480,12 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	authorizer := auth.NewAuthorizer()
 	a.approval = operations.NewApprovalPolicy(authorizer)
 
-	// The bus and publisher exist before plugins register, because a
-	// mutation's propose tool needs somewhere to send the resulting event.
-	a.bus = messaging.NewInProcessBus(log)
+	// The publisher exists before plugins register, because a mutation's
+	// propose tool needs somewhere to send the resulting event. The handler
+	// reads a.executor, which is built further down: the drain does not run
+	// until Run starts, by which time it is set.
 	a.publisher = messaging.NewPublisher(
-		sqlite.MessagingAdapter{OutboxStore: a.outbox}, a.bus, log,
+		sqlite.MessagingAdapter{OutboxStore: a.outbox}, a.dispatchEvent, log,
 		messaging.PublisherConfig{}, time.Now, a.metrics.OutboxPublished)
 
 	ids := operations.NewULIDGenerator(time.Now)
@@ -544,19 +544,6 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		}, log, time.Now, ids, a.publisher.Notify)
 
 	a.reaper = operations.NewReaper(a.ops, log, time.Now, ids, a.publisher.Notify, 30*time.Second)
-
-	// The executor subscribes to approvals. The event is only a hint to look:
-	// Execute reloads and revalidates everything from the database.
-	if err := a.bus.Subscribe("mcpd-executor", messaging.SubjectOperationApproved,
-		func(ctx context.Context, e messaging.Event) error {
-			if e.OperationID == "" {
-				return nil
-			}
-			return a.executor.Execute(ctx, e.OperationID)
-		}); err != nil {
-		db.Close()
-		return nil, err
-	}
 
 	// Issued before the listeners that present it. A browser reaching the
 	// dashboard and a direct MCP client both verify against this, and the CA
@@ -844,6 +831,19 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 // Authorization runs here rather than inside plugin handlers so that a plugin
 // author cannot forget it: a tool that skips the check does not exist, because
 // the check is applied by the registry when the tool is attached.
+// dispatchEvent routes one drained outbox event to whatever acts on it.
+//
+// A switch rather than a broker, because there is one consumer. The event is
+// only a hint to look: Execute reloads and revalidates everything from the
+// database, which is what makes a duplicated or delayed event cost latency
+// rather than correctness.
+func (a *App) dispatchEvent(ctx context.Context, e messaging.Event) error {
+	if e.Subject != messaging.SubjectOperationApproved || e.OperationID == "" {
+		return nil
+	}
+	return a.executor.Execute(ctx, e.OperationID)
+}
+
 func (a *App) toolGate(az *auth.Authorizer) plugins.ToolMiddleware {
 	return func(ctx context.Context, tool string, required auth.Capability) error {
 		principal := auth.FromContext(ctx)

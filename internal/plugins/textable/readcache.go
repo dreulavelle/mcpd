@@ -4,12 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/spoked/mcpd/internal/cachestore"
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
@@ -24,13 +22,6 @@ const maxCacheEntries = 128
 // to max_items records, each as wide as the upstream makes them -- so the same
 // entry count is a few megabytes on a small tenant and far more on a large one.
 const maxCacheBytes = 16 << 20
-
-// fetchCeiling bounds a fetch that has outlived the caller who started it.
-//
-// A shared fetch belongs to whoever is still waiting rather than to whoever
-// asked first, so it does not inherit that caller's cancellation. It has to
-// inherit a deadline from somewhere, and this is it.
-const fetchCeiling = 2 * time.Minute
 
 // kindConfig is the one cache class this plugin has, and it is also the metrics
 // label: how the instance is arranged, as opposed to what is in it.
@@ -73,24 +64,14 @@ const kindConfig = "config"
 // principal, so that Textable's own scoping did the filtering -- this shape
 // would become unsafe and the principal would have to enter the key.
 type readCache struct {
-	plugin string
-	store  *cachestore.Store
-	group  cachestore.Group
-	cfg    Config
-	now    func() time.Time
-	obs    plugins.CacheObserver
+	cfg  Config
+	core *plugins.ReadCache
 }
 
 func newReadCache(plugin string, cfg Config, now func() time.Time, obs plugins.CacheObserver) *readCache {
-	if now == nil {
-		now = time.Now
-	}
 	return &readCache{
-		plugin: plugin,
-		store:  cachestore.NewBounded(maxCacheEntries, maxCacheBytes),
-		cfg:    cfg,
-		now:    now,
-		obs:    obs,
+		cfg:  cfg,
+		core: plugins.NewReadCache(plugin, maxCacheEntries, maxCacheBytes, now, obs),
 	}
 }
 
@@ -127,51 +108,8 @@ func (c Config) cacheTTL(path string) time.Duration {
 func (c *readCache) reuse(ctx context.Context, method, path string, params url.Values,
 	fetch func(context.Context) (any, error)) (any, error) {
 
-	ttl := c.cfg.cacheTTL(path)
-	if ttl <= 0 {
-		return fetch(ctx)
-	}
-	key := requestDigest(method, path, params)
-
-	if hit := c.store.Get(key); hit != nil && hit.State(c.now()) == cachestore.Fresh {
-		c.event(plugins.CacheHit)
-		return hit.Value, nil
-	}
-
-	value, shared, err := c.group.Do(ctx, key, fetchCeiling, func(ctx context.Context) (any, error) {
-		// Re-checked inside the flight: the caller this one is sharing with may
-		// have filled the entry between the miss above and getting here.
-		if hit := c.store.Get(key); hit != nil && hit.State(c.now()) == cachestore.Fresh {
-			return hit.Value, nil
-		}
-		v, err := fetch(ctx)
-		if err != nil {
-			// A failure is not an answer and is not held. A Textable that is
-			// down should be reported as down on every call rather than
-			// remembered as an instance with no users.
-			return nil, err
-		}
-		c.store.Put(key, &cachestore.Entry{
-			Value: v, FetchedAt: c.now(), TTL: ttl, Bytes: heldBytes(v),
-		})
-		return v, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if shared {
-		c.event(plugins.CacheShared)
-	} else {
-		c.event(plugins.CacheMiss)
-	}
-	return value, nil
-}
-
-func (c *readCache) event(event string) {
-	if c.obs == nil {
-		return
-	}
-	c.obs.CacheEvent(c.plugin, kindConfig, event)
+	return c.core.Do(ctx, kindConfig, requestDigest(method, path, params),
+		c.cfg.cacheTTL(path), fetch)
 }
 
 // requestDigest identifies one request for the cache.
@@ -189,17 +127,4 @@ func requestDigest(method, path string, params url.Values) string {
 	b.WriteString(params.Encode())
 	sum := sha256.Sum256([]byte(b.String()))
 	return base64.RawStdEncoding.EncodeToString(sum[:])
-}
-
-// heldBytes is roughly what an answer occupies, for the store's size bound.
-//
-// Encoded, because that is the only honest measure of a value whose shape
-// varies per record. It runs on the miss path only, after a round trip that
-// cost far more than this does.
-func heldBytes(v any) int {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return 0
-	}
-	return len(b)
 }

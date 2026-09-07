@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"regexp"
@@ -1526,11 +1527,7 @@ func (s *Server) settingsFor(plugin string) []settingDTO {
 		return nil
 	}
 	raw := s.opts.PluginSettings(plugin)
-	keys := make([]string, 0, len(raw))
-	for k := range raw {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(raw))
 
 	out := make([]settingDTO, 0, len(keys))
 	for _, k := range keys {

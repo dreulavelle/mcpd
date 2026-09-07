@@ -3,7 +3,8 @@ package graylog
 import (
 	"context"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/spoked/mcpd/internal/plugins"
@@ -319,11 +320,7 @@ func buildMetric(function, field string, percentile int, sort string) (metricSpe
 }
 
 func knownAggregations() string {
-	names := make([]string, 0, len(aggregations))
-	for name := range aggregations {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(aggregations))
 	return strings.Join(names, ", ")
 }
 

@@ -254,5 +254,3 @@ func isLoopbackHost(host string) bool {
 	ip := net.ParseIP(lower)
 	return ip != nil && ip.IsLoopback()
 }
-
-func sortStrings(s []string) { sort.Strings(s) }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spoked/mcpd/internal/plugins"
 	"golang.org/x/time/rate"
 )
 
@@ -154,7 +155,7 @@ func (c *Client) reuse(ctx context.Context, kind, path string, params url.Values
 		return fetch(ctx)
 	}
 	key := cacheKey(kind, path, c.resolveAccount(params))
-	return c.cache.do(ctx, cacheKind(path), key, ttl, fetch)
+	return c.cache.Do(ctx, cacheKind(path), key, ttl, fetch)
 }
 
 // Page is one page of a collection, plus what it took to get there.
@@ -398,7 +399,7 @@ func (c *Client) send(ctx context.Context, target, token string) ([]byte, int, e
 	resp, err := c.http.Do(req)
 	if err != nil {
 		c.observe("error", time.Since(started))
-		return nil, 0, fmt.Errorf("cnmaestro: reach %s: %w", redactURL(target), err)
+		return nil, 0, fmt.Errorf("cnmaestro: reach %s: %w", plugins.RedactURL(target), err)
 	}
 	defer resp.Body.Close()
 	c.observe(outcomeFor(resp.StatusCode), time.Since(started))

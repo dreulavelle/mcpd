@@ -326,12 +326,6 @@ func (a *App) Shutdown() error {
 		a.log.Info("background workers stopped")
 	}
 
-	if a.bus != nil {
-		if err := a.bus.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
 	// The catalogue caches own the refreshes that run behind a served answer.
 	// Nobody is waiting for one, so without this the process would be held
 	// open on the way out by work whose result nothing will read.

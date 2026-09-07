@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -168,11 +169,7 @@ func ParseClientConfig(raw []byte) ([]ClientConfigEntry, error) {
 		return nil, ErrNotClientConfig
 	}
 
-	names := make([]string, 0, len(servers))
-	for name := range servers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(servers))
 
 	out := make([]ClientConfigEntry, 0, len(names))
 	for _, name := range names {
@@ -269,11 +266,7 @@ var urlPattern = regexp.MustCompile(`^https?://`)
 // to spot. It is a suggestion and not a conversion: this host cannot know that
 // the address speaks MCP itself rather than something the wrapper translates.
 func shimSuggestion(e clientEntry) string {
-	keys := make([]string, 0, len(e.Env))
-	for k := range e.Env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(e.Env))
 	for _, k := range keys {
 		if v := e.Env[k]; urlPattern.MatchString(v) {
 			return fmt.Sprintf("its environment sets %s to %s — if that address "+
@@ -300,11 +293,7 @@ func clientDocument(name string, e clientEntry) (json.RawMessage, string) {
 	}
 
 	headers := make([]any, 0, len(e.Headers))
-	names := make([]string, 0, len(e.Headers))
-	for h := range e.Headers {
-		names = append(names, h)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(e.Headers))
 	for _, h := range names {
 		if err := CheckHeaderName(h); err != nil {
 			return nil, fmt.Sprintf("declares %q as a header, which is not a usable "+

@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
+
+	"github.com/spoked/mcpd/internal/plugins"
 )
 
 // maxErrorBody bounds how much of a failure response is read. Enough for a
@@ -67,18 +68,6 @@ func summarise(status int, body []byte) string {
 	return fmt.Sprintf("HTTP %d: %s", status, text)
 }
 
-// redactURL strips any credential and query string before a URL reaches a log
-// or an error a model will read back.
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "the configured address"
-	}
-	u.User = nil
-	u.RawQuery = ""
-	return u.String()
-}
-
 // explainRequestFailure turns an API failure into something a person can act
 // on and a model can repeat without leaking anything.
 //
@@ -128,7 +117,7 @@ func explainRequestFailure(status int, path string, body []byte) error {
 			"recently changed this is the authentication throttle, which trips "+
 			"after api.auth_fail_limit failures and clears on its own; "+
 			"otherwise lower requests_per_second (currently reaching %s)",
-			redactURL(path))
+			plugins.RedactURL(path))
 	}
 
 	if status >= 500 {

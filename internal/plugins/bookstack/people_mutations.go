@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -375,7 +376,7 @@ func (h *roleCreate) Plan(ctx context.Context, params RoleCreateParams) (plugins
 	if name == "" {
 		return plan, fmt.Errorf("bookstack: a role needs a name")
 	}
-	sortStrings(params.Permissions)
+	slices.Sort(params.Permissions)
 	return plugins.Plan[roleState]{
 		Before: roleState{Exists: false},
 		Desired: roleState{
@@ -450,7 +451,7 @@ func (h *roleUpdate) Plan(ctx context.Context, params RoleUpdateParams) (plugins
 	}
 	if params.Permissions != nil {
 		want := append([]string(nil), params.Permissions...)
-		sortStrings(want)
+		slices.Sort(want)
 		// Named rather than counted: "62 becomes 48" tells an approver
 		// nothing about which forty-eight.
 		added, removed := diffSets(before.Permissions, want)
@@ -711,7 +712,7 @@ func (p *Plugin) readUser(ctx context.Context, id int) (personState, error) {
 	for _, r := range got.Roles {
 		roles = append(roles, r.Name)
 	}
-	sortStrings(roles)
+	slices.Sort(roles)
 	return personState{
 		Exists: true, ID: got.ID, Name: got.Name, Email: got.Email,
 		Roles: roles, Updated: got.UpdatedAt,
@@ -731,7 +732,7 @@ func (p *Plugin) readRole(ctx context.Context, id int) (roleState, error) {
 		return roleState{}, err
 	}
 	perms := append([]string(nil), got.Permissions...)
-	sortStrings(perms)
+	slices.Sort(perms)
 	return roleState{
 		Exists: true, ID: got.ID, DisplayName: got.DisplayName,
 		Description: got.Description, Permissions: perms,
@@ -751,7 +752,7 @@ func (p *Plugin) describeRoles(ctx context.Context, ids []int) (string, error) {
 		}
 		names = append(names, r.DisplayName)
 	}
-	sortStrings(names)
+	slices.Sort(names)
 	return strings.Join(names, ", "), nil
 }
 
@@ -839,7 +840,7 @@ func describePermissions(in []RolePermission) string {
 		}
 		out = append(out, name+": "+strings.Join(verbs, "/"))
 	}
-	sortStrings(out)
+	slices.Sort(out)
 	return strings.Join(out, "; ")
 }
 

@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Config is what the startup file still decides.
@@ -378,7 +380,7 @@ func (c *Config) EnabledPlugins() []string {
 			out = append(out, name)
 		}
 	}
-	sortStrings(out)
+	slices.Sort(out)
 	return out
 }
 

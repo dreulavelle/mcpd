@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -52,10 +54,7 @@ func TestPluginBinaryKeepsItsExecutableBitThroughCreateAndRestore(t *testing.T) 
 
 	body, ok := members["plugins/textable/textable"]
 	if !ok {
-		names := make([]string, 0, len(members))
-		for name := range members {
-			names = append(names, name)
-		}
+		names := slices.Collect(maps.Keys(members))
 		t.Fatalf("the archive holds %v, and no plugin", names)
 	}
 	if !strings.Contains(string(body), "echo hello") {

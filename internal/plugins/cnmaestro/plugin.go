@@ -55,7 +55,7 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 	// off, which makes "no caching" cost nothing rather than cost a lookup.
 	var cache *readCache
 	if cfg.InventoryCacheTTL > 0 || cfg.DeviceCacheTTL > 0 {
-		cache = newReadCache(deps.Instance, cfg, now, deps.Cache)
+		cache = newReadCache(deps.Instance, now, deps.Cache)
 	}
 
 	instance := deps.Instance

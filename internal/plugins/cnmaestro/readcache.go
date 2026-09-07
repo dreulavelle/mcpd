@@ -1,13 +1,10 @@
 package cnmaestro
 
 import (
-	"context"
-	"encoding/json"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/spoked/mcpd/internal/cachestore"
 	"github.com/spoked/mcpd/internal/plugins"
 )
 
@@ -19,13 +16,6 @@ import (
 // device listings is already more distinct filter combinations than a
 // conversation produces.
 const maxCacheEntries = 256
-
-// fetchCeiling bounds a fetch that has outlived the caller who started it.
-//
-// A shared fetch belongs to whoever is still waiting rather than to whoever
-// asked first, so it does not inherit that caller's cancellation. It has to
-// inherit a deadline from somewhere, and this is it.
-const fetchCeiling = 2 * time.Minute
 
 // Default reuse windows. Both are configurable, and zero switches that class
 // off entirely.
@@ -80,28 +70,13 @@ const (
 // plugin whose upstream request varies by caller -- a per-user token, a header
 // derived from the principal -- must not reuse this shape without putting the
 // caller in the key.
-type readCache struct {
-	// plugin is the instance name, for the metric. Not in the key: the store
-	// belongs to one instance already.
-	plugin string
-	store  *cachestore.Store
-	group  cachestore.Group
-	cfg    Config
-	now    func() time.Time
-	obs    plugins.CacheObserver
-}
+type readCache = plugins.ReadCache
 
-func newReadCache(plugin string, cfg Config, now func() time.Time, obs plugins.CacheObserver) *readCache {
-	if now == nil {
-		now = time.Now
-	}
-	return &readCache{
-		plugin: plugin,
-		store:  cachestore.NewBounded(maxCacheEntries, maxCacheBytes),
-		cfg:    cfg,
-		now:    now,
-		obs:    obs,
-	}
+// newReadCache builds this plugin's cache. cnMaestro's caller works out the
+// kind, the key and the TTL for itself -- see Client.reuse -- so nothing but
+// the two bounds is this plugin's to decide here.
+func newReadCache(plugin string, now func() time.Time, obs plugins.CacheObserver) *readCache {
+	return plugins.NewReadCache(plugin, maxCacheEntries, maxCacheBytes, now, obs)
 }
 
 // cacheTTL says how long a read of path may be reused, and zero means never.
@@ -158,63 +133,6 @@ func cacheKind(path string) string {
 	return kindInventory
 }
 
-// do returns a cached answer for key, or runs fetch and holds what it returns.
-//
-// A miss is single-flighted: a model fanning out six tool calls that all need
-// the device list should cost one walk of the upstream's pagination, not six
-// identical ones.
-//
-// Nothing stale is ever served. The catalogue cache serves stale answers
-// because a browse page rendering slightly behind is better than not
-// rendering; here the reader is a model about to act on what it is told, and
-// "this is what the estate looked like a while ago" is not a safer answer than
-// waiting.
-func (c *readCache) do(ctx context.Context, kind, key string, ttl time.Duration, fetch func(context.Context) (any, error)) (any, error) {
-	if ttl <= 0 {
-		return fetch(ctx)
-	}
-
-	if hit := c.store.Get(key); hit != nil && hit.State(c.now()) == cachestore.Fresh {
-		c.event(kind, plugins.CacheHit)
-		return hit.Value, nil
-	}
-
-	value, shared, err := c.group.Do(ctx, key, fetchCeiling, func(ctx context.Context) (any, error) {
-		// Re-checked inside the flight: the caller this one is sharing with
-		// may have filled the entry between the miss above and getting here.
-		if hit := c.store.Get(key); hit != nil && hit.State(c.now()) == cachestore.Fresh {
-			return hit.Value, nil
-		}
-		v, err := fetch(ctx)
-		if err != nil {
-			// A failure is not an answer and is not held. An upstream that is
-			// down should be reported as down on every call rather than
-			// remembered as an empty estate.
-			return nil, err
-		}
-		c.store.Put(key, &cachestore.Entry{
-			Value: v, FetchedAt: c.now(), TTL: ttl, Bytes: heldBytes(v),
-		})
-		return v, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if shared {
-		c.event(kind, plugins.CacheShared)
-	} else {
-		c.event(kind, plugins.CacheMiss)
-	}
-	return value, nil
-}
-
-func (c *readCache) event(kind, event string) {
-	if c.obs == nil {
-		return
-	}
-	c.obs.CacheEvent(c.plugin, kind, event)
-}
-
 // cacheKey builds the key for one upstream request.
 //
 // url.Values.Encode sorts by key, so two callers who set the same filters in a
@@ -235,17 +153,3 @@ func cacheKey(kind, path string, params url.Values) string {
 // running inside somebody's memory limit is the second one, and nothing was
 // watching it.
 const maxCacheBytes = 32 << 20
-
-// heldBytes is roughly what an answer occupies, for the store's size bound.
-//
-// Encoded, because that is the only honest measure of a value whose shape
-// varies per record; a count of items would call a listing of banners the same
-// size as a listing of identifiers. It runs on the miss path only, after a
-// round trip that cost far more than this does.
-func heldBytes(v any) int {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return 0
-	}
-	return len(b)
-}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spoked/mcpd/internal/plugins"
 	"golang.org/x/time/rate"
 )
 
@@ -331,7 +332,7 @@ func (c *Client) send(ctx context.Context, method, target string, body []byte) (
 	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		return nil, 0, fmt.Errorf("extremecloudiq: building a request for %s: %w",
-			redactURL(target), err)
+			plugins.RedactURL(target), err)
 	}
 	if c.token != "" {
 		// A plain bearer token. Unlike Graylog -- where an access token is
@@ -347,7 +348,7 @@ func (c *Client) send(ctx context.Context, method, target string, body []byte) (
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("extremecloudiq: could not reach %s: %w",
-			redactURL(target), err)
+			plugins.RedactURL(target), err)
 	}
 	defer resp.Body.Close()
 
@@ -358,7 +359,7 @@ func (c *Client) send(ctx context.Context, method, target string, body []byte) (
 	read, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("extremecloudiq: reading the "+
-			"response from %s: %w", redactURL(target), err)
+			"response from %s: %w", plugins.RedactURL(target), err)
 	}
 	return read, resp.StatusCode, nil
 }
@@ -407,7 +408,7 @@ func (c *Client) Probe(ctx context.Context) (tokenInfo, error) {
 		return tokenInfo{}, fmt.Errorf("extremecloudiq: %s answered "+
 			"/auth/apitoken/info with something that is not the API's JSON -- "+
 			"the address may be reaching a proxy or a different application: %s",
-			redactURL(c.root), summarise(http.StatusOK, raw))
+			plugins.RedactURL(c.root), summarise(http.StatusOK, raw))
 	}
 	// A body that decoded but names neither the account nor the token's owner
 	// is a JSON API that is not this one. Reported here rather than left to
@@ -415,7 +416,7 @@ func (c *Client) Probe(ctx context.Context) (tokenInfo, error) {
 	if info.UserName == "" && info.OwnerID == 0 {
 		return tokenInfo{}, fmt.Errorf("extremecloudiq: %s answered "+
 			"/auth/apitoken/info with JSON that names neither a user nor an "+
-			"owner, so it is probably not ExtremeCloud IQ", redactURL(c.root))
+			"owner, so it is probably not ExtremeCloud IQ", plugins.RedactURL(c.root))
 	}
 	return info, nil
 }
@@ -518,7 +519,7 @@ func (c *Client) Root() string { return c.root }
 // Describe says where this instance reads from and what its read-only
 // guarantee rests on, for the startup log and the health report.
 func (c *Client) Describe() string {
-	return "the API at " + redactURL(c.root) +
+	return "the API at " + plugins.RedactURL(c.root) +
 		", restricted to a named list of read endpoints by its transport"
 }
 
