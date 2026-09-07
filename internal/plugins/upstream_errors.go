@@ -102,6 +102,27 @@ func explanation(err error) string {
 
 // upstreamHost digs out the address the failure was about, so the sentence can
 // name it once instead of the chain naming it twice.
+// RedactURL strips any credential and query string before a URL reaches a log
+// or an error a model will read back.
+//
+// Five integrations had their own copy of this, identical to the character. A
+// function whose whole job is to keep a credential out of a log is one to have
+// once: the copy that quietly stopped stripping something would be the one
+// nobody was reading.
+//
+// An address that will not parse is not returned as-is on the chance that it is
+// harmless -- it is exactly the input most likely to be malformed *because* it
+// carries something unexpected -- so it becomes a description instead.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "the configured address"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	return u.String()
+}
+
 func upstreamHost(err error) string {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {

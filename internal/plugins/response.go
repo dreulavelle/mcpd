@@ -1,5 +1,7 @@
 package plugins
 
+import "encoding/json"
+
 // Bounding what one tool call returns.
 //
 // A tool result is charged twice, and neither charge is obvious from the code
@@ -61,4 +63,39 @@ func ResultBudget(collections int) int {
 		collections = 1
 	}
 	return MaxResultBytes / collections
+}
+
+// Truncation says whether a listing was shortened, and why.
+//
+// The reason is a sentence for whoever reads the result, not a code: a model
+// deciding whether to narrow a query and an operator reading the same answer
+// both need to know that what they are looking at is not all of it.
+type Truncation struct {
+	Truncated bool   `json:"truncated,omitempty"`
+	Reason    string `json:"truncation_reason,omitempty"`
+}
+
+// BoundBytes cuts rows to the result budget and says what happened.
+//
+// cut is what the caller already decided about the *count* -- there were more
+// than were returned -- and is carried through untouched when everything fits.
+// The two reasons are the caller's own words, because "the account holds more"
+// and "the phone system holds more" are the same event in different rooms.
+//
+// A row that will not encode stops the listing there rather than failing the
+// whole call: the tool's own result would fail to encode later with a worse
+// message, and what was collected is worth more than nothing.
+func BoundBytes[T any](rows []T, cut Truncation, sizeReason, encodingReason string) ([]T, Truncation) {
+	total := 0
+	for i, row := range rows {
+		encoded, err := json.Marshal(row)
+		if err != nil {
+			return rows[:i], Truncation{Truncated: true, Reason: encodingReason}
+		}
+		total += len(encoded)
+		if total > ResultBudget(1) {
+			return rows[:i], Truncation{Truncated: true, Reason: sizeReason}
+		}
+	}
+	return rows, cut
 }

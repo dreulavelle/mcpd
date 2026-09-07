@@ -2,7 +2,6 @@ package observium
 
 import (
 	"context"
-	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -162,7 +161,7 @@ func (c *readCache) reuse(ctx context.Context, path string, params url.Values,
 			return nil, err
 		}
 		c.store.Put(key, &cachestore.Entry{
-			Value: v, FetchedAt: c.now(), TTL: ttl, Bytes: heldBytes(v),
+			Value: v, FetchedAt: c.now(), TTL: ttl, Bytes: cachestore.Size(v),
 		})
 		return v, nil
 	})
@@ -209,17 +208,3 @@ func cacheKey(kind, path string, params url.Values, ceiling int) string {
 // running inside somebody's memory limit is the second one, and nothing was
 // watching it.
 const maxCacheBytes = 32 << 20
-
-// heldBytes is roughly what an answer occupies, for the store's size bound.
-//
-// Encoded, because that is the only honest measure of a value whose shape
-// varies per record; a count of items would call a listing of banners the same
-// size as a listing of identifiers. It runs on the miss path only, after a
-// round trip that cost far more than this does.
-func heldBytes(v any) int {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return 0
-	}
-	return len(b)
-}

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spoked/mcpd/internal/plugins"
 	"golang.org/x/time/rate"
 )
 
@@ -471,7 +472,7 @@ func (c *Client) send(ctx context.Context, target string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("observium: building a request for %s: %w",
-			redactURL(target), err)
+			plugins.RedactURL(target), err)
 	}
 	c.auth.apply(req)
 	req.Header.Set("Accept", "application/json")
@@ -479,7 +480,7 @@ func (c *Client) send(ctx context.Context, target string) ([]byte, int, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("observium: could not reach %s: %w",
-			redactURL(target), err)
+			plugins.RedactURL(target), err)
 	}
 	defer resp.Body.Close()
 
@@ -492,7 +493,7 @@ func (c *Client) send(ctx context.Context, target string) ([]byte, int, error) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("observium: reading the response "+
-			"from %s: %w", redactURL(target), err)
+			"from %s: %w", plugins.RedactURL(target), err)
 	}
 	return body, resp.StatusCode, nil
 }
@@ -766,6 +767,6 @@ func (c *Client) Probe(ctx context.Context) error {
 // Describe says where this instance reads from and what its read-only
 // guarantee rests on, for the startup log and the health report.
 func (c *Client) Describe() string {
-	return "the API at " + redactURL(c.root) +
+	return "the API at " + plugins.RedactURL(c.root) +
 		", restricted to reads by a transport that refuses every method but GET"
 }

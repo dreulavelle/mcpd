@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spoked/mcpd/internal/plugins"
 	"golang.org/x/time/rate"
 )
 
@@ -398,7 +399,7 @@ func (c *Client) send(ctx context.Context, target, token string) ([]byte, int, e
 	resp, err := c.http.Do(req)
 	if err != nil {
 		c.observe("error", time.Since(started))
-		return nil, 0, fmt.Errorf("cnmaestro: reach %s: %w", redactURL(target), err)
+		return nil, 0, fmt.Errorf("cnmaestro: reach %s: %w", plugins.RedactURL(target), err)
 	}
 	defer resp.Body.Close()
 	c.observe(outcomeFor(resp.StatusCode), time.Since(started))

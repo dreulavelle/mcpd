@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
+
+	"github.com/spoked/mcpd/internal/plugins"
 )
 
 // maxErrorBody bounds how much of a failure response is read. Enough for a
@@ -57,18 +58,6 @@ func summarise(status int, body []byte) string {
 	return fmt.Sprintf("HTTP %d: %s", status, text)
 }
 
-// redactURL strips any credential and query string before a URL reaches a log
-// or an error a model will read back.
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "the configured address"
-	}
-	u.User = nil
-	u.RawQuery = ""
-	return u.String()
-}
-
 // explainRequestFailure turns an API failure into something a person can act
 // on and a model can repeat without leaking anything.
 //
@@ -111,7 +100,7 @@ func explainRequestFailure(status int, path string, body []byte) error {
 			"expires when it reaches the TTL it was created with, and reads as "+
 			"revoked from here when it does -- the two are indistinguishable, "+
 			"so check the token's expiry as well as whether it still exists. "+
-			"Reaching %s", redactURL(path))
+			"Reaching %s", plugins.RedactURL(path))
 
 	case http.StatusForbidden:
 		return fmt.Errorf("graylog: not permitted to read %s. Graylog authorises "+

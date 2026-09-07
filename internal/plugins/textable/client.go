@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spoked/mcpd/internal/plugins"
 	"golang.org/x/time/rate"
 )
 
@@ -158,7 +159,7 @@ func (c *Client) send(ctx context.Context, method, target string) (json.RawMessa
 	req, err := http.NewRequestWithContext(ctx, method, target, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("textable: building a request for %s: %w",
-			redactURL(target), err)
+			plugins.RedactURL(target), err)
 	}
 	c.auth.apply(req)
 	req.Header.Set("Accept", "application/json")
@@ -166,7 +167,7 @@ func (c *Client) send(ctx context.Context, method, target string) (json.RawMessa
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("textable: could not reach %s: %w",
-			redactURL(target), err)
+			plugins.RedactURL(target), err)
 	}
 	defer resp.Body.Close()
 
@@ -177,7 +178,7 @@ func (c *Client) send(ctx context.Context, method, target string) (json.RawMessa
 	read, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("textable: reading the response "+
-			"from %s: %w", redactURL(target), err)
+			"from %s: %w", plugins.RedactURL(target), err)
 	}
 	return read, resp.StatusCode, nil
 }
@@ -243,7 +244,7 @@ func (c *Client) Probe(ctx context.Context) (healthReport, error) {
 		return healthReport{}, fmt.Errorf("textable: %s answered /health with "+
 			"something that is not the API's JSON -- the address may be "+
 			"reaching a proxy or a different application: %s",
-			redactURL(c.root), summarise(status, raw))
+			plugins.RedactURL(c.root), summarise(status, raw))
 	}
 	// A body that decoded but names no status is a JSON API that is not this
 	// one. Reported here rather than left to fail later against an endpoint
@@ -251,7 +252,7 @@ func (c *Client) Probe(ctx context.Context) (healthReport, error) {
 	if h.Status == "" {
 		return healthReport{}, fmt.Errorf("textable: %s answered /health with "+
 			"JSON that names no status, so it is probably not Textable",
-			redactURL(c.root))
+			plugins.RedactURL(c.root))
 	}
 	return h, nil
 }
@@ -295,7 +296,7 @@ func (c *Client) ProbeAuth(ctx context.Context) error {
 // Describe says where this instance reads from and what its read-only guarantee
 // rests on, for the startup log and the health report.
 func (c *Client) Describe() string {
-	return "the API at " + redactURL(c.root) +
+	return "the API at " + plugins.RedactURL(c.root) +
 		", restricted to a named list of read endpoints by its transport"
 }
 

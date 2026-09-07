@@ -16,6 +16,7 @@ package cachestore
 
 import (
 	"context"
+	"encoding/json"
 	"maps"
 	"slices"
 	"sync"
@@ -78,6 +79,21 @@ func (e *Entry) State(now time.Time) State {
 	default:
 		return Expired
 	}
+}
+
+// Size is how much room a value takes, for the byte bound.
+//
+// The JSON encoding rather than the in-memory footprint: it is what the value
+// will be serialised to anyway, it is stable across the shapes a plugin holds,
+// and unsafe.Sizeof over a tree of maps and slices measures the headers rather
+// than the contents. A value that will not marshal is counted as nothing, which
+// keeps a cache that cannot measure an entry from refusing to hold it.
+func Size(v any) int {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	return len(b)
 }
 
 // Store is a bounded set of entries.

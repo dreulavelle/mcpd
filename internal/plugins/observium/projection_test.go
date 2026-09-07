@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/spoked/mcpd/internal/plugins"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/spoked/mcpd/internal/plugins"
 )
 
 // The bug this exists for: a level 6 token gets snmp_community on every

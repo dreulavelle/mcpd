@@ -1,17 +1,12 @@
 package threecx
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
-
-// maxResultBytes bounds the whole of one answer. The number is the host's, not
-// this package's: see plugins.MaxResultBytes for the arithmetic.
-var maxResultBytes = plugins.ResultBudget(1)
 
 // The reasons a listing stopped short. Separate strings rather than a boolean
 // because they call for different things from the caller: a count ceiling is
@@ -27,10 +22,9 @@ const (
 //
 // A field rather than a log line, because a model shown twenty of two hundred
 // extensions and not told so will answer as though it saw them all.
-type truncation struct {
-	Truncated bool   `json:"truncated,omitempty"`
-	Reason    string `json:"truncation_reason,omitempty"`
-}
+// truncation is plugins.Truncation. Aliased rather than embedded under a new
+// name so the result structs that embed it keep their field and their JSON.
+type truncation = plugins.Truncation
 
 // bound trims rows to the byte ceiling and says so. The count ceiling is
 // applied upstream by list, which stops fetching; this is the second ceiling,
@@ -40,18 +34,7 @@ func bound[T any](rows []T, alreadyCut bool) ([]T, truncation) {
 	if alreadyCut {
 		cut = truncation{Truncated: true, Reason: reasonCount}
 	}
-	total := 0
-	for i, row := range rows {
-		encoded, err := json.Marshal(row)
-		if err != nil {
-			return rows[:i], truncation{Truncated: true, Reason: reasonEncoding}
-		}
-		total += len(encoded)
-		if total > maxResultBytes {
-			return rows[:i], truncation{Truncated: true, Reason: reasonSize}
-		}
-	}
-	return rows, cut
+	return plugins.BoundBytes(rows, cut, reasonSize, reasonEncoding)
 }
 
 // odataString escapes a value for an OData string literal, where the quote is

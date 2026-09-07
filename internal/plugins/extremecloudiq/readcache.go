@@ -2,7 +2,6 @@ package extremecloudiq
 
 import (
 	"context"
-	"encoding/json"
 	"net/url"
 	"strings"
 	"time"
@@ -150,7 +149,7 @@ func (c *readCache) reuse(ctx context.Context, path string, params url.Values,
 			return nil, err
 		}
 		c.store.Put(key, &cachestore.Entry{
-			Value: v, FetchedAt: c.now(), TTL: ttl, Bytes: heldBytes(v),
+			Value: v, FetchedAt: c.now(), TTL: ttl, Bytes: cachestore.Size(v),
 		})
 		return v, nil
 	})
@@ -183,17 +182,4 @@ func requestDigest(path string, params url.Values) string {
 	b.WriteByte(0)
 	b.WriteString(params.Encode())
 	return b.String()
-}
-
-// heldBytes is roughly what an answer occupies, for the store's size bound.
-//
-// Encoded, because that is the only honest measure of a value whose shape
-// varies per record. It runs on the miss path only, after a round trip that
-// cost far more than this does.
-func heldBytes(v any) int {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return 0
-	}
-	return len(b)
 }
