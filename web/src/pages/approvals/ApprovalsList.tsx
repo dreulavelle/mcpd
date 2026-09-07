@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { EmptyState, Loading, Notice, PageHeader } from "@/components/chrome";
 import { usePrincipalNames } from "@/components/principal";
 import { Segmented } from "@/components/Segmented";
-import { stateTone, type Tone } from "@/components/status";
+import { riskTone, stateTone, type Tone } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -439,15 +439,6 @@ function WaitingCard({ op, name }: {
       </Card>
     </Link>
   );
-}
-
-function riskTone(risk: string): Tone {
-  switch (risk) {
-    case "critical": return "problem";
-    case "high": return "attention";
-    case "medium": return "info";
-    default: return "neutral";
-  }
 }
 
 /**

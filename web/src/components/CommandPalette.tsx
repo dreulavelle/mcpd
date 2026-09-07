@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { api, type Operation, type Plugin, type TunnelStatus } from "@/lib/api";
-import { describeChange, principalWords } from "@/lib/format";
+import { describeChange, principalWords, riskLabel } from "@/lib/format";
 import { NAV } from "@/lib/nav";
 import { useRouter } from "@/lib/router";
 import { score } from "@/lib/search";
@@ -15,24 +15,41 @@ import { useCanFn } from "@/lib/session";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { TABS } from "@/pages/settings/SettingsTabs";
-import { healthTone } from "./status";
-import { StatusDot } from "./status";
+import { Chip, healthTone, riskTone, StatusDot } from "./status";
 
 /** One thing the palette can do. */
 interface Command {
   id: string;
   /** Which list it sits in. The order here is the order on screen. */
-  group: "Go to" | "Plugins" | "Waiting on a decision" | "Connectors" | "Do";
+  group: "Go to" | "Plugins" | "Waiting on you" | "Connectors" | "Do";
   label: string;
   hint?: string;
   icon?: LucideIcon;
   /** Extra words a search may match: a plugin's title, an operation's plugin. */
   keywords?: string;
   mark?: ReactNode;
+  /** State the row is worth reading before it is opened: a change's risk. */
+  chip?: ReactNode;
   run: () => void;
 }
 
-const GROUPS: Command["group"][] = ["Go to", "Plugins", "Waiting on a decision", "Connectors", "Do"];
+const GROUPS: Command["group"][] = ["Go to", "Plugins", "Waiting on you", "Connectors", "Do"];
+
+/**
+ * What one line is, in a word.
+ *
+ * A query ranks across every group at once, so the headings have to go -- a
+ * heading inside a ranking puts the best match under the third one. Without
+ * them a page, a plugin and a change waiting on somebody are three
+ * indistinguishable rows, so each row carries its own kind instead.
+ */
+const KIND: Record<Command["group"], string> = {
+  "Go to": "Page",
+  Plugins: "Plugin",
+  "Waiting on you": "Waiting",
+  Connectors: "Connector",
+  Do: "Action",
+};
 
 /**
  * Everything in the console, from one box.
@@ -109,7 +126,7 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
     }
     for (const op of waiting) {
       out.push({
-        id: `op:${op.id}`, group: "Waiting on a decision",
+        id: `op:${op.id}`, group: "Waiting on you",
         // The change, not `label.set`. The palette is the one place somebody
         // reaches for a proposal by name, so the name has to be the one the
         // approvals page taught them.
@@ -124,6 +141,12 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
         }`,
         keywords: `${op.plugin} ${op.action} ${op.requested_by} ${op.id} ${op.risk}`,
         icon: ClipboardCheck,
+        // The one fact worth having before you open it. A palette that lists
+        // changes without saying which is critical makes you open each in turn
+        // to find out, which is slower than the page it was meant to save.
+        chip: (
+          <Chip tone={riskTone(op.risk)}>{riskLabel(op.risk).toLowerCase()} risk</Chip>
+        ),
         run: () => go(`/approvals/${encodeURIComponent(op.id)}`),
       });
     }
@@ -141,9 +164,11 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
     }
     out.push(
       { id: "do:profile", group: "Do", label: "Your profile", icon: UserRound, keywords: "account", run: () => go("/profile") },
-      { id: "do:light", group: "Do", label: "Appearance: light", icon: Sun, keywords: "theme", run: () => { chooseTheme("light"); onOpenChange(false); } },
-      { id: "do:dark", group: "Do", label: "Appearance: dark", icon: Moon, keywords: "theme", run: () => { chooseTheme("dark"); onOpenChange(false); } },
-      { id: "do:system", group: "Do", label: "Appearance: follow the system", icon: Monitor, keywords: "theme", run: () => { chooseTheme("system"); onOpenChange(false); } },
+      // A line says what happens when it is chosen, so each of these is the
+      // action and not the setting's name.
+      { id: "do:light", group: "Do", label: "Switch to the light theme", icon: Sun, keywords: "theme appearance", run: () => { chooseTheme("light"); onOpenChange(false); } },
+      { id: "do:dark", group: "Do", label: "Switch to the dark theme", icon: Moon, keywords: "theme appearance", run: () => { chooseTheme("dark"); onOpenChange(false); } },
+      { id: "do:system", group: "Do", label: "Match the system theme", icon: Monitor, keywords: "theme appearance", run: () => { chooseTheme("system"); onOpenChange(false); } },
       { id: "do:signout", group: "Do", label: "Sign out", icon: LogOut, run: () => { onOpenChange(false); onSignOut(); } },
     );
     return out;
@@ -163,6 +188,21 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
       .map(({ c }) => c);
   }, [commands, query]);
 
+  // Grouped only while nothing is typed. A query's answer is a ranking, and
+  // headings inside a ranking would put the best match under the third one.
+  const grouped = query.trim() === "";
+
+  // Sections first, then the flat order derived from them, so what Enter opens
+  // is the row the eye is on. Reading the two orders independently is how the
+  // highlight and the action drift apart.
+  const sections = useMemo(() => (grouped
+    ? GROUPS
+      .map((heading) => ({ heading, items: shown.filter((c) => c.group === heading) }))
+      .filter((s) => s.items.length > 0)
+    : [{ heading: null, items: shown }]
+  ), [grouped, shown]);
+  const ordered = useMemo(() => sections.flatMap((s) => s.items), [sections]);
+
   useEffect(() => setActive(0), [query]);
 
   // Keep the highlighted line in view as the arrows move it.
@@ -172,30 +212,48 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
   }, [active]);
 
   function onKey(e: React.KeyboardEvent) {
+    const last = ordered.length - 1;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((i) => Math.min(i + 1, shown.length - 1));
+      setActive((i) => Math.min(i + 1, last));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setActive(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setActive(Math.max(0, last));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      shown[active]?.run();
+      ordered[active]?.run();
     }
   }
 
-  // Grouped only while nothing is typed. A query's answer is a ranking, and
-  // headings inside a ranking would put the best match under the third one.
-  const grouped = query.trim() === "";
-  let index = -1;
+  /**
+   * Where the pointer last was, so the mouse stops overruling the keyboard.
+   *
+   * Arrowing scrolls the highlighted row into view, which slides the list
+   * under a cursor that has not moved -- and the browser reports that as a
+   * pointer event over whatever is now beneath it. Taking every such event as
+   * an intention snapped the selection back on every second keypress. Only a
+   * pointer at a new position is somebody choosing.
+   */
+  const point = useRef({ x: -1, y: -1 });
+  function chooseByPointer(i: number, e: React.PointerEvent) {
+    if (e.clientX === point.current.x && e.clientY === point.current.y) return;
+    point.current = { x: e.clientX, y: e.clientY };
+    setActive(i);
+  }
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
           aria-describedby={undefined}
-          className="fixed top-[12vh] left-1/2 z-50 w-[min(40rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          className="fixed top-[12vh] left-1/2 z-50 w-[min(40rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-xl duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
           onKeyDown={onKey}
         >
           <DialogPrimitive.Title className="sr-only">Search the dashboard</DialogPrimitive.Title>
@@ -205,74 +263,136 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Go to a page, a plugin, a change waiting on you…"
+              placeholder="Search pages, plugins and changes"
               aria-label="Search the dashboard"
-              aria-activedescendant={shown[active] ? `cmd-${shown[active].id}` : undefined}
+              aria-activedescendant={ordered[active] ? `cmd-${ordered[active].id}` : undefined}
               role="combobox"
-              aria-expanded="true"
+              aria-expanded={ordered.length > 0}
               aria-controls="command-results"
               aria-autocomplete="list"
-              className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              // The one place the global focus ring is deliberately not drawn.
+              // That rule exists because a ring is a keyboard's only clue to
+              // where it is; here focus never moves -- Radix traps it on this
+              // input for as long as the box is open -- so a permanent ring
+              // says nothing, while the row it would point at is the wrong
+              // one. What the keyboard is actually on is the highlighted
+              // option, which `aria-activedescendant` names and `bg-accent`
+              // draws. The ring also sat on `ring-offset-background`, so
+              // against the popover it read as a halo rather than an outline.
+              className={cn(
+                "h-12 w-full bg-transparent text-sm placeholder:text-muted-foreground",
+                "outline-none focus-visible:ring-0 focus-visible:ring-offset-0",
+              )}
             />
-            <kbd className="hidden rounded border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline">esc</kbd>
           </div>
 
-          <div ref={list} id="command-results" role="listbox" className="max-h-[50vh] overflow-y-auto p-2">
-            {shown.length === 0 && (
-              <p className="px-2 py-6 text-center text-sm text-muted-foreground">
-                Nothing matches. Try a page, a plugin's name, or a word from a change.
+          <div
+            ref={list}
+            id="command-results"
+            role="listbox"
+            aria-label="Results"
+            className="scroll-panel max-h-[min(28rem,60vh)] p-2"
+          >
+            {ordered.length === 0 && (
+              <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+                Nothing matches “{query.trim()}”.
               </p>
             )}
-            {GROUPS.map((group) => {
-              const items = grouped ? shown.filter((c) => c.group === group) : group === GROUPS[0] ? shown : [];
-              if (items.length === 0) return null;
-              return (
-                <div key={group} className="mb-1">
-                  {grouped && (
-                    <p className="px-2 pt-1 pb-1 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-                      {group}
+            {(() => {
+              let index = -1;
+              return sections.map((section) => (
+                <div key={section.heading ?? "ranked"} className="mb-1 last:mb-0">
+                  {section.heading && (
+                    <p className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+                      {section.heading}
                     </p>
                   )}
-                  {items.map((c) => {
+                  {section.items.map((c) => {
                     index += 1;
                     const i = index;
                     const Icon = c.icon;
                     return (
-                      <button
+                      <div
                         key={c.id}
                         id={`cmd-${c.id}`}
-                        type="button"
                         role="option"
                         aria-selected={i === active}
                         data-index={i}
-                        onMouseEnter={() => setActive(i)}
+                        onPointerMove={(e) => chooseByPointer(i, e)}
                         onClick={() => c.run()}
                         className={cn(
-                          "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm",
+                          "flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-left text-sm",
                           i === active ? "bg-accent text-accent-foreground" : "text-foreground",
                         )}
                       >
-                        {c.mark ?? (Icon
-                          ? <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                          : <span className="size-4 shrink-0" />)}
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate">{c.label}</span>
+                        <span className="flex size-4 shrink-0 items-center justify-center">
+                          {c.mark ?? (Icon
+                            ? <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
+                            : null)}
+                        </span>
+
+                        {/* One line, not two. Every page carries its lede as
+                            a hint, so stacking them made a list of five
+                            destinations as tall as a paragraph and pushed
+                            everything else under the fold. The hint takes what
+                            room is left and gives it back first. */}
+                        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                          <span className="min-w-0 truncate">{c.label}</span>
                           {c.hint && (
-                            <span className="block truncate text-xs text-muted-foreground">{c.hint}</span>
+                            <span className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
+                              {c.hint}
+                            </span>
                           )}
                         </span>
-                        {i === active && (
-                          <CornerDownLeft className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+
+                        {c.chip}
+
+                        {/* Without headings there is nothing else saying what
+                            kind of thing a row is, so the ranked list says it
+                            per row and the grouped one does not repeat it. */}
+                        {!grouped && (
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {KIND[c.group]}
+                          </span>
                         )}
-                      </button>
+
+                        <CornerDownLeft
+                          className={cn(
+                            "size-3.5 shrink-0",
+                            i === active ? "text-muted-foreground" : "invisible",
+                          )}
+                          aria-hidden="true"
+                        />
+                      </div>
                     );
                   })}
                 </div>
-              );
-            })}
+              ));
+            })()}
+          </div>
+
+          {/* What the keys do, rather than one lone esc chip in the input. */}
+          <div className="flex items-center justify-between gap-3 border-t px-3 py-2">
+            <p className="text-xs text-muted-foreground">
+              {ordered.length} {ordered.length === 1 ? "result" : "results"}
+            </p>
+            <p className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1"><Key>↑</Key><Key>↓</Key> move</span>
+              <span className="flex items-center gap-1"><Key>↵</Key> open</span>
+              <span className="hidden items-center gap-1 sm:flex"><Key>esc</Key> close</span>
+            </p>
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
+  );
+}
+
+/** One key, drawn as a key. */
+function Key({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="rounded border bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] leading-none">
+      {children}
+    </kbd>
   );
 }
