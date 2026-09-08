@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/dreulavelle/mcpd/compare/v0.23.0...v0.24.0) (2026-09-08)
+
+
+### Features
+
+* **auth:** a session that ends when somebody stops, not on a fixed clock ([f2e2cd5](https://github.com/dreulavelle/mcpd/commit/f2e2cd541a3c687ab4a8c4a59358b3d3b17d9456))
+
 ## [0.23.0](https://github.com/dreulavelle/mcpd/compare/v0.22.1...v0.23.0) (2026-09-08)
 
 
