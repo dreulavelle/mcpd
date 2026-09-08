@@ -632,8 +632,13 @@ func TestAFreshDeploymentImportsNothingAndUsesTheDeclaredDefaults(t *testing.T) 
 		t.Fatalf("a file that supplies nothing imported %v", record.Imported)
 	}
 
-	if got := a.sessionTTL(ctx); got != 12*time.Hour {
-		t.Errorf("session ttl = %s, want the declared 12h default", got)
+	// The ceiling and the idle window are separate clocks with separate
+	// defaults, and a fresh deployment takes both from the declaration.
+	if got := a.sessionTTL(ctx); got != 72*time.Hour {
+		t.Errorf("session ttl = %s, want the declared 72h default", got)
+	}
+	if got := a.sessionIdleTTL(ctx); got != 8*time.Hour {
+		t.Errorf("session idle ttl = %s, want the declared 8h default", got)
 	}
 	if got := a.shutdownTimeout(ctx); got != 30*time.Second {
 		t.Errorf("shutdown timeout = %s, want the declared 30s default", got)

@@ -227,6 +227,11 @@ type Options struct {
 	// with rather than the value it is configured with.
 	SessionTTL func(ctx context.Context) time.Duration
 
+	// SessionIdleTTL is how long a session survives with nobody doing
+	// anything. Zero leaves only the absolute expiry, which is what this did
+	// before there were two clocks.
+	SessionIdleTTL func(ctx context.Context) time.Duration
+
 	// PublicURL is the address clients reach, used to render a connect URL an
 	// operator can copy rather than assemble.
 	PublicURL func(ctx context.Context) string
@@ -548,6 +553,11 @@ func (s *Server) routes() {
 	// The same subject over a longer horizon: performance is what this process
 	// has seen since it started, statistics is what the host has ever done.
 	api("GET /api/statistics", s.handleStatistics, auth.PermHistoryRead)
+	// Says a person is still here. Behind the same middleware as everything
+	// else, so it needs the cookie and the CSRF header like any other write --
+	// a request that could not have come from this page must not be read as
+	// somebody using it.
+	api("POST /api/session/activity", s.handleSessionActivity, auth.PermSignedIn)
 	api("GET /api/updates", s.handleUpdates, auth.PermSystemRead)
 	// Forcing a check reaches an external service, so it is an admin action
 	// even though what it returns is not privileged.
@@ -1509,6 +1519,15 @@ func (s *Server) sessionTTL(ctx context.Context) time.Duration {
 		return 0
 	}
 	return s.opts.SessionTTL(ctx)
+}
+
+// sessionIdleTTL is how long a session survives with nobody doing anything.
+// Zero leaves the absolute expiry as the only clock.
+func (s *Server) sessionIdleTTL(ctx context.Context) time.Duration {
+	if s.opts.SessionIdleTTL == nil {
+		return 0
+	}
+	return s.opts.SessionIdleTTL(ctx)
 }
 
 // secretish reports whether a configuration key names a credential.

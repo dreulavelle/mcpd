@@ -23,6 +23,8 @@ import (
 // credential wins. A database would only add setup between the assertion and
 // the thing asserted.
 type fakeAccounts struct {
+	// touched counts TouchSession calls; see the method below.
+	touched int
 	// resolved, when set, is returned by Resolve verbatim -- for a test that
 	// wants to say exactly what a subject may do and reach without leaning on
 	// a built-in role. Nil means "expand the account's own role and grants",
@@ -83,11 +85,21 @@ func (f *fakeAccounts) NewSession(context.Context, string, time.Duration) (strin
 	return f.token, f.session, nil
 }
 
-func (f *fakeAccounts) ResolveSession(_ context.Context, token string) (*users.User, *users.Session, error) {
+func (f *fakeAccounts) ResolveSession(_ context.Context, token string, _ time.Duration) (*users.User, *users.Session, error) {
 	if token != f.token {
 		return nil, nil, users.ErrNotFound
 	}
 	return f.user, f.session, nil
+}
+
+// touched counts how often the idle clock was asked to move, so a test can
+// tell a request that reported a person from one that only polled.
+func (f *fakeAccounts) TouchSession(_ context.Context, token string, _, _ time.Duration) (bool, error) {
+	if token != f.token {
+		return false, nil
+	}
+	f.touched++
+	return true, nil
 }
 
 func (f *fakeAccounts) DeleteSession(_ context.Context, token string) error {
@@ -555,5 +567,82 @@ func TestPrincipalFor_RefusesWhenAccessCannotBeResolved(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 when access cannot be resolved", w.Code)
+	}
+}
+
+/*
+The console polls: the tunnels page every eight seconds, the overview every
+fifteen. A session renewed by traffic would be renewed by a window left open
+on a page nobody is looking at, and the idle timeout would never once fire.
+
+So presence is reported deliberately, by a route of its own, and no amount of
+ordinary traffic moves the clock.
+*/
+func TestSession_PollingDoesNotRenewTheIdleClock(t *testing.T) {
+	accounts := newFakeAccounts()
+	s := newTestServer(t, accounts)
+
+	// The page refreshing itself, several times over.
+	for range 5 {
+		r := httptest.NewRequest(http.MethodGet, "/api/plugins", nil)
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: accounts.token})
+		s.Handler().ServeHTTP(httptest.NewRecorder(), r)
+	}
+	if accounts.touched != 0 {
+		t.Fatalf("polling moved the idle clock %d times", accounts.touched)
+	}
+
+	// Somebody at the keyboard, reported deliberately.
+	r := httptest.NewRequest(http.MethodPost, "/api/session/activity", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: accounts.token})
+	r.Header.Set(csrfHeader, accounts.session.CSRFToken)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if accounts.touched != 1 {
+		t.Fatalf("reporting a person moved the clock %d times, want 1", accounts.touched)
+	}
+}
+
+/*
+Reporting presence is a write, and a cookie travels on requests the page did
+not make. Without the CSRF header another site could hold somebody's session
+open indefinitely from a tab they left on it.
+*/
+func TestSession_ReportingActivityNeedsTheCSRFToken(t *testing.T) {
+	accounts := newFakeAccounts()
+	s := newTestServer(t, accounts)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/session/activity", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: accounts.token})
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 without a CSRF token", w.Code)
+	}
+	if accounts.touched != 0 {
+		t.Fatalf("a request that could not have come from this page moved the clock")
+	}
+}
+
+/*
+Describing a session must not extend it. The console asks for its own session
+on load and the countdown re-asks while it is showing; if that moved the clock,
+a page would renew exactly what it is counting down.
+*/
+func TestSession_ReadingTheSessionDoesNotRenewIt(t *testing.T) {
+	accounts := newFakeAccounts()
+	s := newTestServer(t, accounts)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/session", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: accounts.token})
+	s.Handler().ServeHTTP(httptest.NewRecorder(), r)
+
+	if accounts.touched != 0 {
+		t.Fatalf("reading the session moved the idle clock %d times", accounts.touched)
 	}
 }

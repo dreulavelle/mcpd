@@ -22,7 +22,10 @@ type Accounts interface {
 	Authenticate(ctx context.Context, email, password string) (*users.User, error)
 	RecordLogin(ctx context.Context, userID string) error
 	NewSession(ctx context.Context, userID string, ttl time.Duration) (string, *users.Session, error)
-	ResolveSession(ctx context.Context, token string) (*users.User, *users.Session, error)
+	ResolveSession(ctx context.Context, token string, idle time.Duration) (*users.User, *users.Session, error)
+	// TouchSession records that a person did something, throttled to at most
+	// one write per `every`. It reports whether the row actually moved.
+	TouchSession(ctx context.Context, token string, every, idle time.Duration) (bool, error)
 	DeleteSession(ctx context.Context, token string) error
 
 	// Resolve is what an account may do and reach: its own role and grants
@@ -161,7 +164,12 @@ type sessionResponse struct {
 	Plugins   []string     `json:"plugins"`
 	Grants    []auth.Grant `json:"grants"`
 	CSRFToken string       `json:"csrf_token"`
-	ExpiresAt string       `json:"expires_at"`
+	// ExpiresAt is the ceiling, and EndsAt is whichever clock runs out first.
+	// Anything counting down reads the second: the ceiling is wrong for
+	// somebody who has walked away, and the idle deadline for somebody working
+	// through it.
+	ExpiresAt string `json:"expires_at"`
+	EndsAt    string `json:"ends_at"`
 	// Status is "active" or "pending". A pending account is signed in and
 	// holds no capability at all, so the page it gets says it is waiting.
 	//
@@ -282,16 +290,65 @@ func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// touchEvery throttles the write behind the idle clock. A person clicking
+// around generates far more requests than a clock needs, and the console polls
+// on top of that; a minute's granularity on an eight-hour window is invisible
+// and turns a write per request into a write per minute.
+const touchEvery = time.Minute
+
+// handleSessionActivity records that a person did something, and answers with
+// the deadline that produced.
+//
+// A request of its own rather than a marker on requests the page was making
+// anyway. Two reasons, and the second is why the marker was not enough. The
+// console polls -- tunnels every eight seconds, the overview every fifteen --
+// so traffic cannot be read as presence: a window left open on a page nobody
+// is looking at would renew for ever. But some pages make no requests at all,
+// and somebody typing on one of those was reporting nothing and being signed
+// out while working.
+//
+// It answers with the whole session because the deadline it just moved is the
+// one the console is counting down. Without that the banner would go on
+// counting to a deadline the host had already extended, and reach zero while
+// the session was healthy.
+func (s *Server) handleSessionActivity(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Accounts == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
+		return
+	}
+	token := sessionToken(r)
+	idle := s.sessionIdleTTL(r.Context())
+
+	if _, err := s.opts.Accounts.TouchSession(r.Context(), token, touchEvery, idle); err != nil {
+		// Logged and swallowed: the session is still valid whatever the write
+		// did, and reporting a failure here would sign somebody out over
+		// bookkeeping.
+		s.opts.Log.WarnContext(r.Context(), "could not record session activity", "error", err)
+	}
+
+	user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), token, idle)
+	if err != nil {
+		s.writeError(w, r, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, s.sessionView(r, user, sess))
+}
+
 // handleCurrentSession reports who is signed in, and reissues the CSRF token.
 //
 // The page calls this on load so that a session surviving a refresh does not
 // require signing in again to obtain a token.
+//
+// It deliberately does not move the idle clock, which every other
+// authenticated path does through the activity route. Describing a session
+// must not extend it: a page polling its own countdown would renew exactly
+// what it is counting down, and the timeout would never fire.
 func (s *Server) handleCurrentSession(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Accounts == nil {
 		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
 		return
 	}
-	user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r))
+	user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r), s.sessionIdleTTL(r.Context()))
 	if err != nil {
 		s.writeError(w, r, http.StatusUnauthorized, "not signed in")
 		return
@@ -317,10 +374,26 @@ func (s *Server) sessionView(r *http.Request, u *users.User, sess *users.Session
 		Grants:      nonNilGrants(access.Grants),
 		CSRFToken:   sess.CSRFToken,
 		ExpiresAt:   sess.ExpiresAt.Format(time.RFC3339),
+		// Whichever clock runs out first, which is what anything counting down
+		// has to read: the absolute one is wrong for somebody who has walked
+		// away, and the idle one for somebody working through the ceiling.
+		EndsAt:      sess.EndsAt().Format(time.RFC3339),
 		Status:      statusOf(u),
 		HasPassword: u.HasPassword(),
 		Permissions: permissionNames(p.PermissionList()),
 	}
+}
+
+// endsAt is when this session ends if nothing further happens.
+//
+// The idle deadline is computed from the setting as it is now rather than read
+// off the session, so it is right for one just issued as well as one just
+// resolved, and so a shortened window takes effect on the next answer.
+func (s *Server) endsAt(ctx context.Context, sess *users.Session) time.Time {
+	if idle := s.sessionIdleTTL(ctx); idle > 0 {
+		sess.IdleDeadline = sess.LastSeenAt.Add(idle)
+	}
+	return sess.EndsAt()
 }
 
 // accessFor resolves what an account may do and reach, for a page that is
@@ -384,7 +457,7 @@ func statusOf(u *users.User) string {
 // should be treated as the person it signed in as.
 func (s *Server) principalFor(w http.ResponseWriter, r *http.Request) (*auth.Principal, bool) {
 	if token := sessionToken(r); token != "" && s.opts.Accounts != nil {
-		user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), token)
+		user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), token, s.sessionIdleTTL(r.Context()))
 		if err == nil {
 			// A cookie is sent by the browser on any request to this origin,
 			// including one a different site caused. The header cannot be set

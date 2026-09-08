@@ -139,7 +139,11 @@ export interface Session {
   plugins: string[];
   grants: Grant[];
   csrf_token: string;
+  /** The ceiling: when this session ends however busy somebody is. */
   expires_at: string;
+  /** Whichever clock runs out first, the ceiling or the idle window. Anything
+   *  counting down reads this one. */
+  ends_at?: string;
   /**
    * "pending" is an account waiting for an administrator. It is signed in and
    * holds no capability at all; the console draws a screen saying so.
@@ -1073,6 +1077,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const safe = method === "GET" || method === "HEAD" || method === "OPTIONS";
   if (!safe && csrfToken) headers.set("X-CSRF-Token", csrfToken);
 
+
   // "include" rather than same-origin: the dev proxy serves this from another
   // port, where the cookie would not travel.
   const response = await fetch(path, { ...init, headers, credentials: "include" });
@@ -1706,6 +1711,15 @@ export const api = {
     }),
 
   session: () => request<Session>("/api/session"),
+  /**
+   * Says somebody is still here, and answers with the deadline that produced.
+   *
+   * A request of its own rather than a flag on requests the page was making
+   * anyway: the console polls, so traffic cannot be read as presence, and some
+   * pages make no requests at all -- somebody typing on one of those was
+   * reporting nothing and being signed out while working.
+   */
+  reportActivity: () => request<Session>("/api/session/activity", { method: "POST" }),
 
   /** Claims an instance that has no accounts yet. The first one is admin. */
   registerFirst: (email: string, password: string, displayName?: string) =>

@@ -156,6 +156,40 @@ it the first time the two schedules disagree. It is also written when the ledger
 is switched off: what that setting turns off is the record of *who*, which is
 the part that names people. How much and how fast name nobody.
 
+**A session ends on the first of two clocks.** An idle window that moves
+whenever somebody does something, and an absolute ceiling that never moves.
+One alone is the wrong answer either way: the ceiling by itself signs out
+somebody working steadily, mid sentence, and the idle window by itself leaves
+a browser left open on a signed-in console signed in indefinitely.
+
+What moves the idle clock is the browser saying a person did something, not a
+request arriving. The console polls -- tunnels every eight seconds, the
+overview every fifteen -- so a clock reset by traffic would be reset by a
+window nobody is looking at, and the idle timeout would never once fire. Only
+the browser can tell a click from its own polling, so it says so through
+`POST /api/session/activity`, and the answer carries the deadline that moved.
+
+A route of its own rather than a marker on requests the page was making anyway,
+for two reasons. Some pages make no requests at all, and somebody typing on one
+of those was reporting nothing while being signed out for inactivity. And the
+countdown has to be told the new deadline, or it goes on counting to one the
+host has already pushed back. The write is throttled to a minute, because a
+person clicking generates far more requests than an eight-hour clock needs, and
+`GET /api/session` deliberately does not move it: describing a session must not
+extend it, or a page polling its own countdown would renew what it is counting
+down.
+
+`Session.EndsAt` is the nearer of the two, and anything counting down reads it
+rather than either alone.
+
+The two bound different things, and conflating them is the easy mistake. The
+idle window bounds an *abandoned browser*: nobody is there, so nothing moves
+it. It does not bound a *stolen cookie* — whoever holds the cookie is using
+the session, and the window moves for them exactly as it does for anybody
+else. The ceiling is the only limit on that case, which is why raising it is
+not free and why it is three days rather than the week the idle window would
+otherwise make it tempting to allow.
+
 **Access is per plugin.** A credential lists the plugins it may reach.
 Everything else returns 404 rather than 403, so an agent scoped to one
 integration cannot discover which others are deployed.
