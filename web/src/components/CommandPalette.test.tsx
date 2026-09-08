@@ -154,4 +154,28 @@ describe("the command palette", () => {
     const row = await screen.findByRole("option", { name: /graylog/ });
     expect(within(row).getByText("Plugin")).toBeInTheDocument();
   });
+
+  /**
+   * A change is remembered by what it does and what it risks, and those live
+   * in different fields -- the headline and the keywords. Scoring the two
+   * separately meant a query had to fall entirely inside one of them.
+   */
+  it("finds a change by words that span its headline and its details", async () => {
+    renderWith(<CommandPalette open onOpenChange={() => undefined} onSignOut={() => undefined} />);
+    await screen.findByRole("option", { name: /Restart the device on cnmaestro/ });
+
+    await userEvent.type(screen.getByRole("combobox"), "restart high");
+    expect(await screen.findByRole("option", { name: /Restart the device on cnmaestro/ }))
+      .toBeInTheDocument();
+  });
+
+  /** Typing the words in another order is still typing the same words. */
+  it("does not care what order the words come in", async () => {
+    renderWith(<CommandPalette open onOpenChange={() => undefined} onSignOut={() => undefined} />);
+    await screen.findByRole("option", { name: /graylog/ });
+
+    await userEvent.type(screen.getByRole("combobox"), "device restart");
+    expect(await screen.findByRole("option", { name: /Restart the device on cnmaestro/ }))
+      .toBeInTheDocument();
+  });
 });

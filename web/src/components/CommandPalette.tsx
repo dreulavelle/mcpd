@@ -178,7 +178,18 @@ export function CommandPalette({ open, onOpenChange, onSignOut }: {
   const shown = useMemo(() => {
     const q = query.trim();
     const ranked = commands
-      .map((c) => ({ c, s: Math.max(score(c.label, q), score(c.keywords ?? "", q) - 5) }))
+      // The label alone, then the label and its keywords together. Scoring
+      // the keywords on their own meant a query had to fall entirely inside
+      // one field or the other: "restart high" names a change by what it does
+      // and what it risks, which live in different ones, and matched nothing.
+      // The label still wins, because the pair is scored five lower.
+      .map((c) => ({
+        c,
+        s: Math.max(
+          score(c.label, q),
+          score(c.keywords ? `${c.label} ${c.keywords}` : c.label, q) - 5,
+        ),
+      }))
       .filter(({ s }) => s > 0);
     // With nothing typed, the lists keep their own order; a query sorts by
     // how well each line matches, and within a score by group.
