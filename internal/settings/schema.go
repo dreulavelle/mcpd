@@ -1105,10 +1105,13 @@ func schema() []Group {
 				{
 					Key: KeyAccountsSessionTTL, Label: "Sign people out regardless after",
 					Kind: KindDuration, Unit: UnitHours, Group: "sessions", Apply: ApplyLive,
-					Default: 168, Min: intPtr(1), Max: intPtr(8760),
-					Help: "The ceiling, however busy somebody is. Applies to sessions " +
-						"started from now on; sessions already issued keep the expiry " +
-						"they were given.",
+					Default: 72, Min: intPtr(1), Max: intPtr(8760),
+					Help: "The ceiling, however busy somebody is, and the only limit " +
+						"on a sign-in cookie somebody else has got hold of: the idle " +
+						"window above is reset by whoever is using the session, which " +
+						"a thief is. Raise it and that is what gets longer. Applies to " +
+						"sessions started from now on; sessions already issued keep " +
+						"the expiry they were given.",
 				},
 			},
 		},

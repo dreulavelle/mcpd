@@ -90,7 +90,7 @@ func TestSession_TouchIsThrottled(t *testing.T) {
 	}
 
 	// Immediately after signing in, the row is already fresh.
-	moved, err := s.TouchSession(ctx, token, time.Minute)
+	moved, err := s.TouchSession(ctx, token, time.Minute, 8*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestSession_TouchIsThrottled(t *testing.T) {
 	}
 
 	advance(2 * time.Minute)
-	moved, err = s.TouchSession(ctx, token, time.Minute)
+	moved, err = s.TouchSession(ctx, token, time.Minute, 8*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestSession_ActivityKeepsASessionAlive(t *testing.T) {
 	// Six hours of steady work, in steps shorter than the window.
 	for range 12 {
 		advance(30 * time.Minute)
-		if _, err := s.TouchSession(ctx, token, time.Minute); err != nil {
+		if _, err := s.TouchSession(ctx, token, time.Minute, 8*time.Hour); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := s.ResolveSession(ctx, token, idle); err != nil {
@@ -160,7 +160,7 @@ func TestSession_TouchCannotReviveAnExpiredSession(t *testing.T) {
 	}
 
 	advance(2 * time.Hour)
-	moved, err := s.TouchSession(ctx, token, time.Minute)
+	moved, err := s.TouchSession(ctx, token, time.Minute, 8*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,5 +169,65 @@ func TestSession_TouchCannotReviveAnExpiredSession(t *testing.T) {
 	}
 	if _, _, err := s.ResolveSession(ctx, token, 8*time.Hour); err == nil {
 		t.Error("an expired session resolved after being touched")
+	}
+}
+
+/*
+The guard is in the statement, not in the caller.
+
+What stops a touch reviving a session that has already gone idle used to be
+that its only caller resolved first and skipped the touch on failure. A second
+caller, or a reordering, would have silently resurrected sessions the idle
+window had ended.
+*/
+func TestSession_TouchCannotReviveAnIdleSession(t *testing.T) {
+	s, setClock := newStore(t)
+	ctx := t.Context()
+	u := mustCreate(t, s, "someone@example.com", auth.RoleAdministrator)
+	at := time.Now()
+	setClock(at)
+
+	token, _, err := s.NewSession(ctx, u.ID, 168*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Nine hours of nothing, with the ceiling still six days away.
+	at = at.Add(9 * time.Hour)
+	setClock(at)
+
+	moved, err := s.TouchSession(ctx, token, time.Minute, 8*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved {
+		t.Error("a session already past its idle window was moved by a touch")
+	}
+	if _, _, err := s.ResolveSession(ctx, token, 8*time.Hour); err == nil {
+		t.Error("an idle session resolved after being touched")
+	}
+}
+
+// Housekeeping takes out rows that can never be used again, rather than
+// leaving a user id and a CSRF token sitting there until the ceiling.
+func TestSession_PurgeRemovesIdleSessionsToo(t *testing.T) {
+	s, setClock := newStore(t)
+	ctx := t.Context()
+	u := mustCreate(t, s, "someone@example.com", auth.RoleAdministrator)
+	at := time.Now()
+	setClock(at)
+
+	token, _, err := s.NewSession(ctx, u.ID, 168*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	at = at.Add(9 * time.Hour)
+	setClock(at)
+	if err := s.PurgeExpiredSessions(ctx, 8*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveSession(ctx, token, 0); err == nil {
+		t.Error("an idle session survived the purge even with the idle check off")
 	}
 }

@@ -1,4 +1,3 @@
-import { recentlyInteracted } from "./activity";
 import type { Area, Level, Permission } from "./permissions";
 // The dashboard's typed view of the mcpd admin API, mirroring the Go DTOs in
 // internal/admin. Hand-written: the surface is small.
@@ -1078,10 +1077,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const safe = method === "GET" || method === "HEAD" || method === "OPTIONS";
   if (!safe && csrfToken) headers.set("X-CSRF-Token", csrfToken);
 
-  // Says a person is at the keyboard, which is what moves the idle clock. It
-  // is not "this request happened": the console polls, and a page refreshing
-  // itself in an abandoned window must not keep somebody signed in.
-  if (recentlyInteracted()) headers.set("X-User-Activity", "1");
 
   // "include" rather than same-origin: the dev proxy serves this from another
   // port, where the cookie would not travel.
@@ -1716,6 +1711,15 @@ export const api = {
     }),
 
   session: () => request<Session>("/api/session"),
+  /**
+   * Says somebody is still here, and answers with the deadline that produced.
+   *
+   * A request of its own rather than a flag on requests the page was making
+   * anyway: the console polls, so traffic cannot be read as presence, and some
+   * pages make no requests at all -- somebody typing on one of those was
+   * reporting nothing and being signed out while working.
+   */
+  reportActivity: () => request<Session>("/api/session/activity", { method: "POST" }),
 
   /** Claims an instance that has no accounts yet. The first one is admin. */
   registerFirst: (email: string, password: string, displayName?: string) =>

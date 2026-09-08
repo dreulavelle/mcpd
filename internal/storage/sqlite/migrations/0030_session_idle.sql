@@ -12,6 +12,13 @@
 -- `expires_at` stays exactly what it was and becomes the second of those --
 -- the ceiling nothing can push past. This column is the first.
 --
+-- The two bound different things and it is worth being exact about which. The
+-- idle window bounds an abandoned browser: nobody is there, so nothing moves
+-- it. It does not bound a stolen cookie, because whoever holds the cookie is
+-- using the session and the window moves for them like anybody else. The
+-- ceiling is the only limit on that, which is why it did not become a week
+-- when this landed.
+--
 -- It is deliberately not "when this session last made a request". The console
 -- polls: the tunnels page every eight seconds, the overview every fifteen. A
 -- timer reset by traffic would be reset by a page nobody is looking at, and

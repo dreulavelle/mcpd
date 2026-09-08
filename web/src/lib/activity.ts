@@ -1,53 +1,80 @@
 /**
- * When somebody last did something, as opposed to when this page last spoke.
+ * Telling the host somebody is still here.
  *
- * The two are not the same and the difference is the whole point. The console
+ * The idle clock has to be moved by a person, not by traffic. The console
  * refreshes several pages on a timer -- tunnels every eight seconds, the
- * overview every fifteen -- so a session renewed by traffic would be renewed
- * by a window left open on a page nobody is looking at, and the idle timeout
- * would never once fire. Only the browser can tell a click from its own
- * polling, so it is the browser that says.
+ * overview every fifteen -- so a session renewed by requests would be renewed
+ * by a window left open on a page nobody is looking at, and the timeout would
+ * never once fire. Only the browser can tell a click from its own polling.
  *
- * A pointer down, a key, or a navigation counts. Mouse movement deliberately
- * does not: a sleeping laptop with a cat on the desk is not somebody working,
- * and a jittery mouse would hold a session open all night.
+ * It reports through a request of its own rather than by marking requests the
+ * page was making anyway, because some pages make none: somebody typing on
+ * Profile was reporting nothing and being signed out while working. The reply
+ * carries the deadline the report just moved, which is what the countdown
+ * reads -- without it the banner would count to a deadline the host had
+ * already extended.
+ *
+ * A pointer, a key, or a navigation counts. Mouse movement deliberately does
+ * not: a sleeping laptop with a cat on the desk is not somebody working, and a
+ * jittery pointer would hold a session open all night.
  */
 
-/** Epoch milliseconds of the last thing a person did. */
-let last = Date.now();
+/** How often a report is worth making. The host throttles to a minute too. */
+const REPORT_EVERY_MS = 60_000;
 
-/** How recent an interaction has to be for a request to carry the marker. */
-const WINDOW_MS = 60_000;
+/** When the last report was sent, so a burst of clicks is still one request. */
+let reported = 0;
 
-/** Records that somebody did something. Called by the router on navigation. */
-export function noteInteraction(): void {
-  last = Date.now();
+/** Who to tell, and what to do with the answer. Set by the app at start. */
+let send: (() => void) | null = null;
+
+/**
+ * Records that somebody did something, and reports it if it is time.
+ *
+ * Called by the pointer and key listeners, and by the router: a jump from the
+ * command palette is somebody doing something and touches neither of those.
+ */
+export function noteInteraction(now = Date.now()): void {
+  if (!send || now - reported < REPORT_EVERY_MS) return;
+  reported = now;
+  send();
 }
 
-/** Whether a person has done something recently enough to count as present. */
-export function recentlyInteracted(now = Date.now()): boolean {
-  return now - last < WINDOW_MS;
-}
-
-/** For tests, which must not inherit a timestamp from the one before. */
-export function resetInteraction(at = Date.now()): void {
-  last = at;
+/** For tests, which must not inherit the timer from the one before. */
+export function resetActivity(): void {
+  reported = 0;
+  send = null;
 }
 
 /**
- * Starts listening. Idempotent, and safe where there is no DOM.
+ * Starts listening, and returns a function that stops.
  *
- * Capture phase, because a handler that stops propagation is still somebody
- * having done something.
+ * Calling it twice replaces the first listener rather than adding a second,
+ * so a hot reload or a remount cannot end up with two.
  */
-export function watchInteraction(): () => void {
-  if (typeof document === "undefined") return () => undefined;
+let stopPrevious: (() => void) | null = null;
 
+export function watchInteraction(report: () => void): () => void {
+  stopPrevious?.();
+  send = report;
+
+  if (typeof document === "undefined") {
+    stopPrevious = () => { send = null; };
+    return stopPrevious;
+  }
+
+  // Capture phase: a handler that stops propagation is still somebody having
+  // done something.
   const note = () => noteInteraction();
   const events = ["pointerdown", "keydown"] as const;
-  for (const e of events) document.addEventListener(e, note, { capture: true, passive: true });
+  for (const e of events) {
+    document.addEventListener(e, note, { capture: true, passive: true });
+  }
 
-  return () => {
+  stopPrevious = () => {
     for (const e of events) document.removeEventListener(e, note, { capture: true });
+    send = null;
+    stopPrevious = null;
   };
+  return stopPrevious;
 }

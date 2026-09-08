@@ -789,16 +789,16 @@ func (s *Store) ResolveSession(ctx context.Context, token string, idle time.Dura
 // TouchSession records that a person did something, and reports whether the
 // row moved.
 //
-// Guarded on the session still being live, so a session that expired between
-// the request arriving and this running is not quietly revived -- the
-// condition is in the statement rather than in Go above it, and a lost race
-// matches zero rows and says so.
+// Both deadlines are in the statement rather than in Go above it. A session
+// past its ceiling or already idle out cannot be revived by a touch that
+// arrives late, and a lost race matches zero rows and says so -- the guard
+// holds for any caller, not only for one that happened to resolve first.
+// `idle` of zero leaves the ceiling as the only condition.
 //
-// `every` throttles the write. The console polls several endpoints on timers
-// and a person clicking around generates far more requests than a clock needs,
-// so a session whose last_seen_at is younger than this is left alone: one
-// write a minute rather than one a click.
-func (s *Store) TouchSession(ctx context.Context, token string, every time.Duration) (bool, error) {
+// `every` throttles the write. A person clicking around generates far more
+// requests than an eight-hour clock needs, so a session whose last_seen_at is
+// younger than this is left alone: one write a minute rather than one a click.
+func (s *Store) TouchSession(ctx context.Context, token string, every, idle time.Duration) (bool, error) {
 	if token == "" {
 		return false, nil
 	}
@@ -810,9 +810,11 @@ func (s *Store) TouchSession(ctx context.Context, token string, every time.Durat
 			   SET last_seen_at = ?
 			 WHERE session_hash = ?
 			   AND expires_at > ?
-			   AND last_seen_at <= ?`,
+			   AND last_seen_at <= ?
+			   AND (? = 0 OR last_seen_at > ?)`,
 			now.UnixMilli(), hashSecret(token), now.UnixMilli(),
-			now.Add(-every).UnixMilli())
+			now.Add(-every).UnixMilli(),
+			idle.Milliseconds(), now.Add(-idle).UnixMilli())
 		moved = n > 0
 		return err
 	})
@@ -827,11 +829,20 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 	})
 }
 
-// PurgeExpiredSessions removes sessions past their expiry.
-func (s *Store) PurgeExpiredSessions(ctx context.Context) error {
-	now := s.now().UnixMilli()
-	return s.db.WriteTx(ctx, now, func(tx *sqlite.UnitOfWork) error {
-		return tx.Exec(`DELETE FROM user_sessions WHERE expires_at < ?`, now)
+// PurgeExpiredSessions removes sessions past either deadline.
+//
+// The idle one matters as much as the ceiling now that the ceiling is a week.
+// A session abandoned after an hour is refused on sight from then on, but the
+// row would otherwise sit there for the rest of the week holding a user id and
+// a CSRF token nothing can use. `idle` of zero purges on the ceiling alone.
+func (s *Store) PurgeExpiredSessions(ctx context.Context, idle time.Duration) error {
+	now := s.now()
+	return s.db.WriteTx(ctx, now.UnixMilli(), func(tx *sqlite.UnitOfWork) error {
+		return tx.Exec(`
+			DELETE FROM user_sessions
+			 WHERE expires_at < ?
+			    OR (? > 0 AND last_seen_at <= ?)`,
+			now.UnixMilli(), idle.Milliseconds(), now.Add(-idle).UnixMilli())
 	})
 }
 
@@ -860,14 +871,23 @@ func isUniqueViolation(err error) bool {
 type Housekeeper struct {
 	store    *Store
 	interval time.Duration
+	// idle is how long a session survives untouched, read per sweep so a
+	// shortened window takes rows out on the next pass.
+	idle func(context.Context) time.Duration
 }
 
 // NewHousekeeper returns a background cleaner.
-func NewHousekeeper(store *Store, interval time.Duration) *Housekeeper {
+//
+// `idle` is read per sweep rather than captured, so shortening the window
+// takes the rows out on the next pass rather than the next restart.
+func NewHousekeeper(store *Store, interval time.Duration, idle func(context.Context) time.Duration) *Housekeeper {
 	if interval <= 0 {
 		interval = time.Hour
 	}
-	return &Housekeeper{store: store, interval: interval}
+	if idle == nil {
+		idle = func(context.Context) time.Duration { return 0 }
+	}
+	return &Housekeeper{store: store, interval: interval, idle: idle}
 }
 
 // Run cleans until ctx is cancelled.
@@ -879,7 +899,7 @@ func (h *Housekeeper) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := h.store.PurgeExpiredSessions(ctx); err != nil {
+			if err := h.store.PurgeExpiredSessions(ctx, h.idle(ctx)); err != nil {
 				return fmt.Errorf("users: housekeeping: %w", err)
 			}
 			if err := h.store.PurgeExpiredPendingLinks(ctx); err != nil {

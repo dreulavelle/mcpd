@@ -553,6 +553,11 @@ func (s *Server) routes() {
 	// The same subject over a longer horizon: performance is what this process
 	// has seen since it started, statistics is what the host has ever done.
 	api("GET /api/statistics", s.handleStatistics, auth.PermHistoryRead)
+	// Says a person is still here. Behind the same middleware as everything
+	// else, so it needs the cookie and the CSRF header like any other write --
+	// a request that could not have come from this page must not be read as
+	// somebody using it.
+	api("POST /api/session/activity", s.handleSessionActivity, auth.PermSignedIn)
 	api("GET /api/updates", s.handleUpdates, auth.PermSystemRead)
 	// Forcing a check reaches an external service, so it is an admin action
 	// even though what it returns is not privileged.

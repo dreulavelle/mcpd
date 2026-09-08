@@ -634,8 +634,8 @@ func TestAFreshDeploymentImportsNothingAndUsesTheDeclaredDefaults(t *testing.T) 
 
 	// The ceiling and the idle window are separate clocks with separate
 	// defaults, and a fresh deployment takes both from the declaration.
-	if got := a.sessionTTL(ctx); got != 168*time.Hour {
-		t.Errorf("session ttl = %s, want the declared 168h default", got)
+	if got := a.sessionTTL(ctx); got != 72*time.Hour {
+		t.Errorf("session ttl = %s, want the declared 72h default", got)
 	}
 	if got := a.sessionIdleTTL(ctx); got != 8*time.Hour {
 		t.Errorf("session idle ttl = %s, want the declared 8h default", got)

@@ -101,7 +101,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.startWorker("outbox-publisher", workerCtx, a.publisher.Run)
 	a.startWorker("reaper", workerCtx, a.reaper.Run)
 	if a.accounts != nil {
-		hk := users.NewHousekeeper(a.accounts, time.Hour)
+		hk := users.NewHousekeeper(a.accounts, time.Hour, a.sessionIdleTTL)
 		a.startWorker("session-housekeeper", workerCtx, hk.Run)
 	}
 	a.startWorker("sso-state-housekeeper", workerCtx, a.purgeSSOStates)

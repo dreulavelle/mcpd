@@ -16,6 +16,7 @@ import { ShortcutsHelp } from "@/components/ShortcutsHelp";
 import { ToastProvider } from "@/components/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AwaitingApproval, FirstRun, SignIn } from "@/pages/signed-out/SignedOut";
+import { watchInteraction } from "@/lib/activity";
 import { Routes } from "@/Routes";
 
 // Read once, before React renders anything, because the parameter is stripped
@@ -40,6 +41,23 @@ export default function App() {
     setCSRFToken(s.csrf_token);
     setSession(s);
   }, []);
+
+  // Somebody doing something is what moves the idle clock, and the answer
+  // carries the deadline it moved to -- which the countdown reads, so it stops
+  // counting towards a moment the host has already pushed back.
+  //
+  // Only while signed in: there is no session to keep alive before that, and a
+  // refused report on the sign-in screen would be noise.
+  useEffect(() => {
+    if (!session) return;
+    return watchInteraction(() => {
+      api.reportActivity().then(adopt).catch(() => {
+        // A failed report is not worth telling anybody about: the session is
+        // either still good, in which case the next interaction reports again,
+        // or it is not, in which case the next real request says so properly.
+      });
+    });
+  }, [session, adopt]);
 
   useEffect(() => {
     api.meta().then(setMeta).catch(() => setMeta(null));

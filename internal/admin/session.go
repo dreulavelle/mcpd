@@ -25,7 +25,7 @@ type Accounts interface {
 	ResolveSession(ctx context.Context, token string, idle time.Duration) (*users.User, *users.Session, error)
 	// TouchSession records that a person did something, throttled to at most
 	// one write per `every`. It reports whether the row actually moved.
-	TouchSession(ctx context.Context, token string, every time.Duration) (bool, error)
+	TouchSession(ctx context.Context, token string, every, idle time.Duration) (bool, error)
 	DeleteSession(ctx context.Context, token string) error
 
 	// Resolve is what an account may do and reach: its own role and grants
@@ -296,29 +296,53 @@ func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request) {
 // and turns a write per request into a write per minute.
 const touchEvery = time.Minute
 
-// noteActivity moves the idle clock when a person did something.
+// handleSessionActivity records that a person did something, and answers with
+// the deadline that produced.
 //
-// The marker comes from the browser because only the browser can tell a click
-// from the console refreshing itself: several pages poll on timers, and a
-// session renewed by traffic would be renewed by a window nobody is looking
-// at, which is not an idle timeout at all.
+// A request of its own rather than a marker on requests the page was making
+// anyway. Two reasons, and the second is why the marker was not enough. The
+// console polls -- tunnels every eight seconds, the overview every fifteen --
+// so traffic cannot be read as presence: a window left open on a page nobody
+// is looking at would renew for ever. But some pages make no requests at all,
+// and somebody typing on one of those was reporting nothing and being signed
+// out while working.
 //
-// A failure is logged and swallowed. The request itself succeeded or did not,
-// and refusing it because the bookkeeping failed would turn a working console
-// into an outage.
-func (s *Server) noteActivity(r *http.Request, token string) {
-	if r.Header.Get("X-User-Activity") == "" || s.opts.Accounts == nil {
+// It answers with the whole session because the deadline it just moved is the
+// one the console is counting down. Without that the banner would go on
+// counting to a deadline the host had already extended, and reach zero while
+// the session was healthy.
+func (s *Server) handleSessionActivity(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Accounts == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
 		return
 	}
-	if _, err := s.opts.Accounts.TouchSession(r.Context(), token, touchEvery); err != nil {
+	token := sessionToken(r)
+	idle := s.sessionIdleTTL(r.Context())
+
+	if _, err := s.opts.Accounts.TouchSession(r.Context(), token, touchEvery, idle); err != nil {
+		// Logged and swallowed: the session is still valid whatever the write
+		// did, and reporting a failure here would sign somebody out over
+		// bookkeeping.
 		s.opts.Log.WarnContext(r.Context(), "could not record session activity", "error", err)
 	}
+
+	user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), token, idle)
+	if err != nil {
+		s.writeError(w, r, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, s.sessionView(r, user, sess))
 }
 
 // handleCurrentSession reports who is signed in, and reissues the CSRF token.
 //
 // The page calls this on load so that a session surviving a refresh does not
 // require signing in again to obtain a token.
+//
+// It deliberately does not move the idle clock, which every other
+// authenticated path does through the activity route. Describing a session
+// must not extend it: a page polling its own countdown would renew exactly
+// what it is counting down, and the timeout would never fire.
 func (s *Server) handleCurrentSession(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Accounts == nil {
 		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
@@ -358,6 +382,18 @@ func (s *Server) sessionView(r *http.Request, u *users.User, sess *users.Session
 		HasPassword: u.HasPassword(),
 		Permissions: permissionNames(p.PermissionList()),
 	}
+}
+
+// endsAt is when this session ends if nothing further happens.
+//
+// The idle deadline is computed from the setting as it is now rather than read
+// off the session, so it is right for one just issued as well as one just
+// resolved, and so a shortened window takes effect on the next answer.
+func (s *Server) endsAt(ctx context.Context, sess *users.Session) time.Time {
+	if idle := s.sessionIdleTTL(ctx); idle > 0 {
+		sess.IdleDeadline = sess.LastSeenAt.Add(idle)
+	}
+	return sess.EndsAt()
 }
 
 // accessFor resolves what an account may do and reach, for a page that is
@@ -423,7 +459,6 @@ func (s *Server) principalFor(w http.ResponseWriter, r *http.Request) (*auth.Pri
 	if token := sessionToken(r); token != "" && s.opts.Accounts != nil {
 		user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), token, s.sessionIdleTTL(r.Context()))
 		if err == nil {
-			s.noteActivity(r, token)
 			// A cookie is sent by the browser on any request to this origin,
 			// including one a different site caused. The header cannot be set
 			// cross-origin without CORS consent, so requiring it is what makes
