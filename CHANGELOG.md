@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/dreulavelle/mcpd/compare/v0.22.1...v0.23.0) (2026-09-08)
+
+
+### Features
+
+* **web:** statistics that a restart does not reset ([40f5369](https://github.com/dreulavelle/mcpd/commit/40f5369f7fa15dd132b97603d8d5d7514f8d2505))
+
 ## [0.22.1](https://github.com/dreulavelle/mcpd/compare/v0.22.0...v0.22.1) (2026-09-08)
 
 
