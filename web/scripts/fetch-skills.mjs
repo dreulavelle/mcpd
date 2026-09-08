@@ -20,7 +20,7 @@
  * is loud: a run that cannot find what it expects writes nothing and leaves
  * the committed snapshot standing.
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { argv } from "node:process";
 
 const ORIGIN = "https://www.skills.sh";
@@ -135,6 +135,54 @@ async function fromPage(path) {
   return clean(arrayAfter(decodeFlight(await response.text()), '"initialSkills":'));
 }
 
+/**
+ * Refuses a snapshot that parsed but cannot be true.
+ *
+ * The shape checks above catch a page that stopped serving what it used to.
+ * They do not catch one that serves something *else* in the same shape, and
+ * that is the case a person skimming the diff would have caught -- so with
+ * nobody skimming it, the run has to catch it itself.
+ *
+ * Both tests below compare against the snapshot already committed, which is
+ * the only thing here that is known good.
+ */
+function checkPlausible(fresh, previous) {
+  if (!previous?.boards?.top?.length) return; // Nothing to compare against yet.
+
+  const was = previous.boards.top;
+  const now = fresh.top;
+
+  // All-time installs only ever go up: it is a cumulative count, and a total
+  // that fell means this is not the board it was yesterday.
+  const before = was.reduce((n, r) => n + r.installs, 0);
+  const after = now.reduce((n, r) => n + r.installs, 0);
+  if (after < before) {
+    throw new Error(
+      `all-time installs fell from ${before} to ${after}; a cumulative count ` +
+      `does not do that, so this is not the same board`);
+  }
+
+  // And the population turns over slowly. A board sharing almost nothing with
+  // yesterday's is a different list, whatever it is shaped like.
+  const known = new Set(was.map((r) => `${r.source}/${r.id}`));
+  const shared = now.filter((r) => known.has(`${r.source}/${r.id}`)).length;
+  const overlap = shared / now.length;
+  if (overlap < 0.5) {
+    throw new Error(
+      `only ${(overlap * 100).toFixed(0)}% of the all-time board was on the ` +
+      `previous one; a leaderboard does not turn over that fast`);
+  }
+}
+
+/** The snapshot already committed, or null on the very first run. */
+function previousSnapshot(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 const boards = {};
 for (const { key, path } of BOARDS) {
   const rows = await fromPage(path);
@@ -148,6 +196,11 @@ for (const { key, path } of BOARDS) {
 }
 
 const out = argv[2] ?? new URL("../src/data/skills.json", import.meta.url).pathname;
+
+// Before writing, not after: a run that cannot be believed must leave the
+// committed snapshot exactly where it was.
+checkPlausible(boards, previousSnapshot(out));
+
 writeFileSync(out, JSON.stringify({
   // Whole days only. A timestamp to the second rewrites this file on every
   // run and turns a no-change refresh into a diff.
