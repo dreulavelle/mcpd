@@ -8,15 +8,14 @@ import {
 function tool(over: Partial<ToolTotals> = {}): ToolTotals {
   return {
     plugin: "echo", tool: "say", calls: 0, ok: 0, errors: 0, denied: 0,
-    rate_limited: 0, timed: 0, mean_us: 0, sized: 0, bytes_sum: 0,
-    mean_bytes: 0, first_seen: "2026-09-01T00:00:00Z",
-    last_seen: "2026-09-08T00:00:00Z", ...over,
+    rate_limited: 0, timed: 0, duration_sum_us: 0, mean_us: 0, sized: 0,
+    bytes_sum: 0, mean_bytes: 0, ...over,
   };
 }
 
 function stats(over: Partial<Statistics> = {}): Statistics {
   return {
-    window_hours: 0, recording: true, tools: [], plugins: [], series: [],
+    window_hours: 0, tools: [], plugins: [], series: [], stride_seconds: 3600,
     result_budget_bytes: 40_000, wire_multiplier: 2, bytes_per_token: 4, ...over,
   };
 }
@@ -29,7 +28,10 @@ describe("headline", () => {
    */
   it("averages latency over the calls that ran, not every call", () => {
     const h = headline(stats({
-      tools: [tool({ calls: 10, ok: 2, denied: 8, timed: 2, mean_us: 50_000 })],
+      tools: [tool({
+        calls: 10, ok: 2, denied: 8, timed: 2,
+        duration_sum_us: 100_000, mean_us: 50_000,
+      })],
     }));
     expect(h.calls).toBe(10);
     expect(h.timed).toBe(2);
@@ -45,8 +47,8 @@ describe("headline", () => {
   it("weights the mean by how many calls each tool contributed", () => {
     const h = headline(stats({
       tools: [
-        tool({ tool: "fast", calls: 99, ok: 99, timed: 99, mean_us: 1_000 }),
-        tool({ tool: "slow", calls: 1, ok: 1, timed: 1, mean_us: 100_000 }),
+        tool({ tool: "fast", calls: 99, ok: 99, timed: 99, duration_sum_us: 99000, mean_us: 1_000 }),
+        tool({ tool: "slow", calls: 1, ok: 1, timed: 1, duration_sum_us: 100000, mean_us: 100_000 }),
       ],
     }));
     // Not (1_000 + 100_000) / 2.
@@ -102,7 +104,8 @@ describe("condense", () => {
   function point(i: number, calls: number): StatsPoint {
     return {
       at: new Date(Date.UTC(2026, 8, 1, i)).toISOString(),
-      calls, ok: calls, failed: 0, timed: calls, mean_us: 1_000, bytes: calls * 10,
+      calls, ok: calls, not_ok: 0, timed: calls,
+      duration_sum_us: calls * 1_000, mean_us: 1_000, bytes: calls * 10,
     };
   }
 
@@ -122,11 +125,11 @@ describe("condense", () => {
 
   it("re-averages latency over the folded buckets rather than averaging averages", () => {
     const s = [
-      { ...point(0, 1), timed: 1, mean_us: 100 },
-      { ...point(1, 9), timed: 9, mean_us: 1_100 },
+      { ...point(0, 1), timed: 1, duration_sum_us: 100, mean_us: 100 },
+      { ...point(1, 9), timed: 9, duration_sum_us: 9900, mean_us: 1_100 },
     ];
     const [folded] = condense(s, 1);
-    expect(folded!.mean_us).toBe(Math.round((100 + 9 * 1_100) / 10));
+    expect(folded!.mean_us).toBe(Math.round((100 + 9_900) / 10));
   });
 });
 

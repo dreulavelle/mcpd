@@ -296,7 +296,7 @@ func (m *Metrics) ToolCall(_ context.Context, plugin, tool, outcome string, d ti
 // The context is accepted and ignored for the same reason ToolCall ignores it:
 // who called belongs in the ledger, not in a label. Other observers on this
 // interface do need it.
-func (m *Metrics) ToolResultSize(_ context.Context, plugin, tool string, size func() int) {
+func (m *Metrics) ToolResultSize(_ context.Context, _ time.Time, plugin, tool string, size func() int) {
 	if m == nil || size == nil {
 		return
 	}

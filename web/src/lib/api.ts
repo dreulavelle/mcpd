@@ -1549,38 +1549,6 @@ export interface Outcomes {
   rate_limited: number;
 }
 
-export interface ToolStats {
-  plugin: string;
-  tool: string;
-  calls: Outcomes;
-  duration?: Distribution;
-  /** Absent until something has been measured; not the same as zero bytes. */
-  result_bytes?: Distribution;
-}
-
-export interface UpstreamStats {
-  plugin: string;
-  outcome: string;
-  duration: Distribution;
-}
-
-export interface CacheStats {
-  plugin: string;
-  kind: string;
-  hit: number;
-  miss: number;
-  /** Joined a fetch already in flight rather than starting a second one. */
-  shared: number;
-}
-
-export interface Performance {
-  tools: ToolStats[];
-  upstream: UpstreamStats[];
-  cache: CacheStats[];
-  /** The ceiling a plugin builds against. Sent so this never hardcodes it. */
-  result_budget_bytes: number;
-}
-
 /**
  * One tool's whole record, from the rollup that is never pruned.
  *
@@ -1598,19 +1566,18 @@ export interface ToolTotals {
   denied: number;
   rate_limited: number;
   timed: number;
+  duration_sum_us: number;
   mean_us: number;
-  min_us?: number;
   max_us?: number;
-  /** The upper bound of the latency band the percentile fell in, or absent
-   *  when it fell past the last one, which has no bound to report. */
+  /** The upper bound of the latency band the percentile fell in, held down to
+   *  max_us, or absent when it fell past the last band, which has no bound.
+   *  Never a measurement: render it as a bound, not as an exact figure. */
   p50_us?: number;
   p95_us?: number;
   sized: number;
   bytes_sum: number;
   mean_bytes: number;
   max_bytes?: number;
-  first_seen: string;
-  last_seen: string;
 }
 
 /** One plugin, summed across its tools. */
@@ -1629,8 +1596,12 @@ export interface StatsPoint {
   at: string;
   calls: number;
   ok: number;
-  failed: number;
+  /** Every call that did not succeed, which is not every call that failed: a
+   *  refusal by the gate or a rate limit is in here too, and that is a working
+   *  host doing its job. Nothing rendering this may call it a failure. */
+  not_ok: number;
   timed: number;
+  duration_sum_us: number;
   mean_us: number;
   bytes: number;
 }
@@ -1644,11 +1615,12 @@ export interface StatsPoint {
  */
 export interface Statistics {
   window_hours: number;
-  recording: boolean;
   /** What the host actually holds, which is not the window asked for -- a host
    *  three days old cannot answer for a month. */
   first?: string;
-  last?: string;
+  /** How wide one point of the series is, so a chart can say what a bar
+   *  covers rather than leaving it to be guessed from the count. */
+  stride_seconds: number;
   tools: ToolTotals[];
   plugins: PluginTotals[];
   series: StatsPoint[];
@@ -2002,7 +1974,6 @@ export const api = {
 
   /** What this process is costing the machine it runs on. */
   resources: () => request<Resources>("/api/resources"),
-  performance: () => request<Performance>("/api/performance"),
   statistics: (hours: number) =>
     request<Statistics>(`/api/statistics${hours > 0 ? `?hours=${hours}` : ""}`),
 

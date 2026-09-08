@@ -15,7 +15,7 @@ import {
 /**
  * Who called what.
  *
- * The counters on the Performance page can say a tool was called four hundred
+ * The Statistics page can say a tool was called four hundred
  * times; they cannot say who called it, because a metric labelled by credential
  * is unbounded cardinality. The audit trail records administrative acts and
  * mutations, not ordinary reads. This is the third question — and the one an

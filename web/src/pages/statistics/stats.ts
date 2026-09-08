@@ -24,7 +24,8 @@ export type WindowHours = (typeof WINDOWS)[number]["hours"];
 export interface Headline {
   calls: number;
   ok: number;
-  failed: number;
+  /** Every call that did not succeed, refusals included. Not "failed". */
+  notOK: number;
   denied: number;
   /** Successes over calls, or null when nothing has been called at all --
    *  which is not the same as a success rate of zero. */
@@ -46,13 +47,16 @@ export function headline(s: Statistics): Headline {
     ok += t.ok;
     denied += t.denied + t.rate_limited;
     timed += t.timed;
-    durationSum += t.mean_us * t.timed;
+    // The exact sum, not the mean times the count: the mean was already
+    // integer-truncated server side, and the page's claim is that its
+    // arithmetic is named rather than approximately right.
+    durationSum += t.duration_sum_us;
     bytes += t.bytes_sum;
   }
   const contextBytes = bytes * s.wire_multiplier;
   return {
     calls, ok, denied, timed, bytes, contextBytes,
-    failed: calls - ok,
+    notOK: calls - ok,
     successRate: calls > 0 ? ok / calls : null,
     meanUS: timed > 0 ? Math.round(durationSum / timed) : null,
     tokens: Math.round(contextBytes / s.bytes_per_token),
@@ -84,11 +88,11 @@ export function againstBudget(t: ToolTotals, budget: number): number | null {
 }
 
 /**
- * Buckets a series into at most `want` columns.
+ * Folds a series into at most `want` columns.
  *
- * A month of hours is 720 bars in a chart a few hundred pixels wide, which is
- * a smear rather than a shape. Summing adjacent hours keeps every call counted
- * while giving the eye something it can read.
+ * A safety net rather than the thing that bounds the payload: the server
+ * already returns at most fifty points, at a stride it reports. This only has
+ * work to do if that ever changes.
  */
 export function condense(series: StatsPoint[], want = 48): StatsPoint[] {
   if (series.length <= want) return series;
@@ -96,13 +100,14 @@ export function condense(series: StatsPoint[], want = 48): StatsPoint[] {
   const out: StatsPoint[] = [];
   for (let i = 0; i < series.length; i += per) {
     const slice = series.slice(i, i + per);
-    let calls = 0, ok = 0, failed = 0, timed = 0, durationSum = 0, bytes = 0;
+    let calls = 0, ok = 0, notOK = 0, timed = 0, durationSum = 0, bytes = 0;
     for (const p of slice) {
-      calls += p.calls; ok += p.ok; failed += p.failed;
-      timed += p.timed; durationSum += p.mean_us * p.timed; bytes += p.bytes;
+      calls += p.calls; ok += p.ok; notOK += p.not_ok;
+      timed += p.timed; durationSum += p.duration_sum_us; bytes += p.bytes;
     }
     out.push({
-      at: slice[0]!.at, calls, ok, failed, timed, bytes,
+      at: slice[0]!.at, calls, ok, not_ok: notOK, timed, bytes,
+      duration_sum_us: durationSum,
       mean_us: timed > 0 ? Math.round(durationSum / timed) : 0,
     });
   }
@@ -132,4 +137,13 @@ export function count(n: number): string {
   if (n >= 10_000) return `${Math.round(n / 1000)}K`;
   if (n >= 1_000) return `${(n / 1000).toFixed(1)}K`;
   return String(n);
+}
+
+/** How wide one bar is, in the words a caption would use. */
+export function strideLabel(seconds: number): string {
+  const hours = Math.round(seconds / 3600);
+  if (hours <= 1) return "hour";
+  if (hours < 48) return `${hours} hours`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "day" : `${days} days`;
 }

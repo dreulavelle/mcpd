@@ -43,7 +43,12 @@ type toolObserver struct {
 func (o *toolObserver) ToolCall(ctx context.Context, plugin, tool, outcome string, d time.Duration) {
 	o.metrics.ToolCall(ctx, plugin, tool, outcome, d)
 
-	at := time.Now()
+	// The hour the call started, not the hour it finished reporting. The size
+	// is rolled up against the same instant, so a call spanning an hour
+	// boundary cannot leave its bytes in the next hour's row without the call
+	// they belong to -- which would make `sized` exceed `calls` and break the
+	// invariant the table's own comments assert.
+	at := time.Now().Add(-d)
 	if o.stats != nil {
 		if err := o.stats.RecordCall(ctx, at, plugin, tool, outcome, measured(outcome, d)); err != nil {
 			o.log.WarnContext(ctx, "could not roll up a tool call",
@@ -93,19 +98,30 @@ func measured(outcome string, d time.Duration) *int64 {
 // Reported separately from the call because measuring it costs a marshal of
 // the whole result, so it is only asked for once a call has succeeded. Both
 // land on the same rollup row, a sized call being an `ok` one by definition.
-func (o *toolObserver) ToolResultSize(ctx context.Context, plugin, tool string, size func() int) {
-	o.metrics.ToolResultSize(ctx, plugin, tool, size)
+func (o *toolObserver) ToolResultSize(ctx context.Context, at time.Time, plugin, tool string, size func() int) {
+	// Measured at most once and shared. Marshalling the whole result is the
+	// expensive part, and two observers each calling the closure paid for it
+	// twice on every successful call.
+	measured, once := -1, false
+	shared := func() int {
+		if !once {
+			measured, once = size(), true
+		}
+		return measured
+	}
+
+	o.metrics.ToolResultSize(ctx, at, plugin, tool, shared)
 
 	if o.stats == nil || size == nil {
 		return
 	}
 	// Negative means the caller could not measure it, and a zero would read as
 	// a tool that answered with nothing.
-	n := size()
+	n := shared()
 	if n < 0 {
 		return
 	}
-	if err := o.stats.RecordResultSize(ctx, time.Now(), plugin, tool, int64(n)); err != nil {
+	if err := o.stats.RecordResultSize(ctx, at, plugin, tool, int64(n)); err != nil {
 		o.log.WarnContext(ctx, "could not roll up a result size",
 			"plugin", plugin, "tool", tool, "error", err)
 	}

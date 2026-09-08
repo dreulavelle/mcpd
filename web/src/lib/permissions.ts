@@ -43,7 +43,7 @@ export const AREA_HINTS: Record<Area, string> = {
   tunnels: "Tunnels and the ChatGPT accounts they connect with",
   settings: "This host's own configuration",
   access: "Users, groups, roles, keys, registrations, sign-in providers",
-  history: "Activity, audit, logs, performance; write is clearing",
+  history: "Activity, audit, logs, statistics; write is clearing",
   system: "What the host is running; restart, backup and restore",
 };
 

@@ -16,10 +16,7 @@ import (
 // pruned. This one holds sums that name nobody, so it answers questions about
 // a year that the ledger cannot answer about a month.
 type StatsReader interface {
-	Totals(ctx context.Context, since time.Time) ([]sqlite.ToolTotals, error)
-	Series(ctx context.Context, since time.Time) ([]sqlite.Point, error)
-	ByPlugin(ctx context.Context, since time.Time) ([]sqlite.PluginTotals, error)
-	Span(ctx context.Context) (first, last time.Time, err error)
+	Read(ctx context.Context, since time.Time) (sqlite.Snapshot, error)
 }
 
 // StatisticsResponse is the whole page in one call.
@@ -32,14 +29,13 @@ type StatisticsResponse struct {
 	// host has ever recorded.
 	Window int `json:"window_hours"`
 
-	// Recording says whether new calls are being rolled up at all, so a page
-	// showing nothing can tell "nothing happened" from "nothing is kept".
-	Recording bool `json:"recording"`
-
-	// First and Last bound what is actually held, which is not the same as the
-	// window asked for: a host three days old cannot answer for a month.
+	// First bounds what is actually held, which is not the window asked for: a
+	// host three days old cannot answer for a month.
 	First *time.Time `json:"first,omitempty"`
-	Last  *time.Time `json:"last,omitempty"`
+
+	// StrideSeconds is how wide one point of the series is, so a chart can say
+	// what a bar covers rather than leaving it to be guessed from the count.
+	StrideSeconds int `json:"stride_seconds"`
 
 	Tools   []sqlite.ToolTotals   `json:"tools"`
 	Plugins []sqlite.PluginTotals `json:"plugins"`
@@ -87,6 +83,7 @@ func (s *Server) handleStatistics(w http.ResponseWriter, r *http.Request) {
 			Tools: []sqlite.ToolTotals{}, Plugins: []sqlite.PluginTotals{},
 			Series: []sqlite.Point{}, ResultBudgetBytes: observability.ResultBudgetBytes,
 			WireMultiplier: wireMultiplier, BytesPerToken: bytesPerToken,
+			StrideSeconds: int(time.Hour / time.Second),
 		})
 		return
 	}
@@ -110,37 +107,26 @@ func (s *Server) handleStatistics(w http.ResponseWriter, r *http.Request) {
 		since = time.Now().Add(-time.Duration(hours) * time.Hour)
 	}
 
+	snap, err := s.opts.Stats.Read(ctx, since)
+	if err != nil {
+		s.writeProblem(w, r, http.StatusInternalServerError, err,
+			"The statistics could not be read.")
+		return
+	}
+
 	out := StatisticsResponse{
 		Window:            hours,
-		Recording:         true,
+		Tools:             snap.Tools,
+		Plugins:           snap.Plugins,
+		Series:            snap.Series,
+		StrideSeconds:     int(snap.Stride / time.Second),
 		ResultBudgetBytes: observability.ResultBudgetBytes,
 		WireMultiplier:    wireMultiplier,
 		BytesPerToken:     bytesPerToken,
 	}
-
-	const failed = "The statistics could not be read."
-
-	var err error
-	if out.Tools, err = s.opts.Stats.Totals(ctx, since); err != nil {
-		s.writeProblem(w, r, http.StatusInternalServerError, err, failed)
-		return
-	}
-	if out.Plugins, err = s.opts.Stats.ByPlugin(ctx, since); err != nil {
-		s.writeProblem(w, r, http.StatusInternalServerError, err, failed)
-		return
-	}
-	if out.Series, err = s.opts.Stats.Series(ctx, since); err != nil {
-		s.writeProblem(w, r, http.StatusInternalServerError, err, failed)
-		return
-	}
-
-	first, last, err := s.opts.Stats.Span(ctx)
-	if err != nil {
-		s.writeProblem(w, r, http.StatusInternalServerError, err, failed)
-		return
-	}
-	if !first.IsZero() {
-		out.First, out.Last = &first, &last
+	if !snap.First.IsZero() {
+		first := snap.First
+		out.First = &first
 	}
 
 	s.writeJSON(w, r, http.StatusOK, out)

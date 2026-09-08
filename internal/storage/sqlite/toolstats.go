@@ -25,6 +25,49 @@ type ToolStatsStore struct {
 
 func NewToolStatsStore(db *DB) *ToolStatsStore { return &ToolStatsStore{db: db} }
 
+// querier is whatever the reads run against: the pool, or one snapshot.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// Snapshot is every cut of the same span, read together.
+//
+// One transaction rather than four calls. Putting the four in one HTTP
+// response does not make them agree: a call landing between two of them
+// appears in one and not the other, and the headline then disagrees with the
+// chart underneath it by a call or two for no reason a reader can see.
+type Snapshot struct {
+	Tools   []ToolTotals
+	Plugins []PluginTotals
+	Series  []Point
+	// Stride is how wide one point is, so a chart can say what a bar means.
+	Stride time.Duration
+	// First and Last bound what is actually held, which is not the window
+	// asked for: a host three days old cannot answer for a month.
+	First, Last time.Time
+}
+
+// Read reports every cut of one span from a single consistent snapshot.
+func (s *ToolStatsStore) Read(ctx context.Context, since time.Time) (Snapshot, error) {
+	var out Snapshot
+	err := s.db.ReadTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if out.Tools, err = s.totals(ctx, tx, since); err != nil {
+			return err
+		}
+		if out.Plugins, err = s.byPlugin(ctx, tx, since); err != nil {
+			return err
+		}
+		if out.Series, out.Stride, err = s.series(ctx, tx, since); err != nil {
+			return err
+		}
+		out.First, out.Last, err = s.span(ctx, tx)
+		return err
+	})
+	return out, err
+}
+
 // Bucket boundaries in microseconds, and the column each band counts into.
 // Fixed rather than configurable: a boundary that moved would make two spans
 // of the same table incomparable, which is the one thing this exists to allow.
@@ -130,12 +173,19 @@ type ToolTotals struct {
 	RateLimited int64 `json:"rate_limited"`
 
 	// Timed is the denominator for every duration here, and is not Calls.
-	Timed  int64  `json:"timed"`
-	MeanUS int64  `json:"mean_us"`
-	MinUS  *int64 `json:"min_us,omitempty"`
-	MaxUS  *int64 `json:"max_us,omitempty"`
-	P50US  *int64 `json:"p50_us,omitempty"`
-	P95US  *int64 `json:"p95_us,omitempty"`
+	Timed int64 `json:"timed"`
+	// DurationSumUS is sent so a caller summing several tools can do it
+	// exactly. Reconstructing it from MeanUS loses up to a microsecond per
+	// call, and this page's whole claim is that its arithmetic is named.
+	DurationSumUS int64  `json:"duration_sum_us"`
+	MeanUS        int64  `json:"mean_us"`
+	MaxUS         *int64 `json:"max_us,omitempty"`
+	// P50US and P95US are the upper bound of the band the call fell in, never
+	// a measurement, and are clamped to MaxUS: a band ceiling above the
+	// slowest call this tool ever made would print a median larger than the
+	// maximum beside it. Nil past the last boundary, which has none.
+	P50US *int64 `json:"p50_us,omitempty"`
+	P95US *int64 `json:"p95_us,omitempty"`
 
 	// Sized is the denominator for the byte figures, for the same reason.
 	Sized     int64  `json:"sized"`
@@ -143,30 +193,24 @@ type ToolTotals struct {
 	MeanBytes int64  `json:"mean_bytes"`
 	MaxBytes  *int64 `json:"max_bytes,omitempty"`
 
-	// FirstSeen and LastSeen bound what this row is describing, so a tool that
-	// stopped being called does not read as one that is merely quiet.
-	FirstSeen time.Time `json:"first_seen"`
-	LastSeen  time.Time `json:"last_seen"`
-
 	bands [8]int64
 }
 
 // Totals reports every tool with activity in the span, busiest first.
 //
 // `since` zero means everything ever recorded, which is the point of the table.
-func (s *ToolStatsStore) Totals(ctx context.Context, since time.Time) ([]ToolTotals, error) {
-	rows, err := s.db.Reader().QueryContext(ctx, `
+func (s *ToolStatsStore) totals(ctx context.Context, q querier, since time.Time) ([]ToolTotals, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT plugin, tool,
 		       SUM(calls),
 		       SUM(CASE WHEN outcome = 'ok'           THEN calls ELSE 0 END),
 		       SUM(CASE WHEN outcome = 'error'        THEN calls ELSE 0 END),
 		       SUM(CASE WHEN outcome = 'denied'       THEN calls ELSE 0 END),
 		       SUM(CASE WHEN outcome = 'rate_limited' THEN calls ELSE 0 END),
-		       SUM(timed), SUM(duration_sum), MIN(duration_min), MAX(duration_max),
+		       SUM(timed), SUM(duration_sum), MAX(duration_max),
 		       SUM(sized), SUM(bytes_sum), MAX(bytes_max),
 		       SUM(le_1ms), SUM(le_5ms), SUM(le_25ms), SUM(le_100ms),
-		       SUM(le_500ms), SUM(le_2s), SUM(le_10s), SUM(over_10s),
-		       MIN(bucket), MAX(bucket)
+		       SUM(le_500ms), SUM(le_2s), SUM(le_10s), SUM(over_10s)
 		FROM tool_call_stats
 		WHERE bucket >= ?
 		GROUP BY plugin, tool
@@ -180,29 +224,22 @@ func (s *ToolStatsStore) Totals(ctx context.Context, since time.Time) ([]ToolTot
 	out := []ToolTotals{}
 	for rows.Next() {
 		var t ToolTotals
-		var durSum int64
-		var first, last int64
 		if err := rows.Scan(&t.Plugin, &t.Tool,
 			&t.Calls, &t.OK, &t.Errors, &t.Denied, &t.RateLimited,
-			&t.Timed, &durSum, &t.MinUS, &t.MaxUS,
+			&t.Timed, &t.DurationSumUS, &t.MaxUS,
 			&t.Sized, &t.BytesSum, &t.MaxBytes,
 			&t.bands[0], &t.bands[1], &t.bands[2], &t.bands[3],
-			&t.bands[4], &t.bands[5], &t.bands[6], &t.bands[7],
-			&first, &last); err != nil {
+			&t.bands[4], &t.bands[5], &t.bands[6], &t.bands[7]); err != nil {
 			return nil, fmt.Errorf("sqlite: scan tool totals: %w", err)
 		}
 		if t.Timed > 0 {
-			t.MeanUS = durSum / t.Timed
-			t.P50US = quantile(t.bands, t.Timed, 0.50)
-			t.P95US = quantile(t.bands, t.Timed, 0.95)
+			t.MeanUS = t.DurationSumUS / t.Timed
+			t.P50US = clamp(quantile(t.bands, t.Timed, 0.50), t.MaxUS)
+			t.P95US = clamp(quantile(t.bands, t.Timed, 0.95), t.MaxUS)
 		}
 		if t.Sized > 0 {
 			t.MeanBytes = t.BytesSum / t.Sized
 		}
-		t.FirstSeen = time.UnixMilli(first).UTC()
-		// The bucket names the start of its hour, so the span it describes
-		// ends an hour later.
-		t.LastSeen = time.UnixMilli(last).UTC().Add(time.Hour)
 		out = append(out, t)
 	}
 	return out, rows.Err()
@@ -215,6 +252,24 @@ func (s *ToolStatsStore) Totals(ctx context.Context, since time.Time) ([]ToolTot
 // not where under, so a number between the bounds would be invented. It is
 // therefore an upper estimate, which is the safe direction for a latency
 // somebody is deciding a timeout from.
+// clamp holds a band ceiling down to the slowest call actually recorded.
+//
+// The bands are coarse -- the first is everything under a millisecond, and an
+// in-process plugin answers in tens of microseconds -- so without this a tool
+// whose every call took 500µs reports a median of 1ms beside a maximum of
+// 500µs. A row where the median exceeds the maximum is self-evidently wrong to
+// anybody reading it, and it discredits the numbers next to it. The clamped
+// value is still an upper estimate, which is the safe direction.
+func clamp(band, max *int64) *int64 {
+	if band == nil || max == nil {
+		return band
+	}
+	if *band > *max {
+		return max
+	}
+	return band
+}
+
 func quantile(bands [8]int64, total int64, q float64) *int64 {
 	if total <= 0 {
 		return nil
@@ -241,49 +296,87 @@ func quantile(bands [8]int64, total int64, q float64) *int64 {
 	return nil
 }
 
-// Point is one hour of the whole host, for a trend line.
+// Point is one span of the whole host, for a trend line.
 type Point struct {
-	At     time.Time `json:"at"`
-	Calls  int64     `json:"calls"`
-	OK     int64     `json:"ok"`
-	Failed int64     `json:"failed"`
-	Timed  int64     `json:"timed"`
-	MeanUS int64     `json:"mean_us"`
-	Bytes  int64     `json:"bytes"`
+	At    time.Time `json:"at"`
+	Calls int64     `json:"calls"`
+	OK    int64     `json:"ok"`
+	// NotOK is every call that did not succeed, which is not the same as every
+	// call that failed: a refusal by the gate or a rate limit is in here too,
+	// and it is a working host doing its job. Anything rendering this may not
+	// call it a failure.
+	NotOK         int64 `json:"not_ok"`
+	Timed         int64 `json:"timed"`
+	DurationSumUS int64 `json:"duration_sum_us"`
+	MeanUS        int64 `json:"mean_us"`
+	Bytes         int64 `json:"bytes"`
 }
 
-// Series reports the host hour by hour, oldest first.
-func (s *ToolStatsStore) Series(ctx context.Context, since time.Time) ([]Point, error) {
-	rows, err := s.db.Reader().QueryContext(ctx, `
-		SELECT bucket,
+// maxPoints is how many a chart can usefully draw. The table is never pruned,
+// so a host running two years has some seventeen thousand hours in it, and
+// sending them all to draw fifty bars is megabytes for nothing.
+const maxPoints = 50
+
+// Series reports the host over time, oldest first, in at most maxPoints spans.
+//
+// The stride is derived from the span rather than fixed, so a day comes back
+// hourly and a year comes back weekly, and the caller is told which by the
+// width beside it. Bucketing here rather than in the browser is what keeps the
+// response a constant size as the table grows without bound.
+func (s *ToolStatsStore) series(ctx context.Context, q querier, since time.Time) ([]Point, time.Duration, error) {
+	from := sinceMillis(since)
+
+	var lo, hi sql.NullInt64
+	if err := q.QueryRowContext(ctx,
+		`SELECT MIN(bucket), MAX(bucket) FROM tool_call_stats WHERE bucket >= ?`, from).
+		Scan(&lo, &hi); err != nil {
+		return nil, 0, fmt.Errorf("sqlite: series span: %w", err)
+	}
+	if !lo.Valid {
+		return []Point{}, time.Hour, nil
+	}
+
+	// Whole hours, so a stride is always a multiple of the grain stored.
+	hours := (hi.Int64-lo.Int64)/int64(time.Hour/time.Millisecond) + 1
+	// Groups are aligned to absolute multiples of the stride, not to the first
+	// bucket, so a span that does not start on a boundary spills into one
+	// extra group. Dividing by one less than the ceiling leaves room for it.
+	strideHours := (hours + maxPoints - 2) / (maxPoints - 1)
+	if strideHours < 1 {
+		strideHours = 1
+	}
+	stride := strideHours * int64(time.Hour/time.Millisecond)
+
+	rows, err := q.QueryContext(ctx, `
+		SELECT (bucket / ?) * ?,
 		       SUM(calls),
-		       SUM(CASE WHEN outcome = 'ok' THEN calls ELSE 0 END),
+		       SUM(CASE WHEN outcome  = 'ok' THEN calls ELSE 0 END),
 		       SUM(CASE WHEN outcome <> 'ok' THEN calls ELSE 0 END),
 		       SUM(timed), SUM(duration_sum), SUM(bytes_sum)
 		FROM tool_call_stats
 		WHERE bucket >= ?
-		GROUP BY bucket
-		ORDER BY bucket`,
-		sinceMillis(since))
+		GROUP BY 1
+		ORDER BY 1`,
+		stride, stride, from)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: tool series: %w", err)
+		return nil, 0, fmt.Errorf("sqlite: tool series: %w", err)
 	}
 	defer rows.Close()
 
 	out := []Point{}
 	for rows.Next() {
 		var p Point
-		var at, durSum int64
-		if err := rows.Scan(&at, &p.Calls, &p.OK, &p.Failed, &p.Timed, &durSum, &p.Bytes); err != nil {
-			return nil, fmt.Errorf("sqlite: scan tool series: %w", err)
+		var at int64
+		if err := rows.Scan(&at, &p.Calls, &p.OK, &p.NotOK, &p.Timed, &p.DurationSumUS, &p.Bytes); err != nil {
+			return nil, 0, fmt.Errorf("sqlite: scan tool series: %w", err)
 		}
 		p.At = time.UnixMilli(at).UTC()
 		if p.Timed > 0 {
-			p.MeanUS = durSum / p.Timed
+			p.MeanUS = p.DurationSumUS / p.Timed
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	return out, time.Duration(stride) * time.Millisecond, rows.Err()
 }
 
 // PluginTotals is one plugin's whole record, summed across its tools.
@@ -298,8 +391,8 @@ type PluginTotals struct {
 }
 
 // ByPlugin reports each plugin, busiest first.
-func (s *ToolStatsStore) ByPlugin(ctx context.Context, since time.Time) ([]PluginTotals, error) {
-	rows, err := s.db.Reader().QueryContext(ctx, `
+func (s *ToolStatsStore) byPlugin(ctx context.Context, q querier, since time.Time) ([]PluginTotals, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT plugin, COUNT(DISTINCT tool), SUM(calls),
 		       SUM(CASE WHEN outcome = 'ok' THEN calls ELSE 0 END),
 		       SUM(timed), SUM(duration_sum), SUM(bytes_sum)
@@ -333,9 +426,9 @@ func (s *ToolStatsStore) ByPlugin(ctx context.Context, since time.Time) ([]Plugi
 // What it is for is saying how far back the numbers go. "Since this host was
 // first used" is a different claim from "since the retention window", and a
 // page that shows lifetime totals has to be able to say which.
-func (s *ToolStatsStore) Span(ctx context.Context) (first, last time.Time, err error) {
+func (s *ToolStatsStore) span(ctx context.Context, q querier) (first, last time.Time, err error) {
 	var lo, hi sql.NullInt64
-	if err := s.db.Reader().QueryRowContext(ctx,
+	if err := q.QueryRowContext(ctx,
 		`SELECT MIN(bucket), MAX(bucket) FROM tool_call_stats`).Scan(&lo, &hi); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("sqlite: stats span: %w", err)
 	}
@@ -346,6 +439,10 @@ func (s *ToolStatsStore) Span(ctx context.Context) (first, last time.Time, err e
 }
 
 // sinceMillis turns a zero time into "everything", rather than 1970.
+//
+// It rounds down to the hour, so a window of "24 hours" asked at half past
+// covers twenty-four and a half. That is a property of an hourly rollup rather
+// than a bug: the alternative is a partial hour counted as a whole one.
 func sinceMillis(since time.Time) int64 {
 	if since.IsZero() {
 		return 0

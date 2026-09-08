@@ -11,7 +11,7 @@ import { useQueryParam } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import {
   WINDOWS, againstBudget, bytes, condense, count, headline, latency,
-  successRate, tokensPerCall,
+  strideLabel, successRate, tokensPerCall,
 } from "./stats";
 
 /**
@@ -98,7 +98,7 @@ function Body({ stats }: { stats: Stats }) {
     <div className="space-y-8">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Tile label="Calls served" value={count(totals.calls)}
-          help={`${count(totals.ok)} succeeded, ${count(totals.failed)} did not`} />
+          help={`${count(totals.ok)} succeeded, ${count(totals.notOK)} did not`} />
         <Tile
           label="Succeeded"
           value={totals.successRate === null ? "—" : `${Math.round(totals.successRate * 100)}%`}
@@ -114,7 +114,7 @@ function Body({ stats }: { stats: Stats }) {
         />
       </div>
 
-      {series.length > 1 && <Traffic series={series} />}
+      {series.length > 1 && <Traffic series={series} stride={strideLabel(stats.stride_seconds)} />}
 
       <Section
         title="Every tool"
@@ -177,16 +177,27 @@ function Tile({ label, value, help, tone }: {
 }
 
 /**
- * Calls over the span, successes and failures stacked.
+ * Calls over the span, successes and everything else stacked.
  *
  * Bars rather than a line: the series is a count per bucket, and a line
  * between two counts implies a value at every moment between them.
+ *
+ * The upper band is deliberately not called failure. A refused call is in it,
+ * and a refusal is a working host doing its job -- painting a burst of them
+ * red and labelling it "failures" sends somebody hunting a broken integration
+ * that does not exist.
  */
-function Traffic({ series }: { series: import("@/lib/api").StatsPoint[] }) {
+function Traffic({ series, stride }: {
+  series: import("@/lib/api").StatsPoint[];
+  stride: string;
+}) {
   const peak = Math.max(...series.map((p) => p.calls), 1);
 
   return (
-    <Section title="When it was used" description="Calls per bucket, failures in red.">
+    <Section
+      title="When it was used"
+      description={`Calls per ${stride}. The band on top is calls that did not succeed, refusals included.`}
+    >
       <div className="rounded-lg border bg-card p-4">
         <div className="flex h-32 items-end gap-px" role="img"
           aria-label={`Calls over time, peaking at ${peak} in one bucket`}>
@@ -194,14 +205,14 @@ function Traffic({ series }: { series: import("@/lib/api").StatsPoint[] }) {
             <div
               key={p.at}
               className="flex min-w-0 flex-1 flex-col justify-end"
-              title={`${new Date(p.at).toLocaleString()}: ${p.calls} calls, ${p.failed} failed`}
+              title={`${new Date(p.at).toLocaleString()}: ${p.calls} calls, ${p.not_ok} did not succeed`}
             >
-              {p.failed > 0 && (
-                <div className="w-full rounded-t-[1px] bg-problem"
-                  style={{ height: `${(p.failed / peak) * 100}%` }} />
+              {p.not_ok > 0 && (
+                <div className="w-full rounded-t-[1px] bg-attention"
+                  style={{ height: `${(p.not_ok / peak) * 100}%` }} />
               )}
               <div
-                className={cn("w-full bg-[var(--chart-1)]", p.failed === 0 && "rounded-t-[1px]")}
+                className={cn("w-full bg-[var(--chart-1)]", p.not_ok === 0 && "rounded-t-[1px]")}
                 style={{ height: `${(p.ok / peak) * 100}%` }}
               />
             </div>
@@ -244,6 +255,33 @@ function ToolTable({ stats }: { stats: Stats }) {
   );
 }
 
+/**
+ * One percentile, drawn as the bound it is.
+ *
+ * The figure is a latency band's ceiling, not a measurement, so it is prefixed
+ * with a bound marker unless it has been held down to the slowest call --
+ * where it is exact. Absent with calls behind it means the band past the last
+ * boundary, which has no ceiling to report and so is named in words.
+ */
+function QuantileCell({ us, timed, max }: {
+  us: number | undefined;
+  timed: number;
+  max: number | undefined;
+}) {
+  if (us === undefined) {
+    return (
+      <TableCell className="text-right tabular-nums text-muted-foreground">
+        {timed > 0 ? "over 10s" : "—"}
+      </TableCell>
+    );
+  }
+  return (
+    <TableCell className="text-right tabular-nums">
+      {us === max ? "" : "≤"}{latency(us)}
+    </TableCell>
+  );
+}
+
 function ToolRow({ t, stats }: { t: ToolTotals; stats: Stats }) {
   const rate = successRate(t);
   const tokens = tokensPerCall(t, stats);
@@ -267,14 +305,8 @@ function ToolRow({ t, stats }: { t: ToolTotals; stats: Stats }) {
         rate !== null && rate < 0.9 && "text-problem")}>
         {rate === null ? "—" : `${Math.round(rate * 100)}%`}
       </TableCell>
-      <TableCell className="text-right tabular-nums">{latency(t.p50_us)}</TableCell>
-      <TableCell className="text-right tabular-nums">
-        {t.p95_us === undefined && t.timed > 0
-          // The call fell past the last bucket boundary, which has no upper
-          // bound to report. Saying "over 10s" beats inventing a number.
-          ? <span className="text-muted-foreground">over 10s</span>
-          : latency(t.p95_us)}
-      </TableCell>
+      <QuantileCell us={t.p50_us} timed={t.timed} max={t.max_us} />
+      <QuantileCell us={t.p95_us} timed={t.timed} max={t.max_us} />
       <TableCell className="text-right tabular-nums text-muted-foreground">
         {latency(t.max_us)}
       </TableCell>
