@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { api } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
 import { SessionExpiry } from "./SessionExpiry";
