@@ -714,19 +714,20 @@ func (s *Store) NewSession(ctx context.Context, userID string, ttl time.Duration
 	expires := now.Add(ttl)
 	err = s.db.WriteTx(ctx, now.UnixMilli(), func(tx *sqlite.UnitOfWork) error {
 		return tx.Exec(`
-			INSERT INTO user_sessions (session_hash, id, user_id, csrf_token, created_at, expires_at)
-			VALUES (?,?,?,?,?,?)`,
-			hashSecret(token), id, userID, csrf, now.UnixMilli(), expires.UnixMilli())
+			INSERT INTO user_sessions (session_hash, id, user_id, csrf_token, created_at, expires_at, last_seen_at)
+			VALUES (?,?,?,?,?,?,?)`,
+			hashSecret(token), id, userID, csrf, now.UnixMilli(), expires.UnixMilli(), now.UnixMilli())
 	})
 	if err != nil {
 		return "", nil, err
 	}
 	return token, &Session{
-		ID:        id,
-		UserID:    userID,
-		CSRFToken: csrf,
-		CreatedAt: now.UTC(),
-		ExpiresAt: expires.UTC(),
+		ID:         id,
+		UserID:     userID,
+		CSRFToken:  csrf,
+		CreatedAt:  now.UTC(),
+		ExpiresAt:  expires.UTC(),
+		LastSeenAt: now.UTC(),
 	}, nil
 }
 
@@ -735,20 +736,26 @@ func (s *Store) NewSession(ctx context.Context, userID string, ttl time.Duration
 // A session for a disabled account resolves to nothing: rights are re-read on
 // every request rather than frozen at sign-in, so switching an account off
 // takes effect on its next call.
-func (s *Store) ResolveSession(ctx context.Context, token string) (*User, *Session, error) {
+//
+// `idle` is how long a session survives with nobody doing anything. Zero
+// disables that check and leaves only the absolute expiry, which is what this
+// did before there were two clocks.
+func (s *Store) ResolveSession(ctx context.Context, token string, idle time.Duration) (*User, *Session, error) {
 	if token == "" {
 		return nil, nil, ErrNotFound
 	}
 	var (
-		sess    Session
-		created int64
-		expires int64
+		sess     Session
+		created  int64
+		expires  int64
+		lastSeen int64
 	)
+	now := s.now()
 	err := s.db.Reader().QueryRowContext(ctx, `
-		SELECT id, user_id, csrf_token, created_at, expires_at
+		SELECT id, user_id, csrf_token, created_at, expires_at, last_seen_at
 		FROM user_sessions WHERE session_hash = ? AND expires_at > ?`,
-		hashSecret(token), s.now().UnixMilli()).
-		Scan(&sess.ID, &sess.UserID, &sess.CSRFToken, &created, &expires)
+		hashSecret(token), now.UnixMilli()).
+		Scan(&sess.ID, &sess.UserID, &sess.CSRFToken, &created, &expires, &lastSeen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, ErrNotFound
 	}
@@ -757,6 +764,17 @@ func (s *Store) ResolveSession(ctx context.Context, token string) (*User, *Sessi
 	}
 	sess.CreatedAt = time.UnixMilli(created).UTC()
 	sess.ExpiresAt = time.UnixMilli(expires).UTC()
+	sess.LastSeenAt = time.UnixMilli(lastSeen).UTC()
+
+	if idle > 0 {
+		sess.IdleDeadline = sess.LastSeenAt.Add(idle)
+		// Gone quiet for longer than the window. Refused rather than deleted:
+		// the purge removes it on its own schedule, and a read path that
+		// writes is a read path that fails when the disk is full.
+		if !now.Before(sess.IdleDeadline) {
+			return nil, nil, ErrNotFound
+		}
+	}
 
 	u, err := s.ByID(ctx, sess.UserID)
 	if err != nil {
@@ -766,6 +784,39 @@ func (s *Store) ResolveSession(ctx context.Context, token string) (*User, *Sessi
 		return nil, nil, ErrNotFound
 	}
 	return u, &sess, nil
+}
+
+// TouchSession records that a person did something, and reports whether the
+// row moved.
+//
+// Guarded on the session still being live, so a session that expired between
+// the request arriving and this running is not quietly revived -- the
+// condition is in the statement rather than in Go above it, and a lost race
+// matches zero rows and says so.
+//
+// `every` throttles the write. The console polls several endpoints on timers
+// and a person clicking around generates far more requests than a clock needs,
+// so a session whose last_seen_at is younger than this is left alone: one
+// write a minute rather than one a click.
+func (s *Store) TouchSession(ctx context.Context, token string, every time.Duration) (bool, error) {
+	if token == "" {
+		return false, nil
+	}
+	now := s.now()
+	moved := false
+	err := s.db.WriteTx(ctx, now.UnixMilli(), func(tx *sqlite.UnitOfWork) error {
+		n, err := tx.ExecAffected(`
+			UPDATE user_sessions
+			   SET last_seen_at = ?
+			 WHERE session_hash = ?
+			   AND expires_at > ?
+			   AND last_seen_at <= ?`,
+			now.UnixMilli(), hashSecret(token), now.UnixMilli(),
+			now.Add(-every).UnixMilli())
+		moved = n > 0
+		return err
+	})
+	return moved, err
 }
 
 // DeleteSession ends one browser session.

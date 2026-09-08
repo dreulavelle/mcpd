@@ -156,6 +156,24 @@ it the first time the two schedules disagree. It is also written when the ledger
 is switched off: what that setting turns off is the record of *who*, which is
 the part that names people. How much and how fast name nobody.
 
+**A session ends on the first of two clocks.** An idle window that moves
+whenever somebody does something, and an absolute ceiling that never moves.
+One alone is the wrong answer either way: the ceiling by itself signs out
+somebody working steadily, mid sentence, and the idle window by itself leaves
+a browser left open on a signed-in console signed in indefinitely.
+
+What moves the idle clock is the browser saying a person did something, not a
+request arriving. The console polls -- tunnels every eight seconds, the
+overview every fifteen -- so a clock reset by traffic would be reset by a
+window nobody is looking at, and the idle timeout would never once fire. Only
+the browser can tell a click from its own polling, so it marks the requests
+that followed one and the host records what it was told. The write is
+throttled to a minute, because a person clicking generates far more requests
+than an eight-hour clock needs.
+
+`Session.EndsAt` is the nearer of the two, and anything counting down reads it
+rather than either alone.
+
 **Access is per plugin.** A credential lists the plugins it may reach.
 Everything else returns 404 rather than 403, so an agent scoped to one
 integration cannot discover which others are deployed.

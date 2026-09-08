@@ -1,3 +1,4 @@
+import { noteInteraction } from "./activity";
 import {
   createContext, useCallback, useContext, useEffect, useMemo, useState,
   type MouseEvent, type ReactNode,
@@ -63,6 +64,10 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const navigate = useCallback((to: string, options?: NavigateOptions) => {
+    // Going somewhere is somebody doing something, and it is the case the
+    // pointer and key listeners would miss on a keyboard-driven jump from the
+    // command palette.
+    noteInteraction();
     const path = normalize(to);
     const search = searchOf(to);
     if (path === normalize(window.location.pathname) &&

@@ -58,9 +58,18 @@ func (a *App) frontendPublicURL(ctx context.Context) string {
 	return a.settings.FieldString(ctx, settings.KeyServerFrontendPublicURL)
 }
 
-// sessionTTL bounds a browser signed in from now on.
+// sessionTTL bounds a browser signed in from now on. The ceiling.
 func (a *App) sessionTTL(ctx context.Context) time.Duration {
 	return a.settings.FieldDuration(ctx, settings.KeyAccountsSessionTTL)
+}
+
+// sessionIdleTTL is how long a session survives with nobody doing anything.
+//
+// Read per request rather than at sign-in, so shortening it takes effect on
+// everybody now rather than on whoever signs in next -- which is what somebody
+// shortening it after a laptop went missing is asking for.
+func (a *App) sessionIdleTTL(ctx context.Context) time.Duration {
+	return a.settings.FieldDuration(ctx, settings.KeyAccountsSessionIdleTTL)
 }
 
 // shutdownTimeout is read when mcpd is asked to stop rather than when it

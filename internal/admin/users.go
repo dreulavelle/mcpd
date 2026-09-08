@@ -173,7 +173,7 @@ func (s *Server) currentAccountID(r *http.Request) string {
 	if s.opts.Accounts == nil {
 		return ""
 	}
-	user, _, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r))
+	user, _, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r), s.sessionIdleTTL(r.Context()))
 	if err != nil {
 		return ""
 	}

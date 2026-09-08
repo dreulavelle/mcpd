@@ -772,6 +772,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			RestorePlugin:    a.RestoreInstance,
 			SetPluginEnabled: a.SetInstanceEnabled,
 			SessionTTL:       a.sessionTTL,
+			SessionIdleTTL:   a.sessionIdleTTL,
 			Plugins:          func() []string { return a.manager.Names() },
 			Assignments:      func() map[string]string { return a.tunnelAssignments(context.Background()) },
 			Directory: func(accountID string) *tunnel.Directory {

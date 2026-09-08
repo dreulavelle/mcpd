@@ -457,7 +457,7 @@ func (s *Server) completeLink(w http.ResponseWriter, r *http.Request, state *sso
 	// provider reported would write an entry naming somebody who may not be
 	// the account being linked -- which is the confusion this endpoint exists
 	// to prevent, recorded as if it were a fact.
-	signedIn, _, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r))
+	signedIn, _, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r), s.sessionIdleTTL(r.Context()))
 	if err != nil || signedIn.ID != state.UserID {
 		s.finish(w, r, state.ReturnTo, outcomeWrongAccount)
 		return

@@ -340,6 +340,11 @@ const (
 	KeyStorageRelaxedDurability = "storage.relaxed_durability"
 
 	KeyAccountsSessionTTL = "auth.accounts.session_ttl_hours"
+	// KeyAccountsSessionIdleTTL is how long a session survives with nobody
+	// doing anything. The pair is deliberate: the absolute one alone signs a
+	// busy person out mid sentence, and the idle one alone leaves a forgotten
+	// open tab signed in for ever.
+	KeyAccountsSessionIdleTTL = "auth.accounts.session_idle_ttl_hours"
 
 	KeyLoggingLevel  = "logging.level"
 	KeyLoggingFormat = "logging.format"
@@ -1083,14 +1088,27 @@ func schema() []Group {
 			Name:    "sessions",
 			Title:   "Sessions",
 			Section: SectionAuthentication,
-			Help:    "How long a signed-in browser stays signed in.",
+			Help: "Two clocks decide when somebody has to sign in again: one " +
+				"that moves while they are working, and one that does not move " +
+				"at all. Whichever runs out first ends the session.",
 			Fields: []Field{
 				{
-					Key: KeyAccountsSessionTTL, Label: "Sign people out after",
+					Key: KeyAccountsSessionIdleTTL, Label: "Sign people out after doing nothing for",
 					Kind: KindDuration, Unit: UnitHours, Group: "sessions", Apply: ApplyLive,
-					Default: 12, Min: intPtr(1), Max: intPtr(8760),
-					Help: "Applies to sessions started from now on. Sessions already " +
-						"issued keep the expiry they were given.",
+					Default: 8, Min: intPtr(1), Max: intPtr(8760),
+					Help: "Counted from the last time somebody actually did something, " +
+						"not from the last time their browser fetched anything: this " +
+						"console refreshes several pages on a timer, and a window left " +
+						"open on one is not somebody working. Takes effect immediately, " +
+						"including for sessions already signed in.",
+				},
+				{
+					Key: KeyAccountsSessionTTL, Label: "Sign people out regardless after",
+					Kind: KindDuration, Unit: UnitHours, Group: "sessions", Apply: ApplyLive,
+					Default: 168, Min: intPtr(1), Max: intPtr(8760),
+					Help: "The ceiling, however busy somebody is. Applies to sessions " +
+						"started from now on; sessions already issued keep the expiry " +
+						"they were given.",
 				},
 			},
 		},

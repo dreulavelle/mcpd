@@ -6,12 +6,18 @@ import { useSession } from "@/lib/session";
 const WARN_MS = 10 * 60_000;
 
 /**
- * A session ends by the clock, not by activity, and the console used to find
- * out when its next request was refused -- which is exactly when somebody is
- * halfway through a reason they are about to lose. This says so ten minutes
- * before, above the page, and counts down. It cannot extend the session:
- * there is no endpoint that would, and a warning that offered a button it
- * could not honour would be worse than none.
+ * A session ends when the first of two clocks runs out: the idle window, which
+ * moves whenever somebody does something, and the ceiling, which never moves.
+ * The console used to find out when its next request was refused -- exactly
+ * when somebody is halfway through a reason they are about to lose.
+ *
+ * `ends_at` is the nearer of the two and is what this counts down. Reading the
+ * ceiling instead would promise a week to somebody about to be signed out for
+ * going quiet.
+ *
+ * There is still no button. Doing anything at all is what extends it now, so a
+ * warning somebody is reading has already stopped being true the moment they
+ * click to dismiss it -- and the countdown will simply go away.
  */
 export function SessionExpiry() {
   const session = useSession();
@@ -23,7 +29,7 @@ export function SessionExpiry() {
   }, []);
 
   if (!session) return null;
-  const ends = Date.parse(session.expires_at);
+  const ends = Date.parse(session.ends_at ?? session.expires_at);
   if (Number.isNaN(ends)) return null;
   const left = ends - now;
   if (left > WARN_MS) return null;

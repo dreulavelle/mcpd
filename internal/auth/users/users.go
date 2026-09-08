@@ -256,7 +256,30 @@ type Session struct {
 	UserID    string
 	CSRFToken string
 	CreatedAt time.Time
+	// ExpiresAt is the ceiling: the moment this session ends however busy the
+	// person is. Set at sign-in and never moved.
 	ExpiresAt time.Time
+	// LastSeenAt is the last moment a person did something, as their browser
+	// reported it -- not the last request, which the console's own polling
+	// would keep fresh on a page nobody is watching.
+	LastSeenAt time.Time
+	// IdleDeadline is when this session ends if nothing further happens. It is
+	// derived rather than stored, so changing the setting takes effect on the
+	// next request rather than on the next sign-in.
+	IdleDeadline time.Time
+}
+
+// EndsAt is whichever deadline comes first.
+//
+// Anything telling a person when they will be signed out has to read this
+// rather than either clock alone: the absolute one is wrong for somebody who
+// has walked away, and the idle one is wrong for somebody working through the
+// ceiling.
+func (s Session) EndsAt() time.Time {
+	if !s.IdleDeadline.IsZero() && s.IdleDeadline.Before(s.ExpiresAt) {
+		return s.IdleDeadline
+	}
+	return s.ExpiresAt
 }
 
 // --- passwords -------------------------------------------------------------

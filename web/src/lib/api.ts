@@ -1,3 +1,4 @@
+import { recentlyInteracted } from "./activity";
 import type { Area, Level, Permission } from "./permissions";
 // The dashboard's typed view of the mcpd admin API, mirroring the Go DTOs in
 // internal/admin. Hand-written: the surface is small.
@@ -139,7 +140,11 @@ export interface Session {
   plugins: string[];
   grants: Grant[];
   csrf_token: string;
+  /** The ceiling: when this session ends however busy somebody is. */
   expires_at: string;
+  /** Whichever clock runs out first, the ceiling or the idle window. Anything
+   *  counting down reads this one. */
+  ends_at?: string;
   /**
    * "pending" is an account waiting for an administrator. It is signed in and
    * holds no capability at all; the console draws a screen saying so.
@@ -1072,6 +1077,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const safe = method === "GET" || method === "HEAD" || method === "OPTIONS";
   if (!safe && csrfToken) headers.set("X-CSRF-Token", csrfToken);
+
+  // Says a person is at the keyboard, which is what moves the idle clock. It
+  // is not "this request happened": the console polls, and a page refreshing
+  // itself in an abandoned window must not keep somebody signed in.
+  if (recentlyInteracted()) headers.set("X-User-Activity", "1");
 
   // "include" rather than same-origin: the dev proxy serves this from another
   // port, where the cookie would not travel.

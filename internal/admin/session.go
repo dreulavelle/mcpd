@@ -22,7 +22,10 @@ type Accounts interface {
 	Authenticate(ctx context.Context, email, password string) (*users.User, error)
 	RecordLogin(ctx context.Context, userID string) error
 	NewSession(ctx context.Context, userID string, ttl time.Duration) (string, *users.Session, error)
-	ResolveSession(ctx context.Context, token string) (*users.User, *users.Session, error)
+	ResolveSession(ctx context.Context, token string, idle time.Duration) (*users.User, *users.Session, error)
+	// TouchSession records that a person did something, throttled to at most
+	// one write per `every`. It reports whether the row actually moved.
+	TouchSession(ctx context.Context, token string, every time.Duration) (bool, error)
 	DeleteSession(ctx context.Context, token string) error
 
 	// Resolve is what an account may do and reach: its own role and grants
@@ -161,7 +164,12 @@ type sessionResponse struct {
 	Plugins   []string     `json:"plugins"`
 	Grants    []auth.Grant `json:"grants"`
 	CSRFToken string       `json:"csrf_token"`
-	ExpiresAt string       `json:"expires_at"`
+	// ExpiresAt is the ceiling, and EndsAt is whichever clock runs out first.
+	// Anything counting down reads the second: the ceiling is wrong for
+	// somebody who has walked away, and the idle deadline for somebody working
+	// through it.
+	ExpiresAt string `json:"expires_at"`
+	EndsAt    string `json:"ends_at"`
 	// Status is "active" or "pending". A pending account is signed in and
 	// holds no capability at all, so the page it gets says it is waiting.
 	//
@@ -282,6 +290,31 @@ func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// touchEvery throttles the write behind the idle clock. A person clicking
+// around generates far more requests than a clock needs, and the console polls
+// on top of that; a minute's granularity on an eight-hour window is invisible
+// and turns a write per request into a write per minute.
+const touchEvery = time.Minute
+
+// noteActivity moves the idle clock when a person did something.
+//
+// The marker comes from the browser because only the browser can tell a click
+// from the console refreshing itself: several pages poll on timers, and a
+// session renewed by traffic would be renewed by a window nobody is looking
+// at, which is not an idle timeout at all.
+//
+// A failure is logged and swallowed. The request itself succeeded or did not,
+// and refusing it because the bookkeeping failed would turn a working console
+// into an outage.
+func (s *Server) noteActivity(r *http.Request, token string) {
+	if r.Header.Get("X-User-Activity") == "" || s.opts.Accounts == nil {
+		return
+	}
+	if _, err := s.opts.Accounts.TouchSession(r.Context(), token, touchEvery); err != nil {
+		s.opts.Log.WarnContext(r.Context(), "could not record session activity", "error", err)
+	}
+}
+
 // handleCurrentSession reports who is signed in, and reissues the CSRF token.
 //
 // The page calls this on load so that a session surviving a refresh does not
@@ -291,7 +324,7 @@ func (s *Server) handleCurrentSession(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusServiceUnavailable, "accounts are not configured")
 		return
 	}
-	user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r))
+	user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), sessionToken(r), s.sessionIdleTTL(r.Context()))
 	if err != nil {
 		s.writeError(w, r, http.StatusUnauthorized, "not signed in")
 		return
@@ -317,6 +350,10 @@ func (s *Server) sessionView(r *http.Request, u *users.User, sess *users.Session
 		Grants:      nonNilGrants(access.Grants),
 		CSRFToken:   sess.CSRFToken,
 		ExpiresAt:   sess.ExpiresAt.Format(time.RFC3339),
+		// Whichever clock runs out first, which is what anything counting down
+		// has to read: the absolute one is wrong for somebody who has walked
+		// away, and the idle one for somebody working through the ceiling.
+		EndsAt:      sess.EndsAt().Format(time.RFC3339),
 		Status:      statusOf(u),
 		HasPassword: u.HasPassword(),
 		Permissions: permissionNames(p.PermissionList()),
@@ -384,8 +421,9 @@ func statusOf(u *users.User) string {
 // should be treated as the person it signed in as.
 func (s *Server) principalFor(w http.ResponseWriter, r *http.Request) (*auth.Principal, bool) {
 	if token := sessionToken(r); token != "" && s.opts.Accounts != nil {
-		user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), token)
+		user, sess, err := s.opts.Accounts.ResolveSession(r.Context(), token, s.sessionIdleTTL(r.Context()))
 		if err == nil {
+			s.noteActivity(r, token)
 			// A cookie is sent by the browser on any request to this origin,
 			// including one a different site caused. The header cannot be set
 			// cross-origin without CORS consent, so requiring it is what makes

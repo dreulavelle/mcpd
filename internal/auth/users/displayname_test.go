@@ -182,7 +182,7 @@ func TestUpdate_ANameChangeKeepsSessionsAlive(t *testing.T) {
 	if _, err := store.Update(ctx, alice.ID, UpdateRequest{DisplayName: &name}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.ResolveSession(ctx, token); err != nil {
+	if _, _, err := store.ResolveSession(ctx, token, 0); err != nil {
 		t.Fatalf("the session was ended by a rename: %v", err)
 	}
 
@@ -191,7 +191,7 @@ func TestUpdate_ANameChangeKeepsSessionsAlive(t *testing.T) {
 	if _, err := store.Update(ctx, alice.ID, UpdateRequest{RoleID: &role}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.ResolveSession(ctx, token); err == nil {
+	if _, _, err := store.ResolveSession(ctx, token, 0); err == nil {
 		t.Error("a role change must still end live sessions")
 	}
 }

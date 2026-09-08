@@ -189,7 +189,7 @@ func TestSessions(t *testing.T) {
 		t.Fatal("a session without a CSRF token cannot guard a mutating request")
 	}
 
-	got, resolved, err := s.ResolveSession(ctx, token)
+	got, resolved, err := s.ResolveSession(ctx, token, 0)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -207,14 +207,14 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("principal lost its role: %+v", p)
 	}
 
-	if _, _, err := s.ResolveSession(ctx, "not-a-real-token"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.ResolveSession(ctx, "not-a-real-token", 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown token: %v, want ErrNotFound", err)
 	}
 
 	// Past its expiry the session stops resolving, without anything having to
 	// delete the row first.
 	setClock(testClock.Add(2 * time.Hour))
-	if _, _, err := s.ResolveSession(ctx, token); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.ResolveSession(ctx, token, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expired session still resolved: %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestSessions(t *testing.T) {
 	if err := s.DeleteSession(ctx, token); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.ResolveSession(ctx, token); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.ResolveSession(ctx, token, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted session still resolved: %v", err)
 	}
 }
@@ -243,7 +243,7 @@ func TestUpdate_DisablingEndsLiveSessions(t *testing.T) {
 	if _, err := s.Update(ctx, u.ID, UpdateRequest{Disabled: &off}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.ResolveSession(ctx, token); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.ResolveSession(ctx, token, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a disabled account kept browsing: %v", err)
 	}
 }
@@ -262,7 +262,7 @@ func TestSetPassword_EndsLiveSessions(t *testing.T) {
 	if err := s.SetPassword(ctx, u.ID, "a-brand-new-long-passphrase"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.ResolveSession(ctx, token); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.ResolveSession(ctx, token, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("session survived a password change: %v", err)
 	}
 	if _, err := s.Authenticate(ctx, "alice@example.com", "a-brand-new-long-passphrase"); err != nil {
