@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.1](https://github.com/dreulavelle/mcpd/compare/v0.22.0...v0.22.1) (2026-09-08)
+
+
+### Fixes
+
+* **web:** the palette's search made word order load-bearing ([5f935c3](https://github.com/dreulavelle/mcpd/commit/5f935c326fc3ba0df1ca16d99f6fbca14d70a123))
+
 ## [0.22.0](https://github.com/dreulavelle/mcpd/compare/v0.21.1...v0.22.0) (2026-09-07)
 
 
