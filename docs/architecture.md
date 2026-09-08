@@ -36,6 +36,7 @@ needs an inbound port, public DNS, or a NAT rule.
 | `internal/auth/users` | Accounts, passwords, browser sessions, registration |
 | `internal/observability` | Logging, redaction, health, metrics, and the copy of the log the dashboard streams |
 | `internal/storage/sqlite` (`toolcalls.go`) | The call ledger: who called what, and how it ended |
+| `internal/storage/sqlite` (`toolstats.go`) | The permanent rollup: what every tool has ever done |
 | `internal/auth/sso` | Signing in through Google, GitHub, Entra, or the operator's own provider |
 | `internal/auth/groups` | Groups, membership, and the one union that decides what a subject holds |
 | `internal/auth/roles` | Named permission sets, and the one query that says whether anybody still manages access |
@@ -109,17 +110,51 @@ issuing an upstream write and recording its result, the operation lands in
 `indeterminate`, not `failed`. Calling it a failure invites a retry, and the
 retry double-applies the change.
 
-**Three questions, three records, and they are not interchangeable.** The
+**Four questions, four records, and they are not interchangeable.** The
 counters say how often a tool was called and how long it took, aggregated and
 scrapeable — they carry no principal, because one Prometheus series per
 credential is unbounded cardinality. The audit trail says who authorised a
 change, hash-chained, written inside the transaction that made it. The call
 ledger says who called what, one row per call, pruned on its own retention.
+The statistics rollup says what every tool has ever done, and is pruned by
+nothing.
 
 None of them can do another's job, and the temptation is always to make one of
 them try. A ledger row carries names and outcomes: never a call's arguments and
 never its result, which is the same line the logging draws and for the same
 reason.
+
+The rollup is the newest of the four and exists because the other three each
+fail the long horizon in their own way. The counters live in this process's
+memory, so every restart puts them back to zero and the console could report
+only on the minutes since — which is what the Performance page did, and why it
+is now Statistics. The ledger is durable but pruned, and has to be: it holds a
+principal and a correlation id per row, and keeping those for ever is a
+liability rather than an asset. So "is this plugin slower than it was last
+month" was the one question nothing could answer.
+
+`tool_call_stats` answers it by holding sums instead of rows — one per hour per
+{plugin, tool, outcome}, with no principal, no arguments and no correlation id.
+That absence is what makes keeping it for ever reasonable, and it is the whole
+difference between it and the ledger beside it. A year of thirty tools is
+smaller than a day of raw calls.
+
+Two things about it are easy to get wrong. **The denominators are not
+interchangeable**: `calls` counts everything including a refusal that never
+reached a handler, `timed` counts only what ran, and `sized` only what returned
+something. Dividing a duration by `calls` reports a host that refuses a great
+deal as a fast one. And **percentiles are summed, never averaged** — the p95 of
+a day is not the mean of twenty-four hourly p95s, which is why each row counts
+its calls into fixed latency bands rather than storing a quantile. The bands
+are constants for the same reason: a boundary that moved would make two spans
+of the same table incomparable, which is the one thing the table exists to
+allow.
+
+It is written on the same call path as the ledger rather than rebuilt from it
+by a batch job, because a rollup derived from rows that get pruned has a hole in
+it the first time the two schedules disagree. It is also written when the ledger
+is switched off: what that setting turns off is the record of *who*, which is
+the part that names people. How much and how fast name nobody.
 
 **Access is per plugin.** A credential lists the plugins it may reach.
 Everything else returns 404 rather than 403, so an agent scoped to one

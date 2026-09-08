@@ -292,7 +292,11 @@ func (m *Metrics) ToolCall(_ context.Context, plugin, tool, outcome string, d ti
 // The size arrives as a function rather than a number because measuring it
 // costs a marshal of the whole answer, and a host with no metrics endpoint
 // should not pay for a series nobody scrapes. A nil *Metrics never calls it.
-func (m *Metrics) ToolResultSize(plugin, tool string, size func() int) {
+//
+// The context is accepted and ignored for the same reason ToolCall ignores it:
+// who called belongs in the ledger, not in a label. Other observers on this
+// interface do need it.
+func (m *Metrics) ToolResultSize(_ context.Context, _ time.Time, plugin, tool string, size func() int) {
 	if m == nil || size == nil {
 		return
 	}

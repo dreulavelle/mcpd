@@ -101,6 +101,11 @@ type App struct {
 	// that made them, and from the counters, which cannot name a caller.
 	calls *sqlite.ToolCallStore
 
+	// stats is the same calls reduced to sums, and is never pruned. The ledger
+	// beside it holds a principal and a correlation id per row, which is why it
+	// cannot be kept for ever; this holds neither, which is why it can.
+	stats *sqlite.ToolStatsStore
+
 	// backups writes and stages whole-instance archives. keyFingerprint
 	// identifies the settings encryption key its archives are readable under;
 	// empty when this host has no key.
@@ -266,6 +271,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		outbox:     sqlite.NewOutboxStore(db, time.Now),
 		audit:      sqlite.NewAuditStore(db),
 		calls:      sqlite.NewToolCallStore(db, time.Now),
+		stats:      sqlite.NewToolStatsStore(db),
 		bypasses:   sqlite.NewBypassStore(db, time.Now),
 		mcpStore:   sqlite.NewMCPServerStore(db, time.Now),
 		mcpServers: map[string]mcpservers.Server{},
@@ -651,6 +657,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			}(),
 			TrustPool:         a.trustPool.get,
 			Calls:             a.calls,
+			Stats:             a.stats,
 			Bypasses:          a.bypasses,
 			BypassOpened:      a.notifyBypassOpened,
 			NotifyTest:        a.sendTestNotification,

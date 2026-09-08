@@ -264,7 +264,7 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 					return nil, zero, err
 				}
 				obs.ToolCall(ctx, plugin, spec.Name, observability.OutcomeOK, time.Since(started))
-				obs.ToolResultSize(plugin, spec.Name, func() int { return marshalledSize(out) })
+				obs.ToolResultSize(ctx, started, plugin, spec.Name, func() int { return marshalledSize(out) })
 				return sendOnce(req), out, nil
 			})
 		},
@@ -469,7 +469,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		// whose slow half is the part anybody waits on.
 		view := resolveApproval(ctx, req, svc, inline, op)
 		obs.ToolCall(ctx, plugin, timedName, observability.OutcomeOK, time.Since(started))
-		obs.ToolResultSize(plugin, timedName, func() int { return marshalledSize(view) })
+		obs.ToolResultSize(ctx, started, plugin, timedName, func() int { return marshalledSize(view) })
 		return sendOnce(req), view, nil
 	})
 }
@@ -576,7 +576,7 @@ type ToolObserver interface {
 	// ToolResultSize reports how large a successful result was, in bytes of
 	// the JSON the plugin built. Lazy because measuring costs a marshal of
 	// the whole answer, which a host with no metrics endpoint should not pay.
-	ToolResultSize(plugin, tool string, size func() int)
+	ToolResultSize(ctx context.Context, at time.Time, plugin, tool string, size func() int)
 	// MutationProposal reports one proposal, recorded or refused.
 	MutationProposal(plugin, action, outcome string)
 }
@@ -642,9 +642,9 @@ func marshalledSize(v any) int {
 // a nil check.
 type noObserver struct{}
 
-func (noObserver) ToolCall(context.Context, string, string, string, time.Duration) {}
-func (noObserver) ToolResultSize(string, string, func() int)                       {}
-func (noObserver) MutationProposal(string, string, string)                         {}
+func (noObserver) ToolCall(context.Context, string, string, string, time.Duration)       {}
+func (noObserver) ToolResultSize(context.Context, time.Time, string, string, func() int) {}
+func (noObserver) MutationProposal(string, string, string)                               {}
 
 type registeredTool struct {
 	spec       ToolSpec

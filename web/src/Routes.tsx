@@ -27,7 +27,6 @@ import { isSettingsTab, SettingsLayout } from "@/pages/settings/SettingsTabs";
 import { Activity } from "@/pages/activity/Activity";
 import { BackupRestore } from "@/pages/settings/BackupRestore";
 import { UsersAndGroups } from "@/pages/settings/UsersAndGroups";
-import { Performance } from "@/pages/performance/Performance";
 import { System } from "@/pages/system/System";
 import { Tunnels } from "@/pages/tunnels/Tunnels";
 
@@ -38,6 +37,11 @@ import { Tunnels } from "@/pages/tunnels/Tunnels";
  * the only page here whose weight is data rather than code. Every operator
  * loading the console paid for it whether or not they ever opened the page.
  */
+// The same treatment, and for the same reason: it is a page most operators
+// open rarely, and it carries a table and a chart nobody else needs.
+const Statistics = lazy(() =>
+  import("@/pages/statistics/Statistics").then((m) => ({ default: m.Statistics })));
+
 const Skills = lazy(() =>
   import("@/pages/skills/Skills").then((m) => ({ default: m.Skills })));
 
@@ -94,14 +98,14 @@ export function Routes() {
       case "clients":
         return <Clients />;
 
+      case "statistics":
+        return <Statistics />;
+
       case "skills":
         return <Skills />;
 
       case "system":
         return <System />;
-
-      case "performance":
-        return <Performance />;
 
       case "activity":
         return <Activity />;

@@ -32,7 +32,7 @@ const (
 	// providers: everything that decides who may do anything else here.
 	AreaAccess Area = "access"
 	// AreaHistory is the activity ledger, the audit trail, the log stream and
-	// performance figures. Write is clearing them.
+	// the statistics. Write is clearing them.
 	AreaHistory Area = "history"
 	// AreaSystem is what the host is running and restarting, backing up or
 	// restoring it.
