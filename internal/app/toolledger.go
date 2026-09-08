@@ -21,7 +21,13 @@ import (
 type toolObserver struct {
 	metrics *observability.Metrics
 	ledger  *sqlite.ToolCallStore
-	log     *slog.Logger
+	// stats is the permanent rollup. It is written even when the ledger is
+	// switched off: what an operator turns off with that setting is the record
+	// of *who*, which is the part that names people. How much and how fast
+	// name nobody, and a host that has been recording for a year should not
+	// lose that history because somebody declined to keep principals.
+	stats *sqlite.ToolStatsStore
+	log   *slog.Logger
 	// recording reports whether calls are being kept, read per call so turning
 	// it off takes effect on the next call rather than the next restart.
 	recording func(ctx context.Context) bool
@@ -36,6 +42,14 @@ type toolObserver struct {
 // are the ones somebody investigating an incident wants most.
 func (o *toolObserver) ToolCall(ctx context.Context, plugin, tool, outcome string, d time.Duration) {
 	o.metrics.ToolCall(ctx, plugin, tool, outcome, d)
+
+	at := time.Now()
+	if o.stats != nil {
+		if err := o.stats.RecordCall(ctx, at, plugin, tool, outcome, measured(outcome, d)); err != nil {
+			o.log.WarnContext(ctx, "could not roll up a tool call",
+				"plugin", plugin, "tool", tool, "error", err)
+		}
+	}
 
 	if o.ledger == nil || !o.recording(ctx) {
 		return
@@ -74,8 +88,27 @@ func measured(outcome string, d time.Duration) *int64 {
 	return &us
 }
 
-func (o *toolObserver) ToolResultSize(plugin, tool string, size func() int) {
-	o.metrics.ToolResultSize(plugin, tool, size)
+// ToolResultSize records how large one answer was.
+//
+// Reported separately from the call because measuring it costs a marshal of
+// the whole result, so it is only asked for once a call has succeeded. Both
+// land on the same rollup row, a sized call being an `ok` one by definition.
+func (o *toolObserver) ToolResultSize(ctx context.Context, plugin, tool string, size func() int) {
+	o.metrics.ToolResultSize(ctx, plugin, tool, size)
+
+	if o.stats == nil || size == nil {
+		return
+	}
+	// Negative means the caller could not measure it, and a zero would read as
+	// a tool that answered with nothing.
+	n := size()
+	if n < 0 {
+		return
+	}
+	if err := o.stats.RecordResultSize(ctx, time.Now(), plugin, tool, int64(n)); err != nil {
+		o.log.WarnContext(ctx, "could not roll up a result size",
+			"plugin", plugin, "tool", tool, "error", err)
+	}
 }
 
 func (o *toolObserver) MutationProposal(plugin, action, outcome string) {
@@ -87,6 +120,7 @@ func (a *App) newToolObserver() *toolObserver {
 	return &toolObserver{
 		metrics: a.metrics,
 		ledger:  a.calls,
+		stats:   a.stats,
 		log:     a.log,
 		recording: func(ctx context.Context) bool {
 			return a.settings.Bool(ctx, settings.KeyCallsRecord, true)

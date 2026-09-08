@@ -65,8 +65,11 @@ describe("navigation gating", () => {
   it("lists every administrative page beside Settings rather than inside it", () => {
     const administer = visibleNav(holding("settings:read", "system:read", "history:read"))
       .find((g) => g.title === "Administer");
+    // Performance left this group entirely: it became Statistics, and sits
+    // beside Overview because it answers the same question the front page
+    // does rather than being a thing an administrator configures.
     expect(administer?.items.map((i) => i.label)).toEqual([
-      "Settings", "System", "Performance", "Logs",
+      "Settings", "System", "Logs",
     ]);
   });
 
@@ -292,5 +295,28 @@ describe("the permission a path requires", () => {
         expect(capabilityFor(item.path)).not.toBeNull();
       }
     }
+  });
+});
+
+describe("statistics replacing performance", () => {
+  /**
+   * The old page read counters that lived in this process's memory, so a
+   * restart put it back to zero. Links and bookmarks still point at it.
+   */
+  it("sends the old performance address to statistics", () => {
+    expect(redirectFor("/performance")).toBe("/statistics");
+  });
+
+  /** It sits with Overview, not under Administer. */
+  it("puts statistics in the first group", () => {
+    const groups = visibleNav(holding("history:read"));
+    expect(groups[0]?.items.map((i) => i.label)).toEqual(["Overview", "Statistics"]);
+  });
+
+  /** The page reports on every caller, which is a wider view than one account's. */
+  it("needs history:read", () => {
+    expect(capabilityFor("/statistics")).toBe("history:read");
+    expect(visibleNav(() => false).map((g) => g.items.map((i) => i.label)).flat())
+      .not.toContain("Statistics");
   });
 });

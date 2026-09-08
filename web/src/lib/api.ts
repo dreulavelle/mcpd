@@ -1581,6 +1581,86 @@ export interface Performance {
   result_budget_bytes: number;
 }
 
+/**
+ * One tool's whole record, from the rollup that is never pruned.
+ *
+ * The denominators differ on purpose and must not be swapped. `calls` counts
+ * everything, including refusals that never reached a handler; `timed` is the
+ * denominator for the durations, and `sized` for the bytes. Dividing a
+ * duration by `calls` would report a host that refuses a lot as a fast one.
+ */
+export interface ToolTotals {
+  plugin: string;
+  tool: string;
+  calls: number;
+  ok: number;
+  errors: number;
+  denied: number;
+  rate_limited: number;
+  timed: number;
+  mean_us: number;
+  min_us?: number;
+  max_us?: number;
+  /** The upper bound of the latency band the percentile fell in, or absent
+   *  when it fell past the last one, which has no bound to report. */
+  p50_us?: number;
+  p95_us?: number;
+  sized: number;
+  bytes_sum: number;
+  mean_bytes: number;
+  max_bytes?: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+/** One plugin, summed across its tools. */
+export interface PluginTotals {
+  plugin: string;
+  tools: number;
+  calls: number;
+  ok: number;
+  timed: number;
+  mean_us: number;
+  bytes_sum: number;
+}
+
+/** One hour of the whole host. */
+export interface StatsPoint {
+  at: string;
+  calls: number;
+  ok: number;
+  failed: number;
+  timed: number;
+  mean_us: number;
+  bytes: number;
+}
+
+/**
+ * Everything the statistics page draws, in one answer.
+ *
+ * One request rather than four: every part is a different cut of the same
+ * span, and four could land either side of an hour boundary and disagree with
+ * each other on screen.
+ */
+export interface Statistics {
+  window_hours: number;
+  recording: boolean;
+  /** What the host actually holds, which is not the window asked for -- a host
+   *  three days old cannot answer for a month. */
+  first?: string;
+  last?: string;
+  tools: ToolTotals[];
+  plugins: PluginTotals[];
+  series: StatsPoint[];
+  result_budget_bytes: number;
+  /** What a byte of result costs a model's context: the protocol carries a
+   *  result as structured content and again as text. */
+  wire_multiplier: number;
+  /** The divisor behind every token figure, and an estimate. This host is the
+   *  server and never sees the count the model actually paid. */
+  bytes_per_token: number;
+}
+
 export interface Resources {
   version: string;
   started_at: string;
@@ -1923,6 +2003,8 @@ export const api = {
   /** What this process is costing the machine it runs on. */
   resources: () => request<Resources>("/api/resources"),
   performance: () => request<Performance>("/api/performance"),
+  statistics: (hours: number) =>
+    request<Statistics>(`/api/statistics${hours > 0 ? `?hours=${hours}` : ""}`),
 
   /** The running version against what has been published. */
   updates: () => request<UpdateStatus>("/api/updates"),

@@ -83,6 +83,11 @@ type Options struct {
 	// keeping one.
 	Calls CallLedger
 
+	// Stats is the permanent rollup of how much and how fast, or nil when this
+	// host is not keeping one. Separate from Calls because it outlives it:
+	// the ledger is pruned, these sums are not.
+	Stats StatsReader
+
 	// Backup writes and restores this whole instance as one encrypted file.
 	// Nil leaves the routes answering "not configured" rather than offering a
 	// page whose every button fails.
@@ -540,6 +545,9 @@ func (s *Server) routes() {
 	// something looks wrong.
 	api("GET /api/resources", s.handleResources, auth.PermSystemRead)
 	api("GET /api/performance", s.handlePerformance, auth.PermHistoryRead)
+	// The same subject over a longer horizon: performance is what this process
+	// has seen since it started, statistics is what the host has ever done.
+	api("GET /api/statistics", s.handleStatistics, auth.PermHistoryRead)
 	api("GET /api/updates", s.handleUpdates, auth.PermSystemRead)
 	// Forcing a check reaches an external service, so it is an admin action
 	// even though what it returns is not privileged.

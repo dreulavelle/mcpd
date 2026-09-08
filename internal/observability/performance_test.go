@@ -49,7 +49,7 @@ func TestPerformanceBucketsAreNotCumulative(t *testing.T) {
 	// One small answer, one middling, one far past what may be sent.
 	for _, n := range []int{100, 1000, 500_000} {
 		size := n
-		m.ToolResultSize("observium", "list_devices", func() int { return size })
+		m.ToolResultSize(t.Context(), "observium", "list_devices", func() int { return size })
 	}
 
 	p := m.Performance()
@@ -94,7 +94,7 @@ func TestPerformanceQuantileStopsAtTheLastBoundary(t *testing.T) {
 	m := NewMetrics()
 	for _, n := range []int{100, 1000, 500_000} {
 		size := n
-		m.ToolResultSize("observium", "list_devices", func() int { return size })
+		m.ToolResultSize(t.Context(), "observium", "list_devices", func() int { return size })
 	}
 	d := m.Performance().Tools[0].ResultBytes
 
@@ -112,7 +112,7 @@ func TestPerformanceQuantileStopsAtTheLastBoundary(t *testing.T) {
 // answer of no size" apart.
 func TestPerformanceLeavesOutWhatCouldNotBeMeasured(t *testing.T) {
 	m := NewMetrics()
-	m.ToolResultSize("echo", "say", func() int { return -1 })
+	m.ToolResultSize(t.Context(), "echo", "say", func() int { return -1 })
 
 	p := m.Performance()
 	for _, tool := range p.Tools {

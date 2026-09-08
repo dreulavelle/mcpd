@@ -46,6 +46,18 @@ export const NAV: NavGroup[] = [
         // when the answer is a refusal.
         capability: "signed-in",
       },
+      {
+        // Beside Overview rather than under Administer, because it answers the
+        // same question the front page does -- how is this host doing -- over
+        // a longer horizon. It replaced Performance, which read counters that
+        // lived in process memory and so reported only what had happened since
+        // the last restart.
+        path: "/statistics",
+        label: "Statistics",
+        lede: "Every tool call this host has served, and what each one costs.",
+        icon: ChartColumn,
+        capability: "history:read",
+      },
     ],
   },
   {
@@ -171,13 +183,6 @@ export const NAV: NavGroup[] = [
         capability: "system:read",
       },
       {
-        path: "/performance",
-        label: "Performance",
-        lede: "How long this host's tools take, and how much they send back.",
-        icon: ChartColumn,
-        capability: "history:read",
-      },
-      {
         // Not read: the log carries every request this host served, which
         // systems were called and by whom. That is a wider view than any one
         // account's own work.
@@ -207,6 +212,9 @@ export const NAV: NavGroup[] = [
 /** Paths that moved, and are redirected because somebody has them bookmarked. */
 export function redirectFor(path: string): string | null {
   if (path === "/settings/account") return "/profile";
+  // Performance became Statistics: the same subject, over a horizon a restart
+  // does not reset. Links and bookmarks point at the old address.
+  if (path === "/performance") return "/statistics";
 
   // Segments stay encoded: "a%20b" has to leave as it arrived.
   const segments = path.split("/").filter(Boolean);
