@@ -1212,7 +1212,16 @@ func schema() []Group {
 			Title:     "Microsoft Entra",
 			Section:   SectionAuthentication,
 			EnabledBy: KeyEntraEnabled,
-			Help:      "Sign in with a work or school Microsoft account.",
+			// Everything an app registration has to say, said here, because
+			// the Entra admin centre asks for all of it before mcpd ever sees
+			// a token and a wrong answer surfaces as a refusal on Microsoft's
+			// screen, in Microsoft's words.
+			Help: "Sign in with a work or school Microsoft account. In the Entra " +
+				"admin centre, register mcpd under Web — not a single-page " +
+				"application, because it holds a client secret — with the redirect " +
+				"address above, single tenant, and add the optional claims email " +
+				"and xms_edov to the ID token under Token configuration. Microsoft " +
+				"accepts only https for that address, except on localhost.",
 			Fields: []Field{
 				{
 					Key: KeyEntraEnabled, Label: "Offer Microsoft", Kind: KindBool,
@@ -1221,18 +1230,25 @@ func schema() []Group {
 				{
 					Key: KeyEntraClientID, Label: "Application (client) ID", Kind: KindString,
 					Group: "entra", Apply: ApplyLive, Required: true,
+					Help: "From the registration's Overview. The Object ID is a " +
+						"different number on the same page.",
 				},
 				{
 					Key: KeyEntraSecret, Label: "Client secret", Kind: KindSecret,
 					Group: "entra", Apply: ApplyLive, Required: true,
-					Help: "Stored encrypted, and never shown again.",
+					// The Value/Secret ID confusion is the usual one: Entra
+					// shows the Value once and the id forever after.
+					Help: "The secret's Value from Certificates & secrets, not its " +
+						"Secret ID. Stored encrypted, and never shown again. Entra " +
+						"expires it, so it has to be replaced before it does.",
 				},
 				{
 					Key: KeyEntraTenant, Label: "Directory (tenant) ID", Kind: KindString,
 					Group: "entra", Apply: ApplyLive, Required: true,
 					// The refusal of common/organizations/consumers is enforced
 					// in the flow, and said here so it is read before it is met.
-					Help: "One directory. `common`, `organizations` and `consumers` " +
+					Help: "One directory: the id from the registration's Overview, or " +
+						"a verified domain. `common`, `organizations` and `consumers` " +
 						"name every directory, which mcpd will not accept.",
 				},
 			},
