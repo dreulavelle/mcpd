@@ -1,9 +1,17 @@
 # Refreshes the Skills board the dashboard renders.
 #
-# It opens a pull request rather than pushing, because a scrape that quietly
-# started returning something else deserves a person looking at the diff. The
-# dashboard bundle is not committed -- the image build compiles it from
-# `web/` -- so this changes one file and the next release picks it up.
+# It opens a pull request and merges its own, so the change is auditable and
+# revertable without anybody having to be awake on a Monday. What that gives up
+# is a person looking at the diff, so the checks that person was performing are
+# done in the job instead: the page's own tests run against the new snapshot
+# before the pull request exists, and the fetch refuses data that parsed but
+# cannot be true -- an all-time count that fell, or a board sharing almost
+# nothing with the one before it. A refused run writes nothing and fails loudly.
+#
+# The dashboard bundle is not committed -- the image build compiles it from
+# `web/` -- so this changes one file and the next release picks it up. The
+# commit is a `chore`, which the changelog hides, so a weekly refresh does not
+# churn releases.
 name: Skills snapshot
 
 on:
@@ -45,6 +53,7 @@ jobs:
         run: cd web && npm ci --silent && npm test
 
       - uses: peter-evans/create-pull-request@v7
+        id: pr
         with:
           branch: chore/skills-snapshot
           base: main
@@ -59,11 +68,33 @@ jobs:
             dashboard reads this file rather than calling out from a customer's
             host, so the numbers only move when this lands.
           body: |
-            The weekly refresh of `web/src/data/skills.json`.
+            The weekly refresh of `web/src/data/skills.json`, merged by the job
+            that opened it.
 
-            Squash this rather than merging it, and read the diff rather than
-            taking it on trust: the numbers
-            come out of a page's streamed payload, so a change in that page's
-            shape shows up here as a board full of something else rather than
-            as a failure.
+            Nobody reviewed this, so the checks a reviewer would have made were
+            made before it existed: the page's own tests ran against this
+            snapshot, and the fetch refuses data that parsed but cannot be true
+            -- an all-time count that fell, or a board sharing almost nothing
+            with the one before it.
+
+            The numbers come out of a page's streamed payload rather than an
+            API. If that page changes shape the run fails and writes nothing,
+            which is why this landing at all is itself a signal that it did not.
           add-paths: web/src/data/skills.json
+
+      # Merged here rather than through GitHub's auto-merge, which without
+      # required status checks on main would merge the moment it was asked and
+      # gate on nothing at all. The gate is the step above this one.
+      #
+      # Squashed, and the subject is the conventional commit release-please
+      # reads. The pull request's own title deliberately is not one, so the
+      # merge cannot put a second copy of it in the changelog.
+      - name: Merge it
+        if: steps.pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.pull-request-number }}
+        run: |
+          gh pr merge "$PR" --squash --delete-branch \
+            --subject "chore(web): refresh the skills snapshot" \
+            --body "Ranked installs from skills.sh, captured by the weekly job."
