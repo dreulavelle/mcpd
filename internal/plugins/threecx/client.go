@@ -398,9 +398,7 @@ type systemInfo struct {
 // in them; a gigabyte is a phone system whose logs are themselves the fault.
 // It is a ceiling on the data volume rather than on memory: the download is
 // spooled to a file.
-// A var rather than a const only so a test can lower it; nothing else writes
-// it.
-var maxBundle int64 = 1 << 30
+const maxBundle int64 = 1 << 30
 
 // progressStep is how much has to land before a download says so again.
 // Progress is read by somebody polling a job, not by a meter, so a few
@@ -419,9 +417,10 @@ const progressStep = 4 << 20
 // production system reaches without anything being wrong; on disk it is a file
 // the kernel reclaims.
 //
-// progress is called as the download lands, and once with what the phone
-// system said it was sending if it said. The caller closes the file.
-func (c *Client) downloadBundle(ctx context.Context, dir string, progress func(got, expected int64)) (*os.File, int64, error) {
+// ceiling is the largest bundle that will be spooled; progress is called as
+// the download lands, and once with what the phone system said it was sending
+// if it said. The caller closes the file.
+func (c *Client) downloadBundle(ctx context.Context, dir string, ceiling int64, progress func(got, expected int64)) (*os.File, int64, error) {
 	token, err := c.bearer(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -456,31 +455,45 @@ func (c *Client) downloadBundle(ctx context.Context, dir string, progress func(g
 		return nil, 0, explainRequestFailure(resp.StatusCode, "SupportInfo", raw)
 	}
 
+	// Where the phone system says how much it is sending, a bundle past the
+	// ceiling is refused before a byte of it lands rather than after a
+	// gigabyte of it has.
+	expected := resp.ContentLength
+	if expected > ceiling {
+		c.observe("error", c.now().Sub(started))
+		return nil, 0, tooLarge(ceiling)
+	}
 	f, err := spoolFile(dir)
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
 		return nil, 0, err
 	}
-	expected := resp.ContentLength
 	if progress != nil {
 		progress(0, expected)
 	}
 	// One byte past the ceiling, so a bundle that is exactly at it is read and
 	// one over it is refused with the size named rather than silently cut.
 	landed := &counter{w: f, expected: expected, fn: progress}
-	n, err := io.Copy(landed, io.LimitReader(resp.Body, maxBundle+1))
+	n, err := io.Copy(landed, io.LimitReader(resp.Body, ceiling+1))
 	elapsed := c.now().Sub(started)
 	if err != nil {
 		c.observe("error", elapsed)
 		closeSpool(f)
+		// The two ends of the copy fail for different reasons and are fixed in
+		// different places: one is the phone system or the network, the other
+		// is this host's disk, and an operator told "reading the bundle: no
+		// space left on device" looks at the wrong machine first.
+		if landed.err != nil {
+			return nil, 0, fmt.Errorf("3cx: could not write the support bundle to %s: %w. "+
+				"The bundle is spooled there while it is read, and it can be as large as "+
+				"the phone system's logs; free some space on the data volume", spoolDir(dir), landed.err)
+		}
 		return nil, 0, fmt.Errorf("3cx: reading the bundle: %w", err)
 	}
-	if n > maxBundle {
+	if n > ceiling {
 		c.observe("error", elapsed)
 		closeSpool(f)
-		return nil, 0, fmt.Errorf("3cx: the support bundle is larger than %d MB, which is more "+
-			"than this integration will spool to disk. Take a fresh one with the packet "+
-			"capture and the debug logs turned off, or read it in the 3CX console", maxBundle>>20)
+		return nil, 0, tooLarge(ceiling)
 	}
 	if progress != nil {
 		progress(n, expected)
@@ -488,6 +501,35 @@ func (c *Client) downloadBundle(ctx context.Context, dir string, progress func(g
 	c.observe("ok", elapsed)
 	c.log.DebugContext(ctx, "3cx support bundle collected", "bytes", n, "took", elapsed)
 	return f, n, nil
+}
+
+// tooLarge is the refusal for a bundle past the ceiling. It says what to do,
+// because "too large" on its own leaves somebody with a phone system they
+// cannot read at all.
+func tooLarge(ceiling int64) error {
+	return fmt.Errorf("3cx: the support bundle is larger than %s, which is more than this "+
+		"integration will spool to disk. Take a fresh one with the packet capture and the "+
+		"debug logs turned off, or read it in the 3CX console", sizeText(ceiling))
+}
+
+// sizeText renders a byte count the way somebody says it out loud.
+func sizeText(n int64) string {
+	switch {
+	case n >= 1<<30 && n%(1<<30) == 0:
+		return fmt.Sprintf("%d GB", n>>30)
+	case n >= 1<<20:
+		return fmt.Sprintf("%d MB", n>>20)
+	}
+	return fmt.Sprintf("%d KB", max(n>>10, 1))
+}
+
+// spoolDir names the directory a download is spooled to, for a message about
+// it failing.
+func spoolDir(dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return os.TempDir()
+	}
+	return dir
 }
 
 // spoolFile opens the file a download lands in.
@@ -525,10 +567,16 @@ type counter struct {
 	expected int64
 	got      int64
 	told     int64
+	// err is the write's own failure, kept because io.Copy hands back one
+	// error for both ends and the two are fixed in different places.
+	err error
 }
 
 func (c *counter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
+	if err != nil {
+		c.err = err
+	}
 	c.got += int64(n)
 	if c.fn != nil && c.got-c.told >= progressStep {
 		c.told = c.got

@@ -20,6 +20,11 @@ type Plugin struct {
 	// its own client, its own token and its own health.
 	accounts []*account
 
+	// bundleCeiling is the largest support bundle that will be spooled. A
+	// field rather than the constant at the call site so a test can lower it
+	// without writing to package state a running collection reads.
+	bundleCeiling int64
+
 	// configured reports whether at least one complete customer was supplied.
 	// A plugin without one still mounts, so its settings form has somewhere to
 	// live.
@@ -72,7 +77,7 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 		}
 	}
 
-	p := &Plugin{deps: deps, configured: configured}
+	p := &Plugin{deps: deps, configured: configured, bundleCeiling: maxBundle}
 	for _, cu := range cfg.Customers {
 		if !cu.complete() {
 			continue

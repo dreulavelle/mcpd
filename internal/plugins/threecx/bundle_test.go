@@ -6,6 +6,8 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -209,30 +211,49 @@ func TestScrubSecrets_RemovesCredentialValues(t *testing.T) {
 // and the spool file is gone whichever way the job ends.
 func TestBundle_SpooledToDiskAndCleanedUp(t *testing.T) {
 	p, _ := bundlePBX(t, bundleZip(t), 0)
+	before := openSpools(t)
 	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
 		t.Fatal(err)
 	}
 	if r := waitForBundle(t, p); r.State != "done" {
 		t.Fatalf("capture: %+v", r)
 	}
-	left, err := os.ReadDir(p.deps.Scratch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(left) != 0 {
+	if left, err := os.ReadDir(p.deps.Scratch); err == nil && len(left) != 0 {
 		t.Errorf("the spooled bundle should be gone, found %d files in %s", len(left), p.deps.Scratch)
 	}
+	if after := openSpools(t); after > before {
+		t.Errorf("the spool file should be closed: %d open before the job, %d after", before, after)
+	}
+}
+
+// openSpools counts the descriptors this process still holds on a spooled
+// bundle. That is the fact worth defending: the file is unlinked the moment it
+// is created, so an empty directory proves nothing, while a descriptor left
+// open holds the whole gigabyte until the process ends. Linux only -- the
+// check is skipped elsewhere rather than the test being.
+func openSpools(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return 0
+	}
+	open := 0
+	for _, e := range entries {
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
+		if err == nil && strings.Contains(target, "threecx-bundle-") {
+			open++
+		}
+	}
+	return open
 }
 
 // A bundle past the ceiling is refused with a sentence saying what to do about
 // it, and leaves nothing behind. The ceiling is lowered here rather than a
 // gigabyte being generated.
 func TestBundle_PastTheCeilingIsRefused(t *testing.T) {
-	was := maxBundle
-	maxBundle = 64
-	t.Cleanup(func() { maxBundle = was })
-
 	p, _ := bundlePBX(t, bundleZip(t), 0)
+	p.bundleCeiling = 64
+	before := openSpools(t)
 	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
 		t.Fatal(err)
 	}
@@ -240,9 +261,62 @@ func TestBundle_PastTheCeilingIsRefused(t *testing.T) {
 	if r.State != "failed" || !strings.Contains(r.Error, "larger than") {
 		t.Fatalf("an oversized bundle should fail with a reason: %+v", r)
 	}
-	left, _ := os.ReadDir(p.deps.Scratch)
-	if len(left) != 0 {
+	if left, _ := os.ReadDir(p.deps.Scratch); len(left) != 0 {
 		t.Errorf("a refused download should leave nothing behind, found %d files", len(left))
+	}
+	if after := openSpools(t); after > before {
+		t.Errorf("a refused download should close its spool file: %d open before, %d after", before, after)
+	}
+}
+
+// A bundle the phone system says up front is too large is refused before any
+// of it is spooled.
+func TestBundle_RefusedOnTheLengthItAnnounces(t *testing.T) {
+	body := bundleZip(t)
+	f, srv := newFakePBX(t, map[string]string{"SystemStatus": `{"Version":"20.0.9"}`})
+	f.raw = map[string]func(w http.ResponseWriter){
+		"SupportInfo": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/zip")
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			_, _ = w.Write(body)
+		},
+	}
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	p.deps.Scratch = t.TempDir()
+	p.bundleCeiling = 8
+
+	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	r := waitForBundle(t, p)
+	if r.State != "failed" || !strings.Contains(r.Error, "larger than") {
+		t.Fatalf("an announced size past the ceiling should be refused: %+v", r)
+	}
+	if left, _ := os.ReadDir(p.deps.Scratch); len(left) != 0 {
+		t.Errorf("nothing should have been spooled, found %d files", len(left))
+	}
+}
+
+// A disk that cannot be written says so, and says it about this host rather
+// than about the phone system.
+func TestBundle_DiskFailureNamesTheDisk(t *testing.T) {
+	p, _ := bundlePBX(t, bundleZip(t), 0)
+	// A file where the directory should be: every create in it fails.
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.deps.Scratch = blocked
+
+	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	r := waitForBundle(t, p)
+	if r.State != "failed" {
+		t.Fatalf("a spool that cannot be opened should fail the job: %+v", r)
+	}
+	if !strings.Contains(r.Error, blocked) {
+		t.Errorf("the failure should name the directory it could not use: %q", r.Error)
 	}
 }
 

@@ -33,12 +33,17 @@ import (
 // finding with the lines it was read from.
 
 const (
-	// bundleTimeout bounds a capture from request to parsed digest.
-	bundleTimeout = 10 * time.Minute
+	// bundleTimeout bounds a collection from request to parsed digest. Three
+	// things happen inside it: the phone system walks its logs to build the
+	// zip, which is minutes on a large site; the zip arrives, which at the
+	// ceiling is a gigabyte; and the digest is read out of it. Ten minutes
+	// covered the first of those and, with the ceiling raised, would have made
+	// the deadline the new way a large bundle failed.
+	bundleTimeout = 30 * time.Minute
 	// bundleTTL is how long a finished digest is kept for follow-up questions
 	// before a fresh capture is needed.
 	bundleTTL = time.Hour
-	// bundleRate is how often a capture may be started, in requests per
+	// bundleRate is how often a collection may be started, in requests per
 	// second: one every ten minutes. The PBX does real work for each.
 	bundleRate = 1.0 / 600
 	// maxFindings and maxRows bound what one answer carries of a digest.
@@ -46,7 +51,7 @@ const (
 	maxRows     = 60
 )
 
-// The phases of a capture. A running job says which one it is in, because
+// The phases of a collection. A running job says which one it is in, because
 // they fail for different reasons and take wildly different times: the phone
 // system may spend minutes walking its logs before a byte is sent, and a
 // bundle with a packet capture in it may then spend minutes arriving.
@@ -56,7 +61,8 @@ const (
 	phaseAnalysing   = "analysing"
 )
 
-// bundleJob is one capture, running or finished.
+// bundleJob is one bundle collection, running or finished. "Capture" is
+// reserved for the packet capture, which this starts none of.
 type bundleJob struct {
 	id       string
 	started  time.Time
@@ -64,7 +70,7 @@ type bundleJob struct {
 	err      error
 	report   *supportinfo.Snapshot
 
-	// phase is what a running capture is doing, and got and expected are how
+	// phase is what a running collection is doing, and got and expected are how
 	// much of the download has landed and how much the phone system said it
 	// was sending -- zero when it did not say, because 3CX builds the zip as
 	// it streams it and often cannot.
@@ -73,7 +79,7 @@ type bundleJob struct {
 	expected int64
 }
 
-// snapshot copies a customer's capture under the lock that guards it.
+// snapshot copies a customer's bundle collection under the lock that guards it.
 //
 // The fields are written by the goroutine doing the capture and read by
 // whoever asks how it is going, so every read has to be under the same lock.
@@ -115,10 +121,11 @@ func (p *Plugin) registerBundleTools(r *plugins.Registry) {
 		Description: "Last resort. Asks the phone system to build its support " +
 			"bundle -- a week of metrics, every service log, and the packet " +
 			"capture if somebody already took one in the console -- and reads it " +
-			"into a digest of findings. It starts no capture of its own: 3CX " +
-			"offers no way to over the API, so a capture has to be running or " +
-			"already taken for one to be in the bundle. Takes seconds on a small " +
-			"system and minutes on a large one, so this returns a job at once; " +
+			"into a digest of findings. It starts no packet capture of its own: " +
+			"3CX offers no way to start one over the API, so a capture has to be " +
+			"running or already taken for one to be in the bundle. Takes seconds " +
+			"on a small system and minutes on a large one, so this returns a job " +
+			"at once; " +
 			"poll get_support_bundle_report for the result. Use the ordinary " +
 			"tools first; reach for this when they have not explained a fault.",
 		Idempotent: false,
@@ -179,11 +186,11 @@ func (p *Plugin) startBundle(ctx context.Context, args startBundleArgs) (BundleS
 		switch {
 		case j.state() == "running":
 			st := statusOf(acct.name, j)
-			st.Note = "a capture is already running; poll get_support_bundle_report"
+			st.Note = "a bundle collection is already running; poll get_support_bundle_report"
 			return st, nil
 		case j.state() == "done" && !args.Force && time.Since(j.finished) < bundleTTL:
 			st := statusOf(acct.name, j)
-			st.Note = "a digest from the last hour is ready; read it with get_support_bundle_report, or pass force to capture again"
+			st.Note = "a digest from the last hour is ready; read it with get_support_bundle_report, or pass force to collect a fresh bundle"
 			return st, nil
 		}
 	}
@@ -195,7 +202,7 @@ func (p *Plugin) startBundle(ctx context.Context, args startBundleArgs) (BundleS
 	go p.runBundle(acct, job)
 
 	st := statusOf(acct.name, *job)
-	st.Note = "capture started; the phone system is building the bundle. Poll get_support_bundle_report -- seconds on a small system, minutes on a large one"
+	st.Note = "started; the phone system is building the bundle. Poll get_support_bundle_report -- seconds on a small system, minutes on a large one"
 	return st, nil
 }
 
@@ -210,7 +217,7 @@ func (p *Plugin) runBundle(acct *account, job *bundleJob) {
 	job.finished = time.Now()
 	job.err = err
 	job.report = report
-	job.phase = ""
+	job.phase, job.got, job.expected = "", 0, 0
 	took := job.finished.Sub(job.started)
 	acct.bundleMu.Unlock()
 
@@ -239,7 +246,7 @@ func (p *Plugin) readBundle(ctx context.Context, acct *account, job *bundleJob) 
 	}
 	phase(phaseGenerating, 0, 0)
 
-	f, size, err := acct.client.downloadBundle(ctx, p.deps.Scratch, func(got, expected int64) {
+	f, size, err := acct.client.downloadBundle(ctx, p.deps.Scratch, p.bundleCeiling, func(got, expected int64) {
 		phase(phaseDownloading, got, expected)
 	})
 	if err != nil {
@@ -255,7 +262,7 @@ func (p *Plugin) readBundle(ctx context.Context, acct *account, job *bundleJob) 
 	return &snap, nil
 }
 
-// statusOf renders a capture. It takes a copy rather than the job itself,
+// statusOf renders a collection. It takes a copy rather than the job itself,
 // because the fields are guarded by the account's lock and a pointer would
 // invite reading them without it -- which is the race this used to have.
 func statusOf(customer string, j bundleJob) BundleStatus {
@@ -286,11 +293,16 @@ func progressText(j bundleJob) string {
 	return megabytes(j.got)
 }
 
+// megabytes renders what has landed. Below a megabyte it says so in kilobytes
+// rather than rounding a small site's bundle to "0 MB".
 func megabytes(n int64) string {
+	if n < 1<<20 {
+		return fmt.Sprintf("%d KB", n>>10)
+	}
 	return fmt.Sprintf("%.0f MB", float64(n)/(1<<20))
 }
 
-// runningNote is what a caller polling a running capture is told. It says
+// runningNote is what a caller polling a running collection is told. It says
 // which phase and how long, and never guesses at how much longer: 3CX reports
 // no progress of its own while it builds the zip, and an invented estimate is
 // the thing somebody would plan around.
@@ -496,7 +508,7 @@ func (p *Plugin) bundleReport(_ context.Context, args bundleReportArgs) (BundleR
 	if !started {
 		return BundleReport{BundleStatus: BundleStatus{
 			Customer: acct.name, State: "none",
-			Note: "no capture has been started; call aggregate_support_bundle first",
+			Note: "no bundle has been collected; call aggregate_support_bundle first",
 		}}, nil
 	}
 	out := BundleReport{BundleStatus: statusOf(acct.name, job)}
@@ -505,7 +517,7 @@ func (p *Plugin) bundleReport(_ context.Context, args bundleReportArgs) (BundleR
 		out.Note = runningNote(job)
 		return out, nil
 	case "failed":
-		out.Note = "the capture failed; fix the cause and call aggregate_support_bundle again"
+		out.Note = "the bundle collection failed; fix the cause and call aggregate_support_bundle again"
 		return out, nil
 	}
 	snap := job.report
