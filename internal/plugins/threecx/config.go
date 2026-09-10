@@ -196,6 +196,12 @@ func (c Config) Validate() error {
 	type owner struct {
 		row   int
 		label string
+		// spelt is the name as that row writes it, which under the comparison
+		// below may look identical to the one colliding with it -- "Acme
+		// Dental" and "Acme  Dental" render the same. The message has to name
+		// the rows, or an operator is told two things they cannot tell apart
+		// are the same thing.
+		spelt string
 	}
 	seenName := map[string]owner{}
 	seenHost := map[string]string{}
@@ -216,9 +222,13 @@ func (c Config) Validate() error {
 			// differ there, which is the ambiguity this check exists to refuse.
 			folded := normaliseName(n)
 			if other, taken := seenName[folded]; taken && other.row != i {
-				return fmt.Errorf("3cx: %q names both %s and %s; a name or alias has to point at one customer", n, other.label, label)
+				return fmt.Errorf("3cx: customer %d (%q) and customer %d (%q) both answer to "+
+					"the same name. Names and aliases are matched ignoring case, spacing and "+
+					"punctuation, so those two are one name and a call naming it could not be "+
+					"resolved without guessing -- give one of them a different name or alias",
+					other.row+1, other.spelt, i+1, n)
 			}
-			seenName[folded] = owner{row: i, label: label}
+			seenName[folded] = owner{row: i, label: label, spelt: n}
 		}
 		host := strings.TrimSpace(cu.Host)
 		if host == "" {
@@ -240,11 +250,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("3cx: %s: the address %q carries a path; a 3CX is reached "+
 				"at the root of its host", label, cu.Host)
 		}
-		if other, taken := seenHost[strings.ToLower(u.Host)]; taken {
+		if other, taken := seenHost[hostKey(u)]; taken {
 			return fmt.Errorf("3cx: %s and %s share the address %s; a 3CX serves one business, "+
 				"so one of them is pointed at the wrong system", other, label, u.Host)
 		}
-		seenHost[strings.ToLower(u.Host)] = label
+		seenHost[hostKey(u)] = label
 		if strings.ContainsAny(cu.Extension, " \t\r\n") {
 			return fmt.Errorf("3cx: %s: the extension %q has whitespace in it", label, cu.Extension)
 		}
@@ -260,6 +270,20 @@ func (c Config) Validate() error {
 			minTimeoutSeconds, maxTimeoutSeconds, c.TimeoutSeconds)
 	}
 	return nil
+}
+
+// hostKey is the address two customers are compared on. The port is part of
+// it -- a different port is a different phone system, and the transport checks
+// it -- but the default one is dropped, because acme.example and
+// acme.example:443 are the same system spelt two ways and would otherwise be
+// accepted as two customers on one PBX.
+func hostKey(u *url.URL) string {
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if port == "" || (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		return host
+	}
+	return host + ":" + port
 }
 
 // parseHost reads an address written either way: a bare FQDN, or one with a

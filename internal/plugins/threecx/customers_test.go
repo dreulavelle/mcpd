@@ -100,7 +100,7 @@ func TestResolve_NeverGuesses(t *testing.T) {
 	// of a name it had a short one for.
 	for _, want := range []string{
 		`no customer here is called "Initech"`,
-		"Acme Dental Group (acme, ADG, Acme Roof Care), Globex Roofing (globex)",
+		"Acme Dental Group, also called acme or ADG or Acme Roof Care; Globex Roofing, also called globex",
 		"add it on the mcpd Plugins page", "Customers", "rather than reading one of the others",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -348,9 +348,16 @@ func TestResolve_EveryToolAcceptsAnAlias(t *testing.T) {
 
 	// Registered but not called here: list_customers takes no customer, and
 	// aggregate_support_bundle asks the phone system to build its support
-	// bundle, which is not a thing to start twenty times in a unit test. Its
-	// resolution is covered in bundle_test.go.
+	// bundle, which is not a thing to start a hundred times in a unit test.
+	// Its own alias resolution is checked once, below.
 	exempt := map[string]bool{"list_customers": true, "aggregate_support_bundle": true}
+
+	// Tools that answer without reaching the phone system at all. Declared
+	// rather than left to be inferred from a call that happened not to read
+	// anything: the "it reached that customer" half of this test is vacuous
+	// for them, and a tool that quietly joins them would be covered by
+	// nothing.
+	answersWithoutReading := map[string]bool{"get_support_bundle_report": true}
 
 	m := plugins.NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)), "test", nil, nil, nil, nil)
 	p, acme, globex := twoOpenCustomers(t)
@@ -384,10 +391,28 @@ func TestResolve_EveryToolAcceptsAnAlias(t *testing.T) {
 			if globex.reads.Load() != 0 {
 				t.Errorf("%s with customer %q reached the wrong customer's phone system", name, asked)
 			}
-			if acme.reads.Load() == 0 && err != nil {
+			if acme.reads.Load() == 0 && !answersWithoutReading[name] {
 				t.Errorf("%s with customer %q reached no phone system: %v", name, asked, err)
 			}
 		}
+	}
+}
+
+// The bundle tool resolves its customer like every other tool; it is left out
+// of the table above because starting a collection is not free, so its one
+// case is here. Nothing is captured: the answer names the customer the alias
+// resolved to before any of that begins.
+func TestResolve_BundleToolTakesAnAlias(t *testing.T) {
+	p, _, globex := twoOpenCustomers(t)
+	st, err := p.startBundle(context.Background(), startBundleArgs{Customer: "ADG"})
+	if err != nil {
+		t.Fatalf("an alias should reach the bundle tool: %v", err)
+	}
+	if st.Customer != "Acme Dental Group" {
+		t.Errorf("the collection is for %q, want Acme Dental Group", st.Customer)
+	}
+	if globex.reads.Load() != 0 {
+		t.Error("the other customer's phone system should not have been touched")
 	}
 }
 

@@ -91,7 +91,10 @@ One resolver, and every tool goes through it. `TestResolve_EveryToolAcceptsAnAli
 walks the registry and refuses to pass if a tool that takes a `customer` is not
 in its table, then calls each one with a canonical name, an alias, a
 differently-spelt alias and a fragment, and checks both that it resolved and
-that it reached *that* customer's phone system rather than the other's. A tool
+that it reached *that* customer's phone system rather than the other's. The two
+tools that answer without reaching a phone system are named in the test rather
+than inferred from a call that happened not to read anything, so a tool that
+joins them cannot be covered by nothing. A tool
 resolving customers its own way is the shape of bug that produces "it worked,
 and then it did not".
 
