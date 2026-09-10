@@ -295,14 +295,24 @@ func (c *Client) explainTransport(err error, what string) error {
 		return fmt.Errorf("3cx: could not reach %s while %s: %w", c.root, what, err)
 	}
 	// Only our own timeout knows what it waited. A deadline set further up --
-	// a caller with less time than this client's setting -- would otherwise be
-	// reported as a wait that never elapsed, pointing at a setting that would
-	// not have helped.
+	// a caller with less time than this client's setting, or the support
+	// bundle's own -- would otherwise be reported as a wait that never
+	// elapsed, pointing at a setting that would not have helped.
 	waited := "the request ran out of time"
 	if ours {
 		waited = fmt.Sprintf("it did not answer within %s", c.cfg.Timeout())
 	}
-	if what == signingIn {
+	switch what {
+	case collectingBundle:
+		// No setting to raise: a collection is bounded by the job's own
+		// deadline, and what an operator can do is make the bundle smaller or
+		// take it by hand.
+		return fmt.Errorf("3cx: %s did not finish building and sending its support "+
+			"bundle in time. A system with debug logging or a packet capture running "+
+			"builds a much larger one; turn those off and ask again, or collect it in "+
+			"the 3CX console", c.root)
+	case signingIn:
+		// No rows to ask fewer of, so only the half of the advice that applies.
 		return fmt.Errorf("3cx: %s while signing in: %s. Raise how long to wait for an "+
 			"answer on the mcpd Plugins page if the phone system is simply slow to reach",
 			c.root, waited)
@@ -313,9 +323,14 @@ func (c *Client) explainTransport(err error, what string) error {
 		c.root, what, waited)
 }
 
-// signingIn is the one non-read this explanation is shared with, and the one
-// where "ask for fewer rows" is advice about nothing.
-const signingIn = "signing in"
+// The two things this explanation is shared with that are not reads, and where
+// "ask for fewer rows" would be advice about nothing. The bundle has no
+// timeout of its own on the client -- the job's deadline bounds it -- so what
+// it needs said is which phase ran out, not which setting to raise.
+const (
+	signingIn        = "signing in"
+	collectingBundle = "collecting the support bundle"
+)
 
 // page is one OData collection response.
 type page[T any] struct {
@@ -500,7 +515,7 @@ func (c *Client) downloadBundle(ctx context.Context, dir string, ceiling int64, 
 		return nil, 0, err
 	}
 	if err := c.limiter.Wait(ctx); err != nil {
-		return nil, 0, fmt.Errorf("3cx: waiting to collect the bundle: %w", err)
+		return nil, 0, c.explainTransport(err, collectingBundle)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.root+apiPrefix+"SupportInfo", nil)
 	if err != nil {
@@ -515,7 +530,7 @@ func (c *Client) downloadBundle(ctx context.Context, dir string, ceiling int64, 
 	resp, err := patient.Do(req)
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
-		return nil, 0, fmt.Errorf("3cx: could not reach %s for the bundle: %w", c.root, err)
+		return nil, 0, c.explainTransport(err, collectingBundle)
 	}
 	defer resp.Body.Close()
 
