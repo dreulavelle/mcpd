@@ -219,6 +219,16 @@ func TestListExtensions_FiltersUpstream(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "DEFAULT, Sales") {
 		t.Errorf("an unknown department should be refused naming the real ones, got %v", err)
 	}
+
+	// The departments are read for their names, so the read does not ask for
+	// the schedule hanging off each one. On a site with a few hundred
+	// departments the office hours are the bulk of that answer, fetched on
+	// every extension listing to be thrown away.
+	for _, seen := range f.seen {
+		if strings.Contains(seen, "/Groups?") && strings.Contains(seen, "Hours") {
+			t.Errorf("naming departments should not fetch their schedules: %s", seen)
+		}
+	}
 }
 
 // One extension in full: the forwarding profiles are read as phrases, the key
@@ -487,6 +497,17 @@ func TestSearchCallHistory_ReadsAsCalls(t *testing.T) {
 	for _, want := range []string{"SrcDn+eq+%2710%27%270%27", "contains%28SrcCallerNumber%2C%27555%27%29", "date%28SegmentStartTime%29+ge+2026-09-01", "CallAnswered+eq+false"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("the request should carry %s, got %s", want, last)
+		}
+	}
+
+	// And it asks for no count. Call history is a view over every leg of every
+	// call the system has ever handled, and $count makes the phone system
+	// count all of them before it answers the first page -- which is what a
+	// search of one extension's calls was timing out on. The result reports no
+	// total, so nothing here was reading it.
+	for _, seen := range f.seen {
+		if strings.Contains(seen, "CallHistoryView") && strings.Contains(seen, "%24count") {
+			t.Errorf("a call history search should not ask the phone system to count: %s", seen)
 		}
 	}
 }

@@ -208,8 +208,34 @@ the first tool call.
 ## OData, as 3CX speaks it
 
 `$top` above 100 is a 400 naming the limit. Everything that can return more is
-paged at 100 with `$skip`, and `$count=true` is asked for on the first page so
-a listing can say how many there are rather than how many it fetched.
+paged at 100 with `$skip`.
+
+**`$count=true` is asked for only where the answer reports a total.** It makes
+the phone system count the whole collection before it answers the first page,
+and on `CallHistoryView` -- every leg of every call the system has handled --
+that count is most of what the request costs. Asking for it on every listing is
+what made a search of one extension's calls time out on a large site while the
+same search on a small one returned in a second. Two listings report a total
+and ask for one (`list_extensions`, `search_directory`); the rest use `list`,
+which asks for none. What that costs is the certainty in the truncation note: a
+counted listing says the phone system holds more, an uncounted one says it *may*
+hold more, because fifty asked for and fifty returned is as likely to be all of
+them. A count the PBX volunteers anyway is still read, and the note is exact
+again when it does.
+
+Targeted reads stay targeted. One extension is `$filter=Number eq '...'` with
+`$top=1` rather than a walk; a call history search pushes the extension, the
+number, the day window and answered-or-not upstream; and the department names
+an extension listing needs are read with `Id,Name,Number,IsDefault` rather than
+the whole group record, whose `Hours` carries every opening period of every
+department.
+
+**How long to wait is a setting.** Thirty seconds by default, five to three
+hundred on the Plugins page, because a large installation answering a wide
+question genuinely takes longer than the default and the alternative was
+editing a constant. A request that runs out says so as a timeout, names the
+wait, and says both halves of the fix: narrow the question, or raise the
+setting.
 
 `$select` is accepted on every collection and singleton tried, including
 `Defs/TimeZones`, `LicenseStatus` and `Groups`. (An earlier integration

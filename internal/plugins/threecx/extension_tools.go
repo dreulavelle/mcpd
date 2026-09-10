@@ -112,9 +112,10 @@ func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (Exten
 		return ExtensionsResult{}, err
 	}
 
-	// Departments, for the name on each row and for the filter. One small
-	// call; a PBX has a handful of groups.
-	groups, err := p.readGroups(ctx, acct)
+	// Departments, for the name on each row and for the filter. Names only:
+	// the schedule hanging off each one is not read here and is the larger
+	// half of the record.
+	groups, err := p.readGroups(ctx, acct, departmentFields)
 	if err != nil {
 		return ExtensionsResult{}, acct.call(err)
 	}
@@ -145,7 +146,7 @@ func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (Exten
 	if len(filters) > 0 {
 		q.Set("$filter", strings.Join(filters, " and "))
 	}
-	got, err := list[userSummary](ctx, acct.client, "Users", q, p.limitOf(args.Limit))
+	got, err := listCounted[userSummary](ctx, acct.client, "Users", q, p.limitOf(args.Limit))
 	if err != nil {
 		return ExtensionsResult{}, acct.call(err)
 	}
@@ -167,7 +168,7 @@ func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (Exten
 	if out.Total < 0 {
 		out.Total = len(out.Extensions)
 	}
-	out.Extensions, out.truncation = bound(out.Extensions, got.Truncated)
+	out.Extensions, out.truncation = bound(out.Extensions, got.reason())
 	out.Returned = len(out.Extensions)
 	acct.note(nil)
 	out.Customer = acct.name
@@ -599,7 +600,7 @@ func (p *Plugin) listDevices(ctx context.Context, args devicesArgs) (DevicesResu
 		}
 		out.Devices = append(out.Devices, row)
 	}
-	out.Devices, out.truncation = bound(out.Devices, got.Truncated)
+	out.Devices, out.truncation = bound(out.Devices, got.reason())
 	out.Returned = len(out.Devices)
 	acct.note(nil)
 	out.Customer = acct.name

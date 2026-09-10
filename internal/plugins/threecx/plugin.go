@@ -58,11 +58,11 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 	configured := cfg.Configured()
 
 	httpClient := deps.HTTP
-	if httpClient != nil && cfg.Timeout > 0 {
+	if httpClient != nil {
 		// A copy, because the host's client is shared and this plugin's
 		// timeout is its own business.
 		clone := *httpClient
-		clone.Timeout = cfg.Timeout
+		clone.Timeout = cfg.Timeout()
 		httpClient = &clone
 	}
 	now := deps.Now

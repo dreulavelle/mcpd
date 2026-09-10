@@ -60,7 +60,7 @@ func (p *Plugin) listCustomers(ctx context.Context, args customersArgs) (Custome
 			wg.Add(1)
 			go func(a *account) {
 				defer wg.Done()
-				actx, cancel := context.WithTimeout(ctx, p.cfg.Timeout)
+				actx, cancel := context.WithTimeout(ctx, p.cfg.Timeout())
 				defer cancel()
 				_, err := a.client.Probe(actx)
 				a.note(err)

@@ -13,9 +13,15 @@ import (
 // narrowed past with a filter, and a size ceiling means the rows themselves
 // are large and narrowing is the only option.
 const (
-	reasonCount    = "the phone system holds more than were returned; narrow with a query or a filter"
-	reasonSize     = "the result reached the size one tool call may return; narrow it"
-	reasonEncoding = "a record could not be encoded and the listing stops there"
+	reasonCount = "the phone system holds more than were returned; narrow with a query or a filter"
+	// reasonMaybeCount is the same ceiling without the count that would make it
+	// a fact. A listing that asked the phone system how many there are knows;
+	// one that did not knows only that it filled up, and saying "there are
+	// more" when there may be exactly none more has a model narrow and re-ask
+	// an answer that was already complete.
+	reasonMaybeCount = "the listing filled up, so the phone system may hold more; narrow with a query or a filter"
+	reasonSize       = "the result reached the size one tool call may return; narrow it"
+	reasonEncoding   = "a record could not be encoded and the listing stops there"
 )
 
 // truncation is what every listing carries when it stops short.
@@ -29,10 +35,10 @@ type truncation = plugins.Truncation
 // bound trims rows to the byte ceiling and says so. The count ceiling is
 // applied upstream by list, which stops fetching; this is the second ceiling,
 // on how much those rows weigh.
-func bound[T any](rows []T, alreadyCut bool) ([]T, truncation) {
+func bound[T any](rows []T, reason string) ([]T, truncation) {
 	var cut truncation
-	if alreadyCut {
-		cut = truncation{Truncated: true, Reason: reasonCount}
+	if reason != "" {
+		cut = truncation{Truncated: true, Reason: reason}
 	}
 	return plugins.BoundBytes(rows, cut, reasonSize, reasonEncoding)
 }

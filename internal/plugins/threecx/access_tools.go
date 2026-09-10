@@ -147,7 +147,7 @@ func (p *Plugin) listBlocked(ctx context.Context, args blockedArgs) (BlockedResu
 		}
 	}
 
-	out.Addresses, out.truncation = bound(out.Addresses, addrs.Truncated)
+	out.Addresses, out.truncation = bound(out.Addresses, addrs.reason())
 	acct.note(nil)
 	return out, nil
 }
@@ -211,7 +211,7 @@ func (p *Plugin) listSBCs(ctx context.Context, args sbcArgs) (SBCsResult, error)
 			Version: s.Version, Group: s.Group, MAC: s.PhoneMAC,
 		})
 	}
-	out.SBCs, out.truncation = bound(out.SBCs, got.Truncated)
+	out.SBCs, out.truncation = bound(out.SBCs, got.reason())
 	out.Returned = len(out.SBCs)
 	acct.note(nil)
 	return out, nil

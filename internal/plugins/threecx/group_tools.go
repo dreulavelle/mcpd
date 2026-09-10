@@ -122,7 +122,7 @@ func (p *Plugin) listRingGroups(ctx context.Context, args ringGroupsArgs) (RingG
 			Registered: g.IsRegistered, Members: memberTexts(g.Members), NoAnswer: g.NoAnswer.text(),
 		})
 	}
-	out.RingGroups, out.truncation = bound(out.RingGroups, got.Truncated)
+	out.RingGroups, out.truncation = bound(out.RingGroups, got.reason())
 	out.Returned = len(out.RingGroups)
 	acct.note(nil)
 	out.Customer = acct.name
@@ -196,7 +196,7 @@ func (p *Plugin) listQueues(ctx context.Context, args queuesArgs) (QueuesResult,
 			Agents: memberTexts(qu.Agents), Managers: memberTexts(qu.Managers), NoAnswer: qu.NoAnswer.text(),
 		})
 	}
-	out.Queues, out.truncation = bound(out.Queues, got.Truncated)
+	out.Queues, out.truncation = bound(out.Queues, got.reason())
 	out.Returned = len(out.Queues)
 	acct.note(nil)
 	out.Customer = acct.name
@@ -273,7 +273,7 @@ func (p *Plugin) listReceptionists(ctx context.Context, args receptionistsArgs) 
 		}
 		out.Receptionists = append(out.Receptionists, row)
 	}
-	out.Receptionists, out.truncation = bound(out.Receptionists, got.Truncated)
+	out.Receptionists, out.truncation = bound(out.Receptionists, got.reason())
 	out.Returned = len(out.Receptionists)
 	acct.note(nil)
 	out.Customer = acct.name

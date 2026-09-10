@@ -53,6 +53,13 @@ const (
 	// that is not going to answer.
 	defaultTimeout = 30 * time.Second
 
+	// The range an operator may set that to. A large installation answering a
+	// wide query genuinely takes longer than thirty seconds sometimes, and the
+	// alternative to raising it there was editing a constant; five minutes is
+	// past the point where a model waiting on the answer has given up anyway.
+	minTimeoutSeconds = 5
+	maxTimeoutSeconds = 300
+
 	// tokenMargin is how long before a token's expiry it is treated as
 	// expired. A token that runs out mid-request fails in a way that reads as
 	// the PBX being down, and a minute costs nothing.
@@ -87,8 +94,11 @@ type Config struct {
 	// pages is a loop, which is the shape most likely to lean on a small PBX.
 	RequestsPerSecond float64 `yaml:"requests_per_second" json:"requests_per_second"`
 
-	// Timeout bounds a single upstream request.
-	Timeout time.Duration `yaml:"timeout" json:"timeout"`
+	// TimeoutSeconds bounds a single upstream request. Seconds rather than a
+	// duration because it is a number on a form: the settings store hands a
+	// duration field back as whole seconds, and a time.Duration decoded from
+	// one would be that many nanoseconds.
+	TimeoutSeconds int `yaml:"timeout" json:"timeout"`
 }
 
 // Customer is one business and the phone system it runs.
@@ -141,9 +151,17 @@ func (c *Config) withDefaults() {
 	if c.RequestsPerSecond <= 0 {
 		c.RequestsPerSecond = defaultRPS
 	}
-	if c.Timeout <= 0 {
-		c.Timeout = defaultTimeout
+	if c.TimeoutSeconds <= 0 {
+		c.TimeoutSeconds = int(defaultTimeout / time.Second)
 	}
+}
+
+// Timeout is how long one upstream request may take.
+func (c Config) Timeout() time.Duration {
+	if c.TimeoutSeconds <= 0 {
+		return defaultTimeout
+	}
+	return time.Duration(c.TimeoutSeconds) * time.Second
 }
 
 // Configured reports whether there is at least one customer that can be
@@ -232,6 +250,10 @@ func (c Config) Validate() error {
 	}
 	if c.RequestsPerSecond <= 0 {
 		return fmt.Errorf("3cx: requests_per_second must be positive, got %v", c.RequestsPerSecond)
+	}
+	if c.TimeoutSeconds < minTimeoutSeconds || c.TimeoutSeconds > maxTimeoutSeconds {
+		return fmt.Errorf("3cx: timeout must be between %d and %d seconds, got %d",
+			minTimeoutSeconds, maxTimeoutSeconds, c.TimeoutSeconds)
 	}
 	return nil
 }

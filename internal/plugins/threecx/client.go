@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -146,7 +147,7 @@ func (c *Client) login(ctx context.Context) (string, time.Duration, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
-		return "", 0, fmt.Errorf("3cx: could not reach %s to sign in: %w", c.root, err)
+		return "", 0, c.explainTransport(err, signingIn)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
@@ -222,7 +223,7 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 		return nil, err
 	}
 	if err := c.limiter.Wait(ctx); err != nil {
-		return nil, fmt.Errorf("3cx: waiting to read %s: %w", path, err)
+		return nil, c.explainTransport(err, "waiting to read "+path)
 	}
 
 	target := c.root + apiPrefix + path
@@ -240,7 +241,7 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 	resp, err := c.http.Do(req)
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
-		return nil, fmt.Errorf("3cx: could not reach %s: %w", c.root, err)
+		return nil, c.explainTransport(err, "reading "+path)
 	}
 	defer resp.Body.Close()
 
@@ -252,7 +253,11 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 	elapsed := c.now().Sub(started)
 	if err != nil {
 		c.observe("error", elapsed)
-		return nil, fmt.Errorf("3cx: reading the response from %s: %w", path, err)
+		// Through the same explanation as a failed Do: the client's timeout
+		// covers the body as well as the headers, and a large page whose
+		// headers arrived and whose body did not is the exact failure this is
+		// about.
+		return nil, c.explainTransport(err, "reading the response from "+path)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized && retryAuth {
@@ -276,6 +281,57 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 	return raw, nil
 }
 
+// explainTransport turns a request that never came back into a sentence.
+//
+// A timeout is the one worth telling apart. On a large installation a wide
+// question genuinely takes longer than the default, and the error a caller saw
+// was "could not reach https://...: context deadline exceeded", which reads as
+// the phone system being down and has nobody reaching for the setting that
+// fixes it.
+func (c *Client) explainTransport(err error, what string) error {
+	var ue *url.Error
+	ours := errors.As(err, &ue) && ue.Timeout()
+	if !ours && !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("3cx: could not reach %s while %s: %w", c.root, what, err)
+	}
+	// Only our own timeout knows what it waited. A deadline set further up --
+	// a caller with less time than this client's setting, or the support
+	// bundle's own -- would otherwise be reported as a wait that never
+	// elapsed, pointing at a setting that would not have helped.
+	waited := "the request ran out of time"
+	if ours {
+		waited = fmt.Sprintf("it did not answer within %s", c.cfg.Timeout())
+	}
+	switch what {
+	case collectingBundle:
+		// No setting to raise: a collection is bounded by the job's own
+		// deadline, and what an operator can do is make the bundle smaller or
+		// take it by hand.
+		return fmt.Errorf("3cx: %s did not finish building and sending its support "+
+			"bundle in time. A system with debug logging or a packet capture running "+
+			"builds a much larger one; turn those off and ask again, or collect it in "+
+			"the 3CX console", c.root)
+	case signingIn:
+		// No rows to ask fewer of, so only the half of the advice that applies.
+		return fmt.Errorf("3cx: %s while signing in: %s. Raise how long to wait for an "+
+			"answer on the mcpd Plugins page if the phone system is simply slow to reach",
+			c.root, waited)
+	}
+	return fmt.Errorf("3cx: %s while %s: %s. A large phone system can take longer than "+
+		"that on a wide question: ask for fewer rows, a shorter time window or one "+
+		"extension, or raise how long to wait for an answer on the mcpd Plugins page",
+		c.root, what, waited)
+}
+
+// The two things this explanation is shared with that are not reads, and where
+// "ask for fewer rows" would be advice about nothing. The bundle has no
+// timeout of its own on the client -- the job's deadline bounds it -- so what
+// it needs said is which phase ran out, not which setting to raise.
+const (
+	signingIn        = "signing in"
+	collectingBundle = "collecting the support bundle"
+)
+
 // page is one OData collection response.
 type page[T any] struct {
 	Count *int `json:"@odata.count"`
@@ -289,17 +345,50 @@ type listing[T any] struct {
 	// Total is the collection's size as the PBX reports it with $count, or -1
 	// when it did not say.
 	Total int
-	// Truncated reports that more rows exist than were fetched.
+	// Truncated reports that the walk stopped short of what the phone system
+	// holds -- for certain when a count was asked for, and otherwise only
+	// because it filled up.
 	Truncated bool
+}
+
+// reason says why a listing stopped short, in the words a caller is given, or
+// nothing when it did not. How sure it is depends on whether a count was asked
+// for, and the difference matters to a model deciding whether to ask again.
+func (l listing[T]) reason() string {
+	switch {
+	case !l.Truncated:
+		return ""
+	case l.Total >= 0:
+		return reasonCount
+	}
+	return reasonMaybeCount
 }
 
 // list walks a collection page by page up to max rows.
 //
 // 3CX refuses any $top above 100, so a phone system with more extensions than
 // that has to be paged through; asking for 500 in one go is a 400 on every
-// site with a real number of phones. $count is asked for on the first page so
-// a listing can say how many there are rather than how many it fetched.
+// site with a real number of phones.
+//
+// It does not ask how many there are. $count=true makes the phone system count
+// the whole collection before it answers the first page, and on a view with
+// millions of rows behind it -- call history on a busy site -- that count is
+// most of the time the request takes, and it timed out queries that would
+// otherwise have returned fifty rows in a second. listCounted is for the two
+// listings that actually report a total.
 func list[T any](ctx context.Context, c *Client, path string, q url.Values, max int) (listing[T], error) {
+	return walk[T](ctx, c, path, q, max, false)
+}
+
+// listCounted walks a collection and asks the phone system how many rows it
+// holds in total, so a listing can say how many there are rather than how many
+// it fetched. Only for a listing that reports the number: the count is paid
+// for on the first page whether or not anything reads it.
+func listCounted[T any](ctx context.Context, c *Client, path string, q url.Values, max int) (listing[T], error) {
+	return walk[T](ctx, c, path, q, max, true)
+}
+
+func walk[T any](ctx context.Context, c *Client, path string, q url.Values, max int, count bool) (listing[T], error) {
 	out := listing[T]{Total: -1}
 	if max <= 0 {
 		max = c.cfg.MaxItems
@@ -309,7 +398,7 @@ func list[T any](ctx context.Context, c *Client, path string, q url.Values, max 
 		want := min(pageSize, max-len(out.Rows))
 		q.Set("$top", fmt.Sprint(want))
 		q.Set("$skip", fmt.Sprint(skip))
-		if skip == 0 {
+		if count && skip == 0 {
 			q.Set("$count", "true")
 		} else {
 			q.Del("$count")
@@ -326,8 +415,8 @@ func list[T any](ctx context.Context, c *Client, path string, q url.Values, max 
 			return out, nil
 		}
 	}
-	// Full up. Whether more exist is known from the count where the PBX gave
-	// one; otherwise one more row would have to be asked for to be sure, and
+	// Full up. Whether more exist is known from the count where one was asked
+	// for; otherwise one more row would have to be asked for to be sure, and
 	// saying "possibly more" honestly is cheaper than another round trip.
 	if out.Total >= 0 {
 		out.Truncated = out.Total > len(out.Rows)
@@ -426,7 +515,7 @@ func (c *Client) downloadBundle(ctx context.Context, dir string, ceiling int64, 
 		return nil, 0, err
 	}
 	if err := c.limiter.Wait(ctx); err != nil {
-		return nil, 0, fmt.Errorf("3cx: waiting to collect the bundle: %w", err)
+		return nil, 0, c.explainTransport(err, collectingBundle)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.root+apiPrefix+"SupportInfo", nil)
 	if err != nil {
@@ -441,7 +530,7 @@ func (c *Client) downloadBundle(ctx context.Context, dir string, ceiling int64, 
 	resp, err := patient.Do(req)
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
-		return nil, 0, fmt.Errorf("3cx: could not reach %s for the bundle: %w", c.root, err)
+		return nil, 0, c.explainTransport(err, collectingBundle)
 	}
 	defer resp.Body.Close()
 
