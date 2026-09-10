@@ -251,3 +251,30 @@ func TestConfig_TimeoutDecodesAsSeconds(t *testing.T) {
 		t.Error("the timeout is not on the settings form, so nobody can raise it")
 	}
 }
+
+// Two customers a caller could not tell apart are refused at the configuration
+// rather than at every call. The resolver ignores case, repeated whitespace
+// and the punctuation a name is written back with, so names differing only in
+// those are one name as far as anybody asking is concerned.
+func TestConfig_NamesTheResolverCannotTellApartAreRefused(t *testing.T) {
+	pairs := [][2]Customer{
+		{{Name: "Acme Inc", Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Acme Inc.", Host: "b.example", Extension: "100", Password: "p"}},
+		{{Name: "Acme Dental", Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Acme  Dental", Host: "b.example", Extension: "100", Password: "p"}},
+		{{Name: "Acme", Aliases: []string{"ADG."}, Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Globex", Aliases: []string{"adg"}, Host: "b.example", Extension: "100", Password: "p"}},
+	}
+	for _, pair := range pairs {
+		cfg := Config{Customers: pair[:], MaxItems: defaultMaxItems, RequestsPerSecond: defaultRPS}
+		err := cfg.Validate()
+		if err == nil {
+			t.Errorf("%q and %q cannot be told apart and should be refused",
+				pair[0].Name, pair[1].Name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "has to point at one customer") {
+			t.Errorf("the refusal should say a name points at one customer, got %v", err)
+		}
+	}
+}

@@ -210,7 +210,11 @@ func (c Config) Validate() error {
 		// A name or alias shared by two customers is a call that cannot be
 		// resolved without guessing, and this integration does not guess.
 		for _, n := range cu.names() {
-			folded := strings.ToLower(n)
+			// The same normalisation the resolver matches with, or a
+			// configuration would be accepted that no call to either customer
+			// could resolve: "Acme Inc" and "Acme Inc." differ here and do not
+			// differ there, which is the ambiguity this check exists to refuse.
+			folded := normaliseName(n)
 			if other, taken := seenName[folded]; taken && other.row != i {
 				return fmt.Errorf("3cx: %q names both %s and %s; a name or alias has to point at one customer", n, other.label, label)
 			}
