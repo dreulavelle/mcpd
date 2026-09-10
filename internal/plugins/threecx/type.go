@@ -3,6 +3,7 @@ package threecx
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/settings"
@@ -65,6 +66,14 @@ func Type() plugins.Type {
 				Kind: settings.KindInt, Default: defaultMaxItems,
 				Min: intPtr(10), Max: intPtr(2000),
 				Help: "A listing stops here and says so.",
+			},
+			{
+				Key: "timeout", Label: "How long to wait for an answer",
+				Kind: settings.KindDuration, Unit: settings.UnitSeconds,
+				Default: int(defaultTimeout / time.Second),
+				Min:     intPtr(minTimeoutSeconds), Max: intPtr(maxTimeoutSeconds),
+				Help: "A large phone system can take longer than the default to answer " +
+					"a wide question. Raise this if listings time out.",
 			},
 			{
 				Key: "requests_per_second", Label: "Requests per second",

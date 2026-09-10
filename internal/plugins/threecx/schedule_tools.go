@@ -50,8 +50,14 @@ type groupRecord struct {
 
 const groupFields = "Id,Name,Number,IsDefault,CurrentGroupHours,TimeZoneId,OverrideExpiresAt,Hours"
 
-func (p *Plugin) readGroups(ctx context.Context, acct *account) ([]groupRecord, error) {
-	q := url.Values{"$select": {groupFields}}
+// departmentFields is the same records with the schedule left off. Naming the
+// department on every row of an extension listing needs the name and nothing
+// else, and Hours carries every opening period of every department -- on a
+// large site that is the bulk of the answer, fetched to be thrown away.
+const departmentFields = "Id,Name,Number,IsDefault"
+
+func (p *Plugin) readGroups(ctx context.Context, acct *account, fields string) ([]groupRecord, error) {
+	q := url.Values{"$select": {fields}}
 	got, err := list[groupRecord](ctx, acct.client, "Groups", q, p.cfg.MaxItems)
 	if err != nil {
 		return nil, err
@@ -131,7 +137,7 @@ func (p *Plugin) getSchedule(ctx context.Context, args scheduleArgs) (Schedule, 
 	if err != nil {
 		return Schedule{}, err
 	}
-	groups, err := p.readGroups(ctx, acct)
+	groups, err := p.readGroups(ctx, acct, groupFields)
 	if err != nil {
 		return Schedule{}, acct.call(err)
 	}

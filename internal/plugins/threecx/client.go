@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -146,7 +147,7 @@ func (c *Client) login(ctx context.Context) (string, time.Duration, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
-		return "", 0, fmt.Errorf("3cx: could not reach %s to sign in: %w", c.root, err)
+		return "", 0, c.explainTransport(err, "signing in")
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
@@ -240,7 +241,7 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 	resp, err := c.http.Do(req)
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
-		return nil, fmt.Errorf("3cx: could not reach %s: %w", c.root, err)
+		return nil, c.explainTransport(err, "reading "+path)
 	}
 	defer resp.Body.Close()
 
@@ -276,6 +277,24 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 	return raw, nil
 }
 
+// explainTransport turns a request that never came back into a sentence.
+//
+// A timeout is the one worth telling apart. On a large installation a wide
+// question genuinely takes longer than the default, and the error a caller saw
+// was "could not reach https://...: context deadline exceeded", which reads as
+// the phone system being down and has nobody reaching for the setting that
+// fixes it.
+func (c *Client) explainTransport(err error, what string) error {
+	var ue *url.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ue) && ue.Timeout()) {
+		return fmt.Errorf("3cx: %s did not answer within %s while %s. A large phone system "+
+			"can take longer than that on a wide question: ask for fewer rows, a shorter "+
+			"time window or one extension, or raise how long to wait for an answer on the "+
+			"mcpd Plugins page", c.root, c.cfg.Timeout(), what)
+	}
+	return fmt.Errorf("3cx: could not reach %s while %s: %w", c.root, what, err)
+}
+
 // page is one OData collection response.
 type page[T any] struct {
 	Count *int `json:"@odata.count"`
@@ -297,9 +316,27 @@ type listing[T any] struct {
 //
 // 3CX refuses any $top above 100, so a phone system with more extensions than
 // that has to be paged through; asking for 500 in one go is a 400 on every
-// site with a real number of phones. $count is asked for on the first page so
-// a listing can say how many there are rather than how many it fetched.
+// site with a real number of phones.
+//
+// It does not ask how many there are. $count=true makes the phone system count
+// the whole collection before it answers the first page, and on a view with
+// millions of rows behind it -- call history on a busy site -- that count is
+// most of the time the request takes, and it timed out queries that would
+// otherwise have returned fifty rows in a second. listCounted is for the two
+// listings that actually report a total.
 func list[T any](ctx context.Context, c *Client, path string, q url.Values, max int) (listing[T], error) {
+	return walk[T](ctx, c, path, q, max, false)
+}
+
+// listCounted walks a collection and asks the phone system how many rows it
+// holds in total, so a listing can say how many there are rather than how many
+// it fetched. Only for a listing that reports the number: the count is paid
+// for on the first page whether or not anything reads it.
+func listCounted[T any](ctx context.Context, c *Client, path string, q url.Values, max int) (listing[T], error) {
+	return walk[T](ctx, c, path, q, max, true)
+}
+
+func walk[T any](ctx context.Context, c *Client, path string, q url.Values, max int, count bool) (listing[T], error) {
 	out := listing[T]{Total: -1}
 	if max <= 0 {
 		max = c.cfg.MaxItems
@@ -309,7 +346,7 @@ func list[T any](ctx context.Context, c *Client, path string, q url.Values, max 
 		want := min(pageSize, max-len(out.Rows))
 		q.Set("$top", fmt.Sprint(want))
 		q.Set("$skip", fmt.Sprint(skip))
-		if skip == 0 {
+		if count && skip == 0 {
 			q.Set("$count", "true")
 		} else {
 			q.Del("$count")
@@ -326,8 +363,8 @@ func list[T any](ctx context.Context, c *Client, path string, q url.Values, max 
 			return out, nil
 		}
 	}
-	// Full up. Whether more exist is known from the count where the PBX gave
-	// one; otherwise one more row would have to be asked for to be sure, and
+	// Full up. Whether more exist is known from the count where one was asked
+	// for; otherwise one more row would have to be asked for to be sure, and
 	// saying "possibly more" honestly is cheaper than another round trip.
 	if out.Total >= 0 {
 		out.Truncated = out.Total > len(out.Rows)

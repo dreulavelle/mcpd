@@ -3,6 +3,7 @@ package threecx
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func oneCustomer(host string) Config {
@@ -69,7 +70,7 @@ func TestConfig_EmptyIsValidAndUnconfigured(t *testing.T) {
 	if cfg.Configured() {
 		t.Error("an empty configuration is not configured")
 	}
-	if cfg.MaxItems != defaultMaxItems || cfg.RequestsPerSecond != defaultRPS || cfg.Timeout != defaultTimeout {
+	if cfg.MaxItems != defaultMaxItems || cfg.RequestsPerSecond != defaultRPS || cfg.Timeout() != defaultTimeout {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}
 }
@@ -186,5 +187,35 @@ func TestConfig_PortsSurviveEverywhere(t *testing.T) {
 	err := try(t, c, "GET", "https://acme.ny.3cx.us/xapi/v1/Users?$select=Id")
 	if err == nil || !strings.Contains(err.Error(), "not the configured phone system") {
 		t.Errorf("a different port is a different system and should be refused, got %v", err)
+	}
+}
+
+// The timeout is an operator's to set, within bounds: a large phone system
+// genuinely takes longer than thirty seconds on a wide question, and the
+// alternative was editing a constant.
+func TestConfig_TimeoutIsSettableWithinBounds(t *testing.T) {
+	base := func(seconds int) Config {
+		return Config{
+			Customers:      []Customer{{Name: "Acme", Host: "acme.example", Extension: "100", Password: "p"}},
+			TimeoutSeconds: seconds, MaxItems: defaultMaxItems, RequestsPerSecond: defaultRPS,
+		}
+	}
+	cfg := base(90)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("90 seconds should be allowed: %v", err)
+	}
+	if cfg.Timeout() != 90*time.Second {
+		t.Errorf("timeout %v, want 90s", cfg.Timeout())
+	}
+	for _, seconds := range []int{1, 600} {
+		if err := base(seconds).Validate(); err == nil {
+			t.Errorf("%d seconds is outside the range and should be refused", seconds)
+		}
+	}
+	// Left alone it is the default, not zero -- a zero timeout on an
+	// http.Client means no timeout at all.
+	var none Config
+	if none.Timeout() != defaultTimeout {
+		t.Errorf("an unset timeout is the default, got %v", none.Timeout())
 	}
 }

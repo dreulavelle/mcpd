@@ -501,7 +501,7 @@ func (p *Plugin) searchDirectory(ctx context.Context, args directoryArgs) (Direc
 		Type   string `json:"Type"`
 		Hidden bool   `json:"Hidden"`
 	}
-	got, err := list[record](ctx, acct.client, "Peers", q, p.limitOf(args.Limit))
+	got, err := listCounted[record](ctx, acct.client, "Peers", q, p.limitOf(args.Limit))
 	if err != nil {
 		return DirectoryResult{}, acct.call(err)
 	}

@@ -139,7 +139,8 @@ func TestClient_NotAPBXIsExplained(t *testing.T) {
 }
 
 // Paging asks for at most 100 at a time, stops at the caller's ceiling, and
-// reports whether more exist from the count the PBX gave.
+// reports whether more exist from the count the PBX gave when one was asked
+// for.
 func TestClient_PagesAtOneHundredAndStopsAtTheCeiling(t *testing.T) {
 	var pages []string
 	srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +165,7 @@ func TestClient_PagesAtOneHundredAndStopsAtTheCeiling(t *testing.T) {
 	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
 
 	type row struct{ Number string }
-	got, err := list[row](context.Background(), firstClient(p), "Users", url.Values{"$select": {"Number"}}, 250)
+	got, err := listCounted[row](context.Background(), firstClient(p), "Users", url.Values{"$select": {"Number"}}, 250)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,5 +178,54 @@ func TestClient_PagesAtOneHundredAndStopsAtTheCeiling(t *testing.T) {
 	want := "100/0/true,100/100/,50/200/"
 	if strings.Join(pages, ",") != want {
 		t.Errorf("pages asked for: %v, want %s", pages, want)
+	}
+
+	// An ordinary listing asks for no count at all. $count=true makes the
+	// phone system count the whole collection before it answers the first
+	// page, and on a view with millions of rows behind it that count is most
+	// of what the request costs -- which is what timed out a search of one
+	// extension's call history on a large system.
+	pages = nil
+	// A count the phone system volunteers anyway is still read; what is
+	// tested here is that none was asked for.
+	plain, err := list[row](context.Background(), firstClient(p), "Users", url.Values{"$select": {"Number"}}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plain.Truncated {
+		t.Error("a listing that filled up with no count says more may exist")
+	}
+	if strings.Join(pages, ",") != "100/0/" {
+		t.Errorf("an ordinary listing should ask for no count, asked: %v", pages)
+	}
+}
+
+// A phone system that does not answer in time says so as a timeout, names how
+// long it waited and says what to do -- rather than reporting "could not reach
+// https://...: context deadline exceeded", which reads as the system being
+// down and leaves the setting that fixes it unmentioned.
+func TestClient_TimeoutSaysWhatToDo(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == loginPath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Status":"AuthSuccess","Token":{"access_token":"` + testToken + `","expires_in":3600}}`))
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	})
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
+	c := firstClient(p)
+	// Sooner than any setting allows, because a test must not wait five
+	// seconds to prove the sentence.
+	c.http.Timeout = 30 * time.Millisecond
+
+	err := c.get(context.Background(), "Users", url.Values{"$select": {"Id"}}, nil)
+	if err == nil {
+		t.Fatal("a phone system that never answers should fail")
+	}
+	for _, want := range []string{"did not answer within", "raise how long to wait", "fewer rows"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the timeout should say %q, got %v", want, err)
+		}
 	}
 }
