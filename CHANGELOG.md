@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.24.1](https://github.com/dreulavelle/mcpd/compare/v0.24.0...v0.24.1) (2026-09-10)
+
+
+### Fixes
+
+* **threecx:** a targeted lookup stays targeted on a large phone system ([#164](https://github.com/dreulavelle/mcpd/issues/164)) ([386194b](https://github.com/dreulavelle/mcpd/commit/386194bd29aa284b4171697f37bcb57a8f7f74e2))
+* **threecx:** an alias works wherever a customer is accepted ([#165](https://github.com/dreulavelle/mcpd/issues/165)) ([d87752b](https://github.com/dreulavelle/mcpd/commit/d87752b26393f570b1aca7abadb1ea0a7aa8bde1))
+* **threecx:** spool the support bundle to disk ([#163](https://github.com/dreulavelle/mcpd/issues/163)) ([55ea344](https://github.com/dreulavelle/mcpd/commit/55ea3448a0d2db8580d99dd069785aa179aac183))
+
+
+### Documentation
+
+* **settings:** say what an Entra app registration needs ([77a06f1](https://github.com/dreulavelle/mcpd/commit/77a06f1c1f51b930d93c7a78430d86b61dc3920f))
+
 ## [0.24.0](https://github.com/dreulavelle/mcpd/compare/v0.23.0...v0.24.0) (2026-09-08)
 
 
