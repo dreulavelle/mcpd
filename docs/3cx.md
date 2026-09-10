@@ -298,11 +298,33 @@ for last.
 
 `aggregate_support_bundle` starts a capture and returns a job at once, because
 a tool call cannot wait minutes. The fetch runs detached with a ten-minute
-ceiling and a hundred-megabyte cap on the zip, which is held in memory -- a
-zip needs random access, and a temporary file of a customer's logs is a thing
-to clean up and eventually fail to. `get_support_bundle_report` reports where
-the job got to and, once done, the digest; a finished digest is kept an hour
-and reused unless `force` is passed.
+ceiling, and the zip is **spooled to a file** under the data volume rather than
+held: bundles from a busy site run to hundreds of megabytes, and the earlier
+hundred-megabyte in-memory cap refused them outright. The file is created in
+`<storage>/tmp` and unlinked immediately, so the handle stays good, the space
+comes back when it closes, and nothing survives the process being killed
+mid-download. The ceiling is now a gigabyte of disk, and a bundle past it is
+refused with what to do about it. It is not spooled to `/tmp`: in the container
+that is a 16 MB tmpfs, which is memory, so it would cost exactly what holding
+it cost.
+
+`get_support_bundle_report` reports where the job got to and, once done, the
+digest; a finished digest is kept an hour and reused unless `force` is passed.
+A running job says which phase it is in -- `generating` while the phone system
+walks its logs, `downloading`, `analysing` -- and how much has landed, because
+"still collecting" for four minutes reads the same as a hang. It reports no
+estimated finish: 3CX exposes no progress of its own for the build, usually
+sends no content length because it writes the zip as it streams it, and an
+invented estimate is the number somebody would plan around. Nothing else is
+held either -- the digest reads the archive an entry at a time, bounds any one
+file at 24 MB, and streams the CSV tables and the capture rather than loading
+them.
+
+**It starts no packet capture.** A timed capture is not in the v20 API (see
+below), so the pcap is in the bundle only if somebody started one in the
+console or one was taken earlier. The tool description says so, because
+"aggregate support bundle" reads to a model as though the capture were part of
+what it does.
 
 The digest comes from the `supportinfo` package beside the plugin, ported from
 an earlier integration: it reads the dozen files that matter and produces the

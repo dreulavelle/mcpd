@@ -1,7 +1,6 @@
 package threecx
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -47,6 +46,16 @@ const (
 	maxRows     = 60
 )
 
+// The phases of a capture. A running job says which one it is in, because
+// they fail for different reasons and take wildly different times: the phone
+// system may spend minutes walking its logs before a byte is sent, and a
+// bundle with a packet capture in it may then spend minutes arriving.
+const (
+	phaseGenerating  = "generating"
+	phaseDownloading = "downloading"
+	phaseAnalysing   = "analysing"
+)
+
 // bundleJob is one capture, running or finished.
 type bundleJob struct {
 	id       string
@@ -54,6 +63,14 @@ type bundleJob struct {
 	finished time.Time
 	err      error
 	report   *supportinfo.Snapshot
+
+	// phase is what a running capture is doing, and got and expected are how
+	// much of the download has landed and how much the phone system said it
+	// was sending -- zero when it did not say, because 3CX builds the zip as
+	// it streams it and often cannot.
+	phase    string
+	got      int64
+	expected int64
 }
 
 // snapshot copies a customer's capture under the lock that guards it.
@@ -96,8 +113,11 @@ func (p *Plugin) registerBundleTools(r *plugins.Registry) {
 		Name:  "aggregate_support_bundle",
 		Title: "Collect a support bundle",
 		Description: "Last resort. Asks the phone system to build its support " +
-			"bundle -- a week of metrics, the packet capture, every service log " +
-			"-- and reads it into a digest of findings. Takes seconds on a small " +
+			"bundle -- a week of metrics, every service log, and the packet " +
+			"capture if somebody already took one in the console -- and reads it " +
+			"into a digest of findings. It starts no capture of its own: 3CX " +
+			"offers no way to over the API, so a capture has to be running or " +
+			"already taken for one to be in the bundle. Takes seconds on a small " +
 			"system and minutes on a large one, so this returns a job at once; " +
 			"poll get_support_bundle_report for the result. Use the ordinary " +
 			"tools first; reach for this when they have not explained a fault.",
@@ -128,7 +148,16 @@ type BundleStatus struct {
 	Customer string `json:"customer"`
 	JobID    string `json:"job_id,omitempty"`
 	// State is none, running, done or failed.
-	State      string `json:"state"`
+	State string `json:"state"`
+	// Phase says which part of a running capture is under way: generating,
+	// while the phone system builds the zip; downloading; or analysing.
+	Phase string `json:"phase,omitempty"`
+	// Progress is how much of the download has landed, in words. The phone
+	// system usually cannot say how large the bundle will be -- it builds the
+	// zip as it sends it -- so this says how much has arrived and only names a
+	// total when there is one. There is no estimate of when it will finish,
+	// because 3CX offers nothing to base one on.
+	Progress   string `json:"progress,omitempty"`
 	StartedAt  string `json:"started_at,omitempty"`
 	FinishedAt string `json:"finished_at,omitempty"`
 	Error      string `json:"error,omitempty"`
@@ -175,24 +204,13 @@ func (p *Plugin) runBundle(acct *account, job *bundleJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), bundleTimeout)
 	defer cancel()
 
-	raw, err := acct.client.fetchBundle(ctx)
-	var report *supportinfo.Snapshot
-	if err == nil {
-		var snap supportinfo.Snapshot
-		snap, err = supportinfo.Read(bytes.NewReader(raw), int64(len(raw)))
-		if err != nil {
-			err = fmt.Errorf("3cx: the bundle could not be read: %w", err)
-		} else {
-			report = &snap
-		}
-	}
-	raw = nil //nolint:ineffassign // let the zip go before the digest is kept
-	_ = raw
+	report, err := p.readBundle(ctx, acct, job)
 
 	acct.bundleMu.Lock()
 	job.finished = time.Now()
 	job.err = err
 	job.report = report
+	job.phase = ""
 	took := job.finished.Sub(job.started)
 	acct.bundleMu.Unlock()
 
@@ -205,12 +223,46 @@ func (p *Plugin) runBundle(acct *account, job *bundleJob) {
 		"findings", len(report.Findings), "files", len(report.Read), "took", took)
 }
 
+// readBundle spools one bundle to disk and reads the digest out of it.
+//
+// The zip is never held in memory: a bundle from a busy site is hundreds of
+// megabytes, the digest is a few kilobytes, and everything in between is read
+// an entry at a time out of the file. The file is gone by the time this
+// returns whichever way it ends.
+func (p *Plugin) readBundle(ctx context.Context, acct *account, job *bundleJob) (*supportinfo.Snapshot, error) {
+	// Written by this goroutine and read by whoever polls the job, so it goes
+	// under the lock that guards every other field of the job.
+	phase := func(name string, got, expected int64) {
+		acct.bundleMu.Lock()
+		job.phase, job.got, job.expected = name, got, expected
+		acct.bundleMu.Unlock()
+	}
+	phase(phaseGenerating, 0, 0)
+
+	f, size, err := acct.client.downloadBundle(ctx, p.deps.Scratch, func(got, expected int64) {
+		phase(phaseDownloading, got, expected)
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer closeSpool(f)
+
+	phase(phaseAnalysing, size, size)
+	snap, err := supportinfo.Read(f, size)
+	if err != nil {
+		return nil, fmt.Errorf("3cx: the bundle could not be read: %w", err)
+	}
+	return &snap, nil
+}
+
 // statusOf renders a capture. It takes a copy rather than the job itself,
 // because the fields are guarded by the account's lock and a pointer would
 // invite reading them without it -- which is the race this used to have.
 func statusOf(customer string, j bundleJob) BundleStatus {
 	st := BundleStatus{Customer: customer, State: j.state()}
 	st.JobID = j.id
+	st.Phase = j.phase
+	st.Progress = progressText(j)
 	st.StartedAt = j.started.UTC().Format(time.RFC3339)
 	if !j.finished.IsZero() {
 		st.FinishedAt = j.finished.UTC().Format(time.RFC3339)
@@ -219,6 +271,41 @@ func statusOf(customer string, j bundleJob) BundleStatus {
 		st.Error = plugins.Explain(j.err).Error()
 	}
 	return st
+}
+
+// progressText says how much of a download has landed, for somebody reading a
+// job rather than a meter. Nothing while the phone system is still building
+// the zip, because zero of an unknown total is not information.
+func progressText(j bundleJob) string {
+	if j.got == 0 {
+		return ""
+	}
+	if j.expected > 0 {
+		return fmt.Sprintf("%s of %s", megabytes(j.got), megabytes(j.expected))
+	}
+	return megabytes(j.got)
+}
+
+func megabytes(n int64) string {
+	return fmt.Sprintf("%.0f MB", float64(n)/(1<<20))
+}
+
+// runningNote is what a caller polling a running capture is told. It says
+// which phase and how long, and never guesses at how much longer: 3CX reports
+// no progress of its own while it builds the zip, and an invented estimate is
+// the thing somebody would plan around.
+func runningNote(j bundleJob) string {
+	elapsed := time.Since(j.started).Round(time.Second)
+	switch j.phase {
+	case phaseDownloading:
+		if p := progressText(j); p != "" {
+			return fmt.Sprintf("downloading the bundle, %s so far after %s; ask again shortly", p, elapsed)
+		}
+		return fmt.Sprintf("downloading the bundle, %s so far; ask again shortly", elapsed)
+	case phaseAnalysing:
+		return fmt.Sprintf("reading the bundle, %s so far; ask again shortly", elapsed)
+	}
+	return fmt.Sprintf("the phone system is building the bundle, %s so far; ask again shortly", elapsed)
 }
 
 // --- reading ----------------------------------------------------------------------
@@ -415,7 +502,7 @@ func (p *Plugin) bundleReport(_ context.Context, args bundleReportArgs) (BundleR
 	out := BundleReport{BundleStatus: statusOf(acct.name, job)}
 	switch job.state() {
 	case "running":
-		out.Note = fmt.Sprintf("still collecting, %s so far; ask again shortly", time.Since(job.started).Round(time.Second))
+		out.Note = runningNote(job)
 		return out, nil
 	case "failed":
 		out.Note = "the capture failed; fix the cause and call aggregate_support_bundle again"

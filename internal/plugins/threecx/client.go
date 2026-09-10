@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -393,28 +394,44 @@ type systemInfo struct {
 }
 
 // maxBundle is the largest support bundle that will be read. Real ones run
-// from a few megabytes to forty; a hundred leaves room for a big site without
-// letting one phone system spend all the memory this process has.
-const maxBundle = 100 << 20
+// from a few megabytes to a few hundred on a busy site with a packet capture
+// in them; a gigabyte is a phone system whose logs are themselves the fault.
+// It is a ceiling on the data volume rather than on memory: the download is
+// spooled to a file.
+// A var rather than a const only so a test can lower it; nothing else writes
+// it.
+var maxBundle int64 = 1 << 30
 
-// fetchBundle downloads a support bundle.
+// progressStep is how much has to land before a download says so again.
+// Progress is read by somebody polling a job, not by a meter, so a few
+// megabytes between updates is plenty and costs one lock instead of one per
+// read.
+const progressStep = 4 << 20
+
+// downloadBundle streams the support bundle to a file in dir and hands the
+// file back, together with its size.
 //
-// The PBX builds the zip on request, walking its logs first, which on a large
-// site takes minutes -- so this ignores the client's ordinary timeout and lets
-// the caller's context bound it. Held in memory rather than spooled to disk: a
-// zip needs random access to be read at all, and a temporary file of
-// somebody's logs is a thing to clean up and eventually fail to.
-func (c *Client) fetchBundle(ctx context.Context) ([]byte, error) {
+// Spooled rather than held. The PBX builds the zip on request, walking its
+// logs first, which on a large site takes minutes -- so this ignores the
+// client's ordinary timeout and lets the caller's context bound it -- and what
+// comes back is hundreds of megabytes on a system with a capture in it. Held
+// in memory that was refused above a hundred megabytes, which is a size a
+// production system reaches without anything being wrong; on disk it is a file
+// the kernel reclaims.
+//
+// progress is called as the download lands, and once with what the phone
+// system said it was sending if it said. The caller closes the file.
+func (c *Client) downloadBundle(ctx context.Context, dir string, progress func(got, expected int64)) (*os.File, int64, error) {
 	token, err := c.bearer(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if err := c.limiter.Wait(ctx); err != nil {
-		return nil, fmt.Errorf("3cx: waiting to collect the bundle: %w", err)
+		return nil, 0, fmt.Errorf("3cx: waiting to collect the bundle: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.root+apiPrefix+"SupportInfo", nil)
 	if err != nil {
-		return nil, fmt.Errorf("3cx: building the bundle request: %w", err)
+		return nil, 0, fmt.Errorf("3cx: building the bundle request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/zip, application/octet-stream")
@@ -425,7 +442,7 @@ func (c *Client) fetchBundle(ctx context.Context) ([]byte, error) {
 	resp, err := patient.Do(req)
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
-		return nil, fmt.Errorf("3cx: could not reach %s for the bundle: %w", c.root, err)
+		return nil, 0, fmt.Errorf("3cx: could not reach %s for the bundle: %w", c.root, err)
 	}
 	defer resp.Body.Close()
 
@@ -433,23 +450,89 @@ func (c *Client) fetchBundle(ctx context.Context) ([]byte, error) {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		c.observe("error", c.now().Sub(started))
 		if resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("3cx: this phone system does not offer a support bundle " +
+			return nil, 0, fmt.Errorf("3cx: this phone system does not offer a support bundle " +
 				"over the API (HTTP 404); it may be an older build than v20")
 		}
-		return nil, explainRequestFailure(resp.StatusCode, "SupportInfo", raw)
+		return nil, 0, explainRequestFailure(resp.StatusCode, "SupportInfo", raw)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBundle+1))
+
+	f, err := spoolFile(dir)
+	if err != nil {
+		c.observe("error", c.now().Sub(started))
+		return nil, 0, err
+	}
+	expected := resp.ContentLength
+	if progress != nil {
+		progress(0, expected)
+	}
+	// One byte past the ceiling, so a bundle that is exactly at it is read and
+	// one over it is refused with the size named rather than silently cut.
+	landed := &counter{w: f, expected: expected, fn: progress}
+	n, err := io.Copy(landed, io.LimitReader(resp.Body, maxBundle+1))
 	elapsed := c.now().Sub(started)
 	if err != nil {
 		c.observe("error", elapsed)
-		return nil, fmt.Errorf("3cx: reading the bundle: %w", err)
+		closeSpool(f)
+		return nil, 0, fmt.Errorf("3cx: reading the bundle: %w", err)
 	}
-	if len(raw) > maxBundle {
+	if n > maxBundle {
 		c.observe("error", elapsed)
-		return nil, fmt.Errorf("3cx: the support bundle is larger than %d MB, which is more "+
-			"than this integration will hold in memory", maxBundle>>20)
+		closeSpool(f)
+		return nil, 0, fmt.Errorf("3cx: the support bundle is larger than %d MB, which is more "+
+			"than this integration will spool to disk. Take a fresh one with the packet "+
+			"capture and the debug logs turned off, or read it in the 3CX console", maxBundle>>20)
+	}
+	if progress != nil {
+		progress(n, expected)
 	}
 	c.observe("ok", elapsed)
-	c.log.DebugContext(ctx, "3cx support bundle collected", "bytes", len(raw), "took", elapsed)
-	return raw, nil
+	c.log.DebugContext(ctx, "3cx support bundle collected", "bytes", n, "took", elapsed)
+	return f, n, nil
+}
+
+// spoolFile opens the file a download lands in.
+//
+// Unlinked as soon as it exists: the handle stays good, and the space goes
+// back when it closes -- including when this process is killed mid-download,
+// which is the case a deferred remove does not cover. On a system that refuses
+// to unlink an open file the name survives and the caller's remove covers it.
+func spoolFile(dir string) (*os.File, error) {
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return nil, fmt.Errorf("3cx: could not open %s to spool the support bundle: %w", dir, err)
+		}
+	}
+	f, err := os.CreateTemp(dir, "threecx-bundle-*.zip")
+	if err != nil {
+		return nil, fmt.Errorf("3cx: could not open a file to spool the support bundle: %w", err)
+	}
+	_ = os.Remove(f.Name())
+	return f, nil
+}
+
+// closeSpool discards a spooled download.
+func closeSpool(f *os.File) {
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+}
+
+// counter is the writer a download lands through, so somebody polling the job
+// can be told how far it has got.
+type counter struct {
+	w        io.Writer
+	fn       func(got, expected int64)
+	expected int64
+	got      int64
+	told     int64
+}
+
+func (c *counter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.got += int64(n)
+	if c.fn != nil && c.got-c.told >= progressStep {
+		c.told = c.got
+		c.fn(c.got, c.expected)
+	}
+	return n, err
 }

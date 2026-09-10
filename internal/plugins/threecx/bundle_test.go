@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,9 @@ func bundlePBX(t *testing.T, zipBody []byte, delay time.Duration) (*Plugin, *fak
 		},
 	}
 	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	// Somewhere of its own to spool to, so a test can prove nothing is left
+	// behind and never writes into the repository.
+	p.deps.Scratch = t.TempDir()
 	return p, f
 }
 
@@ -196,5 +200,105 @@ func TestScrubSecrets_RemovesCredentialValues(t *testing.T) {
 		if got := scrubSecrets(in); got != want {
 			t.Errorf("scrubSecrets(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The bundle is spooled to disk rather than held, so a bundle larger than this
+// process would hold in memory is read -- 0.24.0 refused anything over a
+// hundred megabytes, which a busy site reaches with a packet capture in it --
+// and the spool file is gone whichever way the job ends.
+func TestBundle_SpooledToDiskAndCleanedUp(t *testing.T) {
+	p, _ := bundlePBX(t, bundleZip(t), 0)
+	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	if r := waitForBundle(t, p); r.State != "done" {
+		t.Fatalf("capture: %+v", r)
+	}
+	left, err := os.ReadDir(p.deps.Scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Errorf("the spooled bundle should be gone, found %d files in %s", len(left), p.deps.Scratch)
+	}
+}
+
+// A bundle past the ceiling is refused with a sentence saying what to do about
+// it, and leaves nothing behind. The ceiling is lowered here rather than a
+// gigabyte being generated.
+func TestBundle_PastTheCeilingIsRefused(t *testing.T) {
+	was := maxBundle
+	maxBundle = 64
+	t.Cleanup(func() { maxBundle = was })
+
+	p, _ := bundlePBX(t, bundleZip(t), 0)
+	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	r := waitForBundle(t, p)
+	if r.State != "failed" || !strings.Contains(r.Error, "larger than") {
+		t.Fatalf("an oversized bundle should fail with a reason: %+v", r)
+	}
+	left, _ := os.ReadDir(p.deps.Scratch)
+	if len(left) != 0 {
+		t.Errorf("a refused download should leave nothing behind, found %d files", len(left))
+	}
+}
+
+// A running capture says which phase it is in and how much has landed, because
+// "still collecting" for four minutes is indistinguishable from a hang. It
+// never says when it will finish: 3CX reports nothing to base that on.
+func TestBundle_ReportsItsPhase(t *testing.T) {
+	body := bundleZip(t)
+	f, srv := newFakePBX(t, map[string]string{"SystemStatus": `{"Version":"20.0.9"}`})
+	release := make(chan struct{})
+	f.raw = map[string]func(w http.ResponseWriter){
+		"SupportInfo": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/zip")
+			// Headers, then a pause with the body half sent: the phase a
+			// caller sees in the middle of this is the one being tested.
+			_, _ = w.Write(body[:len(body)/2])
+			if fl, ok := w.(http.Flusher); ok {
+				fl.Flush()
+			}
+			<-release
+			_, _ = w.Write(body[len(body)/2:])
+		},
+	}
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	p.deps.Scratch = t.TempDir()
+
+	ctx := context.Background()
+	if _, err := p.startBundle(ctx, startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	var phases []string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := p.bundleReport(ctx, bundleReportArgs{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Phase != "" {
+			phases = append(phases, r.Phase)
+		}
+		if r.Phase == phaseDownloading {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
+	if len(phases) == 0 {
+		t.Fatal("a running capture should say which phase it is in")
+	}
+	for _, got := range phases {
+		if got != phaseGenerating && got != phaseDownloading && got != phaseAnalysing {
+			t.Errorf("phase %q is not one of the three", got)
+		}
+	}
+	r := waitForBundle(t, p)
+	if r.State != "done" || r.Phase != "" {
+		t.Errorf("a finished capture has no phase: %+v", r)
 	}
 }
