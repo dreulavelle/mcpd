@@ -286,6 +286,7 @@ func (a *App) pluginDeps(name string) plugins.Deps {
 		Events:   newPluginPublisher(a.db, name),
 		Secrets:  newPluginSecrets(a.cfg, name),
 		HTTP:     a.pluginHTTPClient(),
+		Scratch:  a.cfg.ScratchDir(),
 		Now:      time.Now,
 		// Both are the metrics surface, handed over through interfaces narrow
 		// enough that a plugin can report its own cache and its own upstream

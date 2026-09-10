@@ -56,8 +56,10 @@ shape drawn three times -- `components/mark.tsx`, `public/favicon.svg` and
 palette change reaches all three.
 
 The container's data lives in `./data` — one bind mount holding `config.yaml`,
-the database, TLS material, the rotating log in `logs/` and out-of-process
-plugins. It is generated on first start if it is empty, and the container runs
+the database, TLS material, the rotating log in `logs/`, out-of-process
+plugins, and `tmp/`, which is scratch: a plugin with a download too large to
+hold spools it there, unlinked as soon as it is created, and nothing in it is
+ever backed up. It is generated on first start if it is empty, and the container runs
 as the host user's uid so what lands there is yours to read and edit.
 
 It used to be `./.data`, because a distroless image forced the volume to be

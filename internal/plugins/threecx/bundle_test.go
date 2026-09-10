@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +53,9 @@ func bundlePBX(t *testing.T, zipBody []byte, delay time.Duration) (*Plugin, *fak
 		},
 	}
 	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	// Somewhere of its own to spool to, so a test can prove nothing is left
+	// behind and never writes into the repository.
+	p.deps.Scratch = t.TempDir()
 	return p, f
 }
 
@@ -196,5 +202,177 @@ func TestScrubSecrets_RemovesCredentialValues(t *testing.T) {
 		if got := scrubSecrets(in); got != want {
 			t.Errorf("scrubSecrets(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The bundle is spooled to disk rather than held, so a bundle larger than this
+// process would hold in memory is read -- 0.24.0 refused anything over a
+// hundred megabytes, which a busy site reaches with a packet capture in it --
+// and the spool file is gone whichever way the job ends.
+func TestBundle_SpooledToDiskAndCleanedUp(t *testing.T) {
+	p, _ := bundlePBX(t, bundleZip(t), 0)
+	before := openSpools(t)
+	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	if r := waitForBundle(t, p); r.State != "done" {
+		t.Fatalf("capture: %+v", r)
+	}
+	if left, err := os.ReadDir(p.deps.Scratch); err == nil && len(left) != 0 {
+		t.Errorf("the spooled bundle should be gone, found %d files in %s", len(left), p.deps.Scratch)
+	}
+	if after := openSpools(t); after > before {
+		t.Errorf("the spool file should be closed: %d open before the job, %d after", before, after)
+	}
+}
+
+// openSpools counts the descriptors this process still holds on a spooled
+// bundle. That is the fact worth defending: the file is unlinked the moment it
+// is created, so an empty directory proves nothing, while a descriptor left
+// open holds the whole gigabyte until the process ends. Linux only -- the
+// check is skipped elsewhere rather than the test being.
+func openSpools(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return 0
+	}
+	open := 0
+	for _, e := range entries {
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
+		if err == nil && strings.Contains(target, "threecx-bundle-") {
+			open++
+		}
+	}
+	return open
+}
+
+// A bundle past the ceiling is refused with a sentence saying what to do about
+// it, and leaves nothing behind. The ceiling is lowered here rather than a
+// gigabyte being generated.
+func TestBundle_PastTheCeilingIsRefused(t *testing.T) {
+	p, _ := bundlePBX(t, bundleZip(t), 0)
+	p.bundleCeiling = 64
+	before := openSpools(t)
+	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	r := waitForBundle(t, p)
+	if r.State != "failed" || !strings.Contains(r.Error, "larger than") {
+		t.Fatalf("an oversized bundle should fail with a reason: %+v", r)
+	}
+	if left, _ := os.ReadDir(p.deps.Scratch); len(left) != 0 {
+		t.Errorf("a refused download should leave nothing behind, found %d files", len(left))
+	}
+	if after := openSpools(t); after > before {
+		t.Errorf("a refused download should close its spool file: %d open before, %d after", before, after)
+	}
+}
+
+// A bundle the phone system says up front is too large is refused before any
+// of it is spooled.
+func TestBundle_RefusedOnTheLengthItAnnounces(t *testing.T) {
+	body := bundleZip(t)
+	f, srv := newFakePBX(t, map[string]string{"SystemStatus": `{"Version":"20.0.9"}`})
+	f.raw = map[string]func(w http.ResponseWriter){
+		"SupportInfo": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/zip")
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			_, _ = w.Write(body)
+		},
+	}
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	p.deps.Scratch = t.TempDir()
+	p.bundleCeiling = 8
+
+	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	r := waitForBundle(t, p)
+	if r.State != "failed" || !strings.Contains(r.Error, "larger than") {
+		t.Fatalf("an announced size past the ceiling should be refused: %+v", r)
+	}
+	if left, _ := os.ReadDir(p.deps.Scratch); len(left) != 0 {
+		t.Errorf("nothing should have been spooled, found %d files", len(left))
+	}
+}
+
+// A disk that cannot be written says so, and says it about this host rather
+// than about the phone system.
+func TestBundle_DiskFailureNamesTheDisk(t *testing.T) {
+	p, _ := bundlePBX(t, bundleZip(t), 0)
+	// A file where the directory should be: every create in it fails.
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.deps.Scratch = blocked
+
+	if _, err := p.startBundle(context.Background(), startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	r := waitForBundle(t, p)
+	if r.State != "failed" {
+		t.Fatalf("a spool that cannot be opened should fail the job: %+v", r)
+	}
+	if !strings.Contains(r.Error, blocked) {
+		t.Errorf("the failure should name the directory it could not use: %q", r.Error)
+	}
+}
+
+// A running capture says which phase it is in and how much has landed, because
+// "still collecting" for four minutes is indistinguishable from a hang. It
+// never says when it will finish: 3CX reports nothing to base that on.
+func TestBundle_ReportsItsPhase(t *testing.T) {
+	body := bundleZip(t)
+	f, srv := newFakePBX(t, map[string]string{"SystemStatus": `{"Version":"20.0.9"}`})
+	release := make(chan struct{})
+	f.raw = map[string]func(w http.ResponseWriter){
+		"SupportInfo": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/zip")
+			// Headers, then a pause with the body half sent: the phase a
+			// caller sees in the middle of this is the one being tested.
+			_, _ = w.Write(body[:len(body)/2])
+			if fl, ok := w.(http.Flusher); ok {
+				fl.Flush()
+			}
+			<-release
+			_, _ = w.Write(body[len(body)/2:])
+		},
+	}
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	p.deps.Scratch = t.TempDir()
+
+	ctx := context.Background()
+	if _, err := p.startBundle(ctx, startBundleArgs{}); err != nil {
+		t.Fatal(err)
+	}
+	var phases []string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := p.bundleReport(ctx, bundleReportArgs{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Phase != "" {
+			phases = append(phases, r.Phase)
+		}
+		if r.Phase == phaseDownloading {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
+	if len(phases) == 0 {
+		t.Fatal("a running capture should say which phase it is in")
+	}
+	for _, got := range phases {
+		if got != phaseGenerating && got != phaseDownloading && got != phaseAnalysing {
+			t.Errorf("phase %q is not one of the three", got)
+		}
+	}
+	r := waitForBundle(t, p)
+	if r.State != "done" || r.Phase != "" {
+		t.Errorf("a finished capture has no phase: %+v", r)
 	}
 }

@@ -278,6 +278,11 @@ type Deps struct {
 	HTTP *http.Client
 	// Now is injectable so plugins can be tested deterministically.
 	Now func() time.Time
+	// Scratch is a directory on disk a plugin may spool a large download to.
+	// It is shared, so a plugin names its own files and removes them; empty
+	// means the operating system's temporary directory, which in the
+	// container is a small tmpfs and therefore memory.
+	Scratch string
 	// Cache records what a plugin's own read cache did. Nil is allowed and is
 	// what a host with no metrics endpoint supplies.
 	Cache CacheObserver

@@ -147,6 +147,16 @@ func (c *Config) PluginsDir() string {
 	return filepath.Join(c.StorageDir(), "plugins")
 }
 
+// ScratchDir is where a plugin may spool something too large to hold.
+//
+// On the data volume rather than in /tmp: the container's /tmp is a small
+// tmpfs, which is memory, so spooling a 500 MB download there costs exactly
+// what holding it in memory costs. This is disk, and it is the one place a
+// container is allowed to write.
+func (c *Config) ScratchDir() string {
+	return filepath.Join(c.StorageDir(), "tmp")
+}
+
 // LogDir is where mcpd writes its own log files.
 //
 // Beside the database rather than inside the image, for the reason the data

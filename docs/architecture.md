@@ -2046,7 +2046,10 @@ dropped except `CAP_NET_BIND_SERVICE`, and a syscall filter.
 ### The container
 
 **One mount, and it is generated.** `./data` holds `config.yaml`, the database,
-TLS material and out-of-process plugins. `docker compose up` against an empty
+TLS material, out-of-process plugins, and `tmp` -- scratch, where a plugin
+spools something too large to hold, such as a 3CX support bundle. Nothing in
+`tmp` is worth backing up: every file in it is unlinked as soon as it is
+created and belongs to a job that is still running. `docker compose up` against an empty
 directory produces a working host: the entrypoint runs `mcpd -init` when there
 is no config, which writes the file and generates a bearer token and the key
 that encrypts stored credentials.
