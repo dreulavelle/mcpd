@@ -195,7 +195,7 @@ func (p *Plugin) listTrunks(ctx context.Context, args trunksArgs) (TrunksResult,
 		}
 		out.Trunks = append(out.Trunks, row)
 	}
-	out.Trunks, out.truncation = bound(out.Trunks, false)
+	out.Trunks, out.truncation = bound(out.Trunks, "")
 	out.Returned = len(out.Trunks)
 	acct.note(nil)
 	out.Customer = acct.name
@@ -323,7 +323,13 @@ func (p *Plugin) listInboundRules(ctx context.Context, args inboundRulesArgs) (I
 		}
 		return out.Rules[a].DID < out.Rules[b].DID
 	})
-	out.Rules, out.truncation = bound(out.Rules, truncated)
+	// Certain, not a guess: this listing filters here and stopped with rules
+	// still to read, so there are more.
+	cut := ""
+	if truncated {
+		cut = reasonCount
+	}
+	out.Rules, out.truncation = bound(out.Rules, cut)
 	out.Returned = len(out.Rules)
 	acct.note(nil)
 	out.Customer = acct.name
@@ -433,7 +439,7 @@ func (p *Plugin) listOutboundRules(ctx context.Context, args outboundRulesArgs) 
 		}
 		out.Rules = append(out.Rules, row)
 	}
-	out.Rules, out.truncation = bound(out.Rules, got.Truncated)
+	out.Rules, out.truncation = bound(out.Rules, got.reason())
 	out.Returned = len(out.Rules)
 	acct.note(nil)
 	out.Customer = acct.name
@@ -512,7 +518,7 @@ func (p *Plugin) searchDirectory(ctx context.Context, args directoryArgs) (Direc
 	if out.Total < 0 {
 		out.Total = len(out.Entries)
 	}
-	out.Entries, out.truncation = bound(out.Entries, got.Truncated)
+	out.Entries, out.truncation = bound(out.Entries, got.reason())
 	out.Returned = len(out.Entries)
 	acct.note(nil)
 	out.Customer = acct.name

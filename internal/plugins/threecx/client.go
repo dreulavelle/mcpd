@@ -147,7 +147,7 @@ func (c *Client) login(ctx context.Context) (string, time.Duration, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		c.observe("error", c.now().Sub(started))
-		return "", 0, c.explainTransport(err, "signing in")
+		return "", 0, c.explainTransport(err, signingIn)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
@@ -223,7 +223,7 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 		return nil, err
 	}
 	if err := c.limiter.Wait(ctx); err != nil {
-		return nil, fmt.Errorf("3cx: waiting to read %s: %w", path, err)
+		return nil, c.explainTransport(err, "waiting to read "+path)
 	}
 
 	target := c.root + apiPrefix + path
@@ -253,7 +253,11 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 	elapsed := c.now().Sub(started)
 	if err != nil {
 		c.observe("error", elapsed)
-		return nil, fmt.Errorf("3cx: reading the response from %s: %w", path, err)
+		// Through the same explanation as a failed Do: the client's timeout
+		// covers the body as well as the headers, and a large page whose
+		// headers arrived and whose body did not is the exact failure this is
+		// about.
+		return nil, c.explainTransport(err, "reading the response from "+path)
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized && retryAuth {
@@ -286,14 +290,32 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 // fixes it.
 func (c *Client) explainTransport(err error, what string) error {
 	var ue *url.Error
-	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ue) && ue.Timeout()) {
-		return fmt.Errorf("3cx: %s did not answer within %s while %s. A large phone system "+
-			"can take longer than that on a wide question: ask for fewer rows, a shorter "+
-			"time window or one extension, or raise how long to wait for an answer on the "+
-			"mcpd Plugins page", c.root, c.cfg.Timeout(), what)
+	ours := errors.As(err, &ue) && ue.Timeout()
+	if !ours && !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("3cx: could not reach %s while %s: %w", c.root, what, err)
 	}
-	return fmt.Errorf("3cx: could not reach %s while %s: %w", c.root, what, err)
+	// Only our own timeout knows what it waited. A deadline set further up --
+	// a caller with less time than this client's setting -- would otherwise be
+	// reported as a wait that never elapsed, pointing at a setting that would
+	// not have helped.
+	waited := "the request ran out of time"
+	if ours {
+		waited = fmt.Sprintf("it did not answer within %s", c.cfg.Timeout())
+	}
+	if what == signingIn {
+		return fmt.Errorf("3cx: %s while signing in: %s. Raise how long to wait for an "+
+			"answer on the mcpd Plugins page if the phone system is simply slow to reach",
+			c.root, waited)
+	}
+	return fmt.Errorf("3cx: %s while %s: %s. A large phone system can take longer than "+
+		"that on a wide question: ask for fewer rows, a shorter time window or one "+
+		"extension, or raise how long to wait for an answer on the mcpd Plugins page",
+		c.root, what, waited)
 }
+
+// signingIn is the one non-read this explanation is shared with, and the one
+// where "ask for fewer rows" is advice about nothing.
+const signingIn = "signing in"
 
 // page is one OData collection response.
 type page[T any] struct {
@@ -308,8 +330,23 @@ type listing[T any] struct {
 	// Total is the collection's size as the PBX reports it with $count, or -1
 	// when it did not say.
 	Total int
-	// Truncated reports that more rows exist than were fetched.
+	// Truncated reports that the walk stopped short of what the phone system
+	// holds -- for certain when a count was asked for, and otherwise only
+	// because it filled up.
 	Truncated bool
+}
+
+// reason says why a listing stopped short, in the words a caller is given, or
+// nothing when it did not. How sure it is depends on whether a count was asked
+// for, and the difference matters to a model deciding whether to ask again.
+func (l listing[T]) reason() string {
+	switch {
+	case !l.Truncated:
+		return ""
+	case l.Total >= 0:
+		return reasonCount
+	}
+	return reasonMaybeCount
 }
 
 // list walks a collection page by page up to max rows.

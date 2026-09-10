@@ -219,3 +219,35 @@ func TestConfig_TimeoutIsSettableWithinBounds(t *testing.T) {
 		t.Errorf("an unset timeout is the default, got %v", none.Timeout())
 	}
 }
+
+// The timeout arrives from the settings store as whole seconds, and the field
+// it lands in has to be an int for that reason: decoded into a time.Duration,
+// a 45 would be forty-five nanoseconds, every request would fail instantly,
+// and nothing would refuse to compile.
+func TestConfig_TimeoutDecodesAsSeconds(t *testing.T) {
+	var c Config
+	if err := decode(map[string]any{"timeout": 45}, &c); err != nil {
+		t.Fatal(err)
+	}
+	c.withDefaults()
+	if c.TimeoutSeconds != 45 || c.Timeout() != 45*time.Second {
+		t.Errorf("a stored timeout of 45 is forty-five seconds, got %d / %v", c.TimeoutSeconds, c.Timeout())
+	}
+	// And the field the dashboard writes is the field the plugin reads: the
+	// settings declaration has to name the same key.
+	found := false
+	for _, f := range Type().Settings {
+		if f.Key == "timeout" {
+			found = true
+			if f.Default != int(defaultTimeout/time.Second) {
+				t.Errorf("the form's default should be the plugin's, got %v", f.Default)
+			}
+			if f.Min == nil || *f.Min != minTimeoutSeconds || f.Max == nil || *f.Max != maxTimeoutSeconds {
+				t.Errorf("the form's range should be what Validate enforces, got %v-%v", f.Min, f.Max)
+			}
+		}
+	}
+	if !found {
+		t.Error("the timeout is not on the settings form, so nobody can raise it")
+	}
+}

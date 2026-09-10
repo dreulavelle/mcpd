@@ -175,7 +175,7 @@ func (p *Plugin) searchCallHistory(ctx context.Context, args callHistoryArgs) (C
 		}
 		out.Calls = append(out.Calls, row)
 	}
-	out.Calls, out.truncation = bound(out.Calls, got.Truncated)
+	out.Calls, out.truncation = bound(out.Calls, got.reason())
 	out.Returned = len(out.Calls)
 	acct.note(nil)
 	out.Customer = acct.name

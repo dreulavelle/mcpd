@@ -168,7 +168,7 @@ func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (Exten
 	if out.Total < 0 {
 		out.Total = len(out.Extensions)
 	}
-	out.Extensions, out.truncation = bound(out.Extensions, got.Truncated)
+	out.Extensions, out.truncation = bound(out.Extensions, got.reason())
 	out.Returned = len(out.Extensions)
 	acct.note(nil)
 	out.Customer = acct.name
@@ -600,7 +600,7 @@ func (p *Plugin) listDevices(ctx context.Context, args devicesArgs) (DevicesResu
 		}
 		out.Devices = append(out.Devices, row)
 	}
-	out.Devices, out.truncation = bound(out.Devices, got.Truncated)
+	out.Devices, out.truncation = bound(out.Devices, got.reason())
 	out.Returned = len(out.Devices)
 	acct.note(nil)
 	out.Customer = acct.name

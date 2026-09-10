@@ -374,7 +374,7 @@ func (p *Plugin) listActiveCalls(ctx context.Context, args activeCallsArgs) (Act
 			Established: c.EstablishedAt, LastChange: c.LastChangeStatus,
 		})
 	}
-	rows, cut := bound(rows, got.Truncated)
+	rows, cut := bound(rows, got.reason())
 	acct.note(nil)
 	return ActiveCallsResult{Customer: acct.name, Calls: rows, Returned: len(rows), truncation: cut}, nil
 }
@@ -479,7 +479,7 @@ func (p *Plugin) searchEvents(ctx context.Context, args eventsArgs) (EventsResul
 			Message: fillTemplate(e.Message, e.Params),
 		})
 	}
-	rows, cut := bound(rows, got.Truncated)
+	rows, cut := bound(rows, got.reason())
 	acct.note(nil)
 	return EventsResult{Customer: acct.name, Events: rows, Returned: len(rows), truncation: cut}, nil
 }

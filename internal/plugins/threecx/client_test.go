@@ -192,11 +192,48 @@ func TestClient_PagesAtOneHundredAndStopsAtTheCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !plain.Truncated {
-		t.Error("a listing that filled up with no count says more may exist")
-	}
 	if strings.Join(pages, ",") != "100/0/" {
 		t.Errorf("an ordinary listing should ask for no count, asked: %v", pages)
+	}
+	if plain.reason() != reasonCount {
+		t.Errorf("a listing the PBX volunteered a count for knows there are more, got %q", plain.reason())
+	}
+}
+
+// Without a count, a listing that filled up says the phone system *may* hold
+// more rather than that it does. Fifty calls asked for and fifty returned is
+// as likely to be all of them, and a model told there are more narrows and
+// asks again for an answer it already had.
+func TestClient_UncountedListingSaysMayHoldMore(t *testing.T) {
+	srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == loginPath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Status":"AuthSuccess","Token":{"access_token":"` + testToken + `","expires_in":3600}}`))
+			return
+		}
+		rows := make([]string, 50)
+		for i := range rows {
+			rows[i] = `{"Number":"x"}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// No @odata.count: what a phone system sends when none was asked for.
+		_, _ = w.Write([]byte(`{"value":[` + strings.Join(rows, ",") + `]}`))
+	})
+	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
+
+	type row struct{ Number string }
+	got, err := list[row](context.Background(), firstClient(p), "Users", url.Values{"$select": {"Number"}}, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != -1 {
+		t.Errorf("no count was given, so there is no total, got %d", got.Total)
+	}
+	if !got.Truncated {
+		t.Error("a walk that filled its ceiling stopped short as far as it knows")
+	}
+	if got.reason() != reasonMaybeCount {
+		t.Errorf("the reason should be the uncertain one, got %q", got.reason())
 	}
 }
 

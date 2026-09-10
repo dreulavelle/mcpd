@@ -217,8 +217,11 @@ that count is most of what the request costs. Asking for it on every listing is
 what made a search of one extension's calls time out on a large site while the
 same search on a small one returned in a second. Two listings report a total
 and ask for one (`list_extensions`, `search_directory`); the rest use `list`,
-which asks for none and says "possibly more" when it fills up. A count the PBX
-volunteers anyway is still read.
+which asks for none. What that costs is the certainty in the truncation note: a
+counted listing says the phone system holds more, an uncounted one says it *may*
+hold more, because fifty asked for and fifty returned is as likely to be all of
+them. A count the PBX volunteers anyway is still read, and the note is exact
+again when it does.
 
 Targeted reads stay targeted. One extension is `$filter=Number eq '...'` with
 `$top=1` rather than a walk; a call history search pushes the extension, the
