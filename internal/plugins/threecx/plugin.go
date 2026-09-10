@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -193,10 +194,32 @@ func (a *account) call(err error) error {
 	return err
 }
 
+// normaliseName is the form two names are compared in: folded to lower case,
+// trimmed, with runs of whitespace collapsed to one space and the punctuation
+// a sentence leaves on a name taken off the ends.
+//
+// An assistant repeating a name back does not always repeat it exactly: it
+// arrives quoted, with a trailing full stop, or with the double space somebody
+// typed into the settings form. None of those is a different customer, and
+// refusing them sends the model round again with the long form -- which is the
+// behaviour #157 reported. Nothing here loosens what counts as a match beyond
+// that: two different names still do not meet.
+func normaliseName(s string) string {
+	s = strings.TrimFunc(strings.ToLower(s), func(r rune) bool {
+		switch r {
+		case '"', '\'', '`', '.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '“', '”', '‘', '’':
+			return true
+		}
+		return unicode.IsSpace(r)
+	})
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // resolve finds the customer a call is about.
 //
 // The rule is that this never guesses. An exact match on the name or an alias
-// wins, folding case. Failing that, a name that is contained in exactly one
+// wins, folding case, collapsing whitespace and ignoring the punctuation a
+// sentence leaves on a name. Failing that, a name that is contained in exactly one
 // customer's name or alias is taken -- "acme" for "Acme Dental Group" -- but a
 // name contained in two is refused with both, because picking the first of two
 // customers is how a technician reads one business's phone system while
@@ -218,15 +241,15 @@ func (p *Plugin) resolve(asked string) (*account, error) {
 			"customer: %s. list_customers has each one's aliases", len(p.accounts), p.knownCustomers())
 	}
 
-	folded := strings.ToLower(asked)
+	folded := normaliseName(asked)
 	var exact, partial []*account
 	for _, a := range p.accounts {
 		matched, contained := false, false
 		for _, n := range append([]string{a.name}, a.aliases...) {
-			fn := strings.ToLower(n)
+			fn := normaliseName(n)
 			if fn == folded {
 				matched = true
-			} else if strings.Contains(fn, folded) {
+			} else if folded != "" && strings.Contains(fn, folded) {
 				contained = true
 			}
 		}
@@ -253,9 +276,10 @@ func (p *Plugin) resolve(asked string) (*account, error) {
 	// the nearest of the configured customers would answer confidently about
 	// somebody else's phone system.
 	return nil, fmt.Errorf("no customer here is called %q. This instance (%s) serves %s. "+
-		"If %s should be here, somebody has to add it on the mcpd Plugins page, "+
-		"under %s, Customers -- with the phone system's address and a system owner "+
-		"extension. Tell the person that rather than reading one of the others",
+		"Any of those names works, including the ones in brackets. If %s should be "+
+		"here, somebody has to add it on the mcpd Plugins page, under %s, Customers "+
+		"-- with the phone system's address and a system owner extension. Tell the "+
+		"person that rather than reading one of the others",
 		asked, p.instance(), p.knownCustomers(), asked, p.instance())
 }
 
@@ -287,14 +311,26 @@ func (p *Plugin) customerNames() []string {
 // buries the sentence saying what to do.
 const namesInAMessage = 10
 
-// knownCustomers renders the configured customers for a message, bounded.
+// knownCustomers renders the configured customers for a message, bounded, each
+// with the aliases it also answers to.
+//
+// The aliases are named because leaving them out is what sends a model back
+// with the long form of a name it had a short one for: a message listing only
+// "Acme Dental Group" reads as though "ADG" was never going to work.
 func (p *Plugin) knownCustomers() string {
-	names := p.customerNames()
-	if len(names) <= namesInAMessage {
-		return strings.Join(names, ", ")
+	shown := make([]string, 0, len(p.accounts))
+	for i, a := range p.accounts {
+		if i == namesInAMessage {
+			return fmt.Sprintf("%s and %d more (list_customers has them all)",
+				strings.Join(shown, ", "), len(p.accounts)-namesInAMessage)
+		}
+		if len(a.aliases) == 0 {
+			shown = append(shown, a.name)
+			continue
+		}
+		shown = append(shown, fmt.Sprintf("%s (%s)", a.name, strings.Join(a.aliases, ", ")))
 	}
-	return fmt.Sprintf("%s and %d more (list_customers has them all)",
-		strings.Join(names[:namesInAMessage], ", "), len(names)-namesInAMessage)
+	return strings.Join(shown, ", ")
 }
 
 // instance is what this plugin is configured under, which is what somebody

@@ -3,8 +3,12 @@ package threecx
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/spoked/mcpd/internal/plugins"
 )
 
 // twoCustomers builds a plugin over two fake phone systems that answer with
@@ -91,8 +95,12 @@ func TestResolve_NeverGuesses(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown customer must be refused")
 	}
+	// Each customer is named with the aliases it also answers to: a message
+	// listing only the long form is what sends a model back with the long form
+	// of a name it had a short one for.
 	for _, want := range []string{
-		`no customer here is called "Initech"`, "Acme Dental Group, Globex Roofing",
+		`no customer here is called "Initech"`,
+		"Acme Dental Group (acme, ADG, Acme Roof Care), Globex Roofing (globex)",
 		"add it on the mcpd Plugins page", "Customers", "rather than reading one of the others",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -246,6 +254,204 @@ func TestResolve_NoCustomersPointsAtThePluginsPage(t *testing.T) {
 	for _, want := range []string{"has no customers yet", "mcpd Plugins page", "system owner extension"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("should say %q, got %v", want, err)
+		}
+	}
+}
+
+// Every tool that takes a customer resolves an alias, and resolves it to the
+// same phone system the canonical name reaches.
+//
+// This is the guarantee #157 asked for, mechanised: an alias `list_customers`
+// reports has to work everywhere a customer is accepted, and one tool
+// resolving customers its own way is the shape of bug that produces "it
+// worked, then it did not". The table is checked against the registry below,
+// so a tool added without a line here fails rather than going untested.
+func TestResolve_EveryToolAcceptsAnAlias(t *testing.T) {
+	calls := map[string]func(*Plugin, string) error{
+		"list_extensions": func(p *Plugin, c string) error {
+			_, err := p.listExtensions(context.Background(), extensionsArgs{Customer: c})
+			return err
+		},
+		"get_extension": func(p *Plugin, c string) error {
+			_, err := p.getExtension(context.Background(), extensionArgs{Customer: c, Extension: "100"})
+			return err
+		},
+		"list_devices": func(p *Plugin, c string) error {
+			_, err := p.listDevices(context.Background(), devicesArgs{Customer: c})
+			return err
+		},
+		"list_trunks": func(p *Plugin, c string) error {
+			_, err := p.listTrunks(context.Background(), trunksArgs{Customer: c})
+			return err
+		},
+		"list_inbound_rules": func(p *Plugin, c string) error {
+			_, err := p.listInboundRules(context.Background(), inboundRulesArgs{Customer: c})
+			return err
+		},
+		"list_outbound_rules": func(p *Plugin, c string) error {
+			_, err := p.listOutboundRules(context.Background(), outboundRulesArgs{Customer: c})
+			return err
+		},
+		"search_directory": func(p *Plugin, c string) error {
+			_, err := p.searchDirectory(context.Background(), directoryArgs{Customer: c})
+			return err
+		},
+		"list_ring_groups": func(p *Plugin, c string) error {
+			_, err := p.listRingGroups(context.Background(), ringGroupsArgs{Customer: c})
+			return err
+		},
+		"list_queues": func(p *Plugin, c string) error {
+			_, err := p.listQueues(context.Background(), queuesArgs{Customer: c})
+			return err
+		},
+		"list_receptionists": func(p *Plugin, c string) error {
+			_, err := p.listReceptionists(context.Background(), receptionistsArgs{Customer: c})
+			return err
+		},
+		"get_schedule": func(p *Plugin, c string) error {
+			_, err := p.getSchedule(context.Background(), scheduleArgs{Customer: c})
+			return err
+		},
+		"get_system_status": func(p *Plugin, c string) error {
+			_, err := p.getSystemStatus(context.Background(), statusArgs{Customer: c})
+			return err
+		},
+		"list_services": func(p *Plugin, c string) error {
+			_, err := p.listServices(context.Background(), servicesArgs{Customer: c})
+			return err
+		},
+		"list_active_calls": func(p *Plugin, c string) error {
+			_, err := p.listActiveCalls(context.Background(), activeCallsArgs{Customer: c})
+			return err
+		},
+		"search_events": func(p *Plugin, c string) error {
+			_, err := p.searchEvents(context.Background(), eventsArgs{Customer: c})
+			return err
+		},
+		"list_blocked": func(p *Plugin, c string) error {
+			_, err := p.listBlocked(context.Background(), blockedArgs{Customer: c})
+			return err
+		},
+		"list_sbcs": func(p *Plugin, c string) error {
+			_, err := p.listSBCs(context.Background(), sbcArgs{Customer: c})
+			return err
+		},
+		"search_call_history": func(p *Plugin, c string) error {
+			_, err := p.searchCallHistory(context.Background(), callHistoryArgs{Customer: c})
+			return err
+		},
+		"get_support_bundle_report": func(p *Plugin, c string) error {
+			_, err := p.bundleReport(context.Background(), bundleReportArgs{Customer: c})
+			return err
+		},
+	}
+
+	// Registered but not called here: list_customers takes no customer, and
+	// aggregate_support_bundle asks the phone system to build its support
+	// bundle, which is not a thing to start twenty times in a unit test. Its
+	// resolution is covered in bundle_test.go.
+	exempt := map[string]bool{"list_customers": true, "aggregate_support_bundle": true}
+
+	m := plugins.NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)), "test", nil, nil, nil, nil)
+	p, acme, globex := twoOpenCustomers(t)
+	if err := m.Register(context.Background(), p, "threecx", false); err != nil {
+		t.Fatalf("registering the plugin: %v", err)
+	}
+	mounted := m.Lookup("threecx")
+	if mounted == nil {
+		t.Fatal("the plugin did not mount")
+	}
+	for _, name := range mounted.Registry.ToolNames() {
+		bare := strings.TrimPrefix(name, "threecx_")
+		if _, covered := calls[bare]; !covered && !exempt[bare] {
+			t.Errorf("%s takes a customer and is not in this table; every tool that "+
+				"accepts one has to resolve an alias the same way", bare)
+		}
+	}
+
+	// Both spellings of the same customer, and one of another, so a tool that
+	// resolved differently would reach the wrong phone system rather than
+	// merely failing.
+	for _, asked := range []string{"Acme Dental Group", "ADG", "adg", " acme ", "dental"} {
+		for name, call := range calls {
+			acme.reads.Store(0)
+			globex.reads.Store(0)
+			err := call(p, asked)
+			if err != nil && isResolution(err) {
+				t.Errorf("%s with customer %q: %v", name, asked, err)
+				continue
+			}
+			if globex.reads.Load() != 0 {
+				t.Errorf("%s with customer %q reached the wrong customer's phone system", name, asked)
+			}
+			if acme.reads.Load() == 0 && err != nil {
+				t.Errorf("%s with customer %q reached no phone system: %v", name, asked, err)
+			}
+		}
+	}
+}
+
+// isResolution reports whether an error is the resolver refusing the customer,
+// rather than the phone system answering badly.
+func isResolution(err error) bool {
+	text := err.Error()
+	return strings.Contains(text, "no customer here is called") ||
+		strings.Contains(text, "is ambiguous") ||
+		strings.Contains(text, "say which one with customer")
+}
+
+// twoOpenCustomers is twoCustomers with both phone systems answering anything
+// asked of them, so a test can be about which one a call reached. The rate
+// limit is lifted: this one makes a hundred calls, and five a second would
+// make it a twenty-second test about nothing it is testing.
+func twoOpenCustomers(t *testing.T) (*Plugin, *fakePBX, *fakePBX) {
+	t.Helper()
+	acme, acmeSrv := newFakePBX(t, map[string]string{})
+	globex, globexSrv := newFakePBX(t, map[string]string{})
+	acme.anything, globex.anything = true, true
+	p, err := New(testDeps(), Config{
+		RequestsPerSecond: 1000,
+		Customers: []Customer{
+			{Name: "Acme Dental Group", Aliases: []string{"acme", "ADG"}, Host: acmeSrv.URL, Extension: "100", Password: "right-password"},
+			{Name: "Globex Roofing", Aliases: []string{"globex"}, Host: globexSrv.URL, Extension: "100", Password: "right-password"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.accounts[0].client.http = readOnly(acmeSrv.Client(), p.accounts[0].host)
+	p.accounts[1].client.http = readOnly(globexSrv.Client(), p.accounts[1].host)
+	return p, acme, globex
+}
+
+// A name an assistant repeats back is not always spelt the way it was stored:
+// it arrives quoted, with a full stop on the end, or with the double space
+// somebody typed into the form. None of those is a different customer.
+func TestResolve_TolerantOfHowANameIsWrittenBack(t *testing.T) {
+	p, _, _ := twoCustomers(t)
+	for _, asked := range []string{
+		`"Acme Dental Group"`, "Acme Dental Group.", "Acme  Dental   Group",
+		"ADG.", "'adg'", "\u00a0ADG\u00a0", "(globex)",
+	} {
+		a, err := p.resolve(asked)
+		if err != nil {
+			t.Errorf("%q should resolve: %v", asked, err)
+			continue
+		}
+		want := "Acme Dental Group"
+		if strings.Contains(strings.ToLower(asked), "globex") {
+			want = "Globex Roofing"
+		}
+		if a.name != want {
+			t.Errorf("%q resolved to %q, want %q", asked, a.name, want)
+		}
+	}
+
+	// And it still refuses what it should. Loosening how a name is written
+	// must not loosen which names match.
+	for _, asked := range []string{"Initech", "Acme Dental Group Ltd", "roof"} {
+		if _, err := p.resolve(asked); err == nil {
+			t.Errorf("%q should not resolve to anything", asked)
 		}
 	}
 }
