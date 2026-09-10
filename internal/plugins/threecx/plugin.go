@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/spoked/mcpd/internal/plugins"
 )
@@ -193,10 +194,32 @@ func (a *account) call(err error) error {
 	return err
 }
 
+// normaliseName is the form two names are compared in: folded to lower case,
+// trimmed, with runs of whitespace collapsed to one space and the punctuation
+// a sentence leaves on a name taken off the ends. Any punctuation rather than
+// a list of the quote marks somebody thought of: the German and CJK forms are
+// what a name comes back wrapped in when it was not written in English.
+//
+// An assistant repeating a name back does not always repeat it exactly: it
+// arrives quoted, with a trailing full stop, or with the double space somebody
+// typed into the settings form. None of those is a different customer, and
+// refusing them sends the model round again with the long form -- which is the
+// behaviour #157 reported. Nothing here loosens what counts as a match beyond
+// that: two different names still do not meet, the trim is ends-only so
+// "A.C.M.E" is not "ACME", and a configuration where two customers normalise
+// alike is refused by Validate rather than resolved by guessing.
+func normaliseName(s string) string {
+	s = strings.TrimFunc(strings.ToLower(s), func(r rune) bool {
+		return unicode.IsPunct(r) || unicode.IsSpace(r)
+	})
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // resolve finds the customer a call is about.
 //
 // The rule is that this never guesses. An exact match on the name or an alias
-// wins, folding case. Failing that, a name that is contained in exactly one
+// wins, folding case, collapsing whitespace and ignoring the punctuation a
+// sentence leaves on a name. Failing that, a name that is contained in exactly one
 // customer's name or alias is taken -- "acme" for "Acme Dental Group" -- but a
 // name contained in two is refused with both, because picking the first of two
 // customers is how a technician reads one business's phone system while
@@ -204,13 +227,17 @@ func (a *account) call(err error) error {
 // is needed; with several, none given is refused with the list.
 func (p *Plugin) resolve(asked string) (*account, error) {
 	asked = strings.TrimSpace(asked)
+	// The normalised form decides whether a name was given at all: an argument
+	// of "." carries no more of a name than an empty one does, and the two
+	// should not end in different answers.
+	folded := normaliseName(asked)
 	if len(p.accounts) == 0 {
 		return nil, fmt.Errorf("this 3CX plugin (%s) has no customers yet. Somebody has to "+
 			"add one on the mcpd Plugins page, under %s, Customers -- with the phone "+
 			"system's address, a system owner extension and its password -- before "+
 			"anything here can be read", p.instance(), p.instance())
 	}
-	if asked == "" {
+	if folded == "" {
 		if len(p.accounts) == 1 {
 			return p.accounts[0], nil
 		}
@@ -218,12 +245,11 @@ func (p *Plugin) resolve(asked string) (*account, error) {
 			"customer: %s. list_customers has each one's aliases", len(p.accounts), p.knownCustomers())
 	}
 
-	folded := strings.ToLower(asked)
 	var exact, partial []*account
 	for _, a := range p.accounts {
 		matched, contained := false, false
 		for _, n := range append([]string{a.name}, a.aliases...) {
-			fn := strings.ToLower(n)
+			fn := normaliseName(n)
 			if fn == folded {
 				matched = true
 			} else if strings.Contains(fn, folded) {
@@ -253,9 +279,10 @@ func (p *Plugin) resolve(asked string) (*account, error) {
 	// the nearest of the configured customers would answer confidently about
 	// somebody else's phone system.
 	return nil, fmt.Errorf("no customer here is called %q. This instance (%s) serves %s. "+
-		"If %s should be here, somebody has to add it on the mcpd Plugins page, "+
-		"under %s, Customers -- with the phone system's address and a system owner "+
-		"extension. Tell the person that rather than reading one of the others",
+		"Any of those names works. If %s should be "+
+		"here, somebody has to add it on the mcpd Plugins page, under %s, Customers "+
+		"-- with the phone system's address and a system owner extension. Tell the "+
+		"person that rather than reading one of the others",
 		asked, p.instance(), p.knownCustomers(), asked, p.instance())
 }
 
@@ -273,28 +300,45 @@ func ambiguous(asked string, matches []*account) error {
 		asked, strings.Join(names, " and "))
 }
 
-func (p *Plugin) customerNames() []string {
-	out := make([]string, 0, len(p.accounts))
-	for _, a := range p.accounts {
-		out = append(out, a.name)
-	}
-	return out
-}
-
 // namesInAMessage bounds how many customers an error spells out. A deployment
 // with sixty of them would otherwise put all sixty in front of a model on
 // every mistyped name, which costs more context than the answer is worth and
 // buries the sentence saying what to do.
 const namesInAMessage = 10
 
-// knownCustomers renders the configured customers for a message, bounded.
+// aliasesInAMessage bounds how many of one customer's other names are spelt
+// out beside it, for the same reason.
+const aliasesInAMessage = 3
+
+// knownCustomers renders the configured customers for a message, bounded, each
+// with the aliases it also answers to.
+//
+// The aliases are named because leaving them out is what sends a model back
+// with the long form of a name it had a short one for: a message listing only
+// "Acme Dental Group" reads as though "ADG" was never going to work.
 func (p *Plugin) knownCustomers() string {
-	names := p.customerNames()
-	if len(names) <= namesInAMessage {
-		return strings.Join(names, ", ")
+	shown := make([]string, 0, len(p.accounts))
+	for i, a := range p.accounts {
+		if i == namesInAMessage {
+			return fmt.Sprintf("%s; and %d more (list_customers has them all)",
+				strings.Join(shown, "; "), len(p.accounts)-namesInAMessage)
+		}
+		if len(a.aliases) == 0 {
+			shown = append(shown, a.name)
+			continue
+		}
+		// Aliases are bounded too. Ten customers with ten aliases each is a
+		// hundred names, which is the cost the customer bound exists to avoid.
+		also := a.aliases
+		if len(also) > aliasesInAMessage {
+			also = also[:aliasesInAMessage]
+		}
+		// Semicolons between customers, commas between one customer's names:
+		// with one separator doing both jobs a model cannot split the list
+		// back into customers.
+		shown = append(shown, fmt.Sprintf("%s, also called %s", a.name, strings.Join(also, " or ")))
 	}
-	return fmt.Sprintf("%s and %d more (list_customers has them all)",
-		strings.Join(names[:namesInAMessage], ", "), len(names)-namesInAMessage)
+	return strings.Join(shown, "; ")
 }
 
 // instance is what this plugin is configured under, which is what somebody

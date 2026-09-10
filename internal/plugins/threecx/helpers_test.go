@@ -43,6 +43,10 @@ type fakePBX struct {
 	rejectToken atomic.Bool
 	// raw answers a path with bytes rather than JSON, for the bundle.
 	raw map[string]func(w http.ResponseWriter)
+	// anything answers an unlisted path with an empty collection instead of
+	// failing the test. For the tests that are about which phone system a call
+	// reached rather than about what it read.
+	anything bool
 	// absent are paths this phone system genuinely does not serve, answered
 	// 404 without failing the test. An unlisted path is still a mistake: the
 	// difference between "this build does not have it" and "a tool read
@@ -95,6 +99,11 @@ func (f *fakePBX) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	body, ok := f.bodies[path]
 	if !ok {
+		if f.anything {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, collection(0))
+			return
+		}
 		if f.absent[path] {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)

@@ -261,6 +261,13 @@ func (p *Plugin) resolve(asked string) (*account, error) {
 			len(p.accounts), p.knownCustomers())
 	}
 
+	// Case folded and nothing else, which is where threecx's resolver started.
+	// That one now compares names with whitespace collapsed and the
+	// punctuation an assistant leaves on a name trimmed, because a quoted or
+	// full-stopped alias resolved to nobody (#157). This copy has had no such
+	// report and is internally consistent -- Validate folds the same way -- so
+	// it is left alone deliberately rather than by oversight. It is the same
+	// gap if it is ever reported here.
 	folded := strings.ToLower(asked)
 	var exact, partial []*account
 	for _, a := range p.accounts {

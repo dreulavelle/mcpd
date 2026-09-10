@@ -82,7 +82,21 @@ configured customer: answering confidently about somebody else's phone system
 is the failure that wording exists to prevent. An instance with no customers
 at all gets the same treatment rather than reporting its tools as broken. The
 configured names are listed to ten, after which the count stands in for the
-rest, because sixty of them would bury the sentence that says what to do.
+rest, because sixty of them would bury the sentence that says what to do. Each
+is listed with the aliases it also answers to: a refusal naming only the long
+form reads as though the short one was never going to work, and sends a model
+back with the long form of a name it had a short one for.
+
+One resolver, and every tool goes through it. `TestResolve_EveryToolAcceptsAnAlias`
+walks the registry and refuses to pass if a tool that takes a `customer` is not
+in its table, then calls each one with a canonical name, an alias, a
+differently-spelt alias and a fragment, and checks both that it resolved and
+that it reached *that* customer's phone system rather than the other's. The two
+tools that answer without reaching a phone system are named in the test rather
+than inferred from a call that happened not to read anything, so a tool that
+joins them cannot be covered by nothing. A tool
+resolving customers its own way is the shape of bug that produces "it worked,
+and then it did not".
 
 **Access is per instance.** Anyone who can reach the instance -- a key, a
 tunnel, a ChatGPT workspace -- can ask about every customer on it. If some

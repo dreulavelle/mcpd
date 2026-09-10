@@ -251,3 +251,37 @@ func TestConfig_TimeoutDecodesAsSeconds(t *testing.T) {
 		t.Error("the timeout is not on the settings form, so nobody can raise it")
 	}
 }
+
+// Two customers a caller could not tell apart are refused at the configuration
+// rather than at every call. The resolver ignores case, repeated whitespace
+// and the punctuation a name is written back with, so names differing only in
+// those are one name as far as anybody asking is concerned.
+func TestConfig_NamesTheResolverCannotTellApartAreRefused(t *testing.T) {
+	// Each pair collides on the name or the alias quoted beside it.
+	pairs := [][2]Customer{
+		{{Name: "Acme Inc", Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Acme Inc.", Host: "b.example", Extension: "100", Password: "p"}},
+		{{Name: "Acme Dental", Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Acme  Dental", Host: "b.example", Extension: "100", Password: "p"}},
+		{{Name: "Acme", Aliases: []string{"ADG."}, Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Globex", Aliases: []string{"adg"}, Host: "b.example", Extension: "100", Password: "p"}},
+	}
+	for _, pair := range pairs {
+		cfg := Config{Customers: pair[:], MaxItems: defaultMaxItems, RequestsPerSecond: defaultRPS}
+		err := cfg.Validate()
+		if err == nil {
+			t.Errorf("%q and %q cannot be told apart and should be refused",
+				pair[0].Name, pair[1].Name)
+			continue
+		}
+		// The rows are named, and both spellings are quoted: "Acme Dental"
+		// and "Acme  Dental" look identical once anything renders them, so a
+		// message naming only the names tells an operator that two things
+		// they cannot tell apart are the same thing.
+		for _, want := range []string{"customer 1", "customer 2", "give one of them a different name"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal should say %q, got %v", want, err)
+			}
+		}
+	}
+}
