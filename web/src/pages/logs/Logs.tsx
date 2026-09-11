@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
 /**
@@ -464,26 +465,25 @@ function asText(line: Line): string {
 }
 
 function CopyLine({ line }: { line: Line }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"" | "copied" | "failed">("");
+  const button = useRef<HTMLButtonElement>(null);
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(asText(line));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // Refused outside a secure context, which a plain-http LAN address is.
-    }
+    // Said either way: on a plain-http address the clipboard used to refuse
+    // silently, and the button looked like it had worked.
+    setCopied(await copyText(asText(line), button.current) ? "copied" : "failed");
+    setTimeout(() => setCopied(""), 2500);
   }
   return (
     <button
+      ref={button}
       type="button"
       onClick={copy}
       className="mt-1 inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
     >
-      {copied
+      {copied === "copied"
         ? <Check className="size-3 text-good" aria-hidden="true" />
         : <Copy className="size-3" aria-hidden="true" />}
-      {copied ? "Copied" : "Copy this line"}
+      {copied === "copied" ? "Copied" : copied === "failed" ? "Couldn't copy" : "Copy this line"}
     </button>
   );
 }

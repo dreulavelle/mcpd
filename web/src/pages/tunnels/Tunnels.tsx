@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, ChevronRight, Copy, Plus, RotateCw, Search, Waypoints } from "lucide-react";
 import {
   isOpenAIReason, OpenAIPermissionDialog, type OpenAIReason,
@@ -13,6 +13,7 @@ import {
   type TunnelStatus,
   problemText,
 } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { relative, when } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link, useQueryParam } from "@/lib/router";
@@ -646,7 +647,8 @@ function RecentCalls({ principal, plugin }: { principal?: string; plugin: string
 
 /** Everything the page knows about a tunnel, as text, for a ticket. */
 function CopyDiagnostics({ row, reading: r }: { row: Row; reading: Reading }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"" | "copied" | "failed">("");
+  const button = useRef<HTMLButtonElement>(null);
   async function copy() {
     const s = row.status;
     const lines = [
@@ -659,18 +661,15 @@ function CopyDiagnostics({ row, reading: r }: { row: Row; reading: Reading }) {
       s?.upstream ? `upstream: ${s.upstream} (checked ${s.upstream_checked_at ?? "?"})` : "",
       s?.trouble ? `last_client_error: ${s.trouble_at ?? ""} ${s.trouble}` : "",
     ].filter(Boolean);
-    try {
-      await navigator.clipboard.writeText(lines.join("\n"));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // Refused outside a secure context, which a plain-http LAN address is.
-    }
+    // Said either way: on a plain-http address the clipboard used to refuse
+    // silently, and the button looked like it had worked.
+    setCopied(await copyText(lines.join("\n"), button.current) ? "copied" : "failed");
+    setTimeout(() => setCopied(""), 2500);
   }
   return (
-    <Button variant="ghost" size="sm" onClick={copy}>
-      {copied ? <Check className="size-3.5 text-good" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-      {copied ? "Copied" : "Copy diagnostics"}
+    <Button ref={button} variant="ghost" size="sm" onClick={copy}>
+      {copied === "copied" ? <Check className="size-3.5 text-good" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+      {copied === "copied" ? "Copied" : copied === "failed" ? "Couldn't copy" : "Copy diagnostics"}
     </Button>
   );
 }

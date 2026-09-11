@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { copyShortcut, copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -130,13 +131,8 @@ export function OpenAIPermissionDialog({
   const it = EXPLANATIONS[reason];
 
   /**
-   * Copy, by whichever route this browser allows.
-   *
-   * navigator.clipboard exists only in a secure context, and mcpd's dashboard
-   * is served over plain HTTP on purpose -- it is an internal interface and
-   * the TLS is on the MCP listener instead. So on every ordinary install,
-   * reached by LAN address, the modern API is simply absent and the older
-   * execCommand path is the one that runs.
+   * Copy, by whichever route this browser allows -- see copyText for why
+   * there are two.
    *
    * If both are refused the text is left selected and the button says to press
    * the shortcut, because the failure the user must never meet is a button
@@ -144,28 +140,13 @@ export function OpenAIPermissionDialog({
    */
   async function copy() {
     if (!it.handoff) return;
-
-    if (window.isSecureContext && navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(it.handoff);
-        return done("done");
-      } catch {
-        // Refused despite being available -- a permissions policy, usually.
-        // Fall through rather than give up.
-      }
-    }
-
-    const field = box.current;
-    if (field) {
-      field.focus();
-      field.select();
-      try {
-        if (document.execCommand("copy")) return done("done");
-      } catch {
-        // Deprecated and occasionally disabled. The selection stands either
-        // way, which is what makes the last resort usable.
-      }
-    }
+    // Inside the dialog, which keeps focus to itself: a copy made through an
+    // element outside it cannot select anything.
+    if (await copyText(it.handoff, box.current)) return done("done");
+    // The last resort. The request is left selected in its own box, so the
+    // shortcut copies it.
+    box.current?.focus();
+    box.current?.select();
     done("select");
   }
 
@@ -230,7 +211,7 @@ export function OpenAIPermissionDialog({
               </Button>
               {copied === "select" && (
                 <span className="text-xs text-muted-foreground">
-                  Selected — press {navigator.platform?.startsWith("Mac") ? "⌘C" : "Ctrl+C"} to copy.
+                  Selected — press {copyShortcut()} to copy.
                 </span>
               )}
             </div>

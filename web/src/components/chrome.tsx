@@ -3,6 +3,7 @@ import {
   type ErrorInfo, type ReactNode,
 } from "react";
 import { Check, ChevronLeft, Copy } from "lucide-react";
+import { copyShortcut, copyText } from "@/lib/clipboard";
 import { Link } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -202,25 +203,54 @@ export function Clamp({ children, lines = 2, className }: {
 
 /* -- copying --------------------------------------------------------------- */
 
+type CopyState = "" | "copied" | "failed";
+
+/**
+ * Copy with a result. A button that reports nothing is indistinguishable from
+ * one that is broken, and on a plain-http address that is what every one of
+ * these was: the clipboard API is absent there, and the failure was caught
+ * and dropped.
+ */
 function useCopy(value: string) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<CopyState>("");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  const copy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // Refused outside a secure context, which a plain-http LAN address is.
-      setCopied(false);
-    }
+  const copy = useCallback(async (button: Element | null, shown: Element | null) => {
+    const ok = await copyText(value, button);
+    // The last resort: the text on screen is left selected, so the shortcut
+    // copies it and the message beside the button says which shortcut.
+    if (!ok && shown) selectContents(shown);
+    setState(ok ? "copied" : "failed");
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setState(""), ok ? 1600 : 5000);
   }, [value]);
 
-  return { copied, copy };
+  return { state, copy };
+}
+
+function selectContents(el: Element) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function CopyIcon({ state }: { state: CopyState }) {
+  return state === "copied"
+    ? <Check className="size-3.5 text-good" aria-hidden="true" />
+    : <Copy className="size-3.5" aria-hidden="true" />;
+}
+
+function CopyOutcome({ state }: { state: CopyState }) {
+  return (
+    <span role="status" className="text-xs whitespace-nowrap text-muted-foreground">
+      {state === "failed" ? `Selected — press ${copyShortcut()}` : ""}
+      {state === "copied" && <span className="sr-only">Copied</span>}
+    </span>
+  );
 }
 
 export function Copyable({ value, label, className }: {
@@ -228,38 +258,43 @@ export function Copyable({ value, label, className }: {
   label?: string;
   className?: string;
 }) {
-  const { copied, copy } = useCopy(value);
+  const { state, copy } = useCopy(value);
+  const shown = useRef<HTMLElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
   return (
     <div className={cn("flex items-center gap-2 rounded-md border bg-muted/50 px-2 py-1", className)}>
-      <code className="scroll-x min-w-0 flex-1 font-mono text-xs whitespace-nowrap">
+      <code ref={shown} className="scroll-x min-w-0 flex-1 font-mono text-xs whitespace-nowrap">
         {value}
       </code>
+      <CopyOutcome state={state} />
       <Button
-        variant="ghost" size="icon-sm" onClick={copy}
+        ref={button} variant="ghost" size="icon-sm"
+        onClick={() => copy(button.current, shown.current)}
         aria-label={label ? `Copy ${label}` : "Copy"}
       >
-        {copied
-          ? <Check className="size-3.5 text-good" aria-hidden="true" />
-          : <Copy className="size-3.5" aria-hidden="true" />}
+        <CopyIcon state={state} />
       </Button>
     </div>
   );
 }
 
 export function CodeBlock({ children, className }: { children: string; className?: string }) {
-  const { copied, copy } = useCopy(children);
+  const { state, copy } = useCopy(children);
+  const shown = useRef<HTMLPreElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
   return (
     <div className={cn("relative rounded-md border bg-muted/50", className)}>
-      <Button
-        variant="ghost" size="icon-sm" onClick={copy}
-        className="absolute top-1.5 right-1.5"
-        aria-label="Copy"
-      >
-        {copied
-          ? <Check className="size-3.5 text-good" aria-hidden="true" />
-          : <Copy className="size-3.5" aria-hidden="true" />}
-      </Button>
-      <pre className="scroll-x p-3 pr-10 font-mono text-xs leading-relaxed">{children}</pre>
+      <div className="absolute top-1.5 right-1.5 flex items-center gap-2">
+        <CopyOutcome state={state} />
+        <Button
+          ref={button} variant="ghost" size="icon-sm"
+          onClick={() => copy(button.current, shown.current)}
+          aria-label="Copy"
+        >
+          <CopyIcon state={state} />
+        </Button>
+      </div>
+      <pre ref={shown} className="scroll-x p-3 pr-10 font-mono text-xs leading-relaxed">{children}</pre>
     </div>
   );
 }

@@ -53,11 +53,10 @@ describe("OpenAI refusals", () => {
     expect(screen.getByRole("button", { name: "Copy request" })).toBeInTheDocument();
   });
 
-  // The dashboard is served over plain HTTP on purpose, so navigator.clipboard
-  // does not exist on any ordinary install reached by LAN address. The button
-  // silently did nothing there, which is worse than having no button: the
-  // reader cannot tell it from a broken one.
-  it("still reports something when the clipboard API is unavailable", () => {
+  // On a dashboard reached over plain http by LAN address navigator.clipboard
+  // does not exist. The button silently did nothing there, which is worse than
+  // having no button: the reader cannot tell it from a broken one.
+  it("still reports something when the clipboard API is unavailable", async () => {
     const clipboard = navigator.clipboard;
     Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
     Object.defineProperty(window, "isSecureContext", { value: false, configurable: true });
@@ -70,7 +69,7 @@ describe("OpenAI refusals", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy request" }));
 
     // The text is selected and the button says so, rather than pretending.
-    expect(screen.getByText(/press .* to copy/i)).toBeInTheDocument();
+    expect(await screen.findByText(/press .* to copy/i)).toBeInTheDocument();
 
     Object.defineProperty(navigator, "clipboard", { value: clipboard, configurable: true });
   });
