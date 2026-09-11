@@ -78,6 +78,19 @@ type Materials struct {
 	// Issued reports whether anything was written this time, so startup can
 	// say so once rather than on every boot.
 	Issued bool
+
+	// The rest describe the certificate, for the page that shows it.
+	Subject, Issuer string
+	NotBefore       time.Time
+	// Fingerprint is the SHA-256 of the certificate, in hex: what somebody
+	// compares against the authority's own record of what it issued.
+	Fingerprint string
+	// Provided reports a certificate somebody else issued and uploaded,
+	// rather than one from mcpd's own authority. It has no CA here to offer.
+	Provided bool
+	// CloudflareOrigin reports a certificate from Cloudflare's Origin CA,
+	// which browsers do not trust. See describe.
+	CloudflareOrigin bool
 }
 
 // EnsureSelfSigned returns usable certificate material for hosts, generating
@@ -119,14 +132,15 @@ func EnsureSelfSigned(dir string, hosts []string, now time.Time) (*Materials, er
 		return nil, fmt.Errorf("servertls: read issued certificate: %w", err)
 	}
 
-	return &Materials{
+	leaf.Leaf = parsed
+	m := &Materials{
 		Certificate: leaf,
 		CAPath:      filepath.Join(dir, caCertFile),
 		CAPEM:       caPEM,
-		Hosts:       hosts,
-		NotAfter:    parsed.NotAfter,
 		Issued:      issued,
-	}, nil
+	}
+	describe(m, parsed)
+	return m, nil
 }
 
 // TLSConfig returns the listener configuration.

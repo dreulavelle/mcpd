@@ -2126,9 +2126,21 @@ the dashboard is where the setting is changed back. The MCP listener keeps its
 old behaviour and does stop, because a connector configured for https has no
 plain fallback that would help it.
 
-One certificate covers both listeners, and `servertls.Holder` hands it to each
-handshake, so the renewal worker can reissue it -- a month before expiry, or
-when an address it covers changes -- without a restart.
+mcpd's own certificate is one certificate for whichever listeners use it, and
+`servertls.Holder` hands it to each handshake, so the renewal worker can
+reissue it -- a month before expiry, or when an address it covers changes --
+without a restart. The dashboard can present an uploaded certificate instead
+(`custom`), held in a second Holder: most usefully one from a company's own
+authority, which its computers already trust. It is stored as one PEM file,
+`tls/dashboard.pem`, key and chain together, so a replacement is one rename --
+two files could be read between their writes as a mismatched pair -- and the
+worker reloads it when the file changes, which is what lets a renewal tool
+outside mcpd keep it current. An uploaded certificate that has run out is still
+served. And when the dashboard serves https itself, the session cookie's
+`Secure` follows the connection rather than the configured address: nothing is
+in front to terminate TLS, so a plain request is the fallback, and following an
+https address there drops the cookie and locks everybody out of the page the
+certificate would be fixed on.
 
 ## Logs somebody can use from a support call
 

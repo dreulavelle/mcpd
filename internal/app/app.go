@@ -418,7 +418,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		RelaxedDurability: boot.relaxedDurability,
 		TLSSelfSigned:     boot.tlsSelfSigned,
 		FrontendPublicURL: boot.frontendPublicURL,
-		FrontendTLS:       boot.frontendTLS,
+		FrontendTLSMode:   boot.frontendTLSMode,
 	}).Warnings() {
 		log.WarnContext(ctx, "configuration warning", "detail", w)
 	}
@@ -785,18 +785,21 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			AccountAssignments: func() map[string]string {
 				return a.tunnelAccountAssignments(context.Background())
 			},
-			CACertificate: a.caPEM,
-			TLSStatus:     a.tlsStatus,
-			Tunnel:        a.tunnels,
-			TunnelInfo:    func() any { return a.tunnelCheck.Info() },
-			Settings:      a.settings,
-			Bootstrap:     func() []admin.BootstrapSetting { return bootstrapSettings(cfg) },
+			CACertificate:              a.caPEM,
+			TLSStatus:                  a.tlsStatus,
+			SetDashboardCertificate:    a.setDashboardCertificate,
+			RemoveDashboardCertificate: a.removeDashboardCertificate,
+			DashboardServesTLS:         a.dashboardServesTLS,
+			Tunnel:                     a.tunnels,
+			TunnelInfo:                 func() any { return a.tunnelCheck.Info() },
+			Settings:                   a.settings,
+			Bootstrap:                  func() []admin.BootstrapSetting { return bootstrapSettings(cfg) },
 			PluginSettings: func(name string) map[string]any {
 				return cfg.Plugins[name].Settings
 			},
 		})
 		handler := dashboard.Handler()
-		if a.certs.dashboard {
+		if a.certs.dashboard() {
 			// https and plain http share the dashboard's port, and a plain
 			// request is sent on to the same address over https.
 			handler = servertls.RedirectToHTTPS(handler)
@@ -822,7 +825,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		ErrorLog:          serverErrorLog(log),
 	}
 	if a.certs.assistants {
-		a.server.TLSConfig = a.certs.holder.TLSConfig()
+		a.server.TLSConfig = a.certs.own.TLSConfig()
 	}
 	return a, nil
 }
