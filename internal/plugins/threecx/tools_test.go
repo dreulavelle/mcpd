@@ -448,11 +448,21 @@ func TestSearchEvents_FillsTemplates(t *testing.T) {
 		t.Errorf("an unfillable placeholder should be left as it was: %q", res.Events[1].Message)
 	}
 	last := f.seen[len(f.seen)-1]
-	for _, want := range []string{"%24search=trunk", "Type+eq+%27Warning%27", "TimeGenerated+ge+2026-09-01T00%3A00%3A00Z"} {
+	for _, want := range []string{"%24search=%22trunk%22", "Type+eq+%27Warning%27", "TimeGenerated+ge+2026-09-01T00%3A00%3A00Z"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("the request should carry %s, got %s", want, last)
 		}
 	}
+	// A phone number is a term the phone system's own $search lexer refuses
+	// unquoted -- "character '5' is not valid at position 0" -- and the
+	// refusal reads as the phone system being broken. Every term is quoted.
+	if _, err := p.searchEvents(context.Background(), eventsArgs{Query: `5550142 "trunk" down`}); err != nil {
+		t.Fatal(err)
+	}
+	if seen := f.seen[len(f.seen)-1]; !strings.Contains(seen, `%24search=%225550142%22+AND+%22%5C%22trunk%5C%22%22+AND+%22down%22`) {
+		t.Errorf("every search term should reach the phone system quoted, got %s", seen)
+	}
+
 	if _, err := p.searchEvents(context.Background(), eventsArgs{Type: "loud"}); err == nil {
 		t.Error("an unknown severity should be refused")
 	}

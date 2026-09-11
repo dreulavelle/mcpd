@@ -428,7 +428,7 @@ func (p *Plugin) searchEvents(ctx context.Context, args eventsArgs) (EventsResul
 		"$select":  {"Id,TimeGenerated,Type,Source,Message,Params,GroupName"},
 		"$orderby": {"TimeGenerated desc"},
 	}
-	if s := strings.TrimSpace(args.Query); s != "" {
+	if s := odataSearch(args.Query); s != "" {
 		q.Set("$search", s)
 	}
 	var filters []string

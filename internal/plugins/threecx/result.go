@@ -50,6 +50,31 @@ func odataString(v string) string {
 	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
 }
 
+// odataSearch renders a caller's text as a $search expression, with every term
+// quoted as a phrase.
+//
+// $search is parsed by the phone system rather than matched literally, and its
+// lexer only reads a bare term that starts like an identifier: searching the
+// event log for a phone number came back as "The query specified in the URI is
+// not valid. Syntax error: character '3' is not valid at position 0", which
+// reads as the phone system being broken rather than as the number needing
+// quotes. Quoting also keeps a term that happens to be an operator word (AND,
+// OR, NOT) or that carries punctuation from being read as syntax. Terms are
+// joined with AND, which is what putting them side by side already meant.
+func odataSearch(v string) string {
+	terms := strings.Fields(v)
+	if len(terms) == 0 {
+		return ""
+	}
+	quoted := make([]string, 0, len(terms))
+	for _, t := range terms {
+		t = strings.ReplaceAll(t, `\`, `\\`)
+		t = strings.ReplaceAll(t, `"`, `\"`)
+		quoted = append(quoted, `"`+t+`"`)
+	}
+	return strings.Join(quoted, " AND ")
+}
+
 // parseTime reads a caller's timestamp. Parsed rather than passed through,
 // because a $filter is code and the value came from a model. A date without a
 // time is accepted as midnight UTC. An empty value is no bound at all.

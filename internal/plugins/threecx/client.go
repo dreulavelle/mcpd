@@ -268,6 +268,15 @@ func (c *Client) read(ctx context.Context, path string, q url.Values, retryAuth 
 	}
 	if resp.StatusCode != http.StatusOK {
 		c.observe("error", elapsed)
+		// Logged here as well as returned. A refusal used to return before the
+		// line below, so debug logging -- the thing somebody turns on to find
+		// out what the phone system was asked -- recorded every call that
+		// worked and nothing about the one that did not, and a health warning
+		// naming a failed read had no request behind it anywhere. The body is
+		// left out for the same reason it is left out of a success: it is the
+		// upstream's, and its sentence is already in the error the caller gets.
+		c.log.DebugContext(ctx, "3cx API call refused", "path", path,
+			"status", resp.StatusCode, "took", elapsed)
 		return nil, explainRequestFailure(resp.StatusCode, path, raw)
 	}
 	c.observe("ok", elapsed)
