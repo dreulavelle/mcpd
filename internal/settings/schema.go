@@ -1212,16 +1212,13 @@ func schema() []Group {
 			Title:     "Microsoft Entra",
 			Section:   SectionAuthentication,
 			EnabledBy: KeyEntraEnabled,
-			// Everything an app registration has to say, said here, because
-			// the Entra admin centre asks for all of it before mcpd ever sees
-			// a token and a wrong answer surfaces as a refusal on Microsoft's
-			// screen, in Microsoft's words.
-			Help: "Sign in with a work or school Microsoft account. In the Entra " +
-				"admin centre, register mcpd under Web — not a single-page " +
-				"application, because it holds a client secret — with the redirect " +
-				"address above, single tenant, and add the optional claims email " +
-				"and xms_edov to the ID token under Token configuration. Microsoft " +
-				"accepts only https for that address, except on localhost.",
+			// The app registration itself is walked through step by step on
+			// the Sign-in page, beside the exact redirect address, which only
+			// that page knows. This used to carry all of it in one paragraph
+			// that pointed at "the redirect address above" -- a card that was
+			// not drawn at all while the host had no address of its own.
+			Help: "Sign in with a work or school Microsoft account from one " +
+				"directory, registered in the Entra admin centre as a web app.",
 			Fields: []Field{
 				{
 					Key: KeyEntraEnabled, Label: "Offer Microsoft", Kind: KindBool,

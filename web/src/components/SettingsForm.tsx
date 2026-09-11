@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   api, ApiError, problemText, type SettingField, type SettingGroup, type SettingsPayload,
 } from "@/lib/api";
@@ -18,11 +18,33 @@ export interface FieldLink {
   label: string;
 }
 
+/**
+ * What a page adds to one group: something the schema cannot say because only
+ * the page knows it, like the exact address to paste into a provider's
+ * console, or whether the provider is on the sign-in page yet.
+ */
+export interface GroupExtras {
+  /** Beside the group's title. */
+  badge?: ReactNode;
+  /** Under the group's description, whether or not the group is switched on. */
+  lead?: ReactNode;
+  /**
+   * Under the switch that turns the group on, while it is on. Under it rather
+   * than above it, so flipping the switch does not move it out from under the
+   * pointer.
+   */
+  whileOn?: ReactNode;
+}
+
 /** A form over a set of setting groups, shared by every page that has some. */
-export function SettingsForm({ groups, settings, links, placeholders, onSaved, readOnly = false }: {
+export function SettingsForm({
+  groups, settings, links, placeholders, extras, onSaved, readOnly = false,
+}: {
   groups: SettingGroup[];
   settings: SettingsPayload;
   links?: Record<string, FieldLink>;
+  /** By group name. */
+  extras?: Record<string, GroupExtras>;
   /**
    * What an empty field means, by key, when the page knows better than the
    * schema: the address this page was reached on, say. Shown in the field
@@ -94,10 +116,14 @@ export function SettingsForm({ groups, settings, links, placeholders, onSaved, r
       {groups.map((group) => {
         const on = !group.enabled_by || valueOf(group.enabled_by) === "true";
         return (
-          <Card key={group.name}>
+          // An id so a page can send somebody straight to one group.
+          <Card key={group.name} id={`settings-group-${group.name}`} className="scroll-mt-4">
             {groups.length > 1 && (
               <CardHeader>
-                <CardTitle className="text-base">{group.title}</CardTitle>
+                <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                  {group.title}
+                  {extras?.[group.name]?.badge}
+                </CardTitle>
                 {group.help && (
                   <p className="text-sm text-muted-foreground">{group.help}</p>
                 )}
@@ -107,6 +133,8 @@ export function SettingsForm({ groups, settings, links, placeholders, onSaved, r
               {groups.length === 1 && group.help && (
                 <p className="text-sm text-muted-foreground">{group.help}</p>
               )}
+              {extras?.[group.name]?.lead}
+              {!group.enabled_by && extras?.[group.name]?.whileOn}
               {group.fields.map((f) => {
                 if (group.enabled_by && f.key !== group.enabled_by && !on) return null;
                 // Presentation only. The value is still in the draft and is
@@ -115,7 +143,7 @@ export function SettingsForm({ groups, settings, links, placeholders, onSaved, r
                 if (f.show_when && !f.show_when.equals.includes(valueOf(f.show_when.field))) {
                   return null;
                 }
-                return (
+                const field = (
                   <Field
                     key={f.key} value={valueOf(f.key)}
                     field={placeholders?.[f.key] ? { ...f, placeholder: placeholders[f.key] } : f}
@@ -130,6 +158,9 @@ export function SettingsForm({ groups, settings, links, placeholders, onSaved, r
                         : [...c, f.key])}
                   />
                 );
+                const more = extras?.[group.name]?.whileOn;
+                if (f.key !== group.enabled_by || !on || !more) return field;
+                return [field, <div key={`${f.key}-extra`}>{more}</div>];
               })}
             </CardContent>
           </Card>
@@ -268,6 +299,6 @@ function optionLabel(field: SettingField, option: string): string {
 }
 
 /** Strips the internal prefix off a validation message. */
-function tidy(problem: string): string {
+export function tidy(problem: string): string {
   return problem.replace(/^settings:\s*/, "");
 }
