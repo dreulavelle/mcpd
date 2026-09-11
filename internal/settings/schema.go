@@ -328,6 +328,7 @@ const (
 	KeyServerPublicURL         = "server.public_url"
 	KeyServerFrontendPublicURL = "server.frontend_public_url"
 	KeyServerTLSMode           = "server.tls_mode"
+	KeyServerFrontendTLSMode   = "server.frontend_tls_mode"
 	KeyServerFrontendEnabled   = "server.frontend_enabled"
 
 	KeyServerReadHeaderTimeout = "server.read_header_timeout_seconds"
@@ -600,6 +601,27 @@ func schema() []Group {
 					Help: "Leave this off when a reverse proxy already terminates " +
 						"TLS. Self-signed is for reaching mcpd directly, where the " +
 						"alternative is a browser warning every visit.",
+				},
+				{
+					// Its own setting rather than a second meaning of the one
+					// above, because the two listeners are reached different
+					// ways: a deployment behind Cloudflare Access or a proxy
+					// has the dashboard's TLS handled already, and the MCP
+					// listener may still want mcpd's own. Off by default so
+					// that deployment is untouched.
+					Key: KeyServerFrontendTLSMode, Label: "Certificate for this dashboard",
+					Kind: KindEnum, Group: "server", Apply: ApplyRestart,
+					Default: "off", Options: []string{"off", "self-signed"},
+					OptionLabels: map[string]string{
+						"off":         "None — something in front serves https",
+						"self-signed": "mcpd's own",
+					},
+					Help: "Signing in with Microsoft or Google needs this dashboard on " +
+						"https. Leave it off when a proxy or tunnel in front already " +
+						"serves https. mcpd's own serves https on the same port and " +
+						"sends plain http there, and it covers the address this page " +
+						"is on. Browsers warn until they trust mcpd's certificate " +
+						"authority, which you can download below.",
 				},
 				{
 					Key: KeyServerFrontendEnabled, Label: "Serve this dashboard",

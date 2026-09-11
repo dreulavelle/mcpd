@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { api, type SettingGroup, type SettingsPayload } from "@/lib/api";
+import { api, type SettingGroup, type SettingsPayload, type TLSStatus } from "@/lib/api";
 import { renderWith, sessionFor } from "@/test/render";
 import { Advanced } from "./Advanced";
 import { General } from "./General";
@@ -93,7 +93,12 @@ function payload(overrides: Partial<SettingsPayload> = {}): SettingsPayload {
 
 function stub(overrides: Partial<SettingsPayload> = {}) {
   vi.spyOn(api, "settings").mockResolvedValue(payload(overrides));
+  vi.spyOn(api, "tlsStatus").mockResolvedValue(noCertificate);
 }
+
+const noCertificate: TLSStatus = {
+  dashboard: { on: false }, assistants: { on: false }, hosts: [], authority: false,
+};
 
 
 /**
@@ -287,5 +292,59 @@ describe("the settings page, after the config file shrank", () => {
     expect(
       screen.queryByRole("button", { name: /Save changes/ }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("mcpd's own certificate, on General", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    stub();
+  });
+
+  // The default is a deployment with something in front serving https, and
+  // it should not be shown a panel about a certificate it does not have.
+  it("says nothing on a host that serves no certificate of its own", async () => {
+    renderWith(<General />, { session: sessionFor("admin") });
+
+    await screen.findByLabelText(/Address assistants use/);
+    await waitFor(() => expect(api.tlsStatus).toHaveBeenCalled());
+    expect(screen.queryByText("mcpd's own certificate")).toBeNull();
+  });
+
+  // A self-signed certificate is a warning on every visit until its authority
+  // is trusted, so the panel's job is the download and where to put it.
+  it("says what the certificate covers and offers the authority to install", async () => {
+    vi.spyOn(api, "tlsStatus").mockResolvedValue({
+      dashboard: { on: true }, assistants: { on: false },
+      hosts: ["127.0.0.1", "203.0.113.10", "::1", "localhost"],
+      expires: "2027-10-13T00:00:00Z", authority: true,
+    });
+    renderWith(<General />, { session: sessionFor("admin") });
+
+    expect(await screen.findByText("mcpd's own certificate")).toBeInTheDocument();
+    expect(screen.getByText(/Serving https for this dashboard\./)).toBeInTheDocument();
+    // The address people use, not the loopback names every certificate
+    // carries for local checks.
+    expect(screen.getByText("203.0.113.10")).toBeInTheDocument();
+    expect(screen.queryByText(/localhost/)).toBeNull();
+    expect(screen.getByRole("link", { name: "Download mcpd's certificate authority" }))
+      .toHaveAttribute("href", "/api/tls/ca");
+    expect(screen.getByText(/Group Policy/)).toBeInTheDocument();
+  });
+
+  it("says why the dashboard is on plain http when its certificate could not be made", async () => {
+    vi.spyOn(api, "tlsStatus").mockResolvedValue({
+      ...noCertificate,
+      dashboard: {
+        on: false,
+        problem: "The dashboard was set to https, but mcpd couldn't make its certificate, so it is on plain http.",
+        detail: "servertls: create /var/lib/mcpd/tls: not a directory",
+      },
+    });
+    renderWith(<General />, { session: sessionFor("admin") });
+
+    expect(await screen.findByText(/couldn't make its certificate/)).toBeInTheDocument();
+    // The error is evidence, under Technical details, not part of the sentence.
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
   });
 });

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth/users"
+	"github.com/spoked/mcpd/internal/servertls"
 	"github.com/spoked/mcpd/internal/settings"
 )
 
@@ -190,10 +191,16 @@ func (a *App) Run(ctx context.Context) error {
 
 	errCh := make(chan error, 2)
 
+	if a.certs != nil && a.certs.holder != nil {
+		a.startWorker("certificate-renewal", workerCtx, a.renewCertificates)
+	}
+
 	if a.frontend != nil {
 		go func() {
-			a.log.InfoContext(ctx, "dashboard listening", "addr", a.frontend.Addr)
-			if err := a.frontend.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			a.log.InfoContext(ctx, "dashboard listening", "addr", a.frontend.Addr,
+				"https", a.certs != nil && a.certs.dashboard)
+			err := a.serveFrontend()
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				// A privileged port is the likeliest cause, and the message
 				// has to say so: "permission denied" alone sends an operator
 				// looking in the wrong place.
@@ -402,6 +409,20 @@ func (a *App) pruneHistory(ctx context.Context) error {
 	}
 }
 
+// serveFrontend binds the dashboard's address and serves it, over https and
+// plain http on the same port when the dashboard presents mcpd's own
+// certificate.
+func (a *App) serveFrontend() error {
+	listener, err := net.Listen("tcp", a.frontend.Addr)
+	if err != nil {
+		return err
+	}
+	if a.certs != nil && a.certs.dashboard {
+		listener = servertls.Sniff(listener, a.certs.holder.TLSConfig())
+	}
+	return a.frontend.Serve(listener)
+}
+
 // announceServing closes a.serving once the MCP listener answers a request.
 //
 // It probes the listener's own address rather than the public URL: what needs
@@ -410,10 +431,10 @@ func (a *App) pruneHistory(ctx context.Context) error {
 func (a *App) announceServing(ctx context.Context, addr net.Addr) {
 	scheme := "http"
 	client := &http.Client{Timeout: 2 * time.Second}
-	if a.tls != nil {
+	if a.certs != nil && a.certs.assistants {
 		scheme = "https"
 		pool := x509.NewCertPool()
-		pool.AppendCertsFromPEM(a.tls.CAPEM)
+		pool.AppendCertsFromPEM(a.caPEM())
 		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
 	}
 

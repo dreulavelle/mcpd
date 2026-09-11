@@ -129,6 +129,40 @@ whatever `Host` header the request carried. The endpoint is stateless
 streamable HTTP: no session to open, so a single `tools/list` POST is a
 complete check.
 
+## Serving the dashboard over https
+
+Signing in with Microsoft or Google needs the dashboard on https: both refuse a
+redirect address on plain http, except on `localhost`. When something in front
+of mcpd already serves https -- Cloudflare Access, a reverse proxy -- leave
+**Certificate for this dashboard** (Settings → General) off, which is the
+default. Nothing changes for that deployment.
+
+For a host reached directly on a private network, set it to **mcpd's own** and
+restart. mcpd issues a certificate from the authority it keeps in `tls/` under
+the data folder, covering **Address this page is on** and loopback, and serves
+it on the dashboard's port. A plain-http request to that port is redirected to
+https on the same port, so existing bookmarks keep working. The certificate
+lasts a year and is renewed a month before it runs out, and again whenever
+the address changes, without a restart.
+
+Let's Encrypt is not an option for this shape of host: it issues only for a
+name it can check through public DNS or reach from the internet, and a private
+address has neither. That is why the certificate is mcpd's own, and why its
+authority has to be trusted once on each computer. Download it from the
+General tab and install it as a trusted root: across a company with Group
+Policy (Computer Configuration → Policies → Windows Settings → Security
+Settings → Public Key Policies → Trusted Root Certification Authorities) or an
+Intune trusted-certificate profile. Only the certificate is ever reissued, not
+the authority, so it stays trusted through every renewal.
+
+Under Docker, publish the dashboard on 443 so the address needs no port:
+`MCPD_FRONTEND_PORT=443` in `.env`. Then set **Address this page is on** to
+`https://` and the address people type.
+
+If the certificate cannot be made, the dashboard stays on plain http and the
+General tab says why, rather than refusing to start: the dashboard is the page
+the setting is changed on.
+
 ## Reaching an upstream behind your own certificate
 
 An integration inside a company often points at an HTTPS address whose

@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
 import { useCan } from "@/lib/session";
 import { Loading, Notice, PageHeader } from "@/components/chrome";
-import { SettingsForm } from "@/components/SettingsForm";
+import { SettingsForm, type GroupExtras } from "@/components/SettingsForm";
 import { Input } from "@/components/ui/input";
 import { tabForSection } from "./SettingsTabs";
 
@@ -38,12 +38,14 @@ export const SETTING_LINKS = {
  * it does not exist. Matches come from every section and each says where it
  * lives.
  */
-export function SettingsSection({ section, title, lede, placeholders, children }: {
+export function SettingsSection({ section, title, lede, placeholders, extras, children }: {
   section: string;
   title: string;
   lede: ReactNode;
   /** Passed through to the form; see SettingsForm. */
   placeholders?: Record<string, string>;
+  /** Passed through to the form; see SettingsForm. */
+  extras?: Record<string, GroupExtras>;
   /** Rendered above the form, for a tab that is more than its settings. */
   children?: ReactNode;
 }) {
@@ -121,7 +123,7 @@ export function SettingsSection({ section, title, lede, placeholders, children }
                       {tabForSection(g.section)}
                     </p>
                     <SettingsForm
-                  placeholders={placeholders}
+                      placeholders={placeholders} extras={extras}
                       groups={[g]} settings={data} links={SETTING_LINKS}
                       onSaved={reload} readOnly={!mayWrite}
                     />
@@ -134,7 +136,7 @@ export function SettingsSection({ section, title, lede, placeholders, children }
               {children}
               {mine.length > 0 && (
                 <SettingsForm
-                  placeholders={placeholders}
+                  placeholders={placeholders} extras={extras}
                   groups={mine} settings={data} links={SETTING_LINKS}
                   onSaved={reload} readOnly={!mayWrite}
                 />

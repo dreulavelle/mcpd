@@ -85,6 +85,10 @@ export function Authentication() {
   // somebody is left wondering where their button went.
   const loadOptions = useCallback(() => api.authOptions(), []);
   const { data: options, reload: reloadOptions } = useLoader(loadOptions, "");
+  // Whether this dashboard already serves https itself, so a provider that
+  // refuses an http address can be answered with the setting that fixes it.
+  const loadTLS = useCallback(() => api.tlsStatus(), []);
+  const { data: tls } = useLoader(loadTLS, "");
 
   // The providers first, straight under the address they all depend on; who
   // may register and how long a session lasts after them.
@@ -118,6 +122,7 @@ export function Authentication() {
             provider={p}
             uri={addresses?.redirect_uris[p] ?? ""}
             refusal={addresses?.refusals?.[p] ?? ""}
+            offerOwnCertificate={!!tls && !tls.dashboard.on}
             why={state.why}
             loaded={!!addresses}
           />
@@ -126,7 +131,7 @@ export function Authentication() {
       };
     }
     return out;
-  }, [data, addresses, offered]);
+  }, [data, addresses, offered, tls]);
 
   return (
     <>
@@ -329,10 +334,16 @@ function AddressStep({ onSaved }: { onSaved: () => void }) {
  * be right on the machine an operator tested it from and wrong everywhere
  * else.
  */
-function CallbackAddress({ provider, uri, refusal, why, loaded }: {
+function CallbackAddress({ provider, uri, refusal, offerOwnCertificate, why, loaded }: {
   provider: ProviderName;
   uri: string;
   refusal: string;
+  /**
+   * Whether to say mcpd can serve https itself, beside a refusal. Only when
+   * it is not already doing so: then the refusal is about the address, not
+   * the certificate.
+   */
+  offerOwnCertificate: boolean;
   why?: string;
   /** False while the addresses are loading, or when they could not be. */
   loaded: boolean;
@@ -349,7 +360,19 @@ function CallbackAddress({ provider, uri, refusal, why, loaded }: {
       ) : null}
       {/* Said here rather than left to surface as a refusal on the provider's
           own screen, after the operator has gone. */}
-      {refusal && <p className="text-xs text-attention">{refusal}</p>}
+      {refusal && (
+        <p className="text-xs text-attention">
+          {refusal}
+          {offerOwnCertificate && (
+            <>
+              {" "}mcpd can serve https itself: set <strong>Certificate for this
+              dashboard</strong> to mcpd's own on the{" "}
+              <Link to="/settings" className="underline underline-offset-4">General</Link>{" "}
+              tab, then change the address to https.
+            </>
+          )}
+        </p>
+      )}
       {why && <p className="text-xs text-muted-foreground">{why}</p>}
     </div>
   );

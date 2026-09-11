@@ -1,6 +1,9 @@
-import { useCallback, useMemo } from "react";
-import { api, type BootstrapSetting } from "@/lib/api";
+import { useCallback, useMemo, type ReactNode } from "react";
+import { api, type BootstrapSetting, type TLSStatus } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
+import { Notice } from "@/components/chrome";
+import { Evidence } from "@/components/evidence";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SettingsSection } from "./SettingsSection";
 
@@ -18,6 +21,14 @@ export function General() {
   const { data } = useLoader(load, "Couldn't load settings.");
   const loadEndpoints = useCallback(() => api.endpoints(), []);
   const { data: endpoints } = useLoader(loadEndpoints, "");
+  const loadTLS = useCallback(() => api.tlsStatus(), []);
+  const { data: tls } = useLoader(loadTLS, "");
+  // Under the addresses and the certificate settings, which are what it is
+  // about.
+  const extras = useMemo(
+    () => tls ? { server: { footer: <OwnCertificate status={tls} /> } } : undefined,
+    [tls],
+  );
 
   // What an empty address means, as this browser sees it: the host this
   // page was reached on, at the MCP port for one and this page's own
@@ -37,6 +48,7 @@ export function General() {
       title="Settings"
       lede="Addresses and housekeeping. Changes apply at once unless a field says otherwise."
       placeholders={placeholders}
+      extras={extras}
     >
       {data && <StartupFile values={data.bootstrap} />}
     </SettingsSection>
@@ -81,5 +93,90 @@ function StartupFile({ values }: { values: BootstrapSetting[] }) {
         </dl>
       </CardContent>
     </Card>
+  );
+}
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1"]);
+
+function B({ children }: { children: ReactNode }) {
+  return <strong className="font-medium text-foreground">{children}</strong>;
+}
+
+/**
+ * mcpd's own certificate: what it is serving now, and the one thing to do so
+ * browsers stop warning about it.
+ *
+ * What is served rather than what is set. The fields above say what the next
+ * restart will do; between a change and that restart the two differ, and this
+ * is the half that says which one people are getting.
+ *
+ * The authority is the point of the panel. A self-signed certificate is a
+ * warning on every visit until the authority is trusted, and once it is --
+ * pushed to every company computer by Group Policy or Intune -- it stays
+ * trusted through every renewal, because only the leaf is ever reissued.
+ */
+export function OwnCertificate({ status }: { status: TLSStatus }) {
+  const { dashboard, assistants } = status;
+  if (dashboard.problem) {
+    return (
+      <Notice tone="problem">
+        {dashboard.problem}
+        <Evidence detail={dashboard.detail} />
+      </Notice>
+    );
+  }
+  if (!dashboard.on && !assistants.on) return null;
+
+  const serving = [
+    dashboard.on && "this dashboard",
+    assistants.on && "the address assistants use",
+  ].filter(Boolean).join(" and ");
+  const reached = status.hosts.filter((h) => !LOOPBACK.has(h));
+  const until = status.expires ? new Date(status.expires).toLocaleDateString() : "";
+
+  return (
+    <div className="space-y-3 rounded-md border bg-muted/40 p-3">
+      <div className="space-y-1">
+        <p className="text-sm font-medium">mcpd's own certificate</p>
+        <p className="text-sm text-muted-foreground">
+          Serving https for {serving}. It covers{" "}
+          {reached.length > 0
+            ? <span className="font-mono text-xs text-foreground">{reached.join(", ")}</span>
+            : "only this machine"}
+          {until && <> and runs until {until}. mcpd renews it a month before that</>}.
+        </p>
+      </div>
+      {dashboard.warning && <p className="text-xs text-attention">{dashboard.warning}</p>}
+
+      {status.authority && (
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            Browsers warn about it until they trust the authority that signed it.
+            Install that once on each computer, and it stays trusted when mcpd
+            renews the certificate.
+          </p>
+          <Button asChild variant="outline" size="sm">
+            <a href="/api/tls/ca" download>Download mcpd's certificate authority</a>
+          </Button>
+          <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+            <li>
+              <B>Every company computer:</B> add it with Group Policy under
+              Computer Configuration › Policies › Windows Settings › Security
+              Settings › Public Key Policies › Trusted Root Certification
+              Authorities, or as a trusted certificate profile in Intune.
+            </li>
+            <li>
+              <B>One Windows computer:</B> open the file, choose Install
+              Certificate, then Local Machine, and place it in Trusted Root
+              Certification Authorities.
+            </li>
+            <li>
+              <B>A Mac:</B> open the file, add it to the System keychain, and set
+              it to Always Trust.
+            </li>
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }

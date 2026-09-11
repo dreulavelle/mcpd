@@ -82,7 +82,8 @@ type App struct {
 	tunnelFactory tunnel.ServerFactory
 	tunnelCheck   *tunnel.Checker
 	settings      *settings.Store
-	tls           *servertls.Materials
+	// certs is mcpd's own certificate and which listeners present it.
+	certs *certificates
 
 	// repoCatalog is the operator's own list of permitted servers, or a source
 	// with nothing in it when no address is set.
@@ -416,6 +417,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		MetricsEnabled:    cfg.Metrics.Enabled,
 		RelaxedDurability: boot.relaxedDurability,
 		TLSSelfSigned:     boot.tlsSelfSigned,
+		FrontendPublicURL: boot.frontendPublicURL,
+		FrontendTLS:       boot.frontendTLS,
 	}).Warnings() {
 		log.WarnContext(ctx, "configuration warning", "detail", w)
 	}
@@ -557,20 +560,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 	//
 	// The tunnel needs nothing from it: it drives an MCP server in this
 	// process over an in-memory transport and never dials mcpd back.
-	if boot.tlsSelfSigned {
-		materials, err := servertls.EnsureSelfSigned(
-			cfg.TLSDir(),
-			servertls.HostsFor(boot.publicURL, cfg.Server.Listen),
-			time.Now())
-		if err != nil {
-			return nil, err
-		}
-		a.tls = materials
-		log.InfoContext(ctx, "serving https with mcpd's own certificate",
-			"hosts", materials.Hosts,
-			"expires", materials.NotAfter.Format(time.RFC3339),
-			"issued_now", materials.Issued,
-			"ca", materials.CAPath)
+	if err := a.setupCertificates(ctx, cfg, boot, log); err != nil {
+		return nil, err
 	}
 
 	if err := a.buildTunnel(cfg, authorizer, log); err != nil {
@@ -794,28 +785,30 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			AccountAssignments: func() map[string]string {
 				return a.tunnelAccountAssignments(context.Background())
 			},
-			CACertificate: func() []byte {
-				if a.tls == nil {
-					return nil
-				}
-				return a.tls.CAPEM
-			},
-			Tunnel:     a.tunnels,
-			TunnelInfo: func() any { return a.tunnelCheck.Info() },
-			Settings:   a.settings,
-			Bootstrap:  func() []admin.BootstrapSetting { return bootstrapSettings(cfg) },
+			CACertificate: a.caPEM,
+			TLSStatus:     a.tlsStatus,
+			Tunnel:        a.tunnels,
+			TunnelInfo:    func() any { return a.tunnelCheck.Info() },
+			Settings:      a.settings,
+			Bootstrap:     func() []admin.BootstrapSetting { return bootstrapSettings(cfg) },
 			PluginSettings: func(name string) map[string]any {
 				return cfg.Plugins[name].Settings
 			},
 		})
+		handler := dashboard.Handler()
+		if a.certs.dashboard {
+			// https and plain http share the dashboard's port, and a plain
+			// request is sent on to the same address over https.
+			handler = servertls.RedirectToHTTPS(handler)
+		}
 		a.frontend = &http.Server{
 			Addr:              cfg.Server.FrontendListen,
-			Handler:           dashboard.Handler(),
+			Handler:           handler,
 			ReadHeaderTimeout: boot.readHeaderTimeout,
 			ReadTimeout:       boot.readTimeout,
 			WriteTimeout:      boot.writeTimeout,
 			IdleTimeout:       boot.idleTimeout,
-			ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+			ErrorLog:          serverErrorLog(log),
 		}
 	}
 
@@ -826,10 +819,10 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 		ReadTimeout:       boot.readTimeout,
 		WriteTimeout:      boot.writeTimeout,
 		IdleTimeout:       boot.idleTimeout,
-		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+		ErrorLog:          serverErrorLog(log),
 	}
-	if a.tls != nil {
-		a.server.TLSConfig = a.tls.TLSConfig()
+	if a.certs.assistants {
+		a.server.TLSConfig = a.certs.holder.TLSConfig()
 	}
 	return a, nil
 }
