@@ -34,6 +34,8 @@ export interface GroupExtras {
    * pointer.
    */
   whileOn?: ReactNode;
+  /** After the group's fields. */
+  footer?: ReactNode;
 }
 
 /** A form over a set of setting groups, shared by every page that has some. */
@@ -162,6 +164,7 @@ export function SettingsForm({
                 if (f.key !== group.enabled_by || !on || !more) return field;
                 return [field, <div key={`${f.key}-extra`}>{more}</div>];
               })}
+              {extras?.[group.name]?.footer}
             </CardContent>
           </Card>
         );

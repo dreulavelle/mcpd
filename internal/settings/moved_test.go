@@ -153,6 +153,7 @@ func TestValidatingTheMovedFields(t *testing.T) {
 		{"an empty address is allowed", KeyServerPublicURL, "", ""},
 		{"a good address", KeyServerPublicURL, "https://mcp.example.net", ""},
 		{"an unknown TLS mode", KeyServerTLSMode, "acme", "must be one of"},
+		{"an unknown dashboard TLS mode", KeyServerFrontendTLSMode, "acme", "must be one of"},
 		{"a timeout below the floor", KeyServerReadTimeout, "0", "at least"},
 		{"a timeout that is not a number", KeyServerReadTimeout, "60s", "whole number"},
 		{"a risk level that does not exist", KeyApprovalInlineMaxRisk, "catastrophic",

@@ -259,6 +259,10 @@ type Options struct {
 	// operator has to click past every time and one they resolve once.
 	CACertificate func() []byte
 
+	// TLSStatus says which listeners serve mcpd's own certificate, and what
+	// stands in the way of one that was asked to.
+	TLSStatus func(context.Context) TLSStatus
+
 	// Tunnel exposes the embedded tunnel so an operator can see its state and
 	// start or stop it without restarting mcpd.
 	Tunnel TunnelController
@@ -475,6 +479,7 @@ func (s *Server) routes() {
 	// a public document, and requiring a sign-in to fetch it would mean
 	// needing the browser to trust it before it can be trusted.
 	s.mux.HandleFunc("GET /api/tls/ca", s.handleCACertificate)
+	api("GET /api/tls", s.handleTLSStatus, auth.PermSettingsRead)
 
 	// Metrics live here rather than beside /health/ready on the MCP listener.
 	// That listener is the one a third party reaches through a tunnel, and
@@ -1896,6 +1901,46 @@ func decodeJSON(raw json.RawMessage) any {
 	return v
 }
 
+// TLSStatus is mcpd's own certificate as the dashboard describes it.
+//
+// What is served, not what is set: the settings are read when the process
+// starts, so between a change and a restart the two differ, and a page that
+// showed the setting as the state would say https while serving http.
+type TLSStatus struct {
+	Dashboard  ListenerTLS `json:"dashboard"`
+	Assistants ListenerTLS `json:"assistants"`
+	// Hosts are the names and addresses the certificate covers, empty when
+	// mcpd has none.
+	Hosts []string `json:"hosts"`
+	// Expires is when it runs out, RFC 3339, empty when there is none. It
+	// renews itself a month before.
+	Expires string `json:"expires,omitempty"`
+	// Authority reports whether the authority that signed it can be
+	// downloaded from GET /api/tls/ca.
+	Authority bool `json:"authority"`
+}
+
+// ListenerTLS is one listener's part of TLSStatus.
+type ListenerTLS struct {
+	// On reports whether the listener presents mcpd's own certificate now.
+	On bool `json:"on"`
+	// Problem is the sentence saying why a listener that was asked to serve
+	// https is not, and Detail is the error behind it.
+	Problem string `json:"problem,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+	// Warning is something that works but will be refused by browsers: a
+	// certificate that does not cover the address people use.
+	Warning string `json:"warning,omitempty"`
+}
+
+func (s *Server) handleTLSStatus(w http.ResponseWriter, r *http.Request) {
+	if s.opts.TLSStatus == nil {
+		s.writeJSON(w, r, http.StatusOK, TLSStatus{Hosts: []string{}})
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, s.opts.TLSStatus(r.Context()))
+}
+
 // handleCACertificate serves the certificate authority for installation.
 func (s *Server) handleCACertificate(w http.ResponseWriter, r *http.Request) {
 	if s.opts.CACertificate == nil {
@@ -1907,8 +1952,11 @@ func (s *Server) handleCACertificate(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusNotFound, "no certificate authority available")
 		return
 	}
-	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Header().Set("Content-Disposition", `attachment; filename="mcpd-ca.pem"`)
+	// .crt rather than .pem, with the same PEM inside: Windows opens a .crt in
+	// its certificate installer and does not recognise .pem at all, and the
+	// instructions beside the download say "open the file".
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", `attachment; filename="mcpd-ca.crt"`)
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(pem)
 }

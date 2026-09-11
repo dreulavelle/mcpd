@@ -76,6 +76,9 @@ function stub({
       : {},
     refusals,
   });
+  vi.spyOn(api, "tlsStatus").mockResolvedValue({
+    dashboard: { on: false }, assistants: { on: false }, hosts: [], authority: false,
+  });
   vi.spyOn(api, "authOptions").mockResolvedValue({
     providers: offered.map((p) => ({ provider: p, label: p })),
     registration: false,
@@ -169,11 +172,30 @@ describe("the authentication page", () => {
     expect(within(card).queryByText(/Single-page application/)).toBeNull();
   });
 
-  it("says in the card when a provider will refuse the address", async () => {
+  // The refusal is answered with the setting that fixes it, since the
+  // dashboard can serve https itself.
+  it("says in the card when a provider will refuse the address, and what fixes it", async () => {
     stub({ refusals: { entra: "Microsoft accepts only https here, except on localhost." } });
     mount();
 
-    expect(within(await entraCard()).getByText(/only https/)).toBeInTheDocument();
+    const card = await entraCard();
+    expect(within(card).getByText(/only https/)).toBeInTheDocument();
+    expect(await within(card).findByText(/mcpd can serve https itself/)).toBeInTheDocument();
+  });
+
+  it("does not offer mcpd's own certificate when the dashboard already serves it", async () => {
+    stub({ refusals: { entra: "Microsoft accepts only https here, except on localhost." } });
+    const tls = vi.spyOn(api, "tlsStatus").mockResolvedValue({
+      dashboard: { on: true }, assistants: { on: false }, hosts: ["203.0.113.10"], authority: true,
+    });
+    mount();
+
+    const card = await entraCard();
+    await within(card).findByText(/only https/);
+    // Settled, so the absence below is the answer and not the moment before it.
+    await waitFor(() => expect(tls).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(within(card).queryByText(/mcpd can serve https itself/)).toBeNull();
   });
 
   // Switched on and offered are different facts, and the gap between them was

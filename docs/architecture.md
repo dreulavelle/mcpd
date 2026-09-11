@@ -2104,6 +2104,32 @@ can know the session cookie needs `Secure`. `X-Forwarded-Proto` deliberately doe
 whoever is talking to this process, and nothing here can tell a proxy's from a
 caller's.
 
+**The dashboard can serve mcpd's own certificate, and it is a separate
+setting.** A provider sign-in needs the dashboard on https, and a host on a
+private address cannot get a publicly trusted certificate: Let's Encrypt checks
+a name through public DNS or over the internet, and that host has neither. So
+`server.frontend_tls_mode` presents the same private authority's certificate
+the MCP listener can, and the authority is installed once as a trusted root.
+It is its own key rather than a second meaning of `server.tls_mode` because
+the two listeners are reached different ways: a deployment behind Cloudflare
+has the dashboard's TLS handled and may still want mcpd's own on the MCP
+listener, or the reverse.
+
+Three decisions in it are easy to undo by accident. The dashboard's port answers
+both protocols -- `servertls.Sniff` reads the first byte, and a TLS handshake
+always opens with `0x16` -- so a bookmark to `http://` is redirected rather
+than reset. The redirect is 307 and there is no HSTS, because both of the
+permanent forms are remembered by the browser, and turning https off would then
+strand every browser that had visited. And failing to make the certificate
+leaves the dashboard on plain http, saying why, rather than stopping startup:
+the dashboard is where the setting is changed back. The MCP listener keeps its
+old behaviour and does stop, because a connector configured for https has no
+plain fallback that would help it.
+
+One certificate covers both listeners, and `servertls.Holder` hands it to each
+handshake, so the renewal worker can reissue it -- a month before expiry, or
+when an address it covers changes -- without a restart.
+
 ## Logs somebody can use from a support call
 
 The hard case is a machine nobody here can reach, running a version nobody here

@@ -184,6 +184,31 @@ export interface ProviderDescriptor {
  * the providers, which check the address, and nothing checks one typed into a
  * form. A field saying otherwise would have the form promise something false.
  */
+/** One listener's part of TLSStatus. */
+export interface ListenerTLS {
+  /** Serving mcpd's own certificate now. */
+  on: boolean;
+  /** Why a listener asked to serve https is not, and the error behind it. */
+  problem?: string;
+  detail?: string;
+  /** Works, but browsers will refuse it: the address people use isn't covered. */
+  warning?: string;
+}
+
+/**
+ * mcpd's own certificate as it is being served, which differs from the
+ * settings between a change and a restart.
+ */
+export interface TLSStatus {
+  dashboard: ListenerTLS;
+  assistants: ListenerTLS;
+  hosts: string[];
+  /** RFC 3339. It renews itself a month before. */
+  expires?: string;
+  /** Whether the authority can be downloaded from /api/tls/ca. */
+  authority: boolean;
+}
+
 export interface AuthOptions {
   providers: ProviderDescriptor[];
   /** Whether somebody without an account may ask for one. */
@@ -1789,6 +1814,9 @@ export const api = {
   /** "Not now". Retires the offer rather than merely navigating away from it. */
   discardPendingLink: () =>
     request<void>("/api/auth/sso/pending", { method: "DELETE" }),
+
+  /** Which listeners serve mcpd's own certificate, as this process started them. */
+  tlsStatus: () => request<TLSStatus>("/api/tls"),
 
   /** The exact addresses to paste into each provider's console. */
   redirectURIs: () =>

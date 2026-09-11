@@ -20,7 +20,9 @@ import (
 // while they agree.
 type startup struct {
 	publicURL         string
+	frontendPublicURL string
 	tlsSelfSigned     bool
+	frontendTLS       bool
 	frontendEnabled   bool
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
@@ -33,7 +35,9 @@ type startup struct {
 func resolveStartup(ctx context.Context, store *settings.Store) startup {
 	return startup{
 		publicURL:         store.FieldString(ctx, settings.KeyServerPublicURL),
+		frontendPublicURL: store.FieldString(ctx, settings.KeyServerFrontendPublicURL),
 		tlsSelfSigned:     store.FieldString(ctx, settings.KeyServerTLSMode) == "self-signed",
+		frontendTLS:       store.FieldString(ctx, settings.KeyServerFrontendTLSMode) == "self-signed",
 		frontendEnabled:   store.FieldBool(ctx, settings.KeyServerFrontendEnabled),
 		readHeaderTimeout: store.FieldDuration(ctx, settings.KeyServerReadHeaderTimeout),
 		readTimeout:       store.FieldDuration(ctx, settings.KeyServerReadTimeout),
