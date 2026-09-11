@@ -1,10 +1,16 @@
-import { useCallback, useMemo, type ReactNode } from "react";
-import { api, type BootstrapSetting, type TLSStatus } from "@/lib/api";
+import { useCallback, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  api, problemText, type BootstrapSetting, type CertificateInfo, type TLSStatus,
+} from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
-import { Notice } from "@/components/chrome";
+import { CodeBlock, Notice } from "@/components/chrome";
+import { useConfirm } from "@/components/confirm";
 import { Evidence } from "@/components/evidence";
+import { Chip } from "@/components/status";
+import { useNotify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import { SettingsSection } from "./SettingsSection";
 
 /**
@@ -22,12 +28,14 @@ export function General() {
   const loadEndpoints = useCallback(() => api.endpoints(), []);
   const { data: endpoints } = useLoader(loadEndpoints, "");
   const loadTLS = useCallback(() => api.tlsStatus(), []);
-  const { data: tls } = useLoader(loadTLS, "");
+  const { data: tls, reload: reloadTLS } = useLoader(loadTLS, "");
   // Under the addresses and the certificate settings, which are what it is
   // about.
   const extras = useMemo(
-    () => tls ? { server: { footer: <OwnCertificate status={tls} /> } } : undefined,
-    [tls],
+    () => tls
+      ? { server: { footer: <DashboardCertificate status={tls} onChanged={reloadTLS} /> } }
+      : undefined,
+    [tls, reloadTLS],
   );
 
   // What an empty address means, as this browser sees it: the host this
@@ -102,51 +110,82 @@ function B({ children }: { children: ReactNode }) {
   return <strong className="font-medium text-foreground">{children}</strong>;
 }
 
+function day(iso: string): string {
+  return new Date(iso).toLocaleDateString();
+}
+
+function Warnings({ of }: { of?: CertificateInfo }) {
+  if (!of?.warnings?.length) return null;
+  return (
+    <>
+      {of.warnings.map((w) => <p key={w} className="text-xs text-attention">{w}</p>)}
+    </>
+  );
+}
+
 /**
- * mcpd's own certificate: what it is serving now, and the one thing to do so
- * browsers stop warning about it.
+ * What this dashboard presents, and what to do about it: install mcpd's
+ * authority once, or upload a certificate of your own.
  *
- * What is served rather than what is set. The fields above say what the next
+ * What is served rather than what is set. The field above says what the next
  * restart will do; between a change and that restart the two differ, and this
  * is the half that says which one people are getting.
- *
- * The authority is the point of the panel. A self-signed certificate is a
- * warning on every visit until the authority is trusted, and once it is --
- * pushed to every company computer by Group Policy or Intune -- it stays
- * trusted through every renewal, because only the leaf is ever reissued.
  */
-export function OwnCertificate({ status }: { status: TLSStatus }) {
-  const { dashboard, assistants } = status;
-  if (dashboard.problem) {
-    return (
-      <Notice tone="problem">
-        {dashboard.problem}
-        <Evidence detail={dashboard.detail} />
-      </Notice>
-    );
-  }
-  if (!dashboard.on && !assistants.on) return null;
+export function DashboardCertificate({ status, onChanged }: {
+  status: TLSStatus;
+  onChanged: () => void;
+}) {
+  const { dashboard } = status;
+  const own = !!status.own;
+  const yours = status.dashboard_mode === "custom" || !!status.provided;
+  if (!dashboard.problem && !status.restart_needed && !own && !yours) return null;
 
+  return (
+    <div className="space-y-3">
+      {dashboard.problem && (
+        <Notice tone="problem">
+          {dashboard.problem}
+          <Evidence detail={dashboard.detail} />
+        </Notice>
+      )}
+      {status.restart_needed && (
+        <Notice tone="attention">
+          Restart mcpd to change the certificate this dashboard serves.
+        </Notice>
+      )}
+      {own && <OwnCertificate status={status} />}
+      {yours && <YourCertificate status={status} onChanged={onChanged} />}
+    </div>
+  );
+}
+
+/**
+ * mcpd's own certificate. The authority is the point of it: a self-signed
+ * certificate is a warning on every visit until the authority is trusted, and
+ * once it is -- pushed to every company computer by Group Policy or Intune --
+ * it stays trusted through every renewal, because only the leaf is reissued.
+ */
+function OwnCertificate({ status }: { status: TLSStatus }) {
+  const own = status.own!;
   const serving = [
-    dashboard.on && "this dashboard",
-    assistants.on && "the address assistants use",
+    status.dashboard.source === "own" && "this dashboard",
+    status.assistants.on && "the address assistants use",
   ].filter(Boolean).join(" and ");
-  const reached = status.hosts.filter((h) => !LOOPBACK.has(h));
-  const until = status.expires ? new Date(status.expires).toLocaleDateString() : "";
+  const reached = own.hosts.filter((h) => !LOOPBACK.has(h));
 
   return (
     <div className="space-y-3 rounded-md border bg-muted/40 p-3">
       <div className="space-y-1">
         <p className="text-sm font-medium">mcpd's own certificate</p>
         <p className="text-sm text-muted-foreground">
-          Serving https for {serving}. It covers{" "}
+          Serving https for {serving || "nothing yet"}. It covers{" "}
           {reached.length > 0
             ? <span className="font-mono text-xs text-foreground">{reached.join(", ")}</span>
             : "only this machine"}
-          {until && <> and runs until {until}. mcpd renews it a month before that</>}.
+          {" "}and runs until {day(own.not_after)}. mcpd renews it a month before that.
         </p>
       </div>
-      {dashboard.warning && <p className="text-xs text-attention">{dashboard.warning}</p>}
+      <Warnings of={own} />
 
       {status.authority && (
         <div className="space-y-2">
@@ -177,6 +216,210 @@ export function OwnCertificate({ status }: { status: TLSStatus }) {
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * A certificate somebody else issued: most usefully one from the company's
+ * own authority, which its computers already trust, so nobody installs
+ * anything. Nothing renews it, so what it covers and when it runs out are on
+ * the page rather than in a file somebody has to open.
+ */
+function YourCertificate({ status, onChanged }: {
+  status: TLSStatus;
+  onChanged: () => void;
+}) {
+  const p = status.provided;
+  const inUse = status.dashboard.source === "provided";
+  const confirm = useConfirm();
+  const notify = useNotify();
+  const [problem, setProblem] = useState("");
+
+  async function remove() {
+    if (!(await confirm({
+      title: "Remove your certificate?",
+      description: "It isn't in use. You can upload it, or another, again.",
+      action: "Remove",
+    }))) return;
+    setProblem("");
+    try {
+      await api.removeDashboardCertificate();
+      notify("good", "Removed.");
+      onChanged();
+    } catch (e) {
+      setProblem(problemText(e, "Couldn't remove it."));
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border bg-muted/40 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-medium">Your certificate</p>
+        {p && <Chip tone={inUse ? "good" : "neutral"}>{inUse ? "In use" : "Not in use yet"}</Chip>}
+      </div>
+
+      {p ? (
+        <>
+          <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
+            <dt className="text-muted-foreground">Issued to</dt>
+            <dd>{p.subject}</dd>
+            <dt className="text-muted-foreground">Issued by</dt>
+            <dd>{p.issuer}</dd>
+            <dt className="text-muted-foreground">Covers</dt>
+            <dd className="font-mono text-xs break-all">{p.hosts.join(", ") || "Nothing by name"}</dd>
+            <dt className="text-muted-foreground">Runs until</dt>
+            <dd>{day(p.not_after)}</dd>
+          </dl>
+          <Warnings of={p} />
+          <Evidence detail={`SHA-256 fingerprint ${p.fingerprint}`} />
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          None uploaded yet. Ask your company's certificate authority for a server
+          certificate covering the address this page is on, then upload it here.
+        </p>
+      )}
+
+      {problem && <Notice tone="problem">{problem}</Notice>}
+      <UploadCertificate replacing={!!p} onSaved={onChanged} />
+      {p && !inUse && (
+        <Button type="button" variant="ghost" size="sm" onClick={remove}>
+          Remove
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The upload. Two boxes because a certificate and its key usually arrive as
+ * two files, but one file holding everything can go in the first: the server
+ * looks for each piece wherever it is.
+ */
+function UploadCertificate({ replacing, onSaved }: {
+  replacing: boolean;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(!replacing);
+  const [cert, setCert] = useState("");
+  const [key, setKey] = useState("");
+  const [binary, setBinary] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+  const notify = useNotify();
+
+  if (!open) {
+    return (
+      <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
+        Replace it
+      </Button>
+    );
+  }
+
+  // A .pfx is the usual thing a Windows authority hands over, and it is
+  // binary. It is caught here, where the command to convert it can be shown
+  // for copying, rather than sent and refused.
+  async function pick(file: File, into: (text: string) => void) {
+    const text = await file.text();
+    if (!text.includes("-----BEGIN")) {
+      setBinary(true);
+      return;
+    }
+    setBinary(false);
+    into(text);
+  }
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setProblem("");
+    try {
+      const status = await api.setDashboardCertificate(cert, key);
+      notify("good", status.dashboard.source === "provided"
+        ? "Saved. The dashboard is serving it now."
+        : "Saved.");
+      setCert("");
+      setKey("");
+      if (replacing) setOpen(false);
+      onSaved();
+    } catch (err) {
+      setProblem(problemText(err, "Couldn't save that certificate."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={save} className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        Paste the certificate issued for this dashboard, with its authority's
+        certificates after it, and its private key. One file holding all of it
+        can go in the first box.
+      </p>
+      <PemBox
+        id="dashboard-certificate" label="Certificate" value={cert} onChange={setCert}
+        onPick={(f) => pick(f, setCert)} placeholder="-----BEGIN CERTIFICATE-----"
+      />
+      <PemBox
+        id="dashboard-key" label="Private key" value={key} onChange={setKey}
+        onPick={(f) => pick(f, setKey)} placeholder="-----BEGIN PRIVATE KEY-----"
+      />
+      {binary && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-attention">
+            That file isn't PEM text. Convert a .pfx or .p12 file first, then
+            choose the file it makes:
+          </p>
+          <CodeBlock>{"openssl pkcs12 -in certificate.pfx -nodes -out certificate.pem"}</CodeBlock>
+        </div>
+      )}
+      {problem && <Notice tone="problem">{problem}</Notice>}
+      <div className="flex gap-2">
+        <Button type="submit" size="sm" disabled={busy || !cert.trim()}>
+          {busy ? "Saving…" : "Save certificate"}
+        </Button>
+        {replacing && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function PemBox({ id, label, value, onChange, onPick, placeholder }: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (text: string) => void;
+  onPick: (file: File) => void;
+  placeholder: string;
+}) {
+  const picker = useRef<HTMLInputElement>(null);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={id}>{label}</Label>
+        <Button type="button" variant="ghost" size="sm" onClick={() => picker.current?.click()}>
+          Choose a file
+        </Button>
+        <input
+          ref={picker} type="file" className="hidden" aria-hidden="true" tabIndex={-1}
+          accept=".pem,.crt,.cer,.key,.txt"
+          onChange={(e) => {
+            const chosen = e.target.files?.[0];
+            if (chosen) onPick(chosen);
+            e.target.value = "";
+          }}
+        />
+      </div>
+      <textarea
+        id={id} value={value} spellCheck={false} autoComplete="off" placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-28 w-full rounded-md border bg-background p-2 font-mono text-xs"
+      />
     </div>
   );
 }

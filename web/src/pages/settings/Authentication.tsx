@@ -366,7 +366,7 @@ function CallbackAddress({ provider, uri, refusal, offerOwnCertificate, why, loa
           {offerOwnCertificate && (
             <>
               {" "}mcpd can serve https itself: set <strong>Certificate for this
-              dashboard</strong> to mcpd's own on the{" "}
+              dashboard</strong> to mcpd's own or your own on the{" "}
               <Link to="/settings" className="underline underline-offset-4">General</Link>{" "}
               tab, then change the address to https.
             </>

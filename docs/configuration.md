@@ -137,31 +137,62 @@ of mcpd already serves https -- Cloudflare Access, a reverse proxy -- leave
 **Certificate for this dashboard** (Settings → General) off, which is the
 default. Nothing changes for that deployment.
 
-For a host reached directly on a private network, set it to **mcpd's own** and
-restart. mcpd issues a certificate from the authority it keeps in `tls/` under
-the data folder, covering **Address this page is on** and loopback, and serves
-it on the dashboard's port. A plain-http request to that port is redirected to
-https on the same port, so existing bookmarks keep working. The certificate
-lasts a year and is renewed a month before it runs out, and again whenever
-the address changes, without a restart.
+Otherwise it has two settings, and both serve https on the dashboard's port. A
+plain-http request to that port is redirected to https on the same port, so
+existing bookmarks keep working.
 
-Let's Encrypt is not an option for this shape of host: it issues only for a
-name it can check through public DNS or reach from the internet, and a private
-address has neither. That is why the certificate is mcpd's own, and why its
-authority has to be trusted once on each computer. Download it from the
-General tab and install it as a trusted root: across a company with Group
+**mcpd's own** issues a certificate from the authority mcpd keeps in `tls/`
+under the data folder, covering **Address this page is on** and loopback. It
+lasts a year and is renewed a month before it runs out, and again whenever the
+address changes, without a restart. Browsers warn about it until they trust
+that authority, which has to be installed once on each computer: download it
+from the General tab and add it as a trusted root, across a company with Group
 Policy (Computer Configuration → Policies → Windows Settings → Security
 Settings → Public Key Policies → Trusted Root Certification Authorities) or an
 Intune trusted-certificate profile. Only the certificate is ever reissued, not
 the authority, so it stays trusted through every renewal.
 
-Under Docker, publish the dashboard on 443 so the address needs no port:
-`MCPD_FRONTEND_PORT=443` in `.env`. Then set **Address this page is on** to
-`https://` and the address people type.
+**Your own certificate** serves one you upload on the General tab: the
+certificate, the chain above it, and its private key, as PEM, in one file or
+two. This is the one to use when a company already runs a certificate
+authority -- Active Directory Certificate Services, say -- because its computers
+already trust what it issues, and nobody installs anything. Ask it for a server
+certificate covering the address people use; an IP address is fine if the
+authority will put it in the certificate. A publicly trusted certificate for a
+name works too. The private key must not have a passphrase, since mcpd reads it
+on every start with nobody there to type one. A `.pfx` from a Windows
+authority converts with
+`openssl pkcs12 -in certificate.pfx -nodes -out certificate.pem`.
 
-If the certificate cannot be made, the dashboard stays on plain http and the
+Nothing renews an uploaded certificate. The General tab says when it runs out
+and warns a month before; uploading the replacement takes effect at once.
+Something outside mcpd can renew it instead: whatever writes a new PEM bundle,
+key and chain together, to `tls/dashboard.pem` in the data folder is served
+within a minute, without a restart.
+
+A **Cloudflare Origin CA** certificate is not one to use here. Cloudflare signs
+those for its own proxy to trust, not browsers, so reaching the dashboard
+directly shows a warning; the General tab says so if one is uploaded. Behind
+Cloudflare, Cloudflare serves its own certificate to browsers and this setting
+stays off.
+
+Let's Encrypt is not built in. It issues only for a name it can check through
+public DNS or reach from the internet, and a host on a private address with no
+public name has neither. Where there is a public name, a client such as acme.sh
+can fetch one and write it to `tls/dashboard.pem`, as above.
+
+Under Docker, publish the dashboard on 443 so the address needs no port:
+`MCPD_FRONTEND_PORT=443` in `.env`, or 443 alongside 80 so that `http://`
+lands on `https://`. Then set **Address this page is on** to `https://` and
+the address people type.
+
+If the certificate cannot be loaded, the dashboard stays on plain http and the
 General tab says why, rather than refusing to start: the dashboard is the page
-the setting is changed on.
+the setting is changed on. Signing in keeps working there, because the session
+cookie follows the connection rather than the https address when the dashboard
+serves https itself. An uploaded certificate that has run out is still served,
+with a warning, since a browser's warning can be clicked past and a lost
+sign-in cookie cannot.
 
 ## Reaching an upstream behind your own certificate
 

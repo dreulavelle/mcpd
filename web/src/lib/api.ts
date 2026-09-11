@@ -186,26 +186,43 @@ export interface ProviderDescriptor {
  */
 /** One listener's part of TLSStatus. */
 export interface ListenerTLS {
-  /** Serving mcpd's own certificate now. */
+  /** Serving https now. */
   on: boolean;
+  /** Which certificate it presents. */
+  source?: "own" | "provided";
   /** Why a listener asked to serve https is not, and the error behind it. */
   problem?: string;
   detail?: string;
-  /** Works, but browsers will refuse it: the address people use isn't covered. */
-  warning?: string;
+}
+
+/** What the page shows about one certificate. */
+export interface CertificateInfo {
+  subject: string;
+  issuer: string;
+  hosts: string[];
+  /** RFC 3339. */
+  not_before: string;
+  not_after: string;
+  fingerprint: string;
+  /** What browsers will object to: an address it misses, a date it runs out. */
+  warnings?: string[];
 }
 
 /**
- * mcpd's own certificate as it is being served, which differs from the
- * settings between a change and a restart.
+ * What the dashboard and the assistants' address present, which differs from
+ * the settings between a change and a restart.
  */
 export interface TLSStatus {
   dashboard: ListenerTLS;
   assistants: ListenerTLS;
-  hosts: string[];
-  /** RFC 3339. It renews itself a month before. */
-  expires?: string;
-  /** Whether the authority can be downloaded from /api/tls/ca. */
+  /** The setting now: "off", "self-signed" or "custom". The next restart does this. */
+  dashboard_mode: string;
+  restart_needed: boolean;
+  /** mcpd's own certificate, when a listener uses it. It renews itself. */
+  own?: CertificateInfo;
+  /** The uploaded certificate, whether or not it is served yet. */
+  provided?: CertificateInfo;
+  /** Whether mcpd's own authority can be downloaded from /api/tls/ca. */
   authority: boolean;
 }
 
@@ -1815,8 +1832,21 @@ export const api = {
   discardPendingLink: () =>
     request<void>("/api/auth/sso/pending", { method: "DELETE" }),
 
-  /** Which listeners serve mcpd's own certificate, as this process started them. */
+  /** What each listener presents, as this process started them. */
   tlsStatus: () => request<TLSStatus>("/api/tls"),
+
+  /**
+   * Installs a certificate for the dashboard. Either field may hold the whole
+   * bundle; the server finds the key and the certificates wherever they are.
+   */
+  setDashboardCertificate: (certificate: string, privateKey: string) =>
+    request<TLSStatus>("/api/tls/dashboard-certificate", {
+      method: "PUT",
+      body: JSON.stringify({ certificate, private_key: privateKey }),
+    }),
+
+  removeDashboardCertificate: () =>
+    request<void>("/api/tls/dashboard-certificate", { method: "DELETE" }),
 
   /** The exact addresses to paste into each provider's console. */
   redirectURIs: () =>

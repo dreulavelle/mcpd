@@ -97,7 +97,15 @@ function stub(overrides: Partial<SettingsPayload> = {}) {
 }
 
 const noCertificate: TLSStatus = {
-  dashboard: { on: false }, assistants: { on: false }, hosts: [], authority: false,
+  dashboard: { on: false }, assistants: { on: false },
+  dashboard_mode: "off", restart_needed: false, authority: false,
+};
+
+const acmeCertificate = {
+  subject: "mcpd.example.com", issuer: "Acme Issuing CA",
+  hosts: ["203.0.113.10", "mcpd.example.com"],
+  not_before: "2026-09-01T00:00:00Z", not_after: "2027-09-01T00:00:00Z",
+  fingerprint: "AB12",
 };
 
 
@@ -295,7 +303,7 @@ describe("the settings page, after the config file shrank", () => {
   });
 });
 
-describe("mcpd's own certificate, on General", () => {
+describe("the dashboard's certificate, on General", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     stub();
@@ -309,15 +317,19 @@ describe("mcpd's own certificate, on General", () => {
     await screen.findByLabelText(/Address assistants use/);
     await waitFor(() => expect(api.tlsStatus).toHaveBeenCalled());
     expect(screen.queryByText("mcpd's own certificate")).toBeNull();
+    expect(screen.queryByText("Your certificate")).toBeNull();
   });
 
   // A self-signed certificate is a warning on every visit until its authority
   // is trusted, so the panel's job is the download and where to put it.
-  it("says what the certificate covers and offers the authority to install", async () => {
+  it("says what mcpd's own certificate covers and offers the authority to install", async () => {
     vi.spyOn(api, "tlsStatus").mockResolvedValue({
-      dashboard: { on: true }, assistants: { on: false },
-      hosts: ["127.0.0.1", "203.0.113.10", "::1", "localhost"],
-      expires: "2027-10-13T00:00:00Z", authority: true,
+      ...noCertificate, dashboard: { on: true, source: "own" }, dashboard_mode: "self-signed",
+      own: {
+        ...acmeCertificate, subject: "203.0.113.10", issuer: "mcpd local certificate authority",
+        hosts: ["127.0.0.1", "203.0.113.10", "::1", "localhost"],
+      },
+      authority: true,
     });
     renderWith(<General />, { session: sessionFor("admin") });
 
@@ -337,14 +349,65 @@ describe("mcpd's own certificate, on General", () => {
       ...noCertificate,
       dashboard: {
         on: false,
-        problem: "The dashboard was set to https, but mcpd couldn't make its certificate, so it is on plain http.",
+        problem: "The dashboard was set to https, but mcpd couldn't load its certificate, so it is on plain http.",
         detail: "servertls: create /var/lib/mcpd/tls: not a directory",
       },
     });
     renderWith(<General />, { session: sessionFor("admin") });
 
-    expect(await screen.findByText(/couldn't make its certificate/)).toBeInTheDocument();
+    expect(await screen.findByText(/couldn't load its certificate/)).toBeInTheDocument();
     // The error is evidence, under Technical details, not part of the sentence.
     expect(screen.getByText("Technical details")).toBeInTheDocument();
+  });
+
+  // Chosen before anything is uploaded: the page asks for the certificate
+  // where the setting is, so the restart that turns it on has one to serve.
+  it("asks for your certificate once the setting says to use one", async () => {
+    vi.spyOn(api, "tlsStatus").mockResolvedValue({ ...noCertificate, dashboard_mode: "custom" });
+    const save = vi.spyOn(api, "setDashboardCertificate").mockResolvedValue({
+      ...noCertificate, dashboard_mode: "custom", restart_needed: true, provided: acmeCertificate,
+    });
+    renderWith(<General />, { session: sessionFor("admin") });
+
+    expect(await screen.findByText("Your certificate")).toBeInTheDocument();
+    expect(screen.getByText(/None uploaded yet/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Certificate"), "-----BEGIN CERTIFICATE-----");
+    await userEvent.type(screen.getByLabelText("Private key"), "-----BEGIN PRIVATE KEY-----");
+    await userEvent.click(screen.getByRole("button", { name: "Save certificate" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith(
+      "-----BEGIN CERTIFICATE-----", "-----BEGIN PRIVATE KEY-----"));
+  });
+
+  // Nothing renews an uploaded certificate, so what it covers, who issued it
+  // and when it runs out are on the page -- and so is anything a browser will
+  // object to.
+  it("describes the certificate in use and says what browsers will object to", async () => {
+    vi.spyOn(api, "tlsStatus").mockResolvedValue({
+      ...noCertificate, dashboard: { on: true, source: "provided" }, dashboard_mode: "custom",
+      provided: {
+        ...acmeCertificate,
+        warnings: ["This certificate runs out on 1 October 2026. Upload its replacement before then."],
+      },
+    });
+    renderWith(<General />, { session: sessionFor("admin") });
+
+    expect(await screen.findByText("In use")).toBeInTheDocument();
+    expect(screen.getByText("Acme Issuing CA")).toBeInTheDocument();
+    expect(screen.getByText(/runs out on 1 October 2026/)).toBeInTheDocument();
+    // The one in use cannot be removed; replacing it is the way to change it.
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Replace it" })).toBeInTheDocument();
+  });
+
+  it("says a restart is what is left once the setting or the certificate has changed", async () => {
+    vi.spyOn(api, "tlsStatus").mockResolvedValue({
+      ...noCertificate, dashboard_mode: "custom", restart_needed: true, provided: acmeCertificate,
+    });
+    renderWith(<General />, { session: sessionFor("admin") });
+
+    expect(await screen.findByText(/Restart mcpd to change the certificate/)).toBeInTheDocument();
+    expect(screen.getByText("Not in use yet")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
   });
 });

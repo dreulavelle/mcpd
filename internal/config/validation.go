@@ -198,10 +198,11 @@ type Effective struct {
 	MetricsEnabled    bool
 	RelaxedDurability bool
 	TLSSelfSigned     bool
-	// FrontendPublicURL is the address this dashboard is on, and FrontendTLS
-	// whether it serves mcpd's own certificate.
+	// FrontendPublicURL is the address this dashboard is on, and
+	// FrontendTLSMode which certificate it serves: "off", "self-signed" for
+	// mcpd's own, or "custom" for an uploaded one.
 	FrontendPublicURL string
-	FrontendTLS       bool
+	FrontendTLSMode   string
 }
 
 // Warnings returns non-fatal concerns worth logging at startup.
@@ -237,13 +238,14 @@ func (e Effective) Warnings() []string {
 				"TLS in front before exposing it further. ChatGPT will not connect to "+
 				"a plaintext endpoint.", u.Hostname()))
 	}
-	if e.FrontendTLS && e.FrontendEnabled {
+	if tls := e.FrontendTLSMode; tls != "" && tls != "off" && e.FrontendEnabled {
 		// Both work -- a plain request is sent on to https -- but a provider
 		// is told the address as written, and Microsoft and Google refuse an
-		// http one; and a certificate that covers only loopback is refused by
-		// every browser that is not on this machine.
+		// http one; and mcpd's own certificate covering only loopback is
+		// refused by every browser that is not on this machine. An uploaded
+		// certificate covers what it covers, so only the first applies to it.
 		switch u, err := url.Parse(e.FrontendPublicURL); {
-		case e.FrontendPublicURL == "":
+		case e.FrontendPublicURL == "" && tls == "self-signed":
 			out = append(out, "the dashboard serves https with mcpd's own certificate, "+
 				"but no address for it is set, so the certificate covers only this "+
 				"machine. Set the address this page is on in Settings.")

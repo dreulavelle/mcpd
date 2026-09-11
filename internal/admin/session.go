@@ -85,6 +85,15 @@ func (s *Server) secureCookies(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
+	// When the dashboard was asked to serve https itself, nothing in front of
+	// it terminates TLS, so a plain request is exactly what it looks like:
+	// the dashboard fell back to plain http because its certificate could not
+	// be loaded. Following an https address there marks the cookie Secure on
+	// an http page, the browser drops it, and nobody can sign in to the page
+	// the certificate would be fixed on.
+	if s.opts.DashboardServesTLS != nil && s.opts.DashboardServesTLS() {
+		return false
+	}
 	// FrontendPublicURL, not PublicURL. PublicURL is the MCP endpoint, and the
 	// two are different listeners: the MCP endpoint commonly serves TLS from a
 	// self-signed certificate while the dashboard is plain HTTP on the LAN.

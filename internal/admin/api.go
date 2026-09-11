@@ -34,6 +34,7 @@ import (
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
+	"github.com/spoked/mcpd/internal/servertls"
 	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/tunnel"
 	"github.com/spoked/mcpd/internal/updates"
@@ -259,9 +260,23 @@ type Options struct {
 	// operator has to click past every time and one they resolve once.
 	CACertificate func() []byte
 
-	// TLSStatus says which listeners serve mcpd's own certificate, and what
-	// stands in the way of one that was asked to.
+	// TLSStatus says what each listener presents, and what stands in the way
+	// of one that was asked to serve https.
 	TLSStatus func(context.Context) TLSStatus
+
+	// SetDashboardCertificate installs a certificate somebody uploaded for
+	// the dashboard -- the certificate and its chain, and its private key,
+	// which may arrive in either piece -- and returns TLSStatus afterwards.
+	// A certificate that cannot be served is a *servertls.Refusal.
+	SetDashboardCertificate func(ctx context.Context, actor string, certificate, key []byte) (TLSStatus, error)
+
+	// RemoveDashboardCertificate deletes the uploaded certificate, or returns
+	// ErrCertificateInUse while the dashboard is serving it.
+	RemoveDashboardCertificate func(ctx context.Context, actor string) error
+
+	// DashboardServesTLS reports whether the dashboard was asked to serve
+	// https itself, whether or not it managed to. See secureCookies.
+	DashboardServesTLS func() bool
 
 	// Tunnel exposes the embedded tunnel so an operator can see its state and
 	// start or stop it without restarting mcpd.
@@ -480,6 +495,8 @@ func (s *Server) routes() {
 	// needing the browser to trust it before it can be trusted.
 	s.mux.HandleFunc("GET /api/tls/ca", s.handleCACertificate)
 	api("GET /api/tls", s.handleTLSStatus, auth.PermSettingsRead)
+	api("PUT /api/tls/dashboard-certificate", s.handleSetDashboardCertificate, auth.PermSettingsWrite)
+	api("DELETE /api/tls/dashboard-certificate", s.handleRemoveDashboardCertificate, auth.PermSettingsWrite)
 
 	// Metrics live here rather than beside /health/ready on the MCP listener.
 	// That listener is the one a third party reaches through a tunnel, and
@@ -1901,7 +1918,8 @@ func decodeJSON(raw json.RawMessage) any {
 	return v
 }
 
-// TLSStatus is mcpd's own certificate as the dashboard describes it.
+// TLSStatus is what the dashboard and the MCP listener present, as the
+// dashboard describes it.
 //
 // What is served, not what is set: the settings are read when the process
 // starts, so between a change and a restart the two differ, and a page that
@@ -1909,36 +1927,125 @@ func decodeJSON(raw json.RawMessage) any {
 type TLSStatus struct {
 	Dashboard  ListenerTLS `json:"dashboard"`
 	Assistants ListenerTLS `json:"assistants"`
-	// Hosts are the names and addresses the certificate covers, empty when
-	// mcpd has none.
-	Hosts []string `json:"hosts"`
-	// Expires is when it runs out, RFC 3339, empty when there is none. It
-	// renews itself a month before.
-	Expires string `json:"expires,omitempty"`
-	// Authority reports whether the authority that signed it can be
-	// downloaded from GET /api/tls/ca.
+	// DashboardMode is what the setting says now -- "off", "self-signed" or
+	// "custom" -- which is what the next restart does. The page offers the
+	// upload when it is "custom", before the restart that starts serving it.
+	DashboardMode string `json:"dashboard_mode"`
+	// RestartNeeded reports that what the dashboard serves will change when
+	// mcpd restarts.
+	RestartNeeded bool `json:"restart_needed"`
+	// Own is mcpd's own certificate, when a listener uses it.
+	Own *CertificateInfo `json:"own,omitempty"`
+	// Provided is the certificate uploaded for the dashboard, whether or not
+	// it is being served yet.
+	Provided *CertificateInfo `json:"provided,omitempty"`
+	// Authority reports whether the authority that signed mcpd's own
+	// certificate can be downloaded from GET /api/tls/ca.
 	Authority bool `json:"authority"`
 }
 
 // ListenerTLS is one listener's part of TLSStatus.
 type ListenerTLS struct {
-	// On reports whether the listener presents mcpd's own certificate now.
+	// On reports whether the listener serves https now.
 	On bool `json:"on"`
+	// Source is which certificate it presents: "own" or "provided".
+	Source string `json:"source,omitempty"`
 	// Problem is the sentence saying why a listener that was asked to serve
 	// https is not, and Detail is the error behind it.
 	Problem string `json:"problem,omitempty"`
 	Detail  string `json:"detail,omitempty"`
-	// Warning is something that works but will be refused by browsers: a
-	// certificate that does not cover the address people use.
-	Warning string `json:"warning,omitempty"`
 }
+
+// CertificateInfo is what a page shows about one certificate.
+type CertificateInfo struct {
+	Subject string   `json:"subject"`
+	Issuer  string   `json:"issuer"`
+	Hosts   []string `json:"hosts"`
+	// NotBefore and NotAfter are RFC 3339.
+	NotBefore   string `json:"not_before"`
+	NotAfter    string `json:"not_after"`
+	Fingerprint string `json:"fingerprint"`
+	// Warnings are what browsers will object to: an address it does not
+	// cover, a date it runs out, an issuer they do not trust.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// ErrCertificateInUse refuses removing the certificate the dashboard serves.
+var ErrCertificateInUse = errors.New("admin: the dashboard is serving that certificate")
 
 func (s *Server) handleTLSStatus(w http.ResponseWriter, r *http.Request) {
 	if s.opts.TLSStatus == nil {
-		s.writeJSON(w, r, http.StatusOK, TLSStatus{Hosts: []string{}})
+		s.writeJSON(w, r, http.StatusOK, TLSStatus{})
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, s.opts.TLSStatus(r.Context()))
+}
+
+// maxCertificateUpload bounds an uploaded certificate. A leaf, two or three
+// authorities above it and a 4096-bit key come to around 12 KB once they are
+// JSON, which is more than the 8 KB every other request is allowed.
+const maxCertificateUpload = 64 << 10
+
+// dashboardCertificateRequest carries a certificate and its key as PEM text.
+//
+// Two fields, because they often arrive as two files; but either may hold
+// both, because one bundle is how many tools write them, and the server looks
+// for each wherever it is rather than making somebody split a file by hand.
+type dashboardCertificateRequest struct {
+	Certificate string `json:"certificate"`
+	PrivateKey  string `json:"private_key"`
+}
+
+func (s *Server) handleSetDashboardCertificate(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SetDashboardCertificate == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "certificates are not configured")
+		return
+	}
+	var req dashboardCertificateRequest
+	body := http.MaxBytesReader(w, r.Body, maxCertificateUpload)
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "the request could not be read")
+		return
+	}
+	actor := auth.FromContext(r.Context()).ID
+	status, err := s.opts.SetDashboardCertificate(r.Context(), actor,
+		[]byte(req.Certificate), []byte(req.PrivateKey))
+	var refusal *servertls.Refusal
+	switch {
+	case errors.As(err, &refusal):
+		// Written for the person who sent it: what is wrong and what to send
+		// instead. Flattening it to "invalid certificate" would leave them
+		// guessing which of six things it was.
+		s.writeError(w, r, http.StatusBadRequest, refusal.Reason)
+		return
+	case err != nil:
+		s.opts.Log.ErrorContext(r.Context(), "could not install the dashboard's certificate",
+			"error", err)
+		s.writeError(w, r, http.StatusInternalServerError, "the certificate could not be saved")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, status)
+}
+
+func (s *Server) handleRemoveDashboardCertificate(w http.ResponseWriter, r *http.Request) {
+	if s.opts.RemoveDashboardCertificate == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "certificates are not configured")
+		return
+	}
+	actor := auth.FromContext(r.Context()).ID
+	err := s.opts.RemoveDashboardCertificate(r.Context(), actor)
+	switch {
+	case errors.Is(err, ErrCertificateInUse):
+		s.writeError(w, r, http.StatusConflict, "The dashboard is serving that certificate. "+
+			"Change Certificate for this dashboard and restart mcpd before removing it.")
+		return
+	case err != nil:
+		s.opts.Log.ErrorContext(r.Context(), "could not remove the dashboard's certificate",
+			"error", err)
+		s.writeError(w, r, http.StatusInternalServerError, "the certificate could not be removed")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleCACertificate serves the certificate authority for installation.

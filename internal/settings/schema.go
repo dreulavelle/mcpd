@@ -611,17 +611,20 @@ func schema() []Group {
 					// that deployment is untouched.
 					Key: KeyServerFrontendTLSMode, Label: "Certificate for this dashboard",
 					Kind: KindEnum, Group: "server", Apply: ApplyRestart,
-					Default: "off", Options: []string{"off", "self-signed"},
+					Default: "off", Options: []string{"off", "self-signed", "custom"},
 					OptionLabels: map[string]string{
 						"off":         "None — something in front serves https",
 						"self-signed": "mcpd's own",
+						"custom":      "Your own certificate",
 					},
 					Help: "Signing in with Microsoft or Google needs this dashboard on " +
 						"https. Leave it off when a proxy or tunnel in front already " +
-						"serves https. mcpd's own serves https on the same port and " +
-						"sends plain http there, and it covers the address this page " +
-						"is on. Browsers warn until they trust mcpd's certificate " +
-						"authority, which you can download below.",
+						"serves https. mcpd's own covers the address this page is on, " +
+						"and browsers warn until they trust mcpd's certificate " +
+						"authority, which you can download below. Your own is a " +
+						"certificate you upload below, such as one from your company's " +
+						"authority that its computers already trust. Either way https " +
+						"and plain http share the port, and plain http is sent on to https.",
 				},
 				{
 					Key: KeyServerFrontendEnabled, Label: "Serve this dashboard",

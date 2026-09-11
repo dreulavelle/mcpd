@@ -191,14 +191,14 @@ func (a *App) Run(ctx context.Context) error {
 
 	errCh := make(chan error, 2)
 
-	if a.certs != nil && a.certs.holder != nil {
+	if a.certificatesNeedWatching() {
 		a.startWorker("certificate-renewal", workerCtx, a.renewCertificates)
 	}
 
 	if a.frontend != nil {
 		go func() {
 			a.log.InfoContext(ctx, "dashboard listening", "addr", a.frontend.Addr,
-				"https", a.certs != nil && a.certs.dashboard)
+				"https", a.certs != nil && a.certs.dashboard())
 			err := a.serveFrontend()
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				// A privileged port is the likeliest cause, and the message
@@ -417,8 +417,8 @@ func (a *App) serveFrontend() error {
 	if err != nil {
 		return err
 	}
-	if a.certs != nil && a.certs.dashboard {
-		listener = servertls.Sniff(listener, a.certs.holder.TLSConfig())
+	if a.certs != nil && a.certs.dashboard() {
+		listener = servertls.Sniff(listener, a.certs.dash.TLSConfig())
 	}
 	return a.frontend.Serve(listener)
 }

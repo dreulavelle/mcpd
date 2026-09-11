@@ -77,7 +77,8 @@ function stub({
     refusals,
   });
   vi.spyOn(api, "tlsStatus").mockResolvedValue({
-    dashboard: { on: false }, assistants: { on: false }, hosts: [], authority: false,
+    dashboard: { on: false }, assistants: { on: false },
+    dashboard_mode: "off", restart_needed: false, authority: false,
   });
   vi.spyOn(api, "authOptions").mockResolvedValue({
     providers: offered.map((p) => ({ provider: p, label: p })),
@@ -186,7 +187,8 @@ describe("the authentication page", () => {
   it("does not offer mcpd's own certificate when the dashboard already serves it", async () => {
     stub({ refusals: { entra: "Microsoft accepts only https here, except on localhost." } });
     const tls = vi.spyOn(api, "tlsStatus").mockResolvedValue({
-      dashboard: { on: true }, assistants: { on: false }, hosts: ["203.0.113.10"], authority: true,
+      dashboard: { on: true, source: "own" }, assistants: { on: false },
+      dashboard_mode: "self-signed", restart_needed: false, authority: true,
     });
     mount();
 
