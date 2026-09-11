@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.25.0](https://github.com/dreulavelle/mcpd/compare/v0.24.1...v0.25.0) (2026-09-11)
+
+
+### Features
+
+* **dashboard:** each sign-in provider's card says everything it needs ([#167](https://github.com/dreulavelle/mcpd/issues/167)) ([88819a9](https://github.com/dreulavelle/mcpd/commit/88819a9244b5a6d121316b31acd98cb926be8985))
+* **dashboard:** serve the dashboard over https with mcpd's own certificate ([#169](https://github.com/dreulavelle/mcpd/issues/169)) ([5b7ef83](https://github.com/dreulavelle/mcpd/commit/5b7ef831418859f705011c94a66b538bef1efa10))
+
+
+### Fixes
+
+* **dashboard:** copy buttons copy on a plain-http address ([#168](https://github.com/dreulavelle/mcpd/issues/168)) ([623072a](https://github.com/dreulavelle/mcpd/commit/623072a6c0de51ebdb601f1c9eb5a05ac3c9d388))
+* **threecx:** quote every event log search term ([#166](https://github.com/dreulavelle/mcpd/issues/166)) ([11867c6](https://github.com/dreulavelle/mcpd/commit/11867c6d8f47cbf01adcd62151af031f77083a0e))
+
 ## [0.24.1](https://github.com/dreulavelle/mcpd/compare/v0.24.0...v0.24.1) (2026-09-10)
 
 
