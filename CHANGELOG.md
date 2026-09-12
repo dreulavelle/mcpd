@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.26.0](https://github.com/dreulavelle/mcpd/compare/v0.25.0...v0.26.0) (2026-09-12)
+
+
+### Features
+
+* **dashboard:** serve your own certificate on the dashboard ([#171](https://github.com/dreulavelle/mcpd/issues/171)) ([d571e0d](https://github.com/dreulavelle/mcpd/commit/d571e0db7acafd8ce942c0b100583becf98bb4be))
+
+
+### Fixes
+
+* **dashboard:** offer the certificate upload before the setting is changed ([#173](https://github.com/dreulavelle/mcpd/issues/173)) ([a654d9b](https://github.com/dreulavelle/mcpd/commit/a654d9bf78430b19d36b45145c1e5ea55b7e83e9))
+
 ## [0.25.0](https://github.com/dreulavelle/mcpd/compare/v0.24.1...v0.25.0) (2026-09-11)
 
 
