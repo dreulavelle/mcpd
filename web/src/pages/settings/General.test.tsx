@@ -310,14 +310,40 @@ describe("the dashboard's certificate, on General", () => {
   });
 
   // The default is a deployment with something in front serving https, and
-  // it should not be shown a panel about a certificate it does not have.
-  it("says nothing on a host that serves no certificate of its own", async () => {
+  // it should not be shown a panel about a certificate mcpd does not have.
+  it("says nothing about mcpd's own certificate on a host that serves none", async () => {
     renderWith(<General />, { session: sessionFor("admin") });
 
     await screen.findByLabelText(/Address assistants use/);
     await waitFor(() => expect(api.tlsStatus).toHaveBeenCalled());
     expect(screen.queryByText("mcpd's own certificate")).toBeNull();
-    expect(screen.queryByText("Your certificate")).toBeNull();
+  });
+
+  // Uploading a certificate and choosing to serve it are two acts, and the
+  // natural order is that one. The upload used to appear only after the
+  // setting had been changed, so somebody looking for where to put their
+  // certificate found nothing at all.
+  it("offers the upload whatever the setting says, and says what is left to serve it", async () => {
+    renderWith(<General />, { session: sessionFor("admin") });
+
+    expect(await screen.findByText("Your certificate")).toBeInTheDocument();
+    expect(screen.getByLabelText("Certificate")).toBeInTheDocument();
+    expect(screen.getByText(/set Certificate for this dashboard to Your own certificate/))
+      .toBeInTheDocument();
+  });
+
+  // A reader sees what is installed and cannot change it: a form that meets a
+  // refusal on save is worse than no form.
+  it("shows a reader what is installed without offering to change it", async () => {
+    vi.spyOn(api, "tlsStatus").mockResolvedValue({
+      ...noCertificate, dashboard_mode: "custom", restart_needed: true, provided: acmeCertificate,
+    });
+    renderWith(<General />, { session: sessionFor("user", { permissions: ["settings:read"] }) });
+
+    expect(await screen.findByText("Your certificate")).toBeInTheDocument();
+    expect(screen.getByText("Acme Issuing CA")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Certificate")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
   });
 
   // A self-signed certificate is a warning on every visit until its authority
@@ -371,6 +397,7 @@ describe("the dashboard's certificate, on General", () => {
 
     expect(await screen.findByText("Your certificate")).toBeInTheDocument();
     expect(screen.getByText(/None uploaded yet/)).toBeInTheDocument();
+    expect(screen.getByText("Restart mcpd to serve it.")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Certificate"), "-----BEGIN CERTIFICATE-----");
     await userEvent.type(screen.getByLabelText("Private key"), "-----BEGIN PRIVATE KEY-----");
     await userEvent.click(screen.getByRole("button", { name: "Save certificate" }));
