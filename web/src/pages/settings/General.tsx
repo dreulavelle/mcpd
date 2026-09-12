@@ -3,6 +3,7 @@ import {
   api, problemText, type BootstrapSetting, type CertificateInfo, type TLSStatus,
 } from "@/lib/api";
 import { useLoader } from "@/lib/hooks";
+import { useCan } from "@/lib/session";
 import { CodeBlock, Notice } from "@/components/chrome";
 import { useConfirm } from "@/components/confirm";
 import { Evidence } from "@/components/evidence";
@@ -136,8 +137,13 @@ export function DashboardCertificate({ status, onChanged }: {
   onChanged: () => void;
 }) {
   const { dashboard } = status;
+  const mayWrite = useCan("settings:write");
   const own = !!status.own;
-  const yours = status.dashboard_mode === "custom" || !!status.provided;
+  // Offered to an administrator whatever the setting says, because uploading
+  // the certificate and choosing to serve it are two acts and the natural
+  // order is that one. It used to appear only once the setting had already
+  // been changed, so somebody looking for where to upload found nothing.
+  const yours = mayWrite || !!status.provided;
   if (!dashboard.problem && !status.restart_needed && !own && !yours) return null;
 
   return (
@@ -154,7 +160,9 @@ export function DashboardCertificate({ status, onChanged }: {
         </Notice>
       )}
       {own && <OwnCertificate status={status} />}
-      {yours && <YourCertificate status={status} onChanged={onChanged} />}
+      {yours && (
+        <YourCertificate status={status} mayWrite={mayWrite} onChanged={onChanged} />
+      )}
     </div>
   );
 }
@@ -226,12 +234,20 @@ function OwnCertificate({ status }: { status: TLSStatus }) {
  * anything. Nothing renews it, so what it covers and when it runs out are on
  * the page rather than in a file somebody has to open.
  */
-function YourCertificate({ status, onChanged }: {
+function YourCertificate({ status, mayWrite, onChanged }: {
   status: TLSStatus;
+  /** A reader sees what is installed; only a writer uploads or removes. */
+  mayWrite: boolean;
   onChanged: () => void;
 }) {
   const p = status.provided;
   const inUse = status.dashboard.source === "provided";
+  // What is left before it is served. The setting above decides it, so this
+  // says which way it is set rather than leaving somebody to work out why an
+  // uploaded certificate is not in use.
+  const toServe = status.dashboard_mode === "custom"
+    ? "Restart mcpd to serve it."
+    : "To serve it, set Certificate for this dashboard to Your own certificate, above, then restart mcpd.";
   const confirm = useConfirm();
   const notify = useNotify();
   const [problem, setProblem] = useState("");
@@ -276,14 +292,16 @@ function YourCertificate({ status, onChanged }: {
         </>
       ) : (
         <p className="text-sm text-muted-foreground">
-          None uploaded yet. Ask your company's certificate authority for a server
-          certificate covering the address this page is on, then upload it here.
+          None uploaded yet. Ask your company's certificate authority, or any
+          public one, for a server certificate covering the address this page is
+          on, then paste it here or choose the file.
         </p>
       )}
+      {!inUse && <p className="text-sm text-muted-foreground">{toServe}</p>}
 
       {problem && <Notice tone="problem">{problem}</Notice>}
-      <UploadCertificate replacing={!!p} onSaved={onChanged} />
-      {p && !inUse && (
+      {mayWrite && <UploadCertificate replacing={!!p} onSaved={onChanged} />}
+      {mayWrite && p && !inUse && (
         <Button type="button" variant="ghost" size="sm" onClick={remove}>
           Remove
         </Button>
