@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.27.0](https://github.com/dreulavelle/mcpd/compare/v0.26.0...v0.27.0) (2026-09-15)
+
+
+### Features
+
+* **dashboard:** statistics that show the shape of the traffic ([#175](https://github.com/dreulavelle/mcpd/issues/175)) ([304ca19](https://github.com/dreulavelle/mcpd/commit/304ca1909f2cb901c2dbc17a2f771244704015c6))
+* **threecx:** what a caller hears on a queue ([#177](https://github.com/dreulavelle/mcpd/issues/177)) ([98e7838](https://github.com/dreulavelle/mcpd/commit/98e7838d85e29f4643154ce56e38ba9684d07dc4))
+
 ## [0.26.0](https://github.com/dreulavelle/mcpd/compare/v0.25.0...v0.26.0) (2026-09-12)
 
 
