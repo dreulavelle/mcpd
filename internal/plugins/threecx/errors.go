@@ -2,6 +2,7 @@ package threecx
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -61,6 +62,26 @@ func summarise(status int, body []byte) string {
 	return fmt.Sprintf("HTTP %d: %s", status, text)
 }
 
+// notOffered is a read this build of the phone system does not serve.
+//
+// A type rather than a sentence, because "this build does not have it" and
+// "something went wrong reading it" call for different answers from a tool: a
+// question about audio can still be answered from the endpoints that do exist,
+// and saying so is the difference between an incomplete answer a reader can
+// trust and one that looks complete but quietly is not.
+type notOffered struct{ path string }
+
+func (n *notOffered) Error() string {
+	return fmt.Sprintf("3cx: this phone system does not offer %s (HTTP 404); "+
+		"it may be an older build than the v20 API this integration reads", n.path)
+}
+
+// missing reports whether err is a read the phone system does not serve.
+func missing(err error) bool {
+	var n *notOffered
+	return errors.As(err, &n)
+}
+
 // explainRequestFailure turns a failed read into a sentence that says what to
 // do about it.
 //
@@ -82,8 +103,7 @@ func explainRequestFailure(status int, path string, body []byte) error {
 			"Owner role, which every read here needs -- grant it in the 3CX console "+
 			"under Users, or sign in as one that has it", path)
 	case 404:
-		return fmt.Errorf("3cx: this phone system does not offer %s (HTTP 404); "+
-			"it may be an older build than the v20 API this integration reads", path)
+		return &notOffered{path: path}
 	case 429:
 		return fmt.Errorf("3cx: the phone system is rate limiting us (HTTP 429); " +
 			"wait a few seconds before asking again")

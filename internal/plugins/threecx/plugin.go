@@ -117,7 +117,7 @@ func (p *Plugin) Descriptor() plugins.Descriptor {
 
 // Register implements plugins.Plugin.
 //
-// Twenty-one read tools in nine groups, split by the question a technician is
+// Twenty-four read tools in ten groups, split by the question a technician is
 // asking rather than by the entity 3CX keeps the answer on.
 func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	p.registerCustomerTools(r)
@@ -125,6 +125,7 @@ func (p *Plugin) Register(_ context.Context, r *plugins.Registry) error {
 	p.registerExtensionTools(r)
 	p.registerRoutingTools(r)
 	p.registerGroupTools(r)
+	p.registerAudioTools(r)
 	p.registerScheduleTools(r)
 	p.registerHistoryTools(r)
 	p.registerAccessTools(r)

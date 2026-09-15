@@ -76,14 +76,22 @@ var toolListBudget = map[string]int{
 	// row array, a returned count and a truncation note. Output schemas are the
 	// largest line item and one shape reused across five tools is paid for once.
 	"textable": 12_000,
-	// Sixteen read tools over a PBX. Wider per tool than textable because
+	// Twenty-four read tools over a PBX. Wider per tool than textable because
 	// several answers are composite by nature -- one extension carries its
 	// handsets, its forwarding profiles and its key layout, and a status
 	// report carries the licence, the offline trunks and the stopped services
 	// -- and a flat row shape cannot say those without a nested array each.
 	// Raised from 28,000 when the instance grew to serve several customers:
 	// every tool gained a customer argument and list_customers arrived.
-	"threecx": 42_000,
+	//
+	// Raised from 42,000 for the audio group -- get_queue, list_music_on_hold
+	// and search_audio_usage -- which cost 6,400 bytes, most of it output
+	// schema. The nesting is the answer rather than decoration: what a caller
+	// hears is music on hold, an intro prompt and a comfort prompt with its
+	// own interval, each with its own enabled flag, and flattening them into a
+	// dozen sibling fields would cost about the same while leaving a reader to
+	// work out which field belonged to which prompt.
+	"threecx": 48_000,
 }
 
 // budgetTotal bounds every plugin at once, which is what the aggregate
