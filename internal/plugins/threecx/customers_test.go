@@ -340,6 +340,18 @@ func TestResolve_EveryToolAcceptsAnAlias(t *testing.T) {
 			_, err := p.searchCallHistory(context.Background(), callHistoryArgs{Customer: c})
 			return err
 		},
+		"get_queue": func(p *Plugin, c string) error {
+			_, err := p.getQueue(context.Background(), queueArgs{Customer: c, Queue: "800"})
+			return err
+		},
+		"list_music_on_hold": func(p *Plugin, c string) error {
+			_, err := p.listMusicOnHold(context.Background(), musicOnHoldArgs{Customer: c})
+			return err
+		},
+		"search_audio_usage": func(p *Plugin, c string) error {
+			_, err := p.searchAudioUsage(context.Background(), audioUsageArgs{Customer: c, Filename: "onhold.wav"})
+			return err
+		},
 		"get_support_bundle_report": func(p *Plugin, c string) error {
 			_, err := p.bundleReport(context.Background(), bundleReportArgs{Customer: c})
 			return err

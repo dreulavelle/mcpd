@@ -148,6 +148,10 @@ type QueueRow struct {
 	Agents         []string `json:"agents"`
 	Managers       []string `json:"managers"`
 	NoAnswer       string   `json:"no_answer"`
+	// Audio is what this queue plays, in short. get_queue has it in full --
+	// the intervals, whether each prompt is turned on, and what the queue
+	// falls back to when it names no music of its own.
+	Audio *QueueAudioSummary `json:"audio,omitempty"`
 }
 
 // QueuesResult is the queue list.
@@ -165,25 +169,14 @@ func (p *Plugin) listQueues(ctx context.Context, args queuesArgs) (QueuesResult,
 	if err != nil {
 		return QueuesResult{}, err
 	}
-	type record struct {
-		Number          string       `json:"Number"`
-		Name            string       `json:"Name"`
-		PollingStrategy string       `json:"PollingStrategy"`
-		RingTimeout     int          `json:"RingTimeout"`
-		MasterTimeout   int          `json:"MasterTimeout"`
-		MaxCallers      int          `json:"MaxCallersInQueue"`
-		SLATime         int          `json:"SLATime"`
-		IsRegistered    bool         `json:"IsRegistered"`
-		NoAnswer        *destination `json:"ForwardNoAnswer"`
-		Agents          []member     `json:"Agents"`
-		Managers        []member     `json:"Managers"`
-	}
+	// The same record and the same projection the detailed read uses, so the
+	// summary here and get_queue can never disagree about what a queue plays.
 	q := url.Values{
-		"$select":  {"Id,Number,Name,PollingStrategy,RingTimeout,MasterTimeout,MaxCallersInQueue,SLATime,IsRegistered,ForwardNoAnswer"},
-		"$expand":  {"Agents($select=Id,Number,Name,SkillGroup),Managers($select=Id,Number,Name)"},
+		"$select":  {queueFields},
+		"$expand":  {queueExpand},
 		"$orderby": {"Number"},
 	}
-	got, err := list[record](ctx, acct.client, "Queues", q, p.cfg.MaxItems)
+	got, err := list[queueRecord](ctx, acct.client, "Queues", q, p.cfg.MaxItems)
 	if err != nil {
 		return QueuesResult{}, acct.call(err)
 	}
@@ -194,6 +187,7 @@ func (p *Plugin) listQueues(ctx context.Context, args queuesArgs) (QueuesResult,
 			RingSeconds: qu.RingTimeout, MaxWaitSeconds: qu.MasterTimeout, MaxCallers: qu.MaxCallers,
 			SLASeconds: qu.SLATime, Registered: qu.IsRegistered,
 			Agents: memberTexts(qu.Agents), Managers: memberTexts(qu.Managers), NoAnswer: qu.NoAnswer.text(),
+			Audio: audioSummaryOf(qu.queueAudioRecord),
 		})
 	}
 	out.Queues, out.truncation = bound(out.Queues, got.reason())

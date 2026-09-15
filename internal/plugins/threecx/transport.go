@@ -87,6 +87,15 @@ var allowed = []rule{
 	{regexp.MustCompile(`^Queues$`), "listing call queues", false},
 	{regexp.MustCompile(`^Receptionists$`), "listing digital receptionists", false},
 
+	// What a caller hears while they wait. The prompt files themselves, the
+	// system's own music on hold, and the prompt sets a queue or a
+	// receptionist names. A prompt set's contents come back through $expand on
+	// PromptSets rather than through a path of their own, so reaching them
+	// needs no further entry here.
+	{regexp.MustCompile(`^CustomPrompts$`), "listing the audio files on the system", false},
+	{regexp.MustCompile(`^MusicOnHoldSettings$`), "reading the system's music on hold", false},
+	{regexp.MustCompile(`^PromptSets$`), "listing prompt sets and what is in them", false},
+
 	// When the business is open.
 	{regexp.MustCompile(`^Groups$`), "listing departments", false},
 	{regexp.MustCompile(`^Groups\(\d+\)$`), "reading one department's schedule", false},

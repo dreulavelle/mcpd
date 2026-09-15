@@ -121,7 +121,7 @@ the plugin's start.
 
 ## The tools
 
-Twenty-one reads, in nine groups, split by the question a technician is asking:
+Twenty-four reads, in ten groups, split by the question a technician is asking:
 
 | | |
 |---|---|
@@ -131,6 +131,7 @@ Twenty-one reads, in nine groups, split by the question a technician is asking:
 | `list_extensions`, `get_extension`, `list_devices` | who is registered, why one extension behaves as it does, what handsets exist |
 | `list_trunks`, `list_inbound_rules`, `list_outbound_rules`, `search_directory` | where numbers come in, where they ring, how calls go out, what a number is |
 | `list_ring_groups`, `list_queues`, `list_receptionists` | the things a call can land on that are not a person |
+| `get_queue`, `list_music_on_hold`, `search_audio_usage` | one queue in full, the audio the system holds, and everything that names a given file |
 | `get_schedule` | one department's office hours, holidays, time zone and whether somebody forced it open or closed |
 | `list_blocked`, `list_sbcs` | what the system is refusing, and whether a remote site is connected |
 | `search_call_history` | did the call happen, and what became of it |
@@ -434,6 +435,25 @@ bundle, which carries the audit table as CSV. The **update** functions
 as a set or as the parameterised function the metadata describes, so queue
 statistics are not available over this API. `Firewall` answers, with nothing
 in it but two booleans and an HTML blob.
+
+The **audio** entities are there but thinner than the console suggests, and
+the shape decides how the tools are written. There is **no single-entity path**
+for `Queues`, `CustomPrompts` or `PromptSets` -- the schema describes the
+collections and nothing under them -- so one queue is fetched with
+`$filter=Number eq '800'` rather than by key. A `CustomPrompt` carries
+`Filename`, `DisplayName`, `PromptType` and `CanBeDeleted` and **no id of its
+own**, so a file is referred to everywhere by its name; `list_music_on_hold`
+reports a position in the listing and says that is what it is. There is **no
+per-file enabled state** either: whether a file is in use is only knowable from
+what names it, which is the question `search_audio_usage` exists to answer.
+`CustomPrompt.FileLink` is the URL the file is downloaded from and the
+transport refuses it by name, so it is never asked for.
+
+A queue's own music is `OnHoldFile`, not `MusicOnHold` -- that one is the
+system singleton at `/MusicOnHoldSettings`, which holds ten slots as
+`MusicOnHold` and `MusicOnHold1` through `MusicOnHold9`. A queue that sets no
+`OnHoldFile` plays the system's, so `get_queue` reads both and says which of
+the two a caller is actually hearing.
 
 ## What is cached, and what is never
 
