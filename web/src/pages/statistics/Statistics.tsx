@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type Statistics as Stats, type ToolTotals } from "@/lib/api";
+import {
+  Bar, BarChart, CartesianGrid, ComposedChart, Line, XAxis, YAxis,
+} from "recharts";
+import { api, type Statistics as Stats, type StatsPoint, type ToolTotals } from "@/lib/api";
 import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
 import { Segmented } from "@/components/Segmented";
 import { Chip } from "@/components/status";
+import { Button } from "@/components/ui/button";
+import {
+  ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig,
+} from "@/components/ui/chart";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -10,8 +17,9 @@ import { relative } from "@/lib/format";
 import { useQueryParam } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import {
-  WINDOWS, againstBudget, bytes, condense, count, headline, latency,
-  strideLabel, successRate, tokensPerCall,
+  SORTS, WINDOWS, againstBudget, bytes, condense, count, fill, headline, latency,
+  pointLabel, share, sortTools, strideLabel, successRate, tokensPerCall, topTools,
+  type SortKey,
 } from "./stats";
 
 /**
@@ -82,7 +90,12 @@ export function Statistics() {
 
 function Body({ stats }: { stats: Stats }) {
   const totals = useMemo(() => headline(stats), [stats]);
-  const series = useMemo(() => condense(stats.series), [stats.series]);
+  // Gaps back in before anything folds buckets together, so an idle week is
+  // an idle week on the chart rather than a week that never happened.
+  const series = useMemo(
+    () => condense(fill(stats.series, stats.stride_seconds), 60),
+    [stats.series, stats.stride_seconds],
+  );
 
   if (totals.calls === 0) {
     return (
@@ -104,6 +117,7 @@ function Body({ stats }: { stats: Stats }) {
           value={totals.successRate === null ? "—" : `${Math.round(totals.successRate * 100)}%`}
           help={totals.denied > 0 ? `${count(totals.denied)} refused before running` : "none refused"}
           tone={totals.successRate !== null && totals.successRate < 0.9 ? "problem" : undefined}
+          meter={totals.successRate ?? undefined}
         />
         <Tile label="Typical call" value={latency(totals.meanUS)}
           help={`averaged over the ${count(totals.timed)} that ran`} />
@@ -114,39 +128,17 @@ function Body({ stats }: { stats: Stats }) {
         />
       </div>
 
-      {series.length > 1 && <Traffic series={series} stride={strideLabel(stats.stride_seconds)} />}
+      {series.length > 1 && <Traffic series={series} stride={stats.stride_seconds} />}
 
-      <Section
-        title="Every tool"
-        description="What each one costs to call, and how often it answers. Sorted by how much it is used."
-      >
-        <ToolTable stats={stats} />
-      </Section>
+      {stats.tools.length >= 4 && <Concentration stats={stats} calls={totals.calls} />}
 
       {stats.plugins.length > 1 && (
         <Section title="By plugin" description="The same calls, summed per integration.">
-          <div className="space-y-2">
-            {stats.plugins.map((p) => {
-              const rate = successRate(p);
-              return (
-                <div key={p.plugin} className="flex items-center gap-3 rounded-md border bg-card px-3 py-2">
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{p.plugin}</span>
-                  <span className="hidden w-24 text-xs text-muted-foreground tabular-nums sm:block">
-                    {p.tools} {p.tools === 1 ? "tool" : "tools"}
-                  </span>
-                  <span className="w-20 text-right text-sm tabular-nums">{count(p.calls)}</span>
-                  <span className="w-16 text-right text-sm text-muted-foreground tabular-nums">
-                    {rate === null ? "—" : `${Math.round(rate * 100)}%`}
-                  </span>
-                  <span className="w-20 text-right text-sm text-muted-foreground tabular-nums">
-                    {latency(p.mean_us)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+          <ByPlugin stats={stats} />
         </Section>
       )}
+
+      <EveryTool stats={stats} />
 
       <p className="text-xs text-muted-foreground">
         Token figures are an estimate. This host is the server and never sees
@@ -158,11 +150,13 @@ function Body({ stats }: { stats: Stats }) {
   );
 }
 
-function Tile({ label, value, help, tone }: {
+function Tile({ label, value, help, tone, meter }: {
   label: string;
   value: string;
   help?: string;
   tone?: "problem";
+  /** Nought to one, drawn as a bar under the figure. */
+  meter?: number;
 }) {
   return (
     <div className="rounded-lg border bg-card p-4">
@@ -171,87 +165,279 @@ function Tile({ label, value, help, tone }: {
         tone === "problem" && "text-problem")}>
         {value}
       </p>
+      {meter !== undefined && (
+        <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className={cn("h-full rounded-full", tone === "problem" ? "bg-problem" : "bg-good")}
+            style={{ width: `${Math.round(share(meter, 1) * 100)}%` }}
+          />
+        </div>
+      )}
       {help && <p className="mt-1 text-xs text-muted-foreground">{help}</p>}
     </div>
   );
 }
 
+const trafficConfig = {
+  worked: { label: "Worked", color: "var(--chart-1)" },
+  other: { label: "Did not succeed", color: "var(--attention)" },
+  mean: { label: "Typical call (ms)", color: "var(--chart-2)" },
+} satisfies ChartConfig;
+
 /**
- * Calls over the span, successes and everything else stacked.
+ * Calls over the span, with how long they took over the top.
  *
- * Bars rather than a line: the series is a count per bucket, and a line
- * between two counts implies a value at every moment between them.
+ * Bars rather than a line for the counts: the series is a count per bucket,
+ * and a line between two counts implies a value at every moment between them.
+ * The latency is a line, because it is a level rather than an amount and one
+ * bar beside another of a different unit reads as a comparison.
  *
  * The upper band is deliberately not called failure. A refused call is in it,
  * and a refusal is a working host doing its job -- painting a burst of them
  * red and labelling it "failures" sends somebody hunting a broken integration
  * that does not exist.
  */
-function Traffic({ series, stride }: {
-  series: import("@/lib/api").StatsPoint[];
-  stride: string;
-}) {
-  const peak = Math.max(...series.map((p) => p.calls), 1);
+function Traffic({ series, stride }: { series: StatsPoint[]; stride: number }) {
+  const rows = useMemo(() => series.map((p) => ({
+    label: pointLabel(p.at, stride),
+    worked: p.ok,
+    other: p.not_ok,
+    // Milliseconds to one place, so the tooltip prints a figure rather than a
+    // microsecond count nobody reads. Null in a span with nothing timed, so
+    // the line breaks instead of dropping to the floor.
+    mean: p.timed > 0 ? Math.round(p.mean_us / 100) / 10 : null,
+  })), [series, stride]);
+
+  const calls = series.reduce((n, p) => n + p.calls, 0);
+  const notOK = series.reduce((n, p) => n + p.not_ok, 0);
+  const busiest = Math.max(...series.map((p) => p.calls), 0);
+
+  // Both ends and the middle, taken from the rows themselves: a tick that is
+  // not one of the axis's own categories falls outside the scale and draws
+  // nothing.
+  const ticks = rows.length > 2
+    ? [...new Set([rows[0]!.label, rows[Math.floor(rows.length / 2)]!.label, rows[rows.length - 1]!.label])]
+    : rows.map((r) => r.label);
+
+  const label = `${count(calls)} calls per ${strideLabel(stride)} between `
+    + `${pointLabel(series[0]!.at, stride)} and ${pointLabel(series[series.length - 1]!.at, stride)}, `
+    + `${count(notOK)} of them did not succeed. The busiest span served ${count(busiest)}.`;
 
   return (
     <Section
       title="When it was used"
-      description={`Calls per ${stride}. The band on top is calls that did not succeed, refusals included.`}
+      description={`Calls per ${strideLabel(stride)}, and how long a call took. The band on top is calls that did not succeed, refusals included.`}
     >
       <div className="rounded-lg border bg-card p-4">
-        <div className="flex h-32 items-end gap-px" role="img"
-          aria-label={`Calls over time, peaking at ${peak} in one bucket`}>
-          {series.map((p) => (
-            <div
-              key={p.at}
-              className="flex min-w-0 flex-1 flex-col justify-end"
-              title={`${new Date(p.at).toLocaleString()}: ${p.calls} calls, ${p.not_ok} did not succeed`}
-            >
-              {p.not_ok > 0 && (
-                <div className="w-full rounded-t-[1px] bg-attention"
-                  style={{ height: `${(p.not_ok / peak) * 100}%` }} />
-              )}
-              <div
-                className={cn("w-full bg-[var(--chart-1)]", p.not_ok === 0 && "rounded-t-[1px]")}
-                style={{ height: `${(p.ok / peak) * 100}%` }}
-              />
-            </div>
-          ))}
-        </div>
-        <div className="mt-2 flex justify-between text-xs text-muted-foreground">
-          <span>{relative(series[0]!.at)}</span>
-          <span>{relative(series[series.length - 1]!.at)}</span>
-        </div>
+        <ChartContainer
+          config={trafficConfig}
+          className="w-full"
+          style={{ height: 200 }}
+          role="img"
+          aria-label={label}
+        >
+          <ComposedChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} />
+            <XAxis
+              dataKey="label" ticks={ticks} tickLine={false} axisLine={false}
+              tickMargin={8} className="text-[10px]"
+            />
+            <YAxis
+              yAxisId="calls" tickLine={false} axisLine={false} width={36}
+              allowDecimals={false} tickMargin={4} className="text-[10px]"
+            />
+            <YAxis
+              yAxisId="ms" orientation="right" tickLine={false} axisLine={false}
+              width={44} tickMargin={4} className="text-[10px]"
+              tickFormatter={(v: number) => `${v}ms`}
+            />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            {/* Animation off: a window change redraws this, and bars growing
+                from zero every time read as a span that just started. */}
+            <Bar yAxisId="calls" dataKey="worked" stackId="calls"
+              fill="var(--color-worked)" isAnimationActive={false} />
+            <Bar yAxisId="calls" dataKey="other" stackId="calls"
+              fill="var(--color-other)" isAnimationActive={false} />
+            <Line
+              yAxisId="ms" dataKey="mean" type="monotone" dot={false}
+              stroke="var(--color-mean)" strokeWidth={2}
+              connectNulls={false} isAnimationActive={false}
+            />
+          </ComposedChart>
+        </ChartContainer>
+        <Legend />
       </div>
     </Section>
   );
 }
 
-function ToolTable({ stats }: { stats: Stats }) {
+function Legend() {
   return (
-    <div className="scroll-x rounded-lg border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Tool</TableHead>
-            <TableHead className="text-right">Calls</TableHead>
-            <TableHead className="text-right">Succeeded</TableHead>
-            <TableHead className="text-right">Median</TableHead>
-            <TableHead className="text-right" title="Nineteen calls in twenty were faster than this">
-              95th
-            </TableHead>
-            <TableHead className="text-right">Slowest</TableHead>
-            <TableHead className="text-right">Answer</TableHead>
-            <TableHead className="text-right">Context</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {stats.tools.map((t) => (
-            <ToolRow key={`${t.plugin}/${t.tool}`} t={t} stats={stats} />
-          ))}
-        </TableBody>
-      </Table>
+    <div className="mt-3 flex flex-wrap gap-4 text-xs text-muted-foreground">
+      <Key className="bg-[var(--chart-1)]">Worked</Key>
+      <Key className="bg-attention">Did not succeed</Key>
+      <Key className="bg-[var(--chart-2)]">Typical call</Key>
     </div>
+  );
+}
+
+function Key({ className, children }: { className: string; children: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={cn("inline-block size-2 rounded-sm", className)} />
+      {children}
+    </span>
+  );
+}
+
+const topConfig = {
+  calls: { label: "Calls", color: "var(--chart-1)" },
+} satisfies ChartConfig;
+
+/**
+ * Which tools the traffic actually goes to.
+ *
+ * A hundred rows sorted by calls says nothing about concentration, and
+ * concentration is what decides where a slow answer or a large one costs
+ * anything: one tool answering half of everything is the one worth tuning.
+ */
+function Concentration({ stats, calls }: { stats: Stats; calls: number }) {
+  const rows = useMemo(() => topTools(stats.tools), [stats.tools]);
+  const busiest = rows[0];
+  const lead = busiest && !busiest.rest && calls > 0
+    ? `${busiest.name} is ${Math.round(share(busiest.calls, calls) * 100)}% of every call.`
+    : "";
+
+  return (
+    <Section title="Where the calls go" description={lead || "The busiest tools on this host."}>
+      <div className="rounded-lg border bg-card p-4">
+        <ChartContainer
+          config={topConfig}
+          className="w-full"
+          style={{ height: Math.max(120, rows.length * 30 + 16) }}
+          role="img"
+          aria-label={`The busiest tools of ${count(stats.tools.length)}, by calls.`}
+        >
+          <BarChart data={rows} layout="vertical" margin={{ top: 0, right: 40, bottom: 0, left: 0 }}>
+            <XAxis type="number" dataKey="calls" hide />
+            <YAxis
+              type="category" dataKey="name" width={150} tickLine={false} axisLine={false}
+              className="text-[11px]"
+            />
+            <ChartTooltip content={<ChartTooltipContent />} />
+            <Bar dataKey="calls" fill="var(--color-calls)" radius={3} isAnimationActive={false} />
+          </BarChart>
+        </ChartContainer>
+      </div>
+    </Section>
+  );
+}
+
+function ByPlugin({ stats }: { stats: Stats }) {
+  const busiest = Math.max(...stats.plugins.map((p) => p.calls), 1);
+
+  return (
+    <div className="space-y-2">
+      {stats.plugins.map((p) => {
+        const rate = successRate(p);
+        return (
+          <div key={p.plugin} className="rounded-md border bg-card px-3 py-2">
+            <div className="flex items-center gap-3">
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">{p.plugin}</span>
+              <span className="hidden w-24 text-xs text-muted-foreground tabular-nums sm:block">
+                {p.tools} {p.tools === 1 ? "tool" : "tools"}
+              </span>
+              <span className="w-20 text-right text-sm tabular-nums">{count(p.calls)}</span>
+              <span className={cn("w-16 text-right text-sm tabular-nums text-muted-foreground",
+                rate !== null && rate < 0.9 && "text-problem")}>
+                {rate === null ? "—" : `${Math.round(rate * 100)}%`}
+              </span>
+              <span className="w-20 text-right text-sm text-muted-foreground tabular-nums">
+                {latency(p.mean_us)}
+              </span>
+            </div>
+            {/* The share of the busiest, so nine plugins read as a shape
+                rather than as nine numbers to compare by eye. */}
+            <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-[var(--chart-1)]"
+                style={{ width: `${share(p.calls, busiest) * 100}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * How many tools a page holds.
+ *
+ * Ten, not a hundred: a host serving nine plugins has around a hundred tools,
+ * and the whole list under the charts pushed everything above it off the
+ * screen. "Show more" reaches the rest.
+ */
+const PAGE = 10;
+
+function EveryTool({ stats }: { stats: Stats }) {
+  const [sort, setSort] = useState<SortKey>("busiest");
+  const [showing, setShowing] = useState(PAGE);
+
+  const sorted = useMemo(() => sortTools(stats.tools, sort), [stats.tools, sort]);
+
+  // A new order or a new window is a new list, and keeping the old depth would
+  // show the first eighty of an order nobody has read the first ten of.
+  useEffect(() => { setShowing(PAGE); }, [sort, stats]);
+
+  const rest = sorted.length - showing;
+
+  return (
+    <Section
+      title="Every tool"
+      description="What each one costs to call, and how often it answers."
+      actions={
+        <Segmented
+          label="Order"
+          value={sort}
+          onChange={(next) => setSort(next)}
+          options={SORTS}
+        />
+      }
+    >
+      <div className="scroll-x rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Tool</TableHead>
+              <TableHead className="text-right">Calls</TableHead>
+              <TableHead className="text-right">Succeeded</TableHead>
+              <TableHead className="text-right">Median</TableHead>
+              <TableHead className="text-right" title="Nineteen calls in twenty were faster than this">
+                95th
+              </TableHead>
+              <TableHead className="text-right">Slowest</TableHead>
+              <TableHead className="text-right">Answer</TableHead>
+              <TableHead className="text-right">Context</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sorted.slice(0, showing).map((t) => (
+              <ToolRow key={`${t.plugin}/${t.tool}`} t={t} stats={stats} />
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {rest > 0 && (
+        <div className="mt-3 flex flex-col items-center gap-1">
+          <Button variant="outline" size="sm" onClick={() => setShowing((n) => n + PAGE)}>
+            Show more ({count(rest)} left)
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Showing {count(showing)} of {count(sorted.length)} tools.
+          </p>
+        </div>
+      )}
+    </Section>
   );
 }
 
@@ -285,7 +471,7 @@ function QuantileCell({ us, timed, max }: {
 function ToolRow({ t, stats }: { t: ToolTotals; stats: Stats }) {
   const rate = successRate(t);
   const tokens = tokensPerCall(t, stats);
-  const share = againstBudget(t, stats.result_budget_bytes);
+  const budget = againstBudget(t, stats.result_budget_bytes);
 
   return (
     <TableRow>
@@ -312,9 +498,9 @@ function ToolRow({ t, stats }: { t: ToolTotals; stats: Stats }) {
       </TableCell>
       <TableCell className="text-right tabular-nums">
         {t.sized === 0 ? "—" : bytes(t.mean_bytes)}
-        {share !== null && share >= 0.8 && (
+        {budget !== null && budget >= 0.8 && (
           <Chip tone="attention" className="ml-2">
-            {share >= 1 ? "truncated" : "near the cap"}
+            {budget >= 1 ? "truncated" : "near the cap"}
           </Chip>
         )}
       </TableCell>

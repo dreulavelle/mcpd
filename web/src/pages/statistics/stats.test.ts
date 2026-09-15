@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Statistics, StatsPoint, ToolTotals } from "@/lib/api";
 import {
-  againstBudget, bytes, condense, count, headline, latency, successRate,
-  tokensPerCall,
+  againstBudget, bytes, condense, count, fill, headline, latency, share,
+  sortTools, successRate, tokensPerCall, topTools,
 } from "./stats";
 
 function tool(over: Partial<ToolTotals> = {}): ToolTotals {
@@ -130,6 +130,150 @@ describe("condense", () => {
     ];
     const [folded] = condense(s, 1);
     expect(folded!.mean_us).toBe(Math.round((100 + 9_900) / 10));
+  });
+});
+
+describe("fill", () => {
+  function at(hour: number, calls: number): StatsPoint {
+    return {
+      at: new Date(Date.UTC(2026, 8, 1, hour)).toISOString(),
+      calls, ok: calls, not_ok: 0, timed: calls,
+      duration_sum_us: calls * 1_000, mean_us: 1_000, bytes: calls * 10,
+    };
+  }
+
+  /**
+   * The bug this exists for. The rollup holds a row only for an hour something
+   * was called in, so an idle week is absent rather than zero. Drawn as it
+   * came, two hours a fortnight apart were two bars side by side, which reads
+   * as a fortnight of steady traffic.
+   */
+  it("puts the quiet spans back rather than closing the gap", () => {
+    const filled = fill([at(0, 5), at(4, 3)], 3600);
+    expect(filled).toHaveLength(5);
+    expect(filled.map((p) => p.calls)).toEqual([5, 0, 0, 0, 3]);
+  });
+
+  it("keeps every call it was given", () => {
+    const series = [at(0, 5), at(9, 3), at(20, 7)];
+    const before = series.reduce((n, p) => n + p.calls, 0);
+    expect(fill(series, 3600).reduce((n, p) => n + p.calls, 0)).toBe(before);
+  });
+
+  /** A span with nothing in it has nothing to average, and a mean of zero
+   *  would drag a latency line to the floor across an idle week. */
+  it("leaves an invented span timed as nothing", () => {
+    const gap = fill([at(0, 5), at(2, 5)], 3600)[1]!;
+    expect(gap.timed).toBe(0);
+    expect(gap.duration_sum_us).toBe(0);
+  });
+
+  it("leaves a series that is already dense alone", () => {
+    const series = [at(0, 1), at(1, 2), at(2, 3)];
+    expect(fill(series, 3600)).toBe(series);
+  });
+
+  /** A stride that disagrees with the timestamps would have this allocating
+   *  a point per second between two distant hours. */
+  it("refuses to invent more points than a chart could draw", () => {
+    const series = [at(0, 1), at(20, 1)];
+    expect(fill(series, 1)).toBe(series);
+  });
+
+  it("folds to a drawable width once the gaps are back", () => {
+    const series = [at(0, 1), at(40, 1)];
+    expect(condense(fill(series, 3600), 10).length).toBeLessThanOrEqual(10);
+  });
+});
+
+describe("sortTools", () => {
+  const busy = tool({ tool: "busy", calls: 100, ok: 100, timed: 100, p95_us: 5_000, max_us: 5_000 });
+  const slow = tool({ tool: "slow", calls: 2, ok: 2, timed: 2, max_us: 30_000_000 });
+  const flaky = tool({ tool: "flaky", calls: 10, ok: 5, errors: 5, timed: 10, p95_us: 1_000 });
+  // Bounded latency, so the only thing extreme about it is the answer size.
+  const fat = tool({
+    tool: "fat", calls: 4, ok: 4, timed: 4, p95_us: 2_000, max_us: 2_000,
+    sized: 4, mean_bytes: 90_000,
+  });
+  const all = [busy, slow, flaky, fat];
+
+  it("puts the busiest first by default", () => {
+    expect(sortTools(all, "busiest")[0]!.tool).toBe("busy");
+  });
+
+  /**
+   * A tool whose 95th fell past the last band has no ceiling to report. Sorting
+   * on the missing figure as zero buried the slowest thing on the host at the
+   * bottom of the list somebody opened to find it.
+   */
+  it("ranks a tool past the last band as the slowest, not the fastest", () => {
+    expect(sortTools(all, "slowest")[0]!.tool).toBe("slow");
+  });
+
+  /**
+   * Both of these ran past the last band, so both are unbounded. Subtracting
+   * one from the other is NaN, a comparator returning NaN leaves the order
+   * undefined, and `NaN || fallback` takes the fallback without a sound -- so
+   * the whole list came back ordered by something nobody asked for.
+   */
+  it("keeps a total order when two tools are both past the last band", () => {
+    const quiet = tool({ tool: "quiet", calls: 2, ok: 2, timed: 2, max_us: 30_000_000 });
+    const loud = tool({ tool: "loud", calls: 40, ok: 40, timed: 40, max_us: 30_000_000 });
+    const order = sortTools([quiet, loud, busy], "slowest").map((t) => t.tool);
+    // The two unbounded ones first, busiest of them first, and the tool with
+    // a ceiling behind both.
+    expect(order).toEqual(["loud", "quiet", "busy"]);
+  });
+
+  it("puts the least reliable first", () => {
+    expect(sortTools(all, "unreliable")[0]!.tool).toBe("flaky");
+  });
+
+  it("ranks by the biggest answer, ignoring tools that returned nothing", () => {
+    const order = sortTools(all, "largest");
+    expect(order[0]!.tool).toBe("fat");
+    expect(order[order.length - 1]!.calls).toBeGreaterThan(0);
+  });
+
+  it("does not reorder the array it was handed", () => {
+    const given = [...all];
+    sortTools(given, "slowest");
+    expect(given.map((t) => t.tool)).toEqual(all.map((t) => t.tool));
+  });
+});
+
+describe("topTools", () => {
+  it("gathers everything past the head into one row", () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      tool({ tool: `t${i}`, calls: 12 - i, ok: 12 - i }));
+    const rows = topTools(many, 8);
+    expect(rows).toHaveLength(9);
+    expect(rows[8]).toMatchObject({ rest: true, name: "4 more" });
+    // 4 + 3 + 2 + 1, the four it did not name.
+    expect(rows[8]!.calls).toBe(10);
+  });
+
+  /** Two plugins may both expose a `search`, and two ticks reading `search`
+   *  is a chart that cannot be read. */
+  it("names the plugin only where a tool name clashes", () => {
+    const rows = topTools([
+      tool({ plugin: "acme", tool: "search", calls: 9, ok: 9 }),
+      tool({ plugin: "globex", tool: "search", calls: 8, ok: 8 }),
+      tool({ plugin: "acme", tool: "list", calls: 7, ok: 7 }),
+    ]);
+    expect(rows.map((r) => r.name)).toEqual(["acme/search", "globex/search", "list"]);
+  });
+
+  it("leaves out a tool nothing has called", () => {
+    expect(topTools([tool({ tool: "never", calls: 0 })])).toHaveLength(0);
+  });
+});
+
+describe("share", () => {
+  it("is a fraction, and never leaves the bar", () => {
+    expect(share(1, 4)).toBe(0.25);
+    expect(share(5, 4)).toBe(1);
+    expect(share(1, 0)).toBe(0);
   });
 });
 

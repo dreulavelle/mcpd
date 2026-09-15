@@ -131,6 +131,74 @@ describe("the statistics page", () => {
       .toBeInTheDocument();
   });
 
+  /**
+   * A host serving nine plugins has around a hundred tools, and the whole list
+   * under the charts pushed everything above it off the screen.
+   */
+  it("holds the list to ten tools and reaches the rest with Show more", async () => {
+    stub({
+      tools: Array.from({ length: 12 }, (_, i) =>
+        tool({ tool: `tool-${i}`, calls: 100 - i, ok: 100 - i, timed: 100 - i, duration_sum_us: 1_000 })),
+    });
+    renderWith(<Statistics />, { path: "/statistics" });
+
+    // The table alone: the chart above it names the busiest tools too.
+    const table = await screen.findByRole("table");
+    expect(within(table).getAllByRole("row")).toHaveLength(11); // ten and a header
+    expect(screen.getByText("Showing 10 of 12 tools.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show more (2 left)" }));
+    expect(within(table).getAllByRole("row")).toHaveLength(13);
+    expect(screen.queryByRole("button", { name: /Show more/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Busiest answers "what does this host do". Finding the slow one in a
+   * hundred rows sorted by calls is the question a single order cannot be
+   * asked at all.
+   */
+  it("reorders the list when another order is chosen", async () => {
+    stub({
+      tools: [
+        tool({ tool: "busy", calls: 500, ok: 500, timed: 500, duration_sum_us: 500, p95_us: 1_000, max_us: 1_000 }),
+        tool({ tool: "quick", calls: 9, ok: 9, timed: 9, duration_sum_us: 900, p95_us: 1_000, max_us: 1_000 }),
+        tool({ tool: "middling", calls: 8, ok: 8, timed: 8, duration_sum_us: 800, p95_us: 25_000, max_us: 25_000 }),
+        // Past the last band, so it has no ceiling to report and is the
+        // slowest thing here.
+        tool({ tool: "crawler", calls: 2, ok: 2, timed: 2, duration_sum_us: 60_000_000, max_us: 30_000_000 }),
+      ],
+    });
+    renderWith(<Statistics />, { path: "/statistics" });
+
+    const table = await screen.findByRole("table");
+    const firstTool = () => within(within(table).getAllByRole("row")[1]!).getAllByText(/./)[0]!.textContent;
+    expect(firstTool()).toBe("busy");
+
+    await userEvent.click(screen.getByRole("radio", { name: "Slowest" }));
+    expect(firstTool()).toBe("crawler");
+  });
+
+  /**
+   * The chart is a picture, so what it covers has to be readable without it.
+   */
+  it("says what the traffic chart covers", async () => {
+    stub({
+      tools: [tool({ calls: 14, ok: 14, timed: 14, duration_sum_us: 14_000, mean_us: 1_000 })],
+      series: [
+        { at: "2026-09-01T00:00:00Z", calls: 10, ok: 10, not_ok: 0, timed: 10, duration_sum_us: 10_000, mean_us: 1_000, bytes: 0 },
+        // Four hours later: the spans between are idle and absent from the
+        // rollup, and the chart has to draw them rather than close the gap.
+        { at: "2026-09-01T04:00:00Z", calls: 4, ok: 3, not_ok: 1, timed: 4, duration_sum_us: 4_000, mean_us: 1_000, bytes: 0 },
+      ],
+    });
+    renderWith(<Statistics />, { path: "/statistics" });
+
+    const chart = await screen.findByRole("img", { name: /calls per hour/ });
+    expect(chart).toHaveAccessibleName(/14 calls/);
+    expect(chart).toHaveAccessibleName(/1 of them did not succeed/);
+    expect(chart).toHaveAccessibleName(/busiest span served 10/);
+  });
+
   it("shows each tool with its own row", async () => {
     stub({
       tools: [
