@@ -139,7 +139,7 @@ That absence is what makes keeping it for ever reasonable, and it is the whole
 difference between it and the ledger beside it. A year of thirty tools is
 smaller than a day of raw calls.
 
-Two things about it are easy to get wrong. **The denominators are not
+Three things about it are easy to get wrong. **The denominators are not
 interchangeable**: `calls` counts everything including a refusal that never
 reached a handler, `timed` counts only what ran, and `sized` only what returned
 something. Dividing a duration by `calls` reports a host that refuses a great
@@ -149,6 +149,15 @@ its calls into fixed latency bands rather than storing a quantile. The bands
 are constants for the same reason: a boundary that moved would make two spans
 of the same table incomparable, which is the one thing the table exists to
 allow.
+
+And **the series is sparse**. There is a row only for an hour something was
+called in, so a fortnight with sixty-six busy hours in it comes back as
+sixty-six points rather than as a fortnight — the quiet spans are absent, not
+zero. Anything drawing it has to put them back first, or a scatter of hours
+across two weeks is drawn as two weeks of steady traffic, which is the
+opposite of what happened. `fill` on the statistics page is what does that,
+between the first point and the last: padding out to the window asked for
+instead would draw days this host has no answer for.
 
 It is written on the same call path as the ledger rather than rebuilt from it
 by a batch job, because a rollup derived from rows that get pruned has a hole in
