@@ -80,6 +80,73 @@ func (a *App) scanClaimable(ctx context.Context) error {
 	return nil
 }
 
+// startTunnelWorkers connects the tunnels once the host is serving, and keeps
+// asking OpenAI whether it still has each one.
+//
+// Started whether or not a tunnel is configured yet, and that is the point.
+// This used to be gated on the group already holding one, which a host being
+// set up for the first time does not: with nothing assigned at boot the group
+// was never told the host had reached serving, so every tunnel added afterwards
+// was built and left stopped. The Tunnels page read "Off" with the switch on,
+// Restart reported success and did nothing, and only restarting mcpd cleared
+// it. The gate cost one idle goroutine to keep and a support call to remove --
+// the same reasoning the notifier is started under.
+func (a *App) startTunnelWorkers(workerCtx context.Context) {
+	// The tunnel connects in the background: a control plane that is slow or
+	// unreachable must not hold up the listeners, and it can be started from
+	// the dashboard afterwards.
+	//
+	// It waits for the listeners first. A connected tunnel can carry a tool
+	// call immediately, and answering one before the host is serving would
+	// report a failure for a plugin that was moments from being ready.
+	a.startWorker("tunnel", workerCtx, func(ctx context.Context) error {
+		select {
+		case <-a.serving:
+		case <-ctx.Done():
+			return nil
+		}
+		if err := a.tunnels.Start(ctx); err != nil {
+			// Already recorded on the tunnel's status and logged there.
+			// Returning nil keeps a tunnel failure from looking like a
+			// crashed worker.
+			return nil
+		}
+		<-ctx.Done()
+		return a.tunnels.Stop(context.WithoutCancel(ctx))
+	})
+	// Whether OpenAI still has each tunnel. A tunnel deleted in OpenAI's
+	// own dashboard is never told; its client polls for ever and the
+	// status here says connected. Asked every few minutes with the
+	// account's admin key, where there is one, and recorded on the
+	// tunnel's status for the page and the digest to show.
+	a.startWorker("tunnel-upstream", workerCtx, func(ctx context.Context) error {
+		check := func(accountID string) tunnel.UpstreamChecker {
+			dir := a.chatgptDirectory(ctx, accountID)
+			if !dir.Available() {
+				return nil
+			}
+			return dir
+		}
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(30 * time.Second):
+				// Once soon after start, then on the ticker.
+			}
+			a.reconcileTunnelOwners(ctx)
+			a.tunnels.CheckUpstream(ctx, check)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+			}
+		}
+	})
+}
+
 // Run starts every component and blocks until ctx is cancelled, then shuts
 // down in reverse order.
 func (a *App) Run(ctx context.Context) error {
@@ -133,61 +200,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.startWorker("tunnel-version-check", workerCtx, a.tunnelCheck.Run)
 	}
 
-	// The tunnel connects in the background: a control plane that is slow or
-	// unreachable must not hold up the listeners, and it can be started from
-	// the dashboard afterwards.
-	//
-	// It waits for the listeners first. A connected tunnel can carry a tool
-	// call immediately, and answering one before the host is serving would
-	// report a failure for a plugin that was moments from being ready.
-	if a.tunnels.Enabled() {
-		a.startWorker("tunnel", workerCtx, func(ctx context.Context) error {
-			select {
-			case <-a.serving:
-			case <-ctx.Done():
-				return nil
-			}
-			if err := a.tunnels.Start(ctx); err != nil {
-				// Already recorded on the tunnel's status and logged there.
-				// Returning nil keeps a tunnel failure from looking like a
-				// crashed worker.
-				return nil
-			}
-			<-ctx.Done()
-			return a.tunnels.Stop(context.WithoutCancel(ctx))
-		})
-		// Whether OpenAI still has each tunnel. A tunnel deleted in OpenAI's
-		// own dashboard is never told; its client polls for ever and the
-		// status here says connected. Asked every few minutes with the
-		// account's admin key, where there is one, and recorded on the
-		// tunnel's status for the page and the digest to show.
-		a.startWorker("tunnel-upstream", workerCtx, func(ctx context.Context) error {
-			check := func(accountID string) tunnel.UpstreamChecker {
-				dir := a.chatgptDirectory(ctx, accountID)
-				if !dir.Available() {
-					return nil
-				}
-				return dir
-			}
-			ticker := time.NewTicker(5 * time.Minute)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-time.After(30 * time.Second):
-					// Once soon after start, then on the ticker.
-				}
-				a.reconcileTunnelOwners(ctx)
-				a.tunnels.CheckUpstream(ctx, check)
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-ticker.C:
-				}
-			}
-		})
-	}
+	a.startTunnelWorkers(workerCtx)
 
 	errCh := make(chan error, 2)
 

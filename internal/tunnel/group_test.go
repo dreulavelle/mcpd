@@ -224,6 +224,25 @@ func TestApplyConfiguresWithoutConnecting(t *testing.T) {
 	}
 }
 
+// Restart used to return nil before the host was serving, so the dashboard's
+// button reported success and connected nothing -- which is how a tunnel stuck
+// at "Off" survived every attempt to clear it from the page.
+func TestRestartBeforeTheHostIsServingSaysSo(t *testing.T) {
+	g := NewGroup(discardLogger())
+	g.Factory = testFactory()
+	ctx := context.Background()
+
+	const id = "tunnel_1123456789abcdef0123456789abcdef"
+	if err := g.Apply(ctx, []Config{groupConfig("echo", id)}, testFactory()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	t.Cleanup(func() { _ = g.Stop(ctx) })
+
+	if err := g.Restart(ctx, id); err == nil {
+		t.Fatal("Restart reported success while the group was not live, having connected nothing")
+	}
+}
+
 // SameAs decides whether a saved setting reaches the running tunnel. A field
 // missing from it is a setting that reports success and changes nothing --
 // which is worse than one that fails, because it looks like it worked.
