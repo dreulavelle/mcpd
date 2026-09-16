@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.2](https://github.com/dreulavelle/mcpd/compare/v0.27.1...v0.27.2) (2026-09-16)
+
+
+### Fixes
+
+* **tunnel:** list a connector's tools through the tunnel again ([0843124](https://github.com/dreulavelle/mcpd/commit/0843124ef38776d56f86269f87fed03ea8c470c1))
+
 ## [0.27.1](https://github.com/dreulavelle/mcpd/compare/v0.27.0...v0.27.1) (2026-09-16)
 
 
