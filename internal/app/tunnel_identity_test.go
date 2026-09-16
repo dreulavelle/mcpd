@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/settings"
@@ -141,5 +143,52 @@ func TestPerPluginNarrowingKeepsTheAccountsLevelForThatPlugin(t *testing.T) {
 	if lvl := configs[0].Principal.Grants.LevelFor("echo"); lvl != auth.LevelWrite {
 		t.Fatalf("level for echo = %q, want write -- narrowing to one plugin "+
 			"must keep the account's level for it", lvl)
+	}
+}
+
+// A tunnel's server lists the tools its principal may call.
+//
+// The bug this exists for: the listing filter was added after the middleware
+// that attaches the tunnel's principal, and the SDK runs the middleware added
+// last first. So the filter ran outside the principal, judged every tool
+// against an anonymous caller, and every connector reached through a tunnel
+// saw no tools at all -- while the tunnel reported connected and the plugin
+// healthy, and nothing reached the audit trail because nothing was called.
+func TestTunnelServerListsTheToolsItsPrincipalMayCall(t *testing.T) {
+	a := newSettingsApp(t)
+	ctx := context.Background()
+
+	operator, ok := auth.BuiltinRole(auth.RoleOperator)
+	if !ok {
+		t.Fatal("role_operator must be a built-in role")
+	}
+	srv, err := a.tunnelFactory(&auth.Principal{
+		ID: "svc:chatgpt:acme", RoleID: operator.ID, RoleName: operator.Name,
+		Permissions: operator.Permissions,
+		Grants:      auth.GrantsAt([]string{"echo"}, auth.LevelWrite),
+	})
+	if err != nil {
+		t.Fatalf("building the tunnel server: %v", err)
+	}
+
+	serverSide, clientSide := sdkmcp.NewInMemoryTransports()
+	runCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	go func() { _ = srv.Run(runCtx, serverSide) }()
+
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "test", Version: "0"}, nil)
+	session, err := client.Connect(ctx, clientSide, nil)
+	if err != nil {
+		t.Fatalf("connecting: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("tools/list: %v", err)
+	}
+	if len(listed.Tools) == 0 {
+		t.Fatal("a tunnel granted echo listed no tools: the listing filter " +
+			"is not seeing the tunnel's principal")
 	}
 }
