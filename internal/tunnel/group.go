@@ -252,6 +252,16 @@ func (g *Group) Restart(ctx context.Context, tunnelID string) error {
 	if g.Factory == nil {
 		return errors.New("tunnel: the group has no server factory")
 	}
+	// rebuildOne configures without connecting until the host is serving,
+	// which is right for a rebuild at boot and wrong for a person pressing
+	// Restart: they were told it worked and nothing happened. Said plainly
+	// instead, because a button that lies about this cost a support call.
+	g.mu.RLock()
+	live := g.started
+	g.mu.RUnlock()
+	if !live {
+		return errors.New("tunnel: this host is not serving yet, so there is nothing to restart; tunnels connect on their own once it is")
+	}
 	// A rebuild rather than the manager's own Restart, so a plugin remounted
 	// since the tunnel started is picked up -- a person pressing Restart is
 	// usually pressing it because something changed.
