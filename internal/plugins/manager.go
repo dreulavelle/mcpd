@@ -86,11 +86,13 @@ func (m *Manager) SetToolVisibility(v ToolVisibility) { m.visibility = v }
 // filter reads the same declarations the gate does and hides what the gate
 // would refuse.
 //
-// Applied as receiving middleware, which the SDK runs outermost-first in the
-// order added. The tunnel attaches its principal the same way after building
-// its server, so it calls this itself, afterwards; a server reached over HTTP
-// has its principal in the request context before the SDK sees it, so the
-// per-plugin and aggregate servers apply it as they are built.
+// Applied as receiving middleware. Each AddReceivingMiddleware call wraps the
+// handler built so far, so the one added last runs first. The tunnel attaches
+// its principal the same way, so it must call this before attaching it: the
+// other way round, the filter runs outside the principal, sees an anonymous
+// caller and lists nothing. A server reached over HTTP has its principal in the
+// request context before the SDK sees it, so the per-plugin and aggregate
+// servers apply it as they are built.
 func (m *Manager) FilterTools(srv *mcp.Server, caps map[string]auth.Capability) {
 	if m.visibility == nil || srv == nil {
 		return

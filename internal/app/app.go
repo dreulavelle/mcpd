@@ -1065,6 +1065,10 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 		if err != nil {
 			return nil, err
 		}
+		// Before the principal, not after: the middleware added last runs
+		// first, so a filter added after it runs outside it, sees no caller
+		// and lists no tools. See Manager.FilterTools.
+		a.manager.FilterTools(srv, a.manager.Capabilities(granted))
 		// The identity is attached here because an in-memory transport carries
 		// no HTTP request. Every tool call through this server sees the
 		// tunnel's configured principal, and the same authorization checks
@@ -1088,9 +1092,6 @@ func (a *App) buildTunnel(cfg *config.Config, authorizer *auth.Authorizer, log *
 				return next(auth.WithPrincipal(ctx, principal), method, req)
 			}
 		})
-		// After the principal, so the listing filter sees it. See
-		// Manager.FilterTools for why the order matters.
-		a.manager.FilterTools(srv, a.manager.Capabilities(granted))
 		return srv, nil
 	}
 
