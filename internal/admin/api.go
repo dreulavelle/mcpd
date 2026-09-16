@@ -2324,8 +2324,6 @@ func (s *Server) assign(r *http.Request, id, plugin, accountID string) error {
 // why what this host created is recorded locally instead.
 const createdByMCPD = "Created by mcpd"
 
-// workspacesIn collects the distinct workspaces the listed tunnels belong to,
-// in a stable order so the dashboard's default does not move between polls.
 // tunnelName settles what a new tunnel is called.
 //
 // mcpd already knows what the tunnel is for, so asking someone to type a name
