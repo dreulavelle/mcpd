@@ -218,6 +218,19 @@ reaches, never widen it. A tunnel with no account does not start: falling back
 to some other account's key would have a connector quietly authenticate as the
 wrong workspace, which is worse than one that does not come up.
 
+**mcpd manages the tunnels it made, and asks no organisation what those are.**
+`tunnel.<id>.made_here` is written by the create and by nothing else, and it is
+the whole of what the Tunnels page shows, what the assign endpoint will
+re-point, and what the delete endpoint will remove. The description stamped on
+a created tunnel — `Created by mcpd` — is the same string in every build, so it
+cannot say *which* mcpd made one: a host sharing an organisation with a second
+instance listed that instance's connectors as its own, offered to point them at
+its own plugins, and would delete them, while the delete path checked nothing
+at all and would remove a tunnel somebody made by hand in OpenAI's console.
+Provenance has to be local, because the control plane has no field for it. So a
+tunnel made elsewhere is not adoptable, and an organisation's listing is read
+only to prove a key works — never to decide what this host manages.
+
 **Tools are named `verb_resource`.** The host prefixes the instance name, so
 `search` reaches a model as `graylog_search` — a service and a verb, saying
 nothing about what is searched, and unambiguous only until the plugin gains a

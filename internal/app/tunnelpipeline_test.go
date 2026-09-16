@@ -38,9 +38,13 @@ func (f *fakeControlPlane) handler() http.Handler {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.created = append(f.created, body)
 			w.WriteHeader(http.StatusCreated)
+			// A workspace beyond the ones asked for, because OpenAI may list a
+			// tunnel in more than were requested -- and those are the account's
+			// own by definition: it just made a tunnel in them.
+			ws, _ := body["workspace_ids"].([]any)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": "tunnel_abcdef0123456789abcdef0123456789", "name": body["name"],
-				"workspace_ids": body["workspace_ids"],
+				"workspace_ids": append(append([]any{}, ws...), "ws_made"),
 			})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v1/tunnels/"):
 			f.deleted = append(f.deleted, strings.TrimPrefix(r.URL.Path, "/v1/tunnels/"))
@@ -89,9 +93,13 @@ func TestMakeTunnel_IsTheWholePipeline(t *testing.T) {
 	if len(cp.created) != 1 {
 		t.Fatalf("created %d tunnels, want 1", len(cp.created))
 	}
+	// The account's own saved workspaces, and only those. This used to union
+	// in the workspaces of every tunnel in the organisation, which meant a
+	// workspace id was learned from -- and stored against this host's account
+	// from -- connectors other people and other mcpd instances had made.
 	ws, _ := json.Marshal(cp.created[0]["workspace_ids"])
-	if string(ws) != `["ws_own","ws_seen"]` {
-		t.Fatalf("listed in %s, want the account's own workspace and the one its tunnels use", ws)
+	if string(ws) != `["ws_own"]` {
+		t.Fatalf("listed in %s, want only the account's own saved workspace", ws)
 	}
 	if cp.created[0]["name"] != "mcpd" {
 		t.Errorf("name = %v, want mcpd for everything", cp.created[0]["name"])
@@ -105,10 +113,43 @@ func TestMakeTunnel_IsTheWholePipeline(t *testing.T) {
 	if !a.settings.FieldBool(ctx, settings.KeyTunnelEnabled) {
 		t.Error("tunnels were not switched on")
 	}
-	// And the account learned the workspace its tunnels use.
+	// And the account learned the workspaces the new tunnel came back listed
+	// in -- from the create's own response, never from a listing of tunnels
+	// this host did not make.
 	again, _, _ := a.chatgpt.Get(ctx, acct.ID)
-	if strings.Join(again.Workspaces, ",") != "ws_own,ws_seen" {
-		t.Errorf("account workspaces = %v, want the learned one added", again.Workspaces)
+	if strings.Join(again.Workspaces, ",") != "ws_made,ws_own" {
+		t.Errorf("account workspaces = %v, want the created tunnel's added", again.Workspaces)
+	}
+}
+
+// The record of what this host made is what the page, the assign endpoint and
+// the delete endpoint all read. A create writes it; nothing else does.
+func TestMakeTunnel_RecordsThatThisHostMadeIt(t *testing.T) {
+	cp := &fakeControlPlane{}
+	a, acct := pipelineApp(t, cp)
+	ctx := context.Background()
+
+	made, err := a.MakeTunnel(ctx, "user:test", MakeTunnelRequest{Plugin: "", Account: acct.ID})
+	if err != nil {
+		t.Fatalf("MakeTunnel: %v", err)
+	}
+
+	mine := a.tunnelsMadeHere(ctx)
+	if _, ok := mine[made.TunnelID]; !ok {
+		t.Fatalf("made %s and did not record it as this host's: %v", made.TunnelID, mine)
+	}
+	if mine[made.TunnelID] != "mcpd" {
+		t.Errorf("recorded name = %q, want the name it was made with", mine[made.TunnelID])
+	}
+
+	// The organisation's other tunnels -- the fake control plane lists one
+	// nobody here made -- are not this host's, whatever their description
+	// says. Every mcpd build stamps the same one.
+	if _, ok := mine["tunnel_0123456789abcdef0123456789abcdef"]; ok {
+		t.Error("a tunnel this host did not make must not be recorded as its own")
+	}
+	if len(mine) != 1 {
+		t.Errorf("manages %d tunnels, want only the one it made: %v", len(mine), mine)
 	}
 }
 
@@ -138,7 +179,7 @@ func TestCheckChatGPTAccount_ProvesListAndMake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.CanList || !got.CanMake || got.Tunnels != 1 {
+	if !got.CanList || !got.CanMake {
 		t.Fatalf("check = %+v", got)
 	}
 	if len(cp.created) != 1 || len(cp.deleted) != 1 {

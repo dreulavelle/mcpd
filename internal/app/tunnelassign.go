@@ -47,6 +47,74 @@ func (a *App) assignedTunnels(ctx context.Context) []tunnelAssignment {
 	return out
 }
 
+// tunnelsMadeHere reports the tunnels this host created, by id, with the name
+// each was created with.
+//
+// This is the whole of what mcpd will show, re-point or delete. An
+// organisation's other tunnels are not read, so they cannot be offered by
+// mistake: a tunnel another mcpd instance made in the same organisation
+// carries the same description as one this host made, and treating that
+// description as provenance let each instance manage the other's connectors.
+func (a *App) tunnelsMadeHere(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	if a.settings == nil {
+		return out
+	}
+	for _, at := range a.assignedTunnels(ctx) {
+		if !a.settings.Bool(ctx, settings.TunnelMadeHereKey(at.TunnelID), false) {
+			continue
+		}
+		out[at.TunnelID] = a.settings.String(ctx, settings.TunnelNameKey(at.TunnelID), "")
+	}
+	return out
+}
+
+// adoptExistingTunnels records the tunnels this host already had assignments
+// for as ones it made, once, on the first start after the upgrade.
+//
+// Before this, "made by mcpd" was a description string every build stamps, so
+// there was nothing to carry forward but the assignments themselves -- and an
+// assignment is this host's own record of a tunnel it was running, written by
+// its own create. Read from settings rather than from OpenAI: asking the
+// organisation which tunnels look like mcpd's is the question that produced
+// the problem.
+//
+// Not doing this would drop every existing connector off the page and stop it
+// on the first start after an update, which is a worse failure than the one
+// being fixed.
+func (a *App) adoptExistingTunnels(ctx context.Context) {
+	if a.settings == nil {
+		return
+	}
+	var changes []settings.Change
+	var adopted []string
+	for _, at := range a.assignedTunnels(ctx) {
+		if at.Plugin == "" {
+			// Nothing is using it, so there is nothing to carry forward.
+			continue
+		}
+		key := settings.TunnelMadeHereKey(at.TunnelID)
+		if a.settings.String(ctx, key, "\x00") != "\x00" {
+			// Already recorded, either by a create or by a previous start.
+			continue
+		}
+		changes = append(changes, settings.Change{Key: key, Value: "true"})
+		adopted = append(adopted, at.TunnelID)
+	}
+	if len(changes) == 0 {
+		return
+	}
+	sort.Strings(adopted)
+	if err := a.settings.Apply(ctx, "system:config-import", changes); err != nil {
+		a.log.ErrorContext(ctx, "could not record which tunnels this host made; "+
+			"they will not be shown on the Tunnels page until they are made again",
+			"error", err)
+		return
+	}
+	a.log.InfoContext(ctx, "recorded the tunnels this host was already running as its own",
+		"tunnels", len(adopted), "which", strings.Join(adopted, ","))
+}
+
 // migrateTunnelAssignments moves the plugin-keyed assignments to the
 // tunnel-keyed ones, once, on the first start after the upgrade.
 //

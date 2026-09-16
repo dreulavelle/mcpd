@@ -136,7 +136,6 @@ func (a *App) startTunnelWorkers(workerCtx context.Context) {
 			case <-time.After(30 * time.Second):
 				// Once soon after start, then on the ticker.
 			}
-			a.reconcileTunnelOwners(ctx)
 			a.tunnels.CheckUpstream(ctx, check)
 			select {
 			case <-ctx.Done():
@@ -155,6 +154,11 @@ func (a *App) Run(ctx context.Context) error {
 	// served to more than one ChatGPT account. Idempotent, and it leaves the
 	// old keys where they are.
 	a.migrateTunnelAssignments(ctx)
+
+	// Then, on the same first start, record the tunnels those assignments
+	// describe as ones this host made -- the only provenance an upgrade has to
+	// carry forward.
+	a.adoptExistingTunnels(ctx)
 
 	if err := a.manager.Start(ctx); err != nil {
 		return err

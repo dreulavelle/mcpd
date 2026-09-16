@@ -524,6 +524,28 @@ func TunnelAccountKey(tunnelID string) string {
 	return tunnelKeyPrefix + tunnelID + ".account"
 }
 
+// TunnelMadeHereKey records that this host created a tunnel, and is the only
+// thing that makes it this host's to show, re-point or delete.
+//
+// It exists because the control plane has no field for who created a tunnel,
+// and the description this host stamps on one -- "Created by mcpd" -- is the
+// same string in every mcpd build. Trusting that string meant one instance
+// listed, offered to re-point, and would delete tunnels another instance had
+// made in the same organisation, because both had stamped it. A local record
+// cannot be confused that way: nothing but a create here writes it.
+//
+// An organisation's other tunnels are not read at all now, so nothing has to
+// be filtered out of a listing either.
+func TunnelMadeHereKey(tunnelID string) string {
+	return tunnelKeyPrefix + tunnelID + ".made_here"
+}
+
+// TunnelNameKey records the name a tunnel was created with, so the page can
+// name it without asking OpenAI what its own tunnels are called.
+func TunnelNameKey(tunnelID string) string {
+	return tunnelKeyPrefix + tunnelID + ".name"
+}
+
 // TunnelIDFromKey reverses TunnelPluginKey, returning "" for anything else.
 //
 // The suffix is checked as well as the prefix because "tunnel." also begins

@@ -674,7 +674,9 @@ export interface ChatGPTAccount {
 export interface AccountCheck {
   can_list: boolean;
   can_make: boolean;
-  tunnels: number;
+  /** This account's own workspaces. The number of tunnels in its organisation
+   *  used to be reported beside these, and is not this host's to say: most of
+   *  them have nothing to do with it. */
   workspaces: string[];
   problem?: string;
   reason?: string;

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -437,70 +435,4 @@ func (a *App) proveAdminKey(ctx context.Context, adminKey, orgID string) error {
 	a.log.WarnContext(ctx, "could not prove a ChatGPT account's admin key against OpenAI; "+
 		"saving it anyway", "error", err)
 	return nil
-}
-
-// reconcileTunnelOwners writes the account that actually owns each tunnel.
-//
-// A tunnel is created inside one organisation and can only be run by that
-// organisation's key, so which account a tunnel belongs to is a fact rather
-// than a choice. The listings say whose it is; an assignment that names a
-// different account is corrected here, recorded, and the tunnel reconnected
-// under the key that can use it.
-func (a *App) reconcileTunnelOwners(ctx context.Context) {
-	if a.settings == nil {
-		return
-	}
-	// A tunnel's record carries organisations as a list, so one tunnel may
-	// be listed by several accounts and any of their keys may run it. Which
-	// accounts may is a set; the assignment is wrong only when it names an
-	// account outside it, and it is moved to the first inside it, in a
-	// stable order, so two valid accounts never trade the tunnel back and
-	// forth between runs.
-	owners := map[string][]string{}
-	for _, acct := range a.chatgptAccounts(ctx) {
-		dir := a.chatgptDirectory(ctx, acct.ID)
-		if !dir.Available() {
-			continue
-		}
-		list, err := dir.List(ctx)
-		if err != nil {
-			a.log.DebugContext(ctx, "could not list an account's tunnels", "account", acct.Name, "error", err)
-			continue
-		}
-		for _, t := range list {
-			owners[t.ID] = append(owners[t.ID], acct.ID)
-		}
-		// The same listing says which workspaces the account uses; written
-		// back so the account's list fills itself in.
-		a.learnWorkspaces(ctx, acct, dir)
-	}
-	if len(owners) == 0 {
-		return
-	}
-
-	var changes []settings.Change
-	var moved []string
-	for _, at := range a.assignedTunnels(ctx) {
-		able := owners[at.TunnelID]
-		if len(able) == 0 || slices.Contains(able, at.Account) {
-			continue
-		}
-		sort.Strings(able)
-		encoded, err := json.Marshal(able[0])
-		if err != nil {
-			continue
-		}
-		changes = append(changes, settings.Change{Key: settings.TunnelAccountKey(at.TunnelID), Value: string(encoded)})
-		moved = append(moved, at.TunnelID)
-	}
-	if len(changes) == 0 {
-		return
-	}
-	if err := a.settings.Apply(ctx, "system:tunnel-reconcile", changes); err != nil {
-		a.log.ErrorContext(ctx, "could not move tunnels to the accounts that own them", "error", err)
-		return
-	}
-	a.log.InfoContext(ctx, "moved tunnels to the accounts whose organisations own them",
-		"tunnels", strings.Join(moved, ","))
-	a.reconnectTunnels(ctx, "tunnels were moved to the accounts that own them")
 }
