@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.27.1](https://github.com/dreulavelle/mcpd/compare/v0.27.0...v0.27.1) (2026-09-16)
+
+
+### Fixes
+
+* **tunnel:** manage only the tunnels this host made ([0d23387](https://github.com/dreulavelle/mcpd/commit/0d2338773b4f784f2d51cc3679855096f9354a65))
+* **tunnel:** start tunnels on a host that booted without one ([e3468da](https://github.com/dreulavelle/mcpd/commit/e3468da08bd56afd3ef644de560cced5a7858322))
+
+
+### Documentation
+
+* record that mcpd manages only the tunnels it made ([ab06e00](https://github.com/dreulavelle/mcpd/commit/ab06e0086b10d232cf35d985efeb0fe0a76e21e0))
+
 ## [0.27.0](https://github.com/dreulavelle/mcpd/compare/v0.26.0...v0.27.0) (2026-09-15)
 
 
