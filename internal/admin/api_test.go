@@ -175,28 +175,6 @@ func TestTunnelName(t *testing.T) {
 	}
 }
 
-// There is no endpoint that lists ChatGPT workspaces, so the dashboard's
-// choices are read off the tunnels that already have one. Distinct and sorted,
-// because the first is offered as the default and it must not move between
-// polls.
-func TestWorkspacesIn(t *testing.T) {
-	got := workspacesIn([]tunnel.TunnelInfo{
-		{ID: "t1", WorkspaceIDs: []string{"ws_b"}},
-		{ID: "t2", WorkspaceIDs: []string{"ws_a", "ws_b"}},
-		{ID: "t3"},
-		{ID: "t4", WorkspaceIDs: []string{""}},
-	})
-	if len(got) != 2 || got[0] != "ws_a" || got[1] != "ws_b" {
-		t.Fatalf("workspacesIn = %v, want [ws_a ws_b]", got)
-	}
-
-	// No tunnels, or none scoped to a workspace, is an ordinary state: a
-	// personal account has no workspaces at all.
-	if got := workspacesIn(nil); len(got) != 0 {
-		t.Fatalf("workspacesIn(nil) = %v, want empty", got)
-	}
-}
-
 // Lists in the tunnel response are always lists.
 //
 // A nil slice encodes as null, and the dashboard maps over these to build the

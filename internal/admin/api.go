@@ -30,7 +30,6 @@ import (
 	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
-	"github.com/spoked/mcpd/internal/cachestore"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/plugins"
@@ -323,6 +322,16 @@ type Options struct {
 	// tunnel can have one without the other.
 	AccountAssignments func() map[string]string
 
+	// TunnelsMadeHere reports the tunnels this host created, by id, with the
+	// name each was made with.
+	//
+	// It is the whole of what this host will show, re-point or delete. The
+	// organisation's other tunnels are never read: a tunnel another mcpd
+	// instance made carries the same description as one made here, so a
+	// listing cannot tell them apart and this host has no business managing
+	// them.
+	TunnelsMadeHere func() map[string]string
+
 	// Plugins names the mounted systems, so a tunnel can be assigned to one.
 	Plugins func() []string
 
@@ -411,14 +420,6 @@ func (denyAllVerifier) Verify(context.Context, string, *http.Request) (*auth.Pri
 type Server struct {
 	opts Options
 	mux  *http.ServeMux
-
-	// tunnelCache holds each account's tunnel listing for a few seconds, and
-	// tunnelGroup collapses concurrent fetches of the same one. The dashboard
-	// polls this endpoint, so without them every poll was a request to OpenAI
-	// per configured account -- and switching between accounts in the form was
-	// a fresh round trip each time.
-	tunnelCache *cachestore.Store
-	tunnelGroup *cachestore.Group
 }
 
 // NewServer builds the dashboard.
@@ -431,8 +432,6 @@ func NewServer(opts Options) *Server {
 	if opts.Authorizer == nil {
 		opts.Authorizer = auth.NewAuthorizer()
 	}
-	// One entry per ChatGPT account, and a host has a handful.
-	tunnelCache := cachestore.New(32)
 	// A missing verifier must deny everything rather than panic on the first
 	// request. Failing open here would expose the whole dashboard.
 	if opts.Verifier == nil {
@@ -440,8 +439,6 @@ func NewServer(opts Options) *Server {
 		opts.Verifier = denyAllVerifier{}
 	}
 	s := &Server{opts: opts, mux: http.NewServeMux()}
-	s.tunnelCache = tunnelCache
-	s.tunnelGroup = &cachestore.Group{}
 	s.routes()
 	return s
 }
@@ -1012,36 +1009,39 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 			"error", accountsErr)
 		resp.Problem = "The ChatGPT accounts could not be read, so this page may be incomplete."
 	}
-	var seen []tunnel.TunnelInfo
+	// The tunnels this host made, which is every tunnel it has anything to do
+	// with. Nothing is asked of OpenAI here: an organisation's listing is a
+	// mix of this host's connectors, other mcpd instances' and people's, and
+	// it carries no field saying which is which. Reading it to decide what to
+	// show is what let one instance offer to re-point and delete another's.
+	if s.opts.TunnelsMadeHere != nil {
+		for id, name := range s.opts.TunnelsMadeHere() {
+			if name == "" {
+				// Made before the name was recorded. The page names it from
+				// what it serves instead.
+				name = tunnelName("", resp.Assignments[id])
+			}
+			resp.Available = append(resp.Available, availableTunnel{
+				TunnelInfo:  tunnel.TunnelInfo{ID: id, Name: name, Description: createdByMCPD},
+				AccountID:   resp.AccountAssignments[id],
+				AccountName: accountNamed(accounts, resp.AccountAssignments[id]),
+			})
+		}
+		sort.Slice(resp.Available, func(i, j int) bool {
+			return resp.Available[i].ID < resp.Available[j].ID
+		})
+	}
 	for _, acct := range accounts {
 		view := newAccountView(acct)
 		dir := s.directory(acct.ID)
 		view.Missing = dir.Missing()
 		if dir.Available() {
+			// Whether tunnels can be made from this account, which is a
+			// property of its own credentials. It used to be proved by
+			// listing the organisation; having an admin key and an
+			// organisation id is the same answer without reading anything.
 			view.CanManage = true
 			resp.CanManage = true
-			if list, err := s.listTunnels(r.Context(), acct.ID, dir); err != nil {
-				s.opts.Log.ErrorContext(r.Context(), "an account's tunnels could not be listed",
-					"account", acct.Name, "error", err)
-				// Not "check the admin key": a listing fails for reasons that
-				// have nothing to do with the key, and naming one sends
-				// people to change a setting that was right.
-				view.Problem = "This account's tunnels could not be listed, so this page may be incomplete."
-			} else {
-				list = ours(list, resp.Assignments)
-				for _, t := range list {
-					resp.Available = append(resp.Available, availableTunnel{
-						TunnelInfo:  t,
-						AccountID:   acct.ID,
-						AccountName: acct.Name,
-					})
-				}
-				// This account's own workspaces and the ones its tunnels
-				// report, not the host's. The page offers these when a
-				// tunnel is made under this account.
-				view.Workspaces = tunnel.NormalizeWorkspaces(append(view.Workspaces, workspacesIn(list)...))
-				seen = append(seen, list...)
-			}
 		}
 		resp.Accounts = append(resp.Accounts, view)
 	}
@@ -1051,7 +1051,13 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 		// the page to infer from an empty list.
 		resp.Missing = "a ChatGPT account"
 	}
-	if ws := workspacesIn(seen); len(ws) > 0 {
+	// The workspaces the accounts themselves record, learned when a tunnel was
+	// made in them rather than read off the organisation's tunnels.
+	var ws []string
+	for _, acct := range accounts {
+		ws = append(ws, acct.Workspaces...)
+	}
+	if ws = tunnel.NormalizeWorkspaces(ws); len(ws) > 0 {
 		resp.Workspaces = ws
 	}
 	if s.opts.TunnelInfo != nil {
@@ -2098,15 +2104,6 @@ func (s *Server) handleCreateTunnel(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// The page reloads next, and a listing that predates this makes the
-	// tunnel somebody just made look as though it does not exist.
-	if body.Account != "" {
-		s.forgetTunnels(body.Account)
-	} else if accounts, err := s.chatgptAccounts(r.Context()); err == nil {
-		for _, a := range accounts {
-			s.forgetTunnels(a.ID)
-		}
-	}
 	s.writeJSON(w, r, http.StatusCreated, made)
 }
 
@@ -2123,7 +2120,6 @@ func (s *Server) handleCheckChatGPTAccount(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, r, http.StatusNotFound, err.Error())
 		return
 	}
-	s.forgetTunnels(id)
 	s.writeJSON(w, r, http.StatusOK, result)
 }
 
@@ -2184,15 +2180,8 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.assign(r, r.PathValue("id"), body.Plugin, account.ID); err != nil {
-		var wrong *errWrongOwner
-		if errors.As(err, &wrong) {
-			ids := make([]string, 0, len(wrong.owners))
-			for _, o := range wrong.owners {
-				ids = append(ids, o.ID)
-			}
-			s.writeJSON(w, r, http.StatusConflict, map[string]any{
-				"error": "wrong_account", "detail": err.Error(), "owners": ids,
-			})
+		if errors.Is(err, errNotOurs) {
+			s.writeError(w, r, http.StatusForbidden, notOursMessage)
 			return
 		}
 		s.writeProblem(w, r, http.StatusBadRequest, err, "That change could not be saved.")
@@ -2204,6 +2193,15 @@ func (s *Server) handleAssignTunnel(w http.ResponseWriter, r *http.Request) {
 // handleDeleteTunnel removes a tunnel from the organisation.
 func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// Only a tunnel this host made. There was no such check: an id went from
+	// the URL to OpenAI's delete, so any tunnel in any connected account's
+	// organisation could be removed from here -- another mcpd instance's
+	// connector, or one a person made in OpenAI's console -- and a delete is
+	// not a request that can be taken back.
+	if !s.madeHere(id) {
+		s.writeError(w, r, http.StatusForbidden, notOursMessage)
+		return
+	}
 	// Which organisation to delete it from. Taken from the assignment when the
 	// caller does not say, because that is the account mcpd already knows owns
 	// this tunnel -- and deleting from the wrong organisation is a request
@@ -2227,7 +2225,6 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
 		return
 	}
-	s.forgetTunnels(account.ID)
 	// Whatever was pointing at it now points at nothing, so the assignment
 	// goes too: leaving it would keep mcpd trying to run a tunnel that no
 	// longer exists.
@@ -2256,51 +2253,39 @@ func (s *Server) checkPlugin(plugin string) error {
 // on that workspace's credential -- and applying them separately would leave a
 // window in which a tunnel is pointed at a system with no account, which is
 // exactly the state that refuses to start.
-// errWrongOwner is an assignment to an account whose organisation is not
-// among those the tunnel belongs to. A tunnel is run only by the key of an
-// organisation it is associated with, so this is refused rather than stored.
-type errWrongOwner struct {
-	owners []tunnel.Account
+// notOursMessage is what a caller is told about a tunnel this host did not
+// make. It says what mcpd manages rather than implying the tunnel is gone,
+// because it is not: it is somebody else's and still working.
+const notOursMessage = "mcpd only manages the tunnels it made itself. " +
+	"This one was made elsewhere -- in OpenAI's console, or by another mcpd -- " +
+	"so change or remove it there."
+
+// errNotOurs is notOursMessage as an error, for the assign path.
+var errNotOurs = errors.New(notOursMessage)
+
+// accountNamed reports an account's name, or "" when no account has that id.
+func accountNamed(accounts []tunnel.Account, id string) string {
+	for _, a := range accounts {
+		if a.ID == id {
+			return a.Name
+		}
+	}
+	return ""
 }
 
-func (e *errWrongOwner) Error() string {
-	names := make([]string, 0, len(e.owners))
-	for _, o := range e.owners {
-		names = append(names, o.Name)
+// madeHere reports whether this host created a tunnel, which is the only thing
+// that makes it this host's to re-point or delete.
+//
+// Asked of the local record rather than of OpenAI. The organisation's listing
+// cannot answer it: a tunnel another mcpd instance made carries the same
+// description as one made here, so "is this in an organisation I hold a key
+// for" was being used as "is this mine", and it is not the same question.
+func (s *Server) madeHere(id string) bool {
+	if s.opts.TunnelsMadeHere == nil {
+		return false
 	}
-	if len(names) == 1 {
-		return fmt.Sprintf("that tunnel is in %s's organisation and can only run there", names[0])
-	}
-	return fmt.Sprintf("that tunnel belongs to %s and can only run under one of them", strings.Join(names, ", "))
-}
-
-// ownersOf reports every account whose organisation lists a tunnel, from the
-// listings the page already keeps. A tunnel's record names organisations as
-// a list, so there may be several; empty when no account with an admin key
-// can see it.
-func (s *Server) ownersOf(ctx context.Context, id string) []tunnel.Account {
-	accounts, err := s.chatgptAccounts(ctx)
-	if err != nil {
-		return nil
-	}
-	var out []tunnel.Account
-	for _, acct := range accounts {
-		dir := s.directory(acct.ID)
-		if !dir.Available() {
-			continue
-		}
-		list, err := s.listTunnels(ctx, acct.ID, dir)
-		if err != nil {
-			continue
-		}
-		for _, t := range list {
-			if t.ID == id {
-				out = append(out, acct)
-				break
-			}
-		}
-	}
-	return out
+	_, ok := s.opts.TunnelsMadeHere()[id]
+	return ok
 }
 
 // assign points a tunnel at a system under an account. The dashboard spells
@@ -2310,9 +2295,8 @@ func (s *Server) assign(r *http.Request, id, plugin, accountID string) error {
 	if s.opts.Settings == nil {
 		return fmt.Errorf("settings are unavailable")
 	}
-	if owners := s.ownersOf(r.Context(), id); len(owners) > 0 &&
-		!slices.ContainsFunc(owners, func(a tunnel.Account) bool { return a.ID == accountID }) {
-		return &errWrongOwner{owners: owners}
+	if !s.madeHere(id) {
+		return errNotOurs
 	}
 	stored := plugin
 	if stored == "" {
@@ -2333,56 +2317,15 @@ func (s *Server) assign(r *http.Request, id, plugin, accountID string) error {
 	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, changes)
 }
 
-// ours narrows a tunnel listing to the ones this host has anything to do with.
+// createdByMCPD is the description this host puts on tunnels it makes.
 //
-// An organisation's tunnels are not all mcpd's. Adding a ChatGPT account
-// listed every tunnel anyone had ever made in that organisation -- other
-// people's connectors, other tools' -- as though they were this host's to
-// assign, which is noise at best and an invitation to take over somebody
-// else's connector at worst.
-//
-// Two things count as ours: a tunnel this host created, which it stamps on
-// creation, and a tunnel this host has assigned, whoever made it. The second
-// matters because an operator who adopted an existing tunnel by assigning it
-// must not watch it vanish from the page for the crime of not having been
-// created here.
-func ours(list []tunnel.TunnelInfo, assigned map[string]string) []tunnel.TunnelInfo {
-	out := make([]tunnel.TunnelInfo, 0, len(list))
-	for _, t := range list {
-		if t.Description == createdByMCPD {
-			out = append(out, t)
-			continue
-		}
-		if _, mine := assigned[t.ID]; mine {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-// createdByMCPD is the description this host puts on tunnels it makes, and the
-// only durable mark distinguishing them: the control plane has no field for
-// who created a tunnel.
+// For a person reading OpenAI's console, and nothing more. It cannot say which
+// mcpd made a tunnel, because every build stamps the same string -- which is
+// why what this host created is recorded locally instead.
 const createdByMCPD = "Created by mcpd"
 
 // workspacesIn collects the distinct workspaces the listed tunnels belong to,
 // in a stable order so the dashboard's default does not move between polls.
-func workspacesIn(tunnels []tunnel.TunnelInfo) []string {
-	seen := map[string]bool{}
-	out := []string{}
-	for _, t := range tunnels {
-		for _, w := range t.WorkspaceIDs {
-			if w == "" || seen[w] {
-				continue
-			}
-			seen[w] = true
-			out = append(out, w)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 // tunnelName settles what a new tunnel is called.
 //
 // mcpd already knows what the tunnel is for, so asking someone to type a name
@@ -2418,10 +2361,14 @@ func (s *Server) unassign(r *http.Request, id string) error {
 	if s.opts.Settings == nil {
 		return fmt.Errorf("settings are unavailable")
 	}
-	// One pair of keys per tunnel, and nothing else to look for.
+	// Everything keyed by this tunnel, including the record that this host
+	// made it: a deleted tunnel that left its provenance behind would be
+	// managed by a host that no longer has it.
 	return s.opts.Settings.Apply(r.Context(), auth.FromContext(r.Context()).ID, []settings.Change{
 		{Key: settings.TunnelPluginKey(id), Delete: true},
 		{Key: settings.TunnelAccountKey(id), Delete: true},
+		{Key: settings.TunnelMadeHereKey(id), Delete: true},
+		{Key: settings.TunnelNameKey(id), Delete: true},
 	})
 }
 

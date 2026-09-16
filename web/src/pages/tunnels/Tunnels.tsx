@@ -76,12 +76,6 @@ interface Row extends OpenAITunnel {
   status?: TunnelStatus;
   /** Which ChatGPT account it connects with, undefined when it has none. */
   account?: string;
-  /**
-   * Every account whose organisation lists this tunnel. A tunnel's record
-   * names organisations as a list, so there may be several, and any of
-   * their keys may run it; empty when no account here can see it.
-   */
-  owners: string[];
   /** What it is pointed at in the configuration: a plugin name, "" for
    *  everything, or undefined when it is not assigned at all. */
   assigned?: string;
@@ -96,7 +90,7 @@ interface Row extends OpenAITunnel {
  * inspector and the filter chips cannot disagree about what a tunnel is.
  */
 export interface Reading {
-  kind: "elsewhere" | "gone" | "stopped" | "retrying" | "degraded" | "unassigned" | "waiting" | "attach" | "connecting" | "ready" | "off" | "unused";
+  kind: "gone" | "stopped" | "retrying" | "degraded" | "unassigned" | "waiting" | "attach" | "connecting" | "ready" | "off" | "unused";
   label: string;
   tone: Tone;
   rank: number;
@@ -119,15 +113,6 @@ export function reading(row: Row, plugins: string[], accounts: ChatGPTAccount[],
   if (!s) {
     return { kind: "unused", label: "Not used", tone: "neutral", rank: 8, bucket: "off",
       detail: "Point it at a system to start it." };
-  }
-  // The listings know which accounts may run it; the assignment says which
-  // does. When the assigned one is not among them, the runtime key is
-  // refused and the upstream check says missing -- and the remedy is to
-  // move it, not to remake it.
-  if (row.owners.length > 0 && row.account && !row.owners.includes(row.account)) {
-    const names = row.owners.map((id) => accountName(accounts, id)).filter(Boolean);
-    return { kind: "elsewhere", label: "Wrong account", tone: "problem", rank: 0, bucket: "needs",
-      detail: `This tunnel belongs to ${names.join(" and ")}, so ${accountName(accounts, row.account)} cannot use it. Move it to ${names.length === 1 ? names[0] : "one of them"}.` };
   }
   if (s.upstream === "missing") {
     return { kind: "gone", label: "Not in this account", tone: "problem", rank: 0, bucket: "needs",
@@ -211,33 +196,27 @@ export function Tunnels() {
     const running = new Map((info.tunnels ?? []).map((t) => [t.tunnel_id ?? "", t]));
     const accountOf = info.account_assignments ?? {};
     const assignments = info.assignments ?? {};
-    // The listings are per account, so a tunnel several organisations
-    // share appears once per account. One row per tunnel, remembering every
-    // account that listed it.
-    const owners = new Map<string, string[]>();
-    for (const t of info.available ?? []) {
-      if (t.account_id) owners.set(t.id, [...(owners.get(t.id) ?? []), t.account_id]);
-    }
+    // The tunnels this host made. Nothing else is listed: an organisation's
+    // other connectors belong to other people and other mcpd instances, and
+    // this page offered to re-point and delete them.
     const seen = new Set<string>();
     const base: Row[] = [];
-    if (info.can_manage) {
-      for (const t of info.available ?? []) {
-        if (seen.has(t.id)) continue;
-        seen.add(t.id);
-        base.push({ ...t, status: running.get(t.id), owners: owners.get(t.id) ?? [] });
-      }
+    for (const t of info.available ?? []) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      base.push({ ...t, status: running.get(t.id) });
     }
-    // A running tunnel no listing knows -- an account without an admin key,
-    // or one the operator pasted in -- is still a row.
+    // A running tunnel with no record of having been made here, which is what
+    // an upgrade leaves until its assignment is carried over.
     for (const t of info.tunnels ?? []) {
       const id = t.tunnel_id ?? "";
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      base.push({ id, name: t.plugin || "Everything", status: t, owners: [] });
+      base.push({ id, name: t.plugin || "Everything", status: t });
     }
     return base.map((r) => ({
       ...r,
-      account: accountOf[r.id] ?? (r.owners.length === 1 ? r.owners[0] : r.account_id),
+      account: accountOf[r.id] ?? r.account_id,
       assigned: assignments[r.id],
     }));
   }, [info]);
@@ -717,7 +696,6 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
   const s = row.status;
   const account = accounts.find((a) => a.id === row.account);
   const reachesValue = s ? (s.plugin || "*") : row.assigned === undefined ? "" : (row.assigned || "*");
-  const owner = row.owners.length > 0;
   const activity = s?.activity ?? [];
   const errors = s?.errors && s.errors.length === activity.length ? s.errors : activity.map(() => 0);
   const metrics = s && activity.length > 0 && (
@@ -813,12 +791,6 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
 
       {(admin || manages) && (
         <div className="flex flex-wrap gap-2">
-          {manages && r.kind === "elsewhere" && row.owners.map((id) => (
-            <Button key={id} size="sm" disabled={busy !== null}
-                    onClick={() => assign(reachesValue, id)}>
-              Move to {accountName(accounts, id)}
-            </Button>
-          ))}
           {admin && s && s.state !== "disabled" && (
             <Button variant="outline" size="sm" onClick={restart} disabled={busy !== null}
                     title="Stop it and start it again">
@@ -853,11 +825,12 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
               ))}
             </NativeSelect>
           </div>
-          {/* Which account a tunnel belongs to is a fact where an account's
-              listing knows it: a tunnel runs only under the key of the
-              organisation it was made in. The choice is offered only for a
-              tunnel no listing can see. */}
-          {accounts.length > 1 && !owner && (
+          {/* A tunnel runs only under the key of the organisation it was made
+              in, so on a host with one account there is nothing to choose.
+              With several, the choice is offered: nothing here reads an
+              organisation's listing any more, so the host cannot work out
+              whose a tunnel is on the operator's behalf. */}
+          {accounts.length > 1 && (
             <div className="space-y-1.5">
               <Label htmlFor="insp-account">Account</Label>
               <NativeSelect id="insp-account" value={row.account ?? ""} disabled={busy !== null}
@@ -866,7 +839,8 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </NativeSelect>
               <p className="text-xs text-muted-foreground">
-                No account here can see this tunnel, so choose which one runs it.
+                Which account's key runs this tunnel. It has to be the one whose
+                organisation the tunnel was made in.
               </p>
             </div>
           )}

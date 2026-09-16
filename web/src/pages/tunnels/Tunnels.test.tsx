@@ -158,19 +158,20 @@ describe("the tunnels page", () => {
     expect(rows[0]).toHaveTextContent("mcpd: graylog");
   });
 
-  it("moves a tunnel to the account that owns it", async () => {
+  // Only the tunnels this host made are listed, so a connector belonging to
+  // another mcpd in the same organisation is not a row here at all.
+  it("lists only what the host reports as its own", async () => {
     vi.spyOn(api, "tunnel").mockResolvedValue(info({
-      tunnels: [status({ tunnel_id: "tunnel_b", plugin: "echo", state: "failed", message: "refused", requests: 0, last_request_at: undefined })],
-      available: [{ id: "tunnel_b", name: "mcpd: echo", account_id: "acct_2" }] as never,
-      assignments: { tunnel_b: "echo" },
-      account_assignments: { tunnel_b: "acct_1" },
+      tunnels: [status()],
+      available: [{ id: "tunnel_a", name: "mcpd: graylog", account_id: "acct_1" }] as never,
+      assignments: { tunnel_a: "graylog" },
+      account_assignments: { tunnel_a: "acct_1" },
     }));
-    const assign = vi.spyOn(api, "assignTunnel").mockResolvedValue({ status: "assigned" });
     renderWith(<Tunnels />);
-    expect((await screen.findAllByText("Wrong account")).length).toBeGreaterThan(0);
-    await userEvent.click(screen.getByRole("button", { name: "Details for mcpd: echo" }));
-    await userEvent.click(await screen.findByRole("button", { name: "Move to Lab" }));
-    await waitFor(() => expect(assign).toHaveBeenCalledWith("tunnel_b", "echo", "acct_2"));
+    const table = await screen.findByRole("table", { name: "Tunnels" });
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("mcpd: graylog");
   });
 
   it("restarts a tunnel from its row without opening it", async () => {
@@ -244,7 +245,7 @@ describe("the tunnels page", () => {
 // chips cannot disagree.
 describe("what a tunnel is doing", () => {
   const row = (s: Partial<TunnelStatus> | null = {}, extra: Record<string, unknown> = {}) =>
-    ({ id: "t", name: "t", account: "acct_1", owners: [], assigned: "graylog", status: s === null ? undefined : status(s), ...extra }) as never;
+    ({ id: "t", name: "t", account: "acct_1", assigned: "graylog", status: s === null ? undefined : status(s), ...extra }) as never;
   const one = [account()];
   it.each([
     ["not in this organisation", row({ upstream: "missing" }), "gone", 0],
@@ -271,25 +272,6 @@ describe("what a tunnel is doing", () => {
     const idle = row({ requests: 0, last_request_at: undefined });
     expect(reading(idle, ["graylog"], one, new Set(["t"])).kind).toBe("attach");
     expect(reading(idle, ["graylog"], one, new Set()).kind).toBe("ready");
-  });
-
-  // The listing says who owns a tunnel and the assignment says who runs it;
-  // when they differ the key is refused, and the remedy is a move.
-  it("names the account that owns a tunnel assigned to the wrong one", () => {
-    const two = [account(), account({ id: "acct_2", name: "Nick" })];
-    const r = reading(row({ state: "failed", message: "refused" }, { account: "acct_1", owners: ["acct_2"] }), ["graylog"], two);
-    expect(r.kind).toBe("elsewhere");
-    expect(r.detail).toContain("belongs to Nick");
-    expect(r.detail).toContain("Move it to Nick");
-  });
-
-  // A tunnel several organisations share may be run by any of their keys,
-  // so an assignment to one of them is right, and a shared tunnel is one
-  // row rather than one per account that lists it.
-  it("accepts any of the accounts a shared tunnel belongs to", () => {
-    const two = [account(), account({ id: "acct_2", name: "Nick" })];
-    const shared = row({ state: "connected" }, { account: "acct_2", owners: ["acct_1", "acct_2"] });
-    expect(reading(shared, ["graylog"], two).kind).not.toBe("elsewhere");
   });
 
   // The bug: the sidebar read `It will not restart on its own. tunnel: OpenAI

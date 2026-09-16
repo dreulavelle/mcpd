@@ -1840,10 +1840,11 @@ error lines, including its `poll failed; backing off` warnings, which are the
 only sign it is *not* being served. And whether the account's organisation still has the
 tunnel, asked with its admin key every few minutes, because a tunnel deleted
 there -- or assigned to an account whose organisation never owned it -- is
-never told and polls for ever. OpenAI's admin API is scoped to one
-organisation, so that answer alone cannot tell deleted from elsewhere; the
-Tunnels page can, from the listings it already holds for every account, and
-names the owner. A connected tunnel whose
+never told and polls for ever. That question is asked of each tunnel this host
+made, by id, and never by listing an organisation: "missing" therefore means
+this account cannot see this tunnel, which covers both deleted and never
+theirs, and the page says that rather than naming an owner it has no honest
+way to know. A connected tunnel whose
 client has been reporting errors with nothing served is *degraded* on the
 status; after ten minutes of that the watchdog restarts it, since a fresh
 client is the one thing that reliably clears a stuck one.
@@ -1881,22 +1882,42 @@ moved onto the tunnel's own key, and deleted; a value left under an old key
 was a second authority for the same tunnel, and a host holding two answers for
 one plugin is how a connector came to run under a key that could not use it.
 
-Which account a tunnel belongs to is not chosen. A tunnel is created inside
-one organisation and only that organisation's runtime key can use it, so
-where an account's admin key can list it, that account is its owner: the
-reconciler writes the owner over any assignment that disagrees, the assign
-endpoint refuses one that would, and the page offers the choice only for a
-tunnel no listing can see. An admin key and organisation are proved against
-OpenAI when an account is saved, so a key from the wrong organisation fails
-at the form rather than at the first connector.
+**mcpd manages the tunnels it made, and nothing else.** `tunnel.<id>.made_here`
+is written by the create and by nothing else, and it is the whole of what the
+page shows, the assign endpoint will re-point, and the delete endpoint will
+remove. An organisation's own listing is never read to decide any of that.
+
+It cannot be. The description mcpd stamps on a tunnel it creates -- "Created by
+mcpd" -- is the same string in every build, so a host sharing an organisation
+with a second mcpd listed that instance's connectors as its own, offered to
+point them at its own plugins, and would delete them; the delete path had no
+ownership check at all, so a tunnel made by hand in OpenAI's console was
+removable by id even though the listing filter hid it. Provenance has to be
+local, because the control plane has no field for which mcpd created a tunnel.
+
+Two things follow. A tunnel is no longer adopted: one made elsewhere is not
+this host's to run, and the page says so rather than offering it. And the
+owner reconciler is gone -- it existed to correct an assignment against other
+accounts' listings, and a tunnel created here under a known account cannot
+disagree with itself. An admin key and organisation are still proved against
+OpenAI when an account is saved, so a key from the wrong organisation fails at
+the form rather than at the first connector.
+
+The first start after the upgrade records the tunnels the host already had
+assignments for, since an assignment is its own record of a tunnel it created.
+That reads settings, not OpenAI: asking the organisation which tunnels look
+like mcpd's is the question that caused this.
 
 **Making a tunnel is one call, and nothing is asked that the host knows.**
 `MakeTunnel` in `internal/app` is the pipeline: create the tunnel in the
-account's organisation, listed in every workspace the account knows, point it
-at the system, switch tunnels on, start it. The workspaces are the account's
-own list unioned with what its existing tunnels report, learned from each
-listing and written back to the account, so the field fills itself and nobody
-types a workspace id. That question used to be on the form, defaulting to a
+account's organisation, listed in the workspaces that account has saved, point
+it at the system, record it as made here, switch tunnels on, start it. The
+workspaces come back from the create and are written onto the account, so the
+field fills itself and nobody types a workspace id. They were read off every
+tunnel in the organisation until that was found to be learning -- and storing
+-- workspace ids from connectors other people and other mcpd instances had
+made; a create's own response says the same thing about the only tunnel that is
+this host's business. That question used to be on the form, defaulting to a
 host-wide list, and an account with no workspaces of its own was offered
 another organisation's -- which OpenAI refuses with the same 403 as a key
 without the write scope, and an operator whose key had made tunnels an hour
@@ -1904,7 +1925,9 @@ earlier was told it could not. A refused create is now explained by the same
 key's ability to list: a key that reads and cannot write lacks one scope,
 and the message names it. `CheckChatGPTAccount` proves both halves by doing
 them -- a listing, and a tunnel made organisation-only and deleted in the same
-call -- because "has an admin key" was being shown as "can make tunnels".
+call -- because "has an admin key" was being shown as "can make tunnels". What
+that listing returns is not recorded: it proves the key reads, and the
+organisation's tunnel count is not this host's to report.
 
 **The handoff is the one step mcpd cannot do.** OpenAI exposes no API for
 attaching a tunnel as a connector in a ChatGPT workspace; that is done in

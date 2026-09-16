@@ -785,6 +785,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			AccountAssignments: func() map[string]string {
 				return a.tunnelAccountAssignments(context.Background())
 			},
+			TunnelsMadeHere: func() map[string]string {
+				return a.tunnelsMadeHere(context.Background())
+			},
 			CACertificate:              a.caPEM,
 			TLSStatus:                  a.tlsStatus,
 			SetDashboardCertificate:    a.setDashboardCertificate,

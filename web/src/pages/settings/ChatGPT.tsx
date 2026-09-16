@@ -251,10 +251,11 @@ function AccountRow({ account, notify, onChanged }: {
               <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <Chip tone="good">Can list tunnels</Chip>
                 <Chip tone={check.can_make ? "good" : "problem"}>{check.can_make ? "Can make tunnels" : "Cannot make tunnels"}</Chip>
-                <span className="text-muted-foreground">
-                  {check.tunnels} tunnel{check.tunnels === 1 ? "" : "s"} in its organisation
-                  {check.workspaces.length > 0 && <> · workspaces {check.workspaces.join(", ")}</>}
-                </span>
+                {check.workspaces.length > 0 && (
+                  <span className="text-muted-foreground">
+                    workspaces {check.workspaces.join(", ")}
+                  </span>
+                )}
               </span>
             )}
           </TableCell>

@@ -65,9 +65,13 @@ func (a *App) MakeTunnel(ctx context.Context, actor string, req MakeTunnelReques
 		return MakeTunnelResult{}, fmt.Errorf("tunnel: there is no system called %q", req.Plugin)
 	}
 
-	// Learned before the create rather than after, so the tunnel is listed
-	// where the account's others are from the moment it exists.
-	workspaces, listed := a.learnWorkspaces(ctx, acct, dir)
+	// The account's own saved workspaces. This used to union in the workspaces
+	// of every tunnel in the organisation, which meant a workspace id was
+	// learned from -- and written to this host's account row from -- tunnels
+	// somebody else had made. What a create returns is enough to keep the list
+	// filling itself in without reading anybody else's tunnel.
+	workspaces := tunnel.NormalizeWorkspaces(acct.Workspaces)
+	listed := len(workspaces) > 0
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -83,15 +87,23 @@ func (a *App) MakeTunnel(ctx context.Context, actor string, req MakeTunnelReques
 
 	// Assigned and switched on in one write: a tunnel that exists at OpenAI
 	// and is not pointed at anything here is an object doing nothing.
+	//
+	// The same write records that this host made it. That record is what makes
+	// it this host's to manage: an organisation's other tunnels are never
+	// listed, and one made by another mcpd instance is not this one's to
+	// re-point or delete however similar its description looks.
 	stored := req.Plugin
 	if stored == "" {
 		stored = settings.TunnelEverything
 	}
 	encodedPlugin, _ := json.Marshal(stored)
 	encodedAccount, _ := json.Marshal(acct.ID)
+	encodedName, _ := json.Marshal(made.Name)
 	changes := []settings.Change{
 		{Key: settings.TunnelPluginKey(made.ID), Value: string(encodedPlugin)},
 		{Key: settings.TunnelAccountKey(made.ID), Value: string(encodedAccount)},
+		{Key: settings.TunnelMadeHereKey(made.ID), Value: "true"},
+		{Key: settings.TunnelNameKey(made.ID), Value: string(encodedName)},
 		{Key: settings.KeyTunnelEnabled, Value: "true"},
 	}
 	if err := a.settings.Apply(ctx, actor, changes); err != nil {
@@ -99,6 +111,10 @@ func (a *App) MakeTunnel(ctx context.Context, actor string, req MakeTunnelReques
 		// with the id, rather than left as a tunnel somebody finds later.
 		return MakeTunnelResult{}, fmt.Errorf("tunnel: %s was made at OpenAI but could not be assigned here: %w", made.ID, err)
 	}
+	// After the create, from what it returned. OpenAI may list a tunnel in
+	// workspaces beyond the ones asked for, and those are this account's own
+	// by definition -- it just made a tunnel in them.
+	a.recordWorkspaces(ctx, acct, made.WorkspaceIDs)
 	a.reconnectTunnels(ctx, "a tunnel was made")
 
 	return MakeTunnelResult{
@@ -109,35 +125,39 @@ func (a *App) MakeTunnel(ctx context.Context, actor string, req MakeTunnelReques
 	}, nil
 }
 
-// createdByMCPD marks a tunnel this host made, so a listing can tell its own
-// from ones somebody made in OpenAI's dashboard.
+// createdByMCPD is the description this host puts on tunnels it makes.
+//
+// It is for a person reading OpenAI's console, and nothing more. It used to be
+// the signal for "this host made it", which it cannot be: every mcpd build
+// stamps the same string, so one instance treated another's tunnels as its
+// own. What a tunnel here was created by is recorded locally, under
+// settings.TunnelMadeHereKey.
 const createdByMCPD = "Created by mcpd"
 
-// learnWorkspaces returns every workspace an account is known to use: its
-// own list, plus what its tunnels report. Anything new is written back to
-// the account, so the list fills itself in and nobody types a workspace id.
-// listed says whether the listing succeeded, which explainCreate uses.
-func (a *App) learnWorkspaces(ctx context.Context, acct tunnel.Account, dir *tunnel.Directory) (workspaces []string, listed bool) {
+// recordWorkspaces adds the workspaces a tunnel was created in to its
+// account, so the list fills itself in and nobody types a workspace id.
+//
+// Fed by what Create returned rather than by a listing. Reading the
+// organisation's tunnels to harvest workspace ids meant this host learned --
+// and stored -- workspaces from connectors other people and other mcpd
+// instances had made, which is exactly the boundary this is not supposed to
+// cross.
+func (a *App) recordWorkspaces(ctx context.Context, acct tunnel.Account, found []string) {
+	if a.chatgpt == nil {
+		return
+	}
 	known := tunnel.NormalizeWorkspaces(acct.Workspaces)
-	list, err := dir.List(ctx)
-	if err != nil {
-		return known, false
+	all := tunnel.NormalizeWorkspaces(append(append([]string{}, known...), found...))
+	if len(all) == len(known) {
+		return
 	}
-	seen := append([]string{}, known...)
-	for _, t := range list {
-		seen = append(seen, t.WorkspaceIDs...)
+	if _, err := a.chatgpt.Update(ctx, "system:tunnel-reconcile", acct.ID,
+		tunnel.AccountUpdate{Workspaces: &all}); err != nil {
+		a.log.WarnContext(ctx, "could not record an account's workspaces", "account", acct.Name, "error", err)
+		return
 	}
-	all := tunnel.NormalizeWorkspaces(seen)
-	if len(all) != len(known) && a.chatgpt != nil {
-		if _, err := a.chatgpt.Update(ctx, "system:tunnel-reconcile", acct.ID,
-			tunnel.AccountUpdate{Workspaces: &all}); err != nil {
-			a.log.WarnContext(ctx, "could not record an account's workspaces", "account", acct.Name, "error", err)
-		} else {
-			a.log.InfoContext(ctx, "learned an account's workspaces from its tunnels",
-				"account", acct.Name, "workspaces", strings.Join(all, ","))
-		}
-	}
-	return all, true
+	a.log.InfoContext(ctx, "recorded the workspaces a new tunnel was listed in",
+		"account", acct.Name, "workspaces", strings.Join(all, ","))
 }
 
 // explainCreate turns OpenAI's refusal of a create into what to do. A 403
@@ -166,9 +186,12 @@ func (a *App) explainCreate(ctx context.Context, dir *tunnel.Directory, err erro
 // key" was being shown as "can make tunnels" and the difference is exactly
 // what somebody pressing Make needs to know first.
 type AccountCheck struct {
-	CanList    bool     `json:"can_list"`
-	CanMake    bool     `json:"can_make"`
-	Tunnels    int      `json:"tunnels"`
+	CanList bool `json:"can_list"`
+	CanMake bool `json:"can_make"`
+	// Workspaces are this account's own, not every workspace its
+	// organisation's tunnels are listed in. The count of tunnels in the
+	// organisation used to be reported here and is not this host's to say:
+	// most of them are nothing to do with it.
 	Workspaces []string `json:"workspaces"`
 	// Problem is OpenAI's refusal, in the words the dialog shows.
 	Problem string `json:"problem,omitempty"`
@@ -188,14 +211,16 @@ func (a *App) CheckChatGPTAccount(ctx context.Context, id string) (AccountCheck,
 		out.Problem = "This account has " + dir.Missing() + " missing, so it can run tunnels pasted in but not list or make them."
 		return out, nil
 	}
-	list, err := dir.List(ctx)
-	if err != nil {
+	// The listing proves the key can read, and that is all it is used for: the
+	// tunnels it returns are the organisation's, most of them nothing to do
+	// with this host, and neither their count nor their workspaces are this
+	// host's business.
+	if _, err := dir.List(ctx); err != nil {
 		out.Problem, out.Reason = err.Error(), tunnel.Reason(err)
 		return out, nil
 	}
 	out.CanList = true
-	out.Tunnels = len(list)
-	out.Workspaces, _ = a.learnWorkspaces(ctx, acct, dir)
+	out.Workspaces = tunnel.NormalizeWorkspaces(acct.Workspaces)
 
 	// The write half: made and deleted inside one call, organisation-only so
 	// it appears nowhere, named so that a leftover -- if the delete failed --
