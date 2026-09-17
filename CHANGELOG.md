@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.28.0](https://github.com/dreulavelle/mcpd/compare/v0.27.2...v0.28.0) (2026-09-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **threecx:** two tool results had a field called system of their own, and an embedded field loses to depth in Go's JSON, so both would have shadowed the source silently -- carrying customer and system_id while dropping the name, and leaving a reader to meet three meanings of "system" across one tool set. list_music_on_hold now reports the system-wide music under system_wide, and get_support_bundle_report reports the host's facts under machine.
+
+### Features
+
+* **threecx:** a business can run more than one phone system ([dd89f9d](https://github.com/dreulavelle/mcpd/commit/dd89f9d37ea828b2fb7c62c2d5c36d3c789c81f8))
+
 ## [0.27.2](https://github.com/dreulavelle/mcpd/compare/v0.27.1...v0.27.2) (2026-09-16)
 
 
