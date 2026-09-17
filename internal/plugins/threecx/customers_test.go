@@ -21,7 +21,7 @@ func twoCustomers(t *testing.T) (*Plugin, *fakePBX, *fakePBX) {
 		"SystemStatus": `{"FQDN":"globex.example","Version":"20.0.2"}`, "LicenseStatus": `{}`, "Trunks": collection(0), "Users": collection(0)})
 	// Both fakes are httptest servers on loopback; the guard checks the
 	// configured host, so each client is built over its own server's client.
-	p, err := New(testDeps(), Config{Customers: []Customer{
+	p, err := New(testDeps(), Config{Systems: []System{
 		{Name: "Acme Dental Group", Aliases: []string{"acme", "ADG", "Acme Roof Care"}, Host: acmeSrv.URL, Extension: "100", Password: "right-password"},
 		{Name: "Globex Roofing", Aliases: []string{"globex"}, Host: globexSrv.URL, Extension: "100", Password: "right-password"},
 	}})
@@ -49,7 +49,7 @@ func TestResolve_NamesAliasesAndFragments(t *testing.T) {
 		"  Globex Roofing ": "Globex Roofing",
 	}
 	for asked, want := range cases {
-		a, err := p.resolve(asked)
+		a, err := p.resolve(asked, "")
 		if err != nil {
 			t.Errorf("%q: %v", asked, err)
 			continue
@@ -67,12 +67,12 @@ func TestResolve_NamesAliasesAndFragments(t *testing.T) {
 func TestResolve_NeverGuesses(t *testing.T) {
 	p, _, _ := twoCustomers(t)
 
-	a, err := p.resolve("acme")
+	a, err := p.resolve("acme", "")
 	if err != nil || a.name != "Acme Dental Group" {
 		t.Errorf("an exact alias match should win over a fragment of another customer, got %v %v", a, err)
 	}
 
-	_, err = p.resolve("roof")
+	_, err = p.resolve("roof", "")
 	if err == nil {
 		t.Fatal("a fragment matching two customers must be refused")
 	}
@@ -82,7 +82,7 @@ func TestResolve_NeverGuesses(t *testing.T) {
 		}
 	}
 
-	_, err = p.resolve("")
+	_, err = p.resolve("", "")
 	if err == nil || !strings.Contains(err.Error(), "serves 2 customers") || !strings.Contains(err.Error(), "Globex Roofing") {
 		t.Errorf("no name with two customers should be refused with the list, got %v", err)
 	}
@@ -91,7 +91,7 @@ func TestResolve_NeverGuesses(t *testing.T) {
 	// somebody has to open, and tells the model not to settle for a nearby
 	// one -- reading the wrong business's phone system confidently is the
 	// failure this wording exists to prevent.
-	_, err = p.resolve("Initech")
+	_, err = p.resolve("Initech", "")
 	if err == nil {
 		t.Fatal("an unknown customer must be refused")
 	}
@@ -116,13 +116,13 @@ func TestResolve_NeverGuesses(t *testing.T) {
 // that does not is still refused rather than falling back to the only one.
 func TestResolve_SingleCustomer(t *testing.T) {
 	p, _ := toolPlugin(t, map[string]string{})
-	if a, err := p.resolve(""); err != nil || a.name != "Acme" {
+	if a, err := p.resolve("", ""); err != nil || a.name != "Acme" {
 		t.Errorf("one customer needs no name, got %v %v", a, err)
 	}
-	if a, err := p.resolve("ACME"); err != nil || a.name != "Acme" {
+	if a, err := p.resolve("ACME", ""); err != nil || a.name != "Acme" {
 		t.Errorf("the one customer by name, got %v %v", a, err)
 	}
-	if _, err := p.resolve("Globex"); err == nil {
+	if _, err := p.resolve("Globex", ""); err == nil {
 		t.Error("a name that fits nobody must not fall back to the only customer")
 	}
 }
@@ -216,19 +216,19 @@ func TestStart_ReachesNothingUntilAsked(t *testing.T) {
 // sentence saying what to do is the part that matters, and sixty names would
 // bury it.
 func TestResolve_BoundsTheNamesItLists(t *testing.T) {
-	customers := make([]Customer, 0, 14)
+	systems := make([]System, 0, 14)
 	for i := range 14 {
-		customers = append(customers, Customer{
+		systems = append(systems, System{
 			Name:      fmt.Sprintf("Customer %02d", i),
 			Host:      fmt.Sprintf("pbx%02d.example", i),
 			Extension: "100", Password: "p",
 		})
 	}
-	p, err := New(testDeps(), Config{Customers: customers})
+	p, err := New(testDeps(), Config{Systems: systems})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.resolve("nobody")
+	_, err = p.resolve("nobody", "")
 	if err == nil {
 		t.Fatal("expected a refusal")
 	}
@@ -247,7 +247,7 @@ func TestResolve_NoCustomersPointsAtThePluginsPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = p.resolve("Acme")
+	_, err = p.resolve("Acme", "")
 	if err == nil {
 		t.Fatal("expected a refusal")
 	}
@@ -448,7 +448,7 @@ func twoOpenCustomers(t *testing.T) (*Plugin, *fakePBX, *fakePBX) {
 	acme.anything, globex.anything = true, true
 	p, err := New(testDeps(), Config{
 		RequestsPerSecond: 1000,
-		Customers: []Customer{
+		Systems: []System{
 			{Name: "Acme Dental Group", Aliases: []string{"acme", "ADG"}, Host: acmeSrv.URL, Extension: "100", Password: "right-password"},
 			{Name: "Globex Roofing", Aliases: []string{"globex"}, Host: globexSrv.URL, Extension: "100", Password: "right-password"},
 		},
@@ -470,7 +470,7 @@ func TestResolve_TolerantOfHowANameIsWrittenBack(t *testing.T) {
 		`"Acme Dental Group"`, "Acme Dental Group.", "Acme  Dental   Group",
 		"ADG.", "'adg'", "\u00a0ADG\u00a0", "(globex)",
 	} {
-		a, err := p.resolve(asked)
+		a, err := p.resolve(asked, "")
 		if err != nil {
 			t.Errorf("%q should resolve: %v", asked, err)
 			continue
@@ -487,7 +487,7 @@ func TestResolve_TolerantOfHowANameIsWrittenBack(t *testing.T) {
 	// And it still refuses what it should. Loosening how a name is written
 	// must not loosen which names match.
 	for _, asked := range []string{"Initech", "Acme Dental Group Ltd", "roof"} {
-		if _, err := p.resolve(asked); err == nil {
+		if _, err := p.resolve(asked, ""); err == nil {
 			t.Errorf("%q should not resolve to anything", asked)
 		}
 	}

@@ -52,7 +52,7 @@ func bundlePBX(t *testing.T, zipBody []byte, delay time.Duration) (*Plugin, *fak
 			_, _ = w.Write(zipBody)
 		},
 	}
-	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	p := pluginFor(t, srv.Client(), System{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
 	// Somewhere of its own to spool to, so a test can prove nothing is left
 	// behind and never writes into the repository.
 	p.deps.Scratch = t.TempDir()
@@ -105,8 +105,8 @@ func TestBundle_StartsThenReports(t *testing.T) {
 	if r.State != "done" {
 		t.Fatalf("capture: %+v", r)
 	}
-	if r.System == nil || r.System.Version != "20.0.9.995" || r.System.OS == "" {
-		t.Errorf("system facts: %+v", r.System)
+	if r.Machine == nil || r.Machine.Version != "20.0.9.995" || r.Machine.OS == "" {
+		t.Errorf("machine facts: %+v", r.Machine)
 	}
 	if r.Counts == nil || r.Counts.Findings == 0 || r.Counts.Health != 2 {
 		t.Errorf("counts: %+v", r.Counts)
@@ -281,7 +281,7 @@ func TestBundle_RefusedOnTheLengthItAnnounces(t *testing.T) {
 			_, _ = w.Write(body)
 		},
 	}
-	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	p := pluginFor(t, srv.Client(), System{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
 	p.deps.Scratch = t.TempDir()
 	p.bundleCeiling = 8
 
@@ -340,7 +340,7 @@ func TestBundle_ReportsItsPhase(t *testing.T) {
 			_, _ = w.Write(body[len(body)/2:])
 		},
 	}
-	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	p := pluginFor(t, srv.Client(), System{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
 	p.deps.Scratch = t.TempDir()
 
 	ctx := context.Background()

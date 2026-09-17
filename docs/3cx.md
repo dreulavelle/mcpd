@@ -4,27 +4,57 @@ What the 3CX v20 configuration API does that a reader would not expect, and
 what this integration does about it. The plugin is `internal/plugins/threecx`;
 this is the companion to the comments in it.
 
-One instance serves many phone systems. An MSP with thirty customers has
-thirty PBXs, each with its own address and its own system-owner extension; they
-are rows of one instance's **Customers** table, so the MSP runs one endpoint,
-one tunnel and one ChatGPT connector rather than thirty of each. Every tool
-takes a `customer` argument and `list_customers` says what the choices are.
+One instance serves many phone systems. An MSP with thirty customers has at
+least thirty PBXs, each with its own address and its own system-owner
+extension; they are rows of one instance's **Customers** table, so the MSP runs
+one endpoint, one tunnel and one ChatGPT connector rather than thirty of each.
+Every tool takes a `customer` argument and `list_customers` says what the
+choices are.
 
-## Customers
+A business can run more than one of them, so a row is a *phone system* and the
+**Business** column says which business owns it. One business, one or many
+systems; tools take an optional `system` beside the `customer`.
+
+## Customers and their phone systems
 
 The Customers setting is a table (`settings.KindCollection`; see
-[plugins.md](plugins.md)). Each row is one business:
+[plugins.md](plugins.md)). Each row is one phone system:
 
 | column | |
 |---|---|
-| Business name | what the assistant is told and answers with; unique within the instance |
-| Aliases | other names people use, so "acme" finds "Acme Dental Group" |
+| Name | what this phone system is called; the row's identity, unique within the instance |
+| Business | the business that owns it; empty means the row is its own business |
+| Aliases | other names for *this system*, so "acme" finds "Acme Dental Group" and "branch" finds the second of two |
 | Address | the PBX's FQDN, with a port where the console is not on 443 |
 | System owner extension | the number or email to sign in as; needs the System Owner role |
 | Password | that extension's web-client password, stored encrypted |
 
+**The Business column is why nothing broke.** A row that leaves it empty is its
+own business, named as the row is named -- which is exactly what every row
+meant before the column existed. A table filled in under the old shape keeps
+its meaning, its names, its aliases and its answers, and needs no edit. What it
+gains is that a business with a second 3CX can now be entered as one: two rows,
+`Acme HQ` and `Acme Branch`, both naming the business `Acme Dental Group`.
+
+Entering it any other way was not merely inconvenient, it was impossible. The
+row table keeps the first column unique per instance
+(`ux_plugin_rows_identity`), so a customer's two phone systems had to be two
+rows with two different names -- and two differently-named rows are two
+businesses to everything downstream: to `list_customers`, to the resolver, and
+to the model reading them. The business and the phone system were one record,
+and the storage made that record's name the key.
+
+Each business and each phone system has an **identifier**: the name, lower
+case, with everything that is not a letter or a digit turned into a hyphen.
+`Acme Branch` is `acme-branch`. It is derived rather than stored, because there
+is nowhere to store it -- the row's identity *is* its name -- so it is stable
+for exactly as long as the name is, and `Config.Validate` refuses two names
+that would shorten to one identifier. It exists because a name is prose: a
+model repeating `"Acme Dental Group."` back is repeating a name, and
+`acme-dental-group` is a token that survives the trip.
+
 Rows are added, edited and removed one at a time on the Plugins page, each
-saved as it is closed. Replacing one customer's password never means retyping
+saved as it is closed. Replacing one system's password never means retyping
 another's. A file-provisioned host can supply them in `config.yaml` instead,
 with the password as a reference so the file holds none:
 
@@ -34,58 +64,93 @@ plugins:
     type: threecx
     settings:
       customers:
-        - name: Acme Dental Group
-          aliases: [acme, ADG]
-          host: acme.ny.3cx.us
+        - name: Acme HQ
+          customer: Acme Dental Group
+          aliases: [hq]
+          host: pbx1.example
           extension: "100"
-          password_ref: env:ACME_PBX_PASSWORD
+          password_ref: env:ACME_HQ_PASSWORD
+        - name: Acme Branch
+          customer: Acme Dental Group
+          aliases: [branch]
+          host: pbx2.example
+          extension: "100"
+          password_ref: env:ACME_BRANCH_PASSWORD
 ```
 
-Rows in the dashboard win outright over the file when any exist.
+The key is still `customers`, because that is what is stored and what the row
+still is for everybody whose businesses have one phone system each. Rows in the
+dashboard win outright over the file when any exist.
 
-An address is accepted the way a person writes one: `acme.ny.3cx.us`,
-`acme.ny.3cx.us:5001`, or either with `https://` in front. A bare name and
+An address is accepted the way a person writes one: `pbx1.example`,
+`pbx1.example:5001`, or either with `https://` in front. A bare name and
 port has to have the scheme prepended *before* it is parsed, because
-`url.Parse` reads `acme.ny.3cx.us:5001` as a scheme and an opaque body; the
+`url.Parse` reads `pbx1.example:5001` as a scheme and an opaque body; the
 port is then part of the host everywhere it matters, including the
 transport's check that a request is going to the configured system. A
 different port is a different phone system and is refused. The dashboard drops
 a trailing slash on save and shows an https address without its scheme, while
 `http://` stays visible because that one is the exception.
 
-**A customer added while the host runs is answerable at once.** Saving a row
-reconciles the instance: the plugin is rebuilt from its stored rows and
-remounted, and the tunnel bound to it is restarted so a connector is not left
-serving the previous configuration. Nothing is restarted by hand. A connected
-client does not even need to reconnect, because the tool list does not change
--- `customer` is a name rather than an enum of them, so adding a business
-changes no schema. A row that cannot be built into a working configuration --
-two customers sharing a host, say -- leaves the previous set serving and marks
-the instance unhealthy with the reason, rather than taking the working
-customers down with the bad row.
+**A customer or a phone system added while the host runs is answerable at
+once.** Saving a row reconciles the instance: the plugin is rebuilt from its
+stored rows and remounted, and the tunnel bound to it is restarted so a
+connector is not left serving the previous configuration. Nothing is restarted
+by hand. A connected client does not even need to reconnect, because the tool
+list does not change -- `customer` and `system` are names rather than enums of
+them, so adding a business or a second PBX changes no schema and there is no
+stale MCP metadata to invalidate. A row that cannot be built into a working
+configuration -- two rows sharing an address, say -- leaves the previous set
+serving and marks the instance unhealthy with the reason, rather than taking
+the working customers down with the bad row.
 
-**Resolution never guesses.** A tool's `customer` is matched against every
-name and alias, folding case. An exact match wins. Failing that, a fragment
-contained in exactly one customer's name or alias is taken -- "dental" for
-"Acme Dental Group" -- but a fragment that fits two customers is refused with
-both named, and the refusal tells the model to ask the person which they mean
-rather than pick one. No name at all is fine when the instance has one
-customer and is refused with the list when it has several. Two rows may not
-share a name or alias, or a host, because either would be a call that could
-only be resolved by guessing; `Config.Validate` refuses them.
+**Resolution never guesses, at either level.** `customer` is matched against
+every business name and identifier, *and* against every phone system's name,
+aliases and identifier -- because a table where each business has one system
+cannot tell the two apart, and because the names people already have in their
+prompts are the ones `list_customers` used to report. An exact match wins.
+Failing that, a fragment contained in exactly one candidate is taken --
+"dental" for "Acme Dental Group" -- and a fragment that fits two is refused
+with both named. `system` is then matched the same way, within that customer's
+systems.
 
-**A customer nobody has configured is answered with where to add it.** There
-is nothing here to read for a business mcpd has never been given, so the
-answer says so, names the instance to open, and points at the Customers table
-on the Plugins page. It also tells the model not to settle for the nearest
-configured customer: answering confidently about somebody else's phone system
-is the failure that wording exists to prevent. An instance with no customers
-at all gets the same treatment rather than reporting its tools as broken. The
+What each combination settles:
+
+| given | answer |
+|---|---|
+| customer with one system | that system, as it always did |
+| customer with several, no system | refused, with the systems and their identifiers |
+| customer and system | that system, after checking it belongs to that customer |
+| system alone | that system, if the identifier or alias fits exactly one on the instance |
+| neither, one system configured | that system |
+| neither, one business with several | refused, asking for the system |
+| neither, several businesses | refused, with the businesses |
+
+**Two rows of one business may not share a name or alias; two rows of
+different businesses may.** "Server 1" is what everybody calls their first
+one, and a global ban would make the aliases people actually want unusable. So
+a word shared across businesses is legal in the configuration and refused at
+the call -- `system: "main"` naming one of Acme's and one of Globex's is
+answered with both, while `customer: "Globex", system: "main"` resolves inside
+Globex and is not ambiguous at all. What `Config.Validate` does refuse is the
+ambiguity that cannot be narrowed: two of one business's systems answering to
+one word, a business's own name also naming somebody else's system, a business
+with two systems one of which carries the business's name, and two rows on one
+address.
+
+**A name that names nothing is answered with where to add it.** There is
+nothing here to read for a business mcpd has never been given, so the answer
+says so, names the instance to open, and points at the Customers table on the
+Plugins page. It also tells the model not to settle for the nearest configured
+customer: answering confidently about somebody else's phone system is the
+failure that wording exists to prevent. An instance with no customers at all
+gets the same treatment rather than reporting its tools as broken. The
 configured names are listed to ten, after which the count stands in for the
-rest, because sixty of them would bury the sentence that says what to do. Each
-is listed with the aliases it also answers to: a refusal naming only the long
-form reads as though the short one was never going to work, and sends a model
-back with the long form of a name it had a short one for.
+rest, because sixty of them would bury the sentence that says what to do. A
+business with one system is listed with the aliases it also answers to -- a
+refusal naming only the long form reads as though the short one was never going
+to work -- and a business with several is listed with their identifiers, because
+those are what the next call has to carry.
 
 One resolver, and every tool goes through it. `TestResolve_EveryToolAcceptsAnAlias`
 walks the registry and refuses to pass if a tool that takes a `customer` is not
@@ -98,6 +163,35 @@ joins them cannot be covered by nothing. A tool
 resolving customers its own way is the shape of bug that produces "it worked,
 and then it did not".
 
+**Every answer says where it came from.** Each result carries a `Source`:
+`customer`, `system` and `system_id`. The customer alone was enough while a
+business had one phone system and stopped being enough the moment it could have
+two -- "Acme has 40 extensions" is a different claim from "Acme's branch has 40
+extensions", and nothing downstream can tell them apart after the fact. For a
+business with one system, `system` equals `customer` and nothing a caller reads
+has changed.
+
+`list_customers` reports the relationship rather than leaving it to be inferred
+from names that look alike: each business carries `systems[]`, with each
+system's identifier, name, aliases, address and health, and a `system_count`
+beside it. A business with exactly one system also carries the flat `host`,
+`reachable` and `last_error` it always carried, so a caller written before any
+of this reads it unchanged. A business with several carries none of the three:
+there is no honest single address for two PBXs and no honest single health when
+one of them is down, and inventing one would be worse than the absence, which
+sends a reader to `systems[]` where the answers are.
+
+**Nothing is aggregated across a customer's phone systems.** No tool reads two
+of them in one call. A model that wants an extension found across a customer's
+estate calls the tool once per system -- `list_customers` gave it the
+identifiers, and each answer names its own source -- and that is the whole of
+the mechanism today. Adding a `system: "all"` to the read tools is a real
+option and deliberately not taken yet: each answer carries its own count,
+truncation note and failure, and the honest aggregate result has to carry a per
+system breakdown of all three. That is a result shape worth designing on the
+back of a question somebody actually asked, not on the guess that it will be
+asked.
+
 **Access is per instance.** Anyone who can reach the instance -- a key, a
 tunnel, a ChatGPT workspace -- can ask about every customer on it. If some
 people should see only some customers, those customers go on a second
@@ -107,17 +201,17 @@ the setting's own help text so nobody discovers it later.
 **Nothing is reached until asked.** Start signs in to no phone system: thirty
 customers would be thirty sign-ins per restart, each counted by 3CX's
 anti-hacking protection, to mark the plugin degraded over a customer nobody
-had asked about. Health is what the last real call to each customer found, a
-customer never asked about is not a problem, and `list_customers` with `check`
+had asked about. Health is what the last real call to each system found, a
+system never asked about is not a problem, and `list_customers` with `check`
 signs in to every one on demand when somebody wants to know which is wrong.
 
-**Nothing crosses between customers.** Each customer has its own client, its
-own token, its own rate limit, its own transport pinned to its own host, and
-its own health; there is no cache; and every answer carries a `customer` field
-naming the business it is about, so a result can never be read as another
-customer's. One customer's PBX being down leaves the others' tools working and
-names the failing one on the health report; only every customer failing fails
-the plugin's start.
+**Nothing crosses between phone systems.** Each has its own client, its own
+token, its own rate limit, its own transport pinned to its own host, its own
+health and its own support-bundle capture; there is no cache; and every answer
+carries the business and the system it is about, so a result can never be read
+as another customer's or as another of the same customer's. One PBX being down
+leaves the others' tools working and names the failing one -- with its business
+-- on the health report; only every one failing fails the plugin's start.
 
 ## The tools
 
@@ -125,7 +219,7 @@ Twenty-four reads, in ten groups, split by the question a technician is asking:
 
 | | |
 |---|---|
-| `list_customers` | which businesses this instance serves, their aliases, and whether the last call to each worked |
+| `list_customers` | which businesses this instance serves, the phone systems each one runs, their aliases and whether the last call to each worked |
 | `get_system_status` | health, licence, offline trunks, stopped services, disk, backups, and the findings in words |
 | `list_services`, `list_active_calls`, `search_events` | which service is down, what is going through now, what the system has logged |
 | `list_extensions`, `get_extension`, `list_devices` | who is registered, why one extension behaves as it does, what handsets exist |
@@ -137,7 +231,9 @@ Twenty-four reads, in ten groups, split by the question a technician is asking:
 | `search_call_history` | did the call happen, and what became of it |
 | `aggregate_support_bundle`, `get_support_bundle_report` | the support bundle, read into a digest; a last resort |
 
-Every one is read-only and every one is idempotent.
+Every one is read-only and every one is idempotent. Every one but
+`list_customers` takes `customer`, and every one of those takes an optional
+`system` beside it.
 
 ## Default projections leak credentials
 

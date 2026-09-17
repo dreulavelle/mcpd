@@ -159,11 +159,11 @@ func TestListMusicOnHold_NamesTheSlotsAndWhatIsInThem(t *testing.T) {
 	// it by name, and it is never asked for, so it must not appear here.
 	mustNotContain(t, res, "FileLink", "https://pbx.example/prompts")
 
-	if res.System == nil || len(res.System.Slots) != 2 || !res.System.Randomize {
-		t.Fatalf("system music on hold: %+v", res.System)
+	if res.SystemWide == nil || len(res.SystemWide.Slots) != 2 || !res.SystemWide.Randomize {
+		t.Fatalf("system music on hold: %+v", res.SystemWide)
 	}
-	if res.System.Slots[0].File != "system-hold.wav" || res.System.Slots[0].Slot != 0 {
-		t.Errorf("the first slot: %+v", res.System.Slots[0])
+	if res.SystemWide.Slots[0].File != "system-hold.wav" || res.SystemWide.Slots[0].Slot != 0 {
+		t.Errorf("the first slot: %+v", res.SystemWide.Slots[0])
 	}
 	if res.Returned != 3 {
 		t.Fatalf("every file should be listed: %+v", res.Files)
@@ -198,7 +198,7 @@ func TestListMusicOnHold_SaysWhatThisBuildWillNotAnswerFor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("one missing endpoint should not fail the tool: %v", err)
 	}
-	if res.System == nil {
+	if res.SystemWide == nil {
 		t.Error("the system's slots were readable and should still be reported")
 	}
 	if len(res.Unavailable) == 0 {

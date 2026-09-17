@@ -27,8 +27,10 @@ package threecx
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Defaults. Each is a judgement about an installation nobody has tuned yet.
@@ -80,10 +82,14 @@ const loginPath = "/webclient/api/Login/GetAccessToken"
 
 // Config is the plugin's own configuration, from the `settings` block.
 type Config struct {
-	// Customers are the phone systems this instance serves, one per business.
-	// Every tool takes a customer argument resolved against these by name or
-	// alias; an instance with one customer resolves it without being told.
-	Customers []Customer `yaml:"customers" json:"customers"`
+	// Systems are the phone systems this instance serves, one row each.
+	//
+	// The key is still `customers`, because that is what is stored, what a
+	// file-provisioned host writes, and what the row still is for everybody
+	// whose businesses have one phone system each. A row is a *system* rather
+	// than a business because a business can have more than one, and the two
+	// were the same record until they could not be.
+	Systems []System `yaml:"customers" json:"customers"`
 
 	// MaxItems caps what one tool call accumulates. Reported in the result
 	// when it bites, so a caller narrows their filter instead of silently
@@ -101,16 +107,34 @@ type Config struct {
 	TimeoutSeconds int `yaml:"timeout" json:"timeout"`
 }
 
-// Customer is one business and the phone system it runs.
-type Customer struct {
-	// Name is what the business is called: what a person types and what the
-	// answer names. Unique within the instance.
+// System is one 3CX installation: one address, one sign-in, one row.
+//
+// A business owns one or more of them. Customer is what says which business,
+// and it is optional precisely so that the common case does not change: a row
+// that leaves it empty is its own business, which is what every row meant
+// before the field existed and what an MSP with one PBX per client still
+// means.
+type System struct {
+	// Name is what this phone system is called, and the row's identity -- the
+	// collection keeps it unique, because a row nobody can name is a row
+	// nobody can edit.
+	//
+	// For a business with one system it is the business's name, which is why
+	// the table still reads as a list of customers. For a business with
+	// several it names the system -- "Acme HQ", "Acme Branch" -- because the
+	// business's name alone cannot say which one a call meant.
 	Name string `yaml:"name" json:"name"`
-	// Aliases are the other things people call it -- an abbreviation, a
-	// trading name, the site -- so "acme" finds "Acme Dental Group".
+	// Customer is the business this system belongs to, when that is not the
+	// name above. Every row of one business spells it the same way; spellings
+	// are compared the way names are matched, so case, spacing and the
+	// punctuation a sentence leaves on a name do not split a business in two.
+	Customer string `yaml:"customer" json:"customer"`
+	// Aliases are the other things people call this system -- an
+	// abbreviation, a trading name, the site, "server 1" -- so "acme" finds
+	// "Acme Dental Group" and "branch" finds the second of two.
 	Aliases []string `yaml:"aliases" json:"aliases"`
 	// Host is the phone system's web address: the FQDN somebody types to reach
-	// its console, such as acme.ny.3cx.us, or that address with https:// in
+	// its console, such as pbx.example, or that address with https:// in
 	// front of it.
 	Host string `yaml:"host" json:"host"`
 	// Extension is the number, or the email address, this integration signs
@@ -122,25 +146,66 @@ type Customer struct {
 	Password string `yaml:"password" json:"password"`
 }
 
-// complete reports whether enough was supplied to sign in to this customer.
-func (c Customer) complete() bool {
-	return strings.TrimSpace(c.Name) != "" && strings.TrimSpace(c.Host) != "" &&
-		strings.TrimSpace(c.Extension) != "" && c.Password != ""
+// complete reports whether enough was supplied to sign in to this system.
+func (s System) complete() bool {
+	return strings.TrimSpace(s.Name) != "" && strings.TrimSpace(s.Host) != "" &&
+		strings.TrimSpace(s.Extension) != "" && s.Password != ""
 }
 
-// names is the customer's name and aliases, trimmed and non-empty, for
-// matching.
-func (c Customer) names() []string {
-	out := make([]string, 0, 1+len(c.Aliases))
-	if n := strings.TrimSpace(c.Name); n != "" {
+// names is the system's name and aliases, trimmed and non-empty, for matching.
+func (s System) names() []string {
+	out := make([]string, 0, 1+len(s.Aliases))
+	if n := strings.TrimSpace(s.Name); n != "" {
 		out = append(out, n)
 	}
-	for _, a := range c.Aliases {
+	for _, a := range s.Aliases {
 		if a = strings.TrimSpace(a); a != "" {
 			out = append(out, a)
 		}
 	}
 	return out
+}
+
+// business is the name of the business this system belongs to: the Customer
+// column, or the system's own name when that column is empty.
+//
+// The fallback is the whole of the backward compatibility. A table filled in
+// before this column existed has a business per row, named as the row is
+// named, which is exactly what it meant.
+func (s System) business() string {
+	if c := strings.TrimSpace(s.Customer); c != "" {
+		return c
+	}
+	return strings.TrimSpace(s.Name)
+}
+
+// identifier is the token a caller passes to name one thing unambiguously:
+// the name, folded to lower case with everything that is not a letter or a
+// digit turned into a hyphen.
+//
+// It exists because a name is prose. "Acme Dental Group" arrives from a model
+// quoted, capitalised differently or with a full stop on it; an answer that
+// hands back acme-dental-group hands back something that survives being
+// repeated. It is derived rather than stored because there is nowhere to store
+// it -- the row's identity is its name -- so it is stable exactly as long as
+// the name is, and Validate refuses two names that would shorten to one
+// identifier.
+func identifier(name string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			if dash && b.Len() > 0 {
+				b.WriteByte('-')
+			}
+			dash = false
+			b.WriteRune(r)
+		default:
+			dash = true
+		}
+	}
+	return b.String()
 }
 
 // withDefaults fills anything the operator left alone.
@@ -164,15 +229,15 @@ func (c Config) Timeout() time.Duration {
 	return time.Duration(c.TimeoutSeconds) * time.Second
 }
 
-// Configured reports whether there is at least one customer that can be
-// signed in to. A customer half filled in does not count, and is named by
-// Validate rather than silently skipped.
+// Configured reports whether there is at least one phone system that can be
+// signed in to. A row half filled in does not count, and is named by Validate
+// rather than silently skipped.
 func (c Config) Configured() bool {
-	if len(c.Customers) == 0 {
+	if len(c.Systems) == 0 {
 		return false
 	}
-	for _, cu := range c.Customers {
-		if !cu.complete() {
+	for _, s := range c.Systems {
+		if !s.complete() {
 			return false
 		}
 	}
@@ -186,51 +251,13 @@ func (c Config) Configured() bool {
 // configuration that is present and wrong, because that fails later, further
 // away, and with a worse message.
 func (c Config) Validate() error {
-	// Keyed by row rather than by label: two customers both called "Acme" have
-	// the same label, so comparing labels lets the duplicate through -- which
-	// it did, until every call to either was refused as ambiguous at run time
-	// instead of the configuration being refused here. The row index is what
-	// distinguishes "this row's alias repeats its own name", which is
-	// harmless, from "two rows answer to one name", which is a call that
-	// cannot be resolved without guessing.
-	type owner struct {
-		row   int
-		label string
-		// spelt is the name as that row writes it, which under the comparison
-		// below may look identical to the one colliding with it -- "Acme
-		// Dental" and "Acme  Dental" render the same. The message has to name
-		// the rows, or an operator is told two things they cannot tell apart
-		// are the same thing.
-		spelt string
-	}
-	seenName := map[string]owner{}
 	seenHost := map[string]string{}
-	for i, cu := range c.Customers {
-		label := strings.TrimSpace(cu.Name)
+	for i, s := range c.Systems {
+		label := strings.TrimSpace(s.Name)
 		if label == "" {
-			label = fmt.Sprintf("customer %d", i+1)
+			return fmt.Errorf("3cx: phone system %d has no name; every row needs one", i+1)
 		}
-		if strings.TrimSpace(cu.Name) == "" {
-			return fmt.Errorf("3cx: %s has no name; every customer needs one", label)
-		}
-		// A name or alias shared by two customers is a call that cannot be
-		// resolved without guessing, and this integration does not guess.
-		for _, n := range cu.names() {
-			// The same normalisation the resolver matches with, or a
-			// configuration would be accepted that no call to either customer
-			// could resolve: "Acme Inc" and "Acme Inc." differ here and do not
-			// differ there, which is the ambiguity this check exists to refuse.
-			folded := normaliseName(n)
-			if other, taken := seenName[folded]; taken && other.row != i {
-				return fmt.Errorf("3cx: customer %d (%q) and customer %d (%q) both answer to "+
-					"the same name. Names and aliases are matched ignoring case, spacing and "+
-					"punctuation, so those two are one name and a call naming it could not be "+
-					"resolved without guessing -- give one of them a different name or alias",
-					other.row+1, other.spelt, i+1, n)
-			}
-			seenName[folded] = owner{row: i, label: label, spelt: n}
-		}
-		host := strings.TrimSpace(cu.Host)
+		host := strings.TrimSpace(s.Host)
 		if host == "" {
 			continue
 		}
@@ -244,20 +271,28 @@ func (c Config) Validate() error {
 		}
 		if strings.Contains(u.Path, "/xapi") || strings.Contains(u.Path, "/webclient") {
 			return fmt.Errorf("3cx: %s: the address should be the phone system's web "+
-				"root, not the API path -- drop everything after the host from %q", label, cu.Host)
+				"root, not the API path -- drop everything after the host from %q", label, s.Host)
 		}
 		if p := strings.Trim(u.Path, "/"); p != "" {
 			return fmt.Errorf("3cx: %s: the address %q carries a path; a 3CX is reached "+
-				"at the root of its host", label, cu.Host)
+				"at the root of its host", label, s.Host)
 		}
+		// Two rows on one address are one phone system entered twice, whether
+		// or not they claim the same business. A business with two systems has
+		// two addresses; that is what makes them two.
 		if other, taken := seenHost[hostKey(u)]; taken {
-			return fmt.Errorf("3cx: %s and %s share the address %s; a 3CX serves one business, "+
-				"so one of them is pointed at the wrong system", other, label, u.Host)
+			return fmt.Errorf("3cx: %s and %s share the address %s; that is one phone "+
+				"system entered twice, so one of them is pointed at the wrong place. A "+
+				"business with more than one phone system has a different address for "+
+				"each", other, label, u.Host)
 		}
 		seenHost[hostKey(u)] = label
-		if strings.ContainsAny(cu.Extension, " \t\r\n") {
-			return fmt.Errorf("3cx: %s: the extension %q has whitespace in it", label, cu.Extension)
+		if strings.ContainsAny(s.Extension, " \t\r\n") {
+			return fmt.Errorf("3cx: %s: the extension %q has whitespace in it", label, s.Extension)
 		}
+	}
+	if err := c.checkNames(); err != nil {
+		return err
 	}
 	if c.MaxItems < 1 {
 		return fmt.Errorf("3cx: max_items must be at least 1, got %d", c.MaxItems)
@@ -272,7 +307,180 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// hostKey is the address two customers are compared on. The port is part of
+// checkNames refuses a naming that a call could not be resolved against
+// without guessing.
+//
+// Two rules, and the second is the one that changed when a business gained a
+// second phone system:
+//
+//   - within one business, a word names at most one of its systems. Two
+//     systems of Acme both answering to "hq" is a call to Acme that cannot be
+//     settled.
+//   - a word that names a business names nothing else. If "acme" is the
+//     business, it cannot also be one system of another business, and it
+//     cannot be one of Acme's two systems either -- that second case is the
+//     trap a table upgraded in place falls into, where the business is called
+//     what its first phone system was called.
+//
+// What is deliberately *allowed* is the same word on systems of different
+// businesses. "Server 1" is what everybody calls their first one, and
+// refusing it would make the aliases people actually want unusable. A call
+// giving it with a customer resolves inside that customer; a call giving it
+// alone is refused at the time with both named, which is the one place the
+// ambiguity is real.
+func (c Config) checkNames() error {
+	businesses := groupSystems(c.Systems)
+	of := make(map[int]*business, len(c.Systems))
+	for _, b := range businesses {
+		for _, row := range b.rows {
+			of[row] = b
+		}
+	}
+
+	type claims struct {
+		businesses []*business
+		systems    []int
+	}
+	byWord := map[string]*claims{}
+	claim := func(word string, b *business, row int) {
+		for _, w := range []string{normaliseName(word), identifier(word)} {
+			if w == "" {
+				continue
+			}
+			got := byWord[w]
+			if got == nil {
+				got = &claims{}
+				byWord[w] = got
+			}
+			switch {
+			case b != nil:
+				if !slices.Contains(got.businesses, b) {
+					got.businesses = append(got.businesses, b)
+				}
+			default:
+				if !slices.Contains(got.systems, row) {
+					got.systems = append(got.systems, row)
+				}
+			}
+		}
+	}
+	// Ordered so the message names things in the order they appear in the
+	// table: a map's iteration order would make the same bad table produce a
+	// different complaint each time it is saved.
+	var words []string
+	for _, b := range businesses {
+		for _, w := range []string{normaliseName(b.name), identifier(b.name)} {
+			if w != "" {
+				words = append(words, w)
+			}
+		}
+		claim(b.name, b, -1)
+	}
+	for i, s := range c.Systems {
+		for _, n := range s.names() {
+			for _, w := range []string{normaliseName(n), identifier(n)} {
+				if w != "" {
+					words = append(words, w)
+				}
+			}
+			claim(n, nil, i)
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, word := range words {
+		if seen[word] {
+			continue
+		}
+		seen[word] = true
+		got := byWord[word]
+		for a := 0; a < len(got.systems); a++ {
+			for z := a + 1; z < len(got.systems); z++ {
+				if of[got.systems[a]] == of[got.systems[z]] {
+					return fmt.Errorf("3cx: %s and %s both answer to %q, and they are the "+
+						"same business's phone systems, so a call naming it could not be "+
+						"resolved without guessing -- give one of them a name or alias of "+
+						"its own%s", describeSystem(c.Systems, got.systems[a]),
+						describeSystem(c.Systems, got.systems[z]), word, matchingNote)
+				}
+			}
+		}
+		for _, b := range got.businesses {
+			for _, row := range got.systems {
+				if of[row] != b || len(b.rows) > 1 {
+					return fmt.Errorf("3cx: the business %q and %s both answer to %q, so a "+
+						"call naming it could not be resolved without guessing -- a "+
+						"business's name has to be its own%s", b.name,
+						describeSystem(c.Systems, row), word, matchingNote)
+				}
+			}
+			for _, other := range got.businesses {
+				if other != b {
+					return fmt.Errorf("3cx: the businesses %q and %q both answer to %q, so "+
+						"a call naming one could not be told from the other -- give them "+
+						"names that differ by more than punctuation%s", b.name, other.name,
+						word, matchingNote)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// matchingNote is the sentence every naming refusal ends with. One copy,
+// because an operator reading two of them should not have to work out whether
+// the difference in wording means a difference in the rule.
+const matchingNote = ". Names are matched ignoring case, spacing and punctuation, and " +
+	"the identifier a tool answers with is the name with the spaces turned to hyphens, " +
+	"so two names that differ only in those are one name here"
+
+// describeSystem names a row the way a message should: the phone system's own
+// name and where it sits in the table, because two names that collide under
+// the comparison above can look identical on the page.
+func describeSystem(rows []System, row int) string {
+	return fmt.Sprintf("phone system %d (%q)", row+1, strings.TrimSpace(rows[row].Name))
+}
+
+// business is one customer: the businesses are what the rows add up to.
+type business struct {
+	// name is the business as its first row spells it. First rather than
+	// longest or most common, because the table has an order an operator can
+	// see, and any other rule would have the displayed name move when an
+	// unrelated row was edited.
+	name string
+	id   string
+	// rows are its phone systems, as indexes into the rows it was grouped
+	// from, in table order.
+	rows []int
+}
+
+// groupSystems works out the businesses a set of rows describes.
+//
+// Rows are grouped by their business name compared the way every other name
+// here is compared, so "Acme Dental" and "acme dental." are one business
+// rather than two that happen to look alike. Order of first appearance, so the
+// answer is the table's order.
+func groupSystems(rows []System) []*business {
+	var out []*business
+	byName := map[string]*business{}
+	for i, s := range rows {
+		name := s.business()
+		if name == "" {
+			continue
+		}
+		folded := normaliseName(name)
+		b := byName[folded]
+		if b == nil {
+			b = &business{name: name, id: identifier(name)}
+			byName[folded] = b
+			out = append(out, b)
+		}
+		b.rows = append(b.rows, i)
+	}
+	return out
+}
+
+// hostKey is the address two rows are compared on. The port is part of
 // it -- a different port is a different phone system, and the transport checks
 // it -- but the default one is dropped, because acme.example and
 // acme.example:443 are the same system spelt two ways and would otherwise be

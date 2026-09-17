@@ -11,35 +11,55 @@ import (
 
 // Type declares the integration and what an instance of it needs.
 //
-// One instance serves many phone systems. An MSP with thirty customers has
-// thirty PBXs, each with its own address and its own system-owner extension;
-// they are rows of one instance here, so the MSP runs one endpoint, one tunnel
-// and one connector, and every tool says which customer it is about. The cost
-// is that access is per instance: anyone who reaches it reaches every customer
-// on it, so customers that must be kept apart go on separate instances.
+// One instance serves many phone systems. An MSP with thirty customers has at
+// least thirty PBXs, each with its own address and its own system-owner
+// extension; they are rows of one instance here, so the MSP runs one endpoint,
+// one tunnel and one connector, and every tool says which customer and which
+// of their phone systems it is about. The cost is that access is per instance:
+// anyone who reaches it reaches every customer on it, so customers that must
+// be kept apart go on separate instances.
+//
+// A row is a phone system rather than a business, because a business can have
+// more than one and the Business column is what says so. Leaving that column
+// empty means the row is its own business, which is what every row meant
+// before the column existed -- so a table filled in under the old shape keeps
+// its exact meaning.
 func Type() plugins.Type {
 	return plugins.Type{
 		Name:        "threecx",
 		Title:       "3CX",
-		Description: "Your customers' 3CX phone systems, one row per business. Read-only.",
+		Description: "Your customers' 3CX phone systems, one row per system. Read-only.",
 		Settings: []settings.Field{
 			{
 				Key: "customers", Label: "Customers", Kind: settings.KindCollection,
 				Required: true,
-				Help: "One row per business. Anyone who can reach this instance " +
+				Help: "One row per phone system. A business with two of them gets two " +
+					"rows naming the same business. Anyone who can reach this instance " +
 					"reaches every customer on it; split them across instances if " +
 					"some people should see only some.",
 				Columns: []settings.Field{
 					{
-						Key: "name", Label: "Business name", Kind: settings.KindString,
+						Key: "name", Label: "Name", Kind: settings.KindString,
 						Required:    true,
 						Placeholder: "Acme Dental Group",
-						Help:        "What the business is called.",
+						Help: "What this phone system is called, and what no two rows may " +
+							"share. For a business with one, its name. For a business with " +
+							"several, name each system — Acme HQ, Acme Branch — so a " +
+							"question can say which.",
+					},
+					{
+						Key: "customer", Label: "Business", Kind: settings.KindString,
+						Placeholder: "Acme Dental Group",
+						Help: "The business this phone system belongs to. Leave it empty " +
+							"unless the business has more than one system; then fill it in " +
+							"on every one of its rows, spelt the same way, and they are " +
+							"listed together as one customer.",
 					},
 					{
 						Key: "aliases", Label: "Aliases", Kind: settings.KindList,
 						Placeholder: "acme, acme dental, ADG",
-						Help:        "Other names people use for it, separated by commas.",
+						Help: "Other names people use for this system, separated by commas. " +
+							"Two systems of one business may not share one.",
 					},
 					{
 						Key: "host", Label: "Address", Kind: settings.KindString,

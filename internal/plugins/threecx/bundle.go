@@ -147,13 +147,14 @@ func (p *Plugin) registerBundleTools(r *plugins.Registry) {
 
 type startBundleArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Force    bool   `json:"force,omitempty" jsonschema:"start a fresh capture even if a digest from the last hour exists"`
 }
 
 // BundleStatus is where a capture has got to.
 type BundleStatus struct {
-	Customer string `json:"customer"`
-	JobID    string `json:"job_id,omitempty"`
+	Source
+	JobID string `json:"job_id,omitempty"`
 	// State is none, running, done or failed.
 	State string `json:"state"`
 	// Phase says which part of a running capture is under way: generating,
@@ -172,7 +173,7 @@ type BundleStatus struct {
 }
 
 func (p *Plugin) startBundle(ctx context.Context, args startBundleArgs) (BundleStatus, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return BundleStatus{}, err
 	}
@@ -185,11 +186,11 @@ func (p *Plugin) startBundle(ctx context.Context, args startBundleArgs) (BundleS
 		j := *acct.bundle
 		switch {
 		case j.state() == "running":
-			st := statusOf(acct.name, j)
+			st := statusOf(acct.source(), j)
 			st.Note = "a bundle collection is already running; poll get_support_bundle_report"
 			return st, nil
 		case j.state() == "done" && !args.Force && time.Since(j.finished) < bundleTTL:
-			st := statusOf(acct.name, j)
+			st := statusOf(acct.source(), j)
 			st.Note = "a digest from the last hour is ready; read it with get_support_bundle_report, or pass force to collect a fresh bundle"
 			return st, nil
 		}
@@ -201,7 +202,7 @@ func (p *Plugin) startBundle(ctx context.Context, args startBundleArgs) (BundleS
 	// a model with a deadline. Bounded by its own timeout instead.
 	go p.runBundle(acct, job)
 
-	st := statusOf(acct.name, *job)
+	st := statusOf(acct.source(), *job)
 	st.Note = "started; the phone system is building the bundle. Poll get_support_bundle_report -- seconds on a small system, minutes on a large one"
 	return st, nil
 }
@@ -265,8 +266,8 @@ func (p *Plugin) readBundle(ctx context.Context, acct *account, job *bundleJob) 
 // statusOf renders a collection. It takes a copy rather than the job itself,
 // because the fields are guarded by the account's lock and a pointer would
 // invite reading them without it -- which is the race this used to have.
-func statusOf(customer string, j bundleJob) BundleStatus {
-	st := BundleStatus{Customer: customer, State: j.state()}
+func statusOf(src Source, j bundleJob) BundleStatus {
+	st := BundleStatus{Source: src, State: j.state()}
 	st.JobID = j.id
 	st.Phase = j.phase
 	st.Progress = progressText(j)
@@ -324,6 +325,7 @@ func runningNote(j bundleJob) string {
 
 type bundleReportArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Section  string `json:"section,omitempty" jsonschema:"one section in detail: events, changes, quality, capture, services, network, health or files; left out for the summary"`
 }
 
@@ -332,8 +334,11 @@ type BundleReport struct {
 	BundleStatus
 	CapturedAt string `json:"captured_at,omitempty"`
 
-	// System is the page of facts about the machine and the PBX on it.
-	System *BundleSystem `json:"system,omitempty"`
+	// Machine is the page of facts about the host and the PBX on it. Named
+	// machine rather than system because the answer already carries the phone
+	// system it describes under `system`, and the same word for both would
+	// leave a reader to guess which one a field meant.
+	Machine *BundleSystem `json:"machine,omitempty"`
 	// Findings are the things wrong, most serious first, each with the lines
 	// it was read from.
 	Findings []FindingRow  `json:"findings,omitempty"`
@@ -495,7 +500,7 @@ var bundleSections = map[string]bool{
 }
 
 func (p *Plugin) bundleReport(_ context.Context, args bundleReportArgs) (BundleReport, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return BundleReport{}, err
 	}
@@ -507,11 +512,11 @@ func (p *Plugin) bundleReport(_ context.Context, args bundleReportArgs) (BundleR
 	job, started := acct.snapshot()
 	if !started {
 		return BundleReport{BundleStatus: BundleStatus{
-			Customer: acct.name, State: "none",
+			Source: acct.source(), State: "none",
 			Note: "no bundle has been collected; call aggregate_support_bundle first",
 		}}, nil
 	}
-	out := BundleReport{BundleStatus: statusOf(acct.name, job)}
+	out := BundleReport{BundleStatus: statusOf(acct.source(), job)}
 	switch job.state() {
 	case "running":
 		out.Note = runningNote(job)
@@ -535,7 +540,7 @@ func (p *Plugin) bundleReport(_ context.Context, args bundleReportArgs) (BundleR
 	if snap.Capture != nil {
 		out.Counts.Streams = len(snap.Capture.Streams)
 	}
-	out.System = systemOf(snap)
+	out.Machine = systemOf(snap)
 
 	cut := false
 	switch section {

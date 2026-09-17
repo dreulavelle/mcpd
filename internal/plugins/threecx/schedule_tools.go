@@ -87,6 +87,7 @@ func groupNames(groups []groupRecord) []string {
 
 type scheduleArgs struct {
 	Customer   string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System     string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Department string `json:"department,omitempty" jsonschema:"which department, by name or number; left out for the default one"`
 }
 
@@ -112,7 +113,7 @@ type HolidayRow struct {
 type Schedule struct {
 	// Customer is the business this answer is about, so an answer can never be
 	// read as another customer's.
-	Customer   string `json:"customer"`
+	Source
 	Department string `json:"department"`
 	Number     string `json:"number,omitempty"`
 	IsDefault  bool   `json:"is_default"`
@@ -133,7 +134,7 @@ type Schedule struct {
 }
 
 func (p *Plugin) getSchedule(ctx context.Context, args scheduleArgs) (Schedule, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return Schedule{}, err
 	}
@@ -231,7 +232,7 @@ func (p *Plugin) getSchedule(ctx context.Context, args scheduleArgs) (Schedule, 
 
 	out.TimeZone = p.timeZoneName(ctx, acct, chosen.TimeZoneID)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 

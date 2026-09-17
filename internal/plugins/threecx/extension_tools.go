@@ -55,6 +55,7 @@ func (p *Plugin) registerExtensionTools(r *plugins.Registry) {
 
 type extensionsArgs struct {
 	Customer         string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System           string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Query            string `json:"query,omitempty" jsonschema:"only extensions whose name, number or email contains this"`
 	OnlyUnregistered bool   `json:"only_unregistered,omitempty" jsonschema:"only extensions with no handset or app registered"`
 	Department       string `json:"department,omitempty" jsonschema:"only extensions whose primary department has this name or number"`
@@ -75,9 +76,10 @@ type ExtensionRow struct {
 
 // ExtensionsResult is the extension list with its counts.
 type ExtensionsResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer   string         `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Extensions []ExtensionRow `json:"extensions"`
 	// Total is how many extensions match on the phone system, which can be
 	// more than were returned.
@@ -107,7 +109,7 @@ type userSummary struct {
 }
 
 func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (ExtensionsResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return ExtensionsResult{}, err
 	}
@@ -171,7 +173,7 @@ func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (Exten
 	out.Extensions, out.truncation = bound(out.Extensions, got.reason())
 	out.Returned = len(out.Extensions)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -179,6 +181,7 @@ func (p *Plugin) listExtensions(ctx context.Context, args extensionsArgs) (Exten
 
 type extensionArgs struct {
 	Customer  string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System    string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Extension string `json:"extension" jsonschema:"the extension number"`
 }
 
@@ -186,7 +189,7 @@ type extensionArgs struct {
 type Extension struct {
 	// Customer is the business this answer is about, so an answer can never be
 	// read as another customer's.
-	Customer   string `json:"customer"`
+	Source
 	Number     string `json:"number"`
 	Name       string `json:"name"`
 	FirstName  string `json:"first_name,omitempty"`
@@ -352,7 +355,7 @@ type forwardingProfile struct {
 }
 
 func (p *Plugin) getExtension(ctx context.Context, args extensionArgs) (Extension, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return Extension{}, err
 	}
@@ -425,7 +428,7 @@ func (p *Plugin) getExtension(ctx context.Context, args extensionArgs) (Extensio
 		out.WhyCallsMayNotLand = append(out.WhyCallsMayNotLand, "lan_only is set, so a handset or app outside the office network cannot register")
 	}
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -519,6 +522,7 @@ func parseKeys(raw string) []KeyRow {
 
 type devicesArgs struct {
 	Customer       string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System         string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Query          string `json:"query,omitempty" jsonschema:"only handsets whose MAC, model, vendor, address or assigned extension contains this"`
 	UnassignedOnly bool   `json:"unassigned_only,omitempty" jsonschema:"only handsets not yet attached to an extension"`
 	Limit          int    `json:"limit,omitempty" jsonschema:"most handsets to return"`
@@ -540,9 +544,10 @@ type DeviceRow struct {
 
 // DevicesResult is the handset list.
 type DevicesResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer   string      `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Devices    []DeviceRow `json:"devices"`
 	Returned   int         `json:"returned"`
 	Unassigned int         `json:"unassigned"`
@@ -556,7 +561,7 @@ const deviceFields = "Id,MAC,Vendor,Model,FirmwareVersion,NetworkAddress,Assigne
 	"DetectedAt,UserAgent,TemplateName,ViaSBC,SbcName"
 
 func (p *Plugin) listDevices(ctx context.Context, args devicesArgs) (DevicesResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return DevicesResult{}, err
 	}
@@ -603,7 +608,7 @@ func (p *Plugin) listDevices(ctx context.Context, args devicesArgs) (DevicesResu
 	out.Devices, out.truncation = bound(out.Devices, got.reason())
 	out.Returned = len(out.Devices)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 

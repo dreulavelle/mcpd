@@ -69,6 +69,7 @@ func memberTexts(members []member) []string {
 
 type ringGroupsArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 }
 
 // RingGroupRow is one ring group.
@@ -84,16 +85,17 @@ type RingGroupRow struct {
 
 // RingGroupsResult is the ring group list.
 type RingGroupsResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer   string         `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	RingGroups []RingGroupRow `json:"ring_groups"`
 	Returned   int            `json:"returned"`
 	truncation
 }
 
 func (p *Plugin) listRingGroups(ctx context.Context, args ringGroupsArgs) (RingGroupsResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return RingGroupsResult{}, err
 	}
@@ -125,7 +127,7 @@ func (p *Plugin) listRingGroups(ctx context.Context, args ringGroupsArgs) (RingG
 	out.RingGroups, out.truncation = bound(out.RingGroups, got.reason())
 	out.Returned = len(out.RingGroups)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -133,6 +135,7 @@ func (p *Plugin) listRingGroups(ctx context.Context, args ringGroupsArgs) (RingG
 
 type queuesArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 }
 
 // QueueRow is one call queue.
@@ -156,16 +159,17 @@ type QueueRow struct {
 
 // QueuesResult is the queue list.
 type QueuesResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string     `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Queues   []QueueRow `json:"queues"`
 	Returned int        `json:"returned"`
 	truncation
 }
 
 func (p *Plugin) listQueues(ctx context.Context, args queuesArgs) (QueuesResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return QueuesResult{}, err
 	}
@@ -193,7 +197,7 @@ func (p *Plugin) listQueues(ctx context.Context, args queuesArgs) (QueuesResult,
 	out.Queues, out.truncation = bound(out.Queues, got.reason())
 	out.Returned = len(out.Queues)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -201,6 +205,7 @@ func (p *Plugin) listQueues(ctx context.Context, args queuesArgs) (QueuesResult,
 
 type receptionistsArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 }
 
 // ReceptionistRow is one digital receptionist.
@@ -218,16 +223,17 @@ type ReceptionistRow struct {
 
 // ReceptionistsResult is the receptionist list.
 type ReceptionistsResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer      string            `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Receptionists []ReceptionistRow `json:"receptionists"`
 	Returned      int               `json:"returned"`
 	truncation
 }
 
 func (p *Plugin) listReceptionists(ctx context.Context, args receptionistsArgs) (ReceptionistsResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return ReceptionistsResult{}, err
 	}
@@ -270,7 +276,7 @@ func (p *Plugin) listReceptionists(ctx context.Context, args receptionistsArgs) 
 	out.Receptionists, out.truncation = bound(out.Receptionists, got.reason())
 	out.Returned = len(out.Receptionists)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 

@@ -17,9 +17,15 @@ type Plugin struct {
 	deps plugins.Deps
 	cfg  Config
 
-	// accounts are the customers, in the order they were configured. Each has
-	// its own client, its own token and its own health.
+	// accounts are the phone systems, in the order they were configured. Each
+	// has its own client, its own token and its own health.
 	accounts []*account
+
+	// customers are the businesses those systems belong to, in the order they
+	// first appear. One business owns one or more accounts; a business with
+	// one is the case every row was before the Customer column existed, and it
+	// resolves exactly as it did.
+	customers []*customer
 
 	// bundleCeiling is the largest support bundle that will be spooled. A
 	// field rather than the constant at the call site so a test can lower it
@@ -32,12 +38,31 @@ type Plugin struct {
 	configured bool
 }
 
-// account is one customer and the client that reaches their phone system.
+// customer is one business and the phone systems it owns.
+type customer struct {
+	// id is the name with its spaces turned to hyphens: what an answer hands
+	// back and what a caller can repeat without having to spell prose.
+	id   string
+	name string
+	// systems are its phone systems in table order. Never empty: a business
+	// exists because a row named it.
+	systems []*account
+}
+
+// account is one phone system and the client that reaches it.
 type account struct {
+	// id is the identifier a caller passes as `system`. Derived from the name
+	// rather than stored, because the row's identity *is* its name; see
+	// identifier.
+	id string
+	// name is this phone system's name, which for a business with one system
+	// is the business's name.
 	name    string
 	aliases []string
-	host    string
-	client  *Client
+	// owner is the business this system belongs to. Always set.
+	owner  *customer
+	host   string
+	client *Client
 
 	mu      sync.RWMutex
 	lastErr error
@@ -79,24 +104,45 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 	}
 
 	p := &Plugin{deps: deps, configured: configured, bundleCeiling: maxBundle}
-	for _, cu := range cfg.Customers {
-		if !cu.complete() {
-			continue
+
+	// Only the rows that can be signed in to, and grouped after that filter
+	// rather than before it: a business whose every row is half filled in has
+	// no phone system to reach, and listing it as a customer with no systems
+	// would have a model ask about something nothing here can answer.
+	usable := make([]System, 0, len(cfg.Systems))
+	for _, s := range cfg.Systems {
+		if s.complete() {
+			usable = append(usable, s)
 		}
-		p.accounts = append(p.accounts, &account{
-			name:    strings.TrimSpace(cu.Name),
-			aliases: cu.names()[1:],
-			host:    rootOf(cu.Host),
-			client: NewClient(httpClient, cfg, cu.Host, cu.Extension, cu.Password,
-				deps.Log.With("customer", strings.TrimSpace(cu.Name)), now, observe),
-		})
+	}
+	for _, b := range groupSystems(usable) {
+		cust := &customer{id: b.id, name: b.name}
+		for _, row := range b.rows {
+			s := usable[row]
+			name := strings.TrimSpace(s.Name)
+			acct := &account{
+				id:      identifier(name),
+				name:    name,
+				aliases: s.names()[1:],
+				owner:   cust,
+				host:    rootOf(s.Host),
+				// Both names on the logger: with several systems under one
+				// business, "customer=Acme" alone does not say which of them a
+				// line is about.
+				client: NewClient(httpClient, cfg, s.Host, s.Extension, s.Password,
+					deps.Log.With("customer", cust.name, "system", name), now, observe),
+			}
+			cust.systems = append(cust.systems, acct)
+			p.accounts = append(p.accounts, acct)
+		}
+		p.customers = append(p.customers, cust)
 	}
 
 	// The credentials are not kept on the config the plugin holds, so a dump
 	// of it -- a log line, an error, the settings page -- cannot carry one.
 	// They live on each account's client and nowhere else.
-	for i := range cfg.Customers {
-		cfg.Customers[i].Password = ""
+	for i := range cfg.Systems {
+		cfg.Systems[i].Password = ""
 	}
 	p.cfg = cfg
 	return p, nil
@@ -106,12 +152,13 @@ func New(deps plugins.Deps, cfg Config) (*Plugin, error) {
 func (p *Plugin) Descriptor() plugins.Descriptor {
 	return plugins.Descriptor{
 		Name:    "threecx",
-		Version: "0.2.0",
+		Version: "0.3.0",
 		Title:   "3CX",
 		Description: "Answers questions about your customers' phone systems: whether " +
 			"the phones are working, who is registered, where a number rings, and " +
 			"what happened to a call. Name the customer you mean; list_customers " +
-			"has them. Nothing here changes anything.",
+			"has them, and says which of them run more than one phone system -- " +
+			"those need system set as well. Nothing here changes anything.",
 	}
 }
 
@@ -150,8 +197,9 @@ func (p *Plugin) Start(ctx context.Context) error {
 			"address, a system owner extension and its password on the Plugins page")
 		return nil
 	}
-	p.deps.Log.InfoContext(ctx, "3cx ready", "customers", len(p.accounts),
-		"reading", "each customer's configuration API on first use, restricted to a "+
+	p.deps.Log.InfoContext(ctx, "3cx ready", "customers", len(p.customers),
+		"systems", len(p.accounts),
+		"reading", "each phone system's configuration API on first use, restricted to a "+
 			"named list of read endpoints by its transport")
 	return nil
 }
@@ -173,7 +221,14 @@ func (p *Plugin) Check(_ context.Context) plugins.Health {
 		err := a.lastErr
 		a.mu.RUnlock()
 		if err != nil {
-			failing = append(failing, a.name+": "+plugins.Explain(err).Error())
+			// The business as well as the system when they differ: "Branch is
+			// down" does not say whose branch, and the person reading the
+			// dashboard is looking for a customer to ring.
+			where := a.name
+			if a.owner.name != a.name {
+				where = a.owner.name + " / " + a.name
+			}
+			failing = append(failing, where+": "+plugins.Explain(err).Error())
 		}
 	}
 	if len(failing) > 0 {
@@ -216,70 +271,116 @@ func normaliseName(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// resolve finds the customer a call is about.
+// scope is what a caller's `customer` argument settled: a business, or one
+// phone system named directly.
 //
-// The rule is that this never guesses. An exact match on the name or an alias
-// wins, folding case, collapsing whitespace and ignoring the punctuation a
-// sentence leaves on a name. Failing that, a name that is contained in exactly one
-// customer's name or alias is taken -- "acme" for "Acme Dental Group" -- but a
-// name contained in two is refused with both, because picking the first of two
-// customers is how a technician reads one business's phone system while
-// believing they are reading another's. With one customer configured no name
-// is needed; with several, none given is refused with the list.
-func (p *Plugin) resolve(asked string) (*account, error) {
-	asked = strings.TrimSpace(asked)
-	// The normalised form decides whether a name was given at all: an argument
-	// of "." carries no more of a name than an empty one does, and the two
-	// should not end in different answers.
-	folded := normaliseName(asked)
+// Both, because the argument has always accepted either. A table where every
+// business has one phone system cannot tell them apart, and the names people
+// already have in their prompts -- the ones list_customers reported before
+// this field existed -- are the systems' names.
+type scope struct {
+	cust *customer
+	acct *account
+}
+
+// resolve finds the phone system a call is about.
+//
+// The rule is that this never guesses, and it now has two arguments to not
+// guess with. `customer` names the business, or one system outright; `system`
+// picks between a business's systems. What has not changed is the answer for
+// the table that has one phone system per business: the customer argument
+// alone settles it, exactly as it did, and `system` is never needed.
+//
+// Matching, at both levels: an exact match on a name, an alias or an
+// identifier wins, folding case, collapsing whitespace and ignoring the
+// punctuation a sentence leaves on a name. Failing that, a word contained in
+// exactly one candidate is taken -- "acme" for "Acme Dental Group" -- and one
+// contained in two is refused with both, because picking the first of two is
+// how a technician reads one phone system while believing they are reading
+// another.
+func (p *Plugin) resolve(asked, system string) (*account, error) {
 	if len(p.accounts) == 0 {
 		return nil, fmt.Errorf("this 3CX plugin (%s) has no customers yet. Somebody has to "+
 			"add one on the mcpd Plugins page, under %s, Customers -- with the phone "+
 			"system's address, a system owner extension and its password -- before "+
 			"anything here can be read", p.instance(), p.instance())
 	}
-	if folded == "" {
-		if len(p.accounts) == 1 {
-			return p.accounts[0], nil
-		}
-		return nil, fmt.Errorf("this instance serves %d customers, so say which one with "+
-			"customer: %s. list_customers has each one's aliases", len(p.accounts), p.knownCustomers())
+	sc, err := p.scopeOf(asked)
+	if err != nil {
+		return nil, err
 	}
+	// Normalised rather than trimmed, for the same reason the customer
+	// argument is: a system of "." names no more of a phone system than an
+	// empty one does, and a fragment match on nothing matches everything.
+	if normaliseName(system) != "" {
+		return p.systemIn(sc, system)
+	}
+	switch {
+	case sc.acct != nil:
+		return sc.acct, nil
+	case sc.cust != nil:
+		if len(sc.cust.systems) == 1 {
+			return sc.cust.systems[0], nil
+		}
+		return nil, needSystem(sc.cust)
+	case len(p.accounts) == 1:
+		return p.accounts[0], nil
+	case len(p.customers) == 1:
+		// One business with several phone systems. Naming it would add
+		// nothing the caller does not already know, so the answer is the same
+		// one they would get for naming it.
+		return nil, needSystem(p.customers[0])
+	}
+	return nil, fmt.Errorf("this instance serves %d customers, so say which one with "+
+		"customer: %s. list_customers has each one's aliases", len(p.customers), p.knownCustomers())
+}
 
-	var exact, partial []*account
-	for _, a := range p.accounts {
-		matched, contained := false, false
-		for _, n := range append([]string{a.name}, a.aliases...) {
-			fn := normaliseName(n)
-			if fn == folded {
-				matched = true
-			} else if strings.Contains(fn, folded) {
-				contained = true
+// scopeOf reads the `customer` argument. An empty one is not an error here;
+// what to do about it depends on what else was given.
+func (p *Plugin) scopeOf(asked string) (scope, error) {
+	// The normalised form decides whether a name was given at all: an argument
+	// of "." carries no more of a name than an empty one does, and the two
+	// should not end in different answers.
+	folded := normaliseName(strings.TrimSpace(asked))
+	if folded == "" {
+		return scope{}, nil
+	}
+	for _, exact := range []bool{true, false} {
+		var custs []*customer
+		var accts []*account
+		for _, c := range p.customers {
+			if nameMatches(folded, exact, c.name, c.id) {
+				custs = append(custs, c)
+			}
+		}
+		for _, a := range p.accounts {
+			if nameMatches(folded, exact, append([]string{a.name, a.id}, a.aliases...)...) {
+				accts = append(accts, a)
 			}
 		}
 		switch {
-		case matched:
-			exact = append(exact, a)
-		case contained:
-			partial = append(partial, a)
+		case len(custs) == 1 && len(accts) == 0:
+			return scope{cust: custs[0]}, nil
+		case len(custs) == 0 && len(accts) == 1:
+			return scope{acct: accts[0]}, nil
+		case len(custs) == 0 && len(accts) == 0:
+			continue
 		}
-	}
-	switch {
-	case len(exact) == 1:
-		return exact[0], nil
-	case len(exact) > 1:
-		return nil, ambiguous(asked, exact)
-	case len(partial) == 1:
-		return partial[0], nil
-	case len(partial) > 1:
-		return nil, ambiguous(asked, partial)
+		// More than one candidate. They are not necessarily more than one
+		// answer: a business with a single phone system and that system are
+		// the same thing under two headings, which is what every row of an
+		// ordinary table is.
+		if only := onlyAccount(custs, accts); only != nil {
+			return scope{acct: only}, nil
+		}
+		return scope{}, ambiguous(asked, custs, accts)
 	}
 	// Nothing here can be read for a business mcpd has never been given, so
 	// the answer has to be where that is fixed. It names the instance because
 	// a deployment may have several, and it says not to guess: settling for
 	// the nearest of the configured customers would answer confidently about
 	// somebody else's phone system.
-	return nil, fmt.Errorf("no customer here is called %q. This instance (%s) serves %s. "+
+	return scope{}, fmt.Errorf("no customer here is called %q. This instance (%s) serves %s. "+
 		"Any of those names works. If %s should be "+
 		"here, somebody has to add it on the mcpd Plugins page, under %s, Customers "+
 		"-- with the phone system's address and a system owner extension. Tell the "+
@@ -287,18 +388,176 @@ func (p *Plugin) resolve(asked string) (*account, error) {
 		asked, p.instance(), p.knownCustomers(), asked, p.instance())
 }
 
-// ambiguous is the refusal for a name that fits more than one customer. It
-// names them all and says what to do, because the model reading it is about to
-// act on it.
-func ambiguous(asked string, matches []*account) error {
-	names := make([]string, 0, len(matches))
-	for _, a := range matches {
-		names = append(names, a.name)
+// systemIn settles the `system` argument within whatever `customer` left.
+func (p *Plugin) systemIn(sc scope, asked string) (*account, error) {
+	folded := normaliseName(strings.TrimSpace(asked))
+	within := p.accounts
+	switch {
+	case sc.acct != nil:
+		within = sc.acct.owner.systems
+	case sc.cust != nil:
+		within = sc.cust.systems
 	}
-	sort.Strings(names)
+	var found []*account
+	for _, exact := range []bool{true, false} {
+		for _, a := range within {
+			if nameMatches(folded, exact, append([]string{a.name, a.id}, a.aliases...)...) {
+				found = append(found, a)
+			}
+		}
+		if len(found) > 0 {
+			break
+		}
+	}
+	switch {
+	case len(found) > 1:
+		return nil, ambiguous(asked, nil, found)
+	case len(found) == 0:
+		// Named a real phone system, but not one of this customer's. Saying so
+		// is the difference between an operator fixing a mistyped customer and
+		// one concluding the system is missing.
+		if sc.cust != nil || sc.acct != nil {
+			for _, a := range p.accounts {
+				if nameMatches(folded, true, append([]string{a.name, a.id}, a.aliases...)...) {
+					return nil, fmt.Errorf("%s belongs to %s, not to %s. Ask for it by that "+
+						"customer, or name one of %s's own: %s", a.name, a.owner.name,
+						ownerOf(sc).name, ownerOf(sc).name, systemsOf(ownerOf(sc)))
+				}
+			}
+			return nil, fmt.Errorf("%s has no phone system called %q. It has %s. Do not pick "+
+				"one -- ask the person which they mean, then call again with that identifier",
+				ownerOf(sc).name, asked, systemsOf(ownerOf(sc)))
+		}
+		return nil, fmt.Errorf("no phone system here is called %q. This instance (%s) has %s. "+
+			"If it should be here, somebody has to add it on the mcpd Plugins page, under "+
+			"%s, Customers. Tell the person that rather than reading one of the others",
+			asked, p.instance(), p.knownSystems(), p.instance())
+	}
+	if sc.acct != nil && found[0] != sc.acct {
+		return nil, fmt.Errorf("customer %q and system %q name two different phone systems, "+
+			"%s and %s. Say which one you mean", sc.acct.name, asked, sc.acct.name, found[0].name)
+	}
+	return found[0], nil
+}
+
+// ownerOf is the business a scope is within, for a message. A scope reaching
+// here has one.
+func ownerOf(sc scope) *customer {
+	if sc.cust != nil {
+		return sc.cust
+	}
+	return sc.acct.owner
+}
+
+// onlyAccount reports the single phone system a set of candidates all denote,
+// or nil if they denote more than one.
+func onlyAccount(custs []*customer, accts []*account) *account {
+	var only *account
+	consider := func(a *account) bool {
+		if only == nil {
+			only = a
+			return true
+		}
+		return only == a
+	}
+	for _, c := range custs {
+		for _, a := range c.systems {
+			if !consider(a) {
+				return nil
+			}
+		}
+	}
+	for _, a := range accts {
+		if !consider(a) {
+			return nil
+		}
+	}
+	return only
+}
+
+// matches reports whether a name a caller gave fits any of these names, either
+// exactly or as a fragment of one.
+//
+// Each name is compared twice, as it normalises and as its identifier: the
+// identifier is what answers hand back, so a model repeating "acme-dental"
+// must reach what "Acme Dental" reaches.
+func nameMatches(folded string, exact bool, names ...string) bool {
+	for _, n := range names {
+		for _, form := range [2]string{normaliseName(n), identifier(n)} {
+			if form == "" {
+				continue
+			}
+			if exact && form == folded {
+				return true
+			}
+			if !exact && strings.Contains(form, folded) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ambiguous is the refusal for a name that fits more than one thing. It names
+// them all and says what to do, because the model reading it is about to act
+// on it.
+func ambiguous(asked string, custs []*customer, accts []*account) error {
+	named := make([]string, 0, len(custs)+len(accts))
+	for _, c := range custs {
+		named = append(named, c.name)
+	}
+	sort.Strings(named)
+	// Phone systems are named with their identifier and their business, since
+	// the whole reason two of them collided is that their names do not tell
+	// them apart on their own.
+	systems := make([]string, 0, len(accts))
+	for _, a := range accts {
+		systems = append(systems, fmt.Sprintf("%s (%s, on %s)", a.id, a.owner.name, displayHost(a.host)))
+	}
+	sort.Strings(systems)
+	switch {
+	case len(named) == 0:
+		return fmt.Errorf("%q is ambiguous: it matches the phone systems %s. Do not pick "+
+			"one -- ask the person which they mean, then call again with system set to "+
+			"that identifier", asked, strings.Join(systems, " and "))
+	case len(systems) > 0:
+		return fmt.Errorf("%q is ambiguous: it matches %s and the phone systems %s. Do not "+
+			"pick one -- ask the person which they mean, then call again with that exact "+
+			"name", asked, strings.Join(named, " and "), strings.Join(systems, " and "))
+	}
 	return fmt.Errorf("%q is ambiguous: it matches %s. Do not pick one -- ask the "+
 		"person which customer they mean, then call again with that exact name",
-		asked, strings.Join(names, " and "))
+		asked, strings.Join(named, " and "))
+}
+
+// needSystem is the refusal for a business with more than one phone system and
+// a call that did not say which.
+//
+// It is not a failure of the request so much as a question the request left
+// open, and the answer says so: the systems are listed with the identifier to
+// pass back, and the model is told to ask rather than to try one. Reading the
+// wrong site's extensions and reporting them as the customer's is the failure
+// this exists to prevent, and it is invisible when it happens.
+func needSystem(c *customer) error {
+	return fmt.Errorf("%s has %d phone systems, so say which one with system: %s. "+
+		"Do not pick one -- ask the person which they mean, or read each in turn and "+
+		"say which is which. list_customers has them all",
+		c.name, len(c.systems), systemsOf(c))
+}
+
+// systemsOf renders a business's phone systems for a message: the identifier
+// to pass back, the name a person uses, and the address, which is often the
+// only thing that tells two sites apart to somebody who knows the estate.
+func systemsOf(c *customer) string {
+	shown := make([]string, 0, len(c.systems))
+	for i, a := range c.systems {
+		if i == namesInAMessage {
+			return fmt.Sprintf("%s; and %d more (list_customers has them all)",
+				strings.Join(shown, "; "), len(c.systems)-namesInAMessage)
+		}
+		shown = append(shown, fmt.Sprintf("%s (%s, on %s)", a.id, a.name, displayHost(a.host)))
+	}
+	return strings.Join(shown, "; ")
 }
 
 // namesInAMessage bounds how many customers an error spells out. A deployment
@@ -311,33 +570,61 @@ const namesInAMessage = 10
 // out beside it, for the same reason.
 const aliasesInAMessage = 3
 
-// knownCustomers renders the configured customers for a message, bounded, each
-// with the aliases it also answers to.
+// knownCustomers renders the configured businesses for a message, bounded,
+// each with the aliases it also answers to or the phone systems it owns.
 //
 // The aliases are named because leaving them out is what sends a model back
 // with the long form of a name it had a short one for: a message listing only
-// "Acme Dental Group" reads as though "ADG" was never going to work.
+// "Acme Dental Group" reads as though "ADG" was never going to work. A
+// business with several systems is spelt out the other way, with their
+// identifiers, because those are what the next call has to carry.
 func (p *Plugin) knownCustomers() string {
-	shown := make([]string, 0, len(p.accounts))
-	for i, a := range p.accounts {
+	shown := make([]string, 0, len(p.customers))
+	for i, c := range p.customers {
 		if i == namesInAMessage {
 			return fmt.Sprintf("%s; and %d more (list_customers has them all)",
-				strings.Join(shown, "; "), len(p.accounts)-namesInAMessage)
+				strings.Join(shown, "; "), len(p.customers)-namesInAMessage)
 		}
-		if len(a.aliases) == 0 {
-			shown = append(shown, a.name)
+		if len(c.systems) > 1 {
+			ids := make([]string, 0, len(c.systems))
+			for _, a := range c.systems {
+				ids = append(ids, a.id)
+			}
+			// The systems rather than the business, because naming the
+			// business is not enough to ask it anything: "Any of these
+			// works" has to be true of every name in the list.
+			shown = append(shown, fmt.Sprintf("%s, which runs %d phone systems -- ask about %s",
+				c.name, len(c.systems), strings.Join(ids, " or ")))
+			continue
+		}
+		also := c.systems[0].aliases
+		if len(also) == 0 {
+			shown = append(shown, c.name)
 			continue
 		}
 		// Aliases are bounded too. Ten customers with ten aliases each is a
 		// hundred names, which is the cost the customer bound exists to avoid.
-		also := a.aliases
 		if len(also) > aliasesInAMessage {
 			also = also[:aliasesInAMessage]
 		}
 		// Semicolons between customers, commas between one customer's names:
 		// with one separator doing both jobs a model cannot split the list
 		// back into customers.
-		shown = append(shown, fmt.Sprintf("%s, also called %s", a.name, strings.Join(also, " or ")))
+		shown = append(shown, fmt.Sprintf("%s, also called %s", c.name, strings.Join(also, " or ")))
+	}
+	return strings.Join(shown, "; ")
+}
+
+// knownSystems renders every phone system on the instance, for the refusal of
+// a `system` that named none of them and no customer to narrow it to.
+func (p *Plugin) knownSystems() string {
+	shown := make([]string, 0, len(p.accounts))
+	for i, a := range p.accounts {
+		if i == namesInAMessage {
+			return fmt.Sprintf("%s; and %d more (list_customers has them all)",
+				strings.Join(shown, "; "), len(p.accounts)-namesInAMessage)
+		}
+		shown = append(shown, fmt.Sprintf("%s (%s)", a.id, a.owner.name))
 	}
 	return strings.Join(shown, "; ")
 }
@@ -362,4 +649,9 @@ func (p *Plugin) limitOf(requested int) int {
 		return p.cfg.MaxItems
 	}
 	return requested
+}
+
+// source is what every answer carries to say which phone system it came from.
+func (a *account) source() Source {
+	return Source{Customer: a.owner.name, System: a.name, SystemID: a.id}
 }

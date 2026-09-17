@@ -91,7 +91,14 @@ var toolListBudget = map[string]int{
 	// own interval, each with its own enabled flag, and flattening them into a
 	// dozen sibling fields would cost about the same while leaving a reader to
 	// work out which field belonged to which prompt.
-	"threecx": 48_000,
+	//
+	// Raised from 48,000 when a business became able to run more than one
+	// phone system: every tool gained an optional system argument and every
+	// answer gained the system and the identifier it came from. Two thirds of
+	// the 2,000 bytes is the output schemas, and that is the half worth
+	// paying for -- an answer that does not say which of a customer's phone
+	// systems it describes is one nothing downstream can correct.
+	"threecx": 50_000,
 }
 
 // budgetTotal bounds every plugin at once, which is what the aggregate

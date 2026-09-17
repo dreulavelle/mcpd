@@ -30,6 +30,7 @@ func (p *Plugin) registerHistoryTools(r *plugins.Registry) {
 
 type callHistoryArgs struct {
 	Customer   string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System     string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Extension  string `json:"extension,omitempty" jsonschema:"only calls involving this extension, either end"`
 	Number     string `json:"number,omitempty" jsonschema:"only calls involving a phone number containing these digits, either end"`
 	Since      string `json:"since,omitempty" jsonschema:"only calls at or after this time, as 2026-09-01T14:00:00Z or 2026-09-01"`
@@ -57,9 +58,10 @@ type CallRow struct {
 
 // CallHistoryResult is a page of call records.
 type CallHistoryResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string    `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Calls    []CallRow `json:"calls"`
 	Returned int       `json:"returned"`
 	Answered int       `json:"answered"`
@@ -77,7 +79,7 @@ const callFields = "SegmentId,SegmentStartTime,SegmentEndTime,CallTime,CallAnswe
 const defaultCalls = 50
 
 func (p *Plugin) searchCallHistory(ctx context.Context, args callHistoryArgs) (CallHistoryResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return CallHistoryResult{}, err
 	}
@@ -178,6 +180,6 @@ func (p *Plugin) searchCallHistory(ctx context.Context, args callHistoryArgs) (C
 	out.Calls, out.truncation = bound(out.Calls, got.reason())
 	out.Returned = len(out.Calls)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
