@@ -118,7 +118,7 @@ func TestClient_SecondFactorIsExplained(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"Status":"AuthSecurityCodeRequired","Token":null}`))
 	})
-	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
+	p := pluginFor(t, srv.Client(), System{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
 	_, err := firstClient(p).bearer(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "two-factor") {
 		t.Errorf("want a message about a second factor, got %v", err)
@@ -131,7 +131,7 @@ func TestClient_NotAPBXIsExplained(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<html>Welcome to nginx</html>`))
 	})
-	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
+	p := pluginFor(t, srv.Client(), System{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
 	_, err := firstClient(p).bearer(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "not the phone system's JSON") {
 		t.Errorf("want the address to be doubted, got %v", err)
@@ -162,7 +162,7 @@ func TestClient_PagesAtOneHundredAndStopsAtTheCeiling(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(collection(1000, rows...)))
 	})
-	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
+	p := pluginFor(t, srv.Client(), System{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
 
 	type row struct{ Number string }
 	got, err := listCounted[row](context.Background(), firstClient(p), "Users", url.Values{"$select": {"Number"}}, 250)
@@ -219,7 +219,7 @@ func TestClient_UncountedListingSaysMayHoldMore(t *testing.T) {
 		// No @odata.count: what a phone system sends when none was asked for.
 		_, _ = w.Write([]byte(`{"value":[` + strings.Join(rows, ",") + `]}`))
 	})
-	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
+	p := pluginFor(t, srv.Client(), System{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
 
 	type row struct{ Number string }
 	got, err := list[row](context.Background(), firstClient(p), "Users", url.Values{"$select": {"Number"}}, 50)
@@ -250,7 +250,7 @@ func TestClient_TimeoutSaysWhatToDo(t *testing.T) {
 		}
 		time.Sleep(300 * time.Millisecond)
 	})
-	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
+	p := pluginFor(t, srv.Client(), System{Name: "Acme", Host: srv.URL, Extension: "100", Password: "p"})
 	c := firstClient(p)
 	// Sooner than any setting allows, because a test must not wait five
 	// seconds to prove the sentence.

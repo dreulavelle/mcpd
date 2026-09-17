@@ -95,6 +95,7 @@ func (p *Plugin) readTrunks(ctx context.Context, acct *account) ([]trunkRecord, 
 
 type trunksArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 }
 
 // TrunkRow is one trunk with its numbers.
@@ -125,9 +126,10 @@ type TrunkRow struct {
 
 // TrunksResult is the trunk list.
 type TrunksResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string     `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Trunks   []TrunkRow `json:"trunks"`
 	Returned int        `json:"returned"`
 	Offline  int        `json:"offline"`
@@ -135,7 +137,7 @@ type TrunksResult struct {
 }
 
 func (p *Plugin) listTrunks(ctx context.Context, args trunksArgs) (TrunksResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return TrunksResult{}, err
 	}
@@ -198,7 +200,7 @@ func (p *Plugin) listTrunks(ctx context.Context, args trunksArgs) (TrunksResult,
 	out.Trunks, out.truncation = bound(out.Trunks, "")
 	out.Returned = len(out.Trunks)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -239,6 +241,7 @@ func (p *Plugin) readInboundRules(ctx context.Context, acct *account) ([]inbound
 
 type inboundRulesArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Number   string `json:"number,omitempty" jsonschema:"only rules for a DID containing these digits"`
 	Trunk    string `json:"trunk,omitempty" jsonschema:"only rules on the trunk with this number or name"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"most rules to return"`
@@ -261,16 +264,17 @@ type InboundRuleRow struct {
 
 // InboundRulesResult is the routing table.
 type InboundRulesResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string           `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Rules    []InboundRuleRow `json:"rules"`
 	Returned int              `json:"returned"`
 	truncation
 }
 
 func (p *Plugin) listInboundRules(ctx context.Context, args inboundRulesArgs) (InboundRulesResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return InboundRulesResult{}, err
 	}
@@ -332,7 +336,7 @@ func (p *Plugin) listInboundRules(ctx context.Context, args inboundRulesArgs) (I
 	out.Rules, out.truncation = bound(out.Rules, cut)
 	out.Returned = len(out.Rules)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -340,6 +344,7 @@ func (p *Plugin) listInboundRules(ctx context.Context, args inboundRulesArgs) (I
 
 type outboundRulesArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 }
 
 // OutboundRuleRow is one way a dialled number may leave.
@@ -357,16 +362,17 @@ type OutboundRuleRow struct {
 
 // OutboundRulesResult is the dialling plan.
 type OutboundRulesResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string            `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Rules    []OutboundRuleRow `json:"rules"`
 	Returned int               `json:"returned"`
 	truncation
 }
 
 func (p *Plugin) listOutboundRules(ctx context.Context, args outboundRulesArgs) (OutboundRulesResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return OutboundRulesResult{}, err
 	}
@@ -442,7 +448,7 @@ func (p *Plugin) listOutboundRules(ctx context.Context, args outboundRulesArgs) 
 	out.Rules, out.truncation = bound(out.Rules, got.reason())
 	out.Returned = len(out.Rules)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -450,6 +456,7 @@ func (p *Plugin) listOutboundRules(ctx context.Context, args outboundRulesArgs) 
 
 type directoryArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Query    string `json:"query,omitempty" jsonschema:"a number or part of a name"`
 	Type     string `json:"type,omitempty" jsonschema:"only this kind: Extension, Queue, RingGroup, IVR, Fax, Conference, Parking, SpecialMenu, RoutePoint"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"most entries to return"`
@@ -465,9 +472,10 @@ type PeerRow struct {
 
 // DirectoryResult is the numbering plan, narrowed.
 type DirectoryResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string    `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Entries  []PeerRow `json:"entries"`
 	Total    int       `json:"total"`
 	Returned int       `json:"returned"`
@@ -481,7 +489,7 @@ var peerTypes = map[string]string{
 }
 
 func (p *Plugin) searchDirectory(ctx context.Context, args directoryArgs) (DirectoryResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return DirectoryResult{}, err
 	}
@@ -521,6 +529,6 @@ func (p *Plugin) searchDirectory(ctx context.Context, args directoryArgs) (Direc
 	out.Entries, out.truncation = bound(out.Entries, got.reason())
 	out.Returned = len(out.Entries)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }

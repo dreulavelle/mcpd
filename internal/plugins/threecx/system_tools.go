@@ -53,13 +53,14 @@ func (p *Plugin) registerSystemTools(r *plugins.Registry) {
 
 type statusArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 }
 
 // SystemStatus is one answer to "is it healthy", with the arithmetic done.
 type SystemStatus struct {
 	// Customer is the business this answer is about, so an answer can never be
 	// read as another customer's.
-	Customer  string `json:"customer"`
+	Source
 	FQDN      string `json:"fqdn"`
 	Version   string `json:"version"`
 	Activated bool   `json:"activated"`
@@ -110,7 +111,7 @@ const systemStatusFields = "FQDN,Version,Activated,OS,MaxSimCalls,CallsActive," 
 	"LicenseActive,ExpirationDate,MaintenanceExpiresAt,RecordingQuotaReached,VoicemailQuotaReached"
 
 func (p *Plugin) getSystemStatus(ctx context.Context, args statusArgs) (SystemStatus, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return SystemStatus{}, err
 	}
@@ -196,7 +197,7 @@ func (p *Plugin) getSystemStatus(ctx context.Context, args statusArgs) (SystemSt
 
 	out.Concerns = concerns(out)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -262,6 +263,7 @@ func trunkLabel(number, name string) string {
 
 type servicesArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 }
 
 // ServiceRow is one of the phone system's own processes.
@@ -274,9 +276,10 @@ type ServiceRow struct {
 
 // ServicesResult is the service list with the finding drawn out.
 type ServicesResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer   string       `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Services   []ServiceRow `json:"services"`
 	AllRunning bool         `json:"all_running"`
 	NotRunning []string     `json:"not_running"`
@@ -299,7 +302,7 @@ func (p *Plugin) readServices(ctx context.Context, acct *account) ([]serviceReco
 }
 
 func (p *Plugin) listServices(ctx context.Context, args servicesArgs) (ServicesResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return ServicesResult{}, err
 	}
@@ -321,7 +324,7 @@ func (p *Plugin) listServices(ctx context.Context, args servicesArgs) (ServicesR
 	}
 	out.AllRunning = len(out.NotRunning) == 0
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -329,6 +332,7 @@ func (p *Plugin) listServices(ctx context.Context, args servicesArgs) (ServicesR
 
 type activeCallsArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 }
 
 // ActiveCallRow is one call in progress.
@@ -342,16 +346,17 @@ type ActiveCallRow struct {
 
 // ActiveCallsResult is the calls in progress.
 type ActiveCallsResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string          `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Calls    []ActiveCallRow `json:"calls"`
 	Returned int             `json:"returned"`
 	truncation
 }
 
 func (p *Plugin) listActiveCalls(ctx context.Context, args activeCallsArgs) (ActiveCallsResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return ActiveCallsResult{}, err
 	}
@@ -376,13 +381,14 @@ func (p *Plugin) listActiveCalls(ctx context.Context, args activeCallsArgs) (Act
 	}
 	rows, cut := bound(rows, got.reason())
 	acct.note(nil)
-	return ActiveCallsResult{Customer: acct.name, Calls: rows, Returned: len(rows), truncation: cut}, nil
+	return ActiveCallsResult{Source: acct.source(), Calls: rows, Returned: len(rows), truncation: cut}, nil
 }
 
 // --- event log --------------------------------------------------------------
 
 type eventsArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Query    string `json:"query,omitempty" jsonschema:"text to look for, searched by the phone system: an extension, a trunk name, part of an error"`
 	Type     string `json:"type,omitempty" jsonschema:"only this severity: Error, Warning or Info"`
 	Source   string `json:"source,omitempty" jsonschema:"only events from a source whose name contains this, e.g. SIP Server"`
@@ -402,9 +408,10 @@ type EventRow struct {
 
 // EventsResult is a page of the event log.
 type EventsResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string     `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	Events   []EventRow `json:"events"`
 	Returned int        `json:"returned"`
 	truncation
@@ -414,7 +421,7 @@ type EventsResult struct {
 const defaultEvents = 50
 
 func (p *Plugin) searchEvents(ctx context.Context, args eventsArgs) (EventsResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return EventsResult{}, err
 	}
@@ -481,7 +488,7 @@ func (p *Plugin) searchEvents(ctx context.Context, args eventsArgs) (EventsResul
 	}
 	rows, cut := bound(rows, got.reason())
 	acct.note(nil)
-	return EventsResult{Customer: acct.name, Events: rows, Returned: len(rows), truncation: cut}, nil
+	return EventsResult{Source: acct.source(), Events: rows, Returned: len(rows), truncation: cut}, nil
 }
 
 var eventTypes = map[string]string{"error": "Error", "warning": "Warning", "info": "Info"}

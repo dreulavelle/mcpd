@@ -24,6 +24,26 @@ const (
 	reasonEncoding   = "a record could not be encoded and the listing stops there"
 )
 
+// Source names where an answer came from.
+//
+// Every result carries one. The customer alone was enough while a business had
+// one phone system, and stopped being enough the moment one could have two:
+// "Acme has 40 extensions" is a different claim from "Acme's branch has 40
+// extensions", and nothing downstream can tell them apart after the fact. So
+// the phone system is named on the answer rather than left to be inferred from
+// the arguments the caller sent.
+type Source struct {
+	// Customer is the business this answer is about.
+	Customer string `json:"customer"`
+	// System is the phone system it came from, by the name in the table. Equal
+	// to Customer for a business with one, which is what makes this additive
+	// for everybody who has one.
+	System string `json:"system"`
+	// SystemID is that system's identifier: what to pass back as `system` to
+	// ask another question of this same phone system.
+	SystemID string `json:"system_id"`
+}
+
 // truncation is what every listing carries when it stops short.
 //
 // A field rather than a log line, because a model shown twenty of two hundred

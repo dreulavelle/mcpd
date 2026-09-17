@@ -128,15 +128,15 @@ func toolPlugin(t *testing.T, bodies map[string]string, absent ...string) (*Plug
 	for _, path := range absent {
 		f.absent[path] = true
 	}
-	p := pluginFor(t, srv.Client(), Customer{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
+	p := pluginFor(t, srv.Client(), System{Name: "Acme", Host: srv.URL, Extension: "100", Password: "right-password"})
 	return p, f
 }
 
-// pluginFor builds a plugin over the given customers, every one of them
+// pluginFor builds a plugin over the given phone systems, every one of them
 // reached through the fake server's own client so its certificate is trusted.
-func pluginFor(t *testing.T, hc *http.Client, customers ...Customer) *Plugin {
+func pluginFor(t *testing.T, hc *http.Client, systems ...System) *Plugin {
 	t.Helper()
-	p, err := New(testDeps(), Config{Customers: customers})
+	p, err := New(testDeps(), Config{Systems: systems})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func pluginFor(t *testing.T, hc *http.Client, customers ...Customer) *Plugin {
 	return p
 }
 
-// firstClient is the one customer's client, for tests about the client itself.
+// firstClient is the one phone system's client, for tests about the client itself.
 func firstClient(p *Plugin) *Client { return p.accounts[0].client }
 
 // collection wraps rows as an OData collection response, with a count.

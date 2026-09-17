@@ -45,6 +45,7 @@ func (p *Plugin) registerAccessTools(r *plugins.Registry) {
 
 type blockedArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Query    string `json:"query,omitempty" jsonschema:"only entries whose address, caller ID or description contains this"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"most entries to return"`
 }
@@ -69,7 +70,7 @@ type BlockedCaller struct {
 
 // BlockedResult is what the phone system is refusing.
 type BlockedResult struct {
-	Customer string `json:"customer"`
+	Source
 	// Addresses blocked, then addresses explicitly allowed: the block list is
 	// what somebody is looking for and the allow list is what explains why one
 	// address is fine while its neighbour is not.
@@ -83,7 +84,7 @@ type BlockedResult struct {
 }
 
 func (p *Plugin) listBlocked(ctx context.Context, args blockedArgs) (BlockedResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return BlockedResult{}, err
 	}
@@ -103,7 +104,7 @@ func (p *Plugin) listBlocked(ctx context.Context, args blockedArgs) (BlockedResu
 	}
 
 	out := BlockedResult{
-		Customer: acct.name, Addresses: make([]BlockedAddress, 0, len(addrs.Rows)),
+		Source: acct.source(), Addresses: make([]BlockedAddress, 0, len(addrs.Rows)),
 		Callers: []BlockedCaller{},
 	}
 	for _, a := range addrs.Rows {
@@ -156,6 +157,7 @@ func (p *Plugin) listBlocked(ctx context.Context, args blockedArgs) (BlockedResu
 
 type sbcArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 }
 
 // SBCRow is one session border controller or remote handset.
@@ -172,7 +174,10 @@ type SBCRow struct {
 
 // SBCsResult is the remote connectivity picture.
 type SBCsResult struct {
-	Customer     string   `json:"customer"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
 	SBCs         []SBCRow `json:"sbcs"`
 	Returned     int      `json:"returned"`
 	Disconnected int      `json:"disconnected"`
@@ -180,7 +185,7 @@ type SBCsResult struct {
 }
 
 func (p *Plugin) listSBCs(ctx context.Context, args sbcArgs) (SBCsResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return SBCsResult{}, err
 	}
@@ -199,7 +204,7 @@ func (p *Plugin) listSBCs(ctx context.Context, args sbcArgs) (SBCsResult, error)
 	if err != nil {
 		return SBCsResult{}, acct.call(err)
 	}
-	out := SBCsResult{Customer: acct.name, SBCs: make([]SBCRow, 0, len(got.Rows))}
+	out := SBCsResult{Source: acct.source(), SBCs: make([]SBCRow, 0, len(got.Rows))}
 	for _, s := range got.Rows {
 		if !s.HasConnection {
 			out.Disconnected++

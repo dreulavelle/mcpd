@@ -152,11 +152,12 @@ type QueueAnnouncements struct {
 
 // Queue is one call queue in full.
 type Queue struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string `json:"customer"`
-	Number   string `json:"number"`
-	Name     string `json:"name"`
+	// Source names the business and the phone system this answer is about,
+	// so an answer can never be read as another customer's or another of
+	// the same customer's.
+	Source
+	Number string `json:"number"`
+	Name   string `json:"name"`
 
 	Strategy       string `json:"strategy,omitempty"`
 	RingSeconds    int    `json:"ring_seconds"`
@@ -194,11 +195,12 @@ type Queue struct {
 
 type queueArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Queue    string `json:"queue" jsonschema:"the queue's number, as list_queues reports it; its exact name also works"`
 }
 
 func (p *Plugin) getQueue(ctx context.Context, args queueArgs) (Queue, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return Queue{}, err
 	}
@@ -264,7 +266,7 @@ func (p *Plugin) getQueue(ctx context.Context, args queueArgs) (Queue, error) {
 	}
 
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -418,13 +420,19 @@ type PromptSetRow struct {
 
 // MusicOnHoldResult is every source of audio on one phone system.
 type MusicOnHoldResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string             `json:"customer"`
-	System   *SystemMusicOnHold `json:"system,omitempty"`
-	Files    []AudioFileRow     `json:"files"`
-	Sets     []PromptSetRow     `json:"prompt_sets,omitempty"`
-	Returned int                `json:"returned"`
+	// Source names the business and the phone system this answer is about, so an
+	// answer can never be read as another customer's, or as another of the same
+	// customer's.
+	Source
+	// SystemWide is the music on hold the phone system falls back to, as
+	// against what one queue sets. Named system_wide rather than system
+	// because every answer here carries the phone system it came from under
+	// that name, and two things called "system" in one result is one too many
+	// for a reader that has only the field name to go on.
+	SystemWide *SystemMusicOnHold `json:"system_wide,omitempty"`
+	Files      []AudioFileRow     `json:"files"`
+	Sets       []PromptSetRow     `json:"prompt_sets,omitempty"`
+	Returned   int                `json:"returned"`
 	// Unavailable names what this build of 3CX would not answer for, so a short
 	// answer says which part is missing rather than reading as a phone system
 	// with no audio on it.
@@ -434,6 +442,7 @@ type MusicOnHoldResult struct {
 
 type musicOnHoldArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Query    string `json:"query,omitempty" jsonschema:"only files whose filename or display name contains this"`
 	// IncludeSets is off by default: a system prompt set holds a few hundred
 	// files, which is a great deal of answer for a question about music.
@@ -442,7 +451,7 @@ type musicOnHoldArgs struct {
 }
 
 func (p *Plugin) listMusicOnHold(ctx context.Context, args musicOnHoldArgs) (MusicOnHoldResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return MusicOnHoldResult{}, err
 	}
@@ -459,7 +468,7 @@ func (p *Plugin) listMusicOnHold(ctx context.Context, args musicOnHoldArgs) (Mus
 		return MusicOnHoldResult{}, acct.call(err)
 	default:
 		slots := sys.slots()
-		out.System = &SystemMusicOnHold{
+		out.SystemWide = &SystemMusicOnHold{
 			Slots: slots, Randomize: sys.Randomize, RandomizePerCall: sys.PerCall,
 		}
 		for _, s := range slots {
@@ -517,7 +526,7 @@ func (p *Plugin) listMusicOnHold(ctx context.Context, args musicOnHoldArgs) (Mus
 	}
 
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 
@@ -614,9 +623,10 @@ type AudioUsage struct {
 
 // AudioUsageResult is everything that names one file.
 type AudioUsageResult struct {
-	// Customer is the business this answer is about, so an answer can never be
-	// read as another customer's.
-	Customer string `json:"customer"`
+	// Source names the business and the phone system this answer is about,
+	// so an answer can never be read as another customer's or another of
+	// the same customer's.
+	Source
 	Filename string `json:"filename"`
 	// Exists reports whether the phone system has a file by that name at all.
 	// Nil when the file list could not be read, which is not the same as the
@@ -638,11 +648,12 @@ type AudioUsageResult struct {
 
 type audioUsageArgs struct {
 	Customer string `json:"customer,omitempty" jsonschema:"which customer's phone system, by business name or alias; needed when this instance serves more than one"`
+	System   string `json:"system,omitempty" jsonschema:"which of that customer's phone systems; the id list_customers gives, when it has more than one"`
 	Filename string `json:"filename" jsonschema:"the audio file's name, as list_music_on_hold reports it"`
 }
 
 func (p *Plugin) searchAudioUsage(ctx context.Context, args audioUsageArgs) (AudioUsageResult, error) {
-	acct, err := p.resolve(args.Customer)
+	acct, err := p.resolve(args.Customer, args.System)
 	if err != nil {
 		return AudioUsageResult{}, err
 	}
@@ -679,7 +690,7 @@ func (p *Plugin) searchAudioUsage(ctx context.Context, args audioUsageArgs) (Aud
 
 	out.Summary = summariseUsage(out)
 	acct.note(nil)
-	out.Customer = acct.name
+	out.Source = acct.source()
 	return out, nil
 }
 

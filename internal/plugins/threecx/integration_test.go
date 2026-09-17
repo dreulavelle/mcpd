@@ -34,7 +34,7 @@ func integrationPlugin(t *testing.T) *Plugin {
 		Instance: "threecx",
 		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Now:      time.Now,
-	}, Config{Customers: []Customer{{Name: "Trial", Host: host, Extension: ext, Password: pass}}})
+	}, Config{Systems: []System{{Name: "Trial", Host: host, Extension: ext, Password: pass}}})
 	if err != nil {
 		t.Fatalf("building the plugin: %v", err)
 	}
@@ -189,11 +189,11 @@ func TestIntegration_SupportBundle(t *testing.T) {
 	if r.State != "done" {
 		t.Fatalf("capture: %+v", r)
 	}
-	if r.System == nil || r.System.Version == "" {
-		t.Errorf("the digest should name the system version: %+v", r.System)
+	if r.Machine == nil || r.Machine.Version == "" {
+		t.Errorf("the digest should name the system version: %+v", r.Machine)
 	}
 	t.Logf("bundle: version %s, %d findings, %d health checks, %d event groups, %d edits",
-		r.System.Version, r.Counts.Findings, r.Counts.Health, r.Counts.Events, r.Counts.Changes)
+		r.Machine.Version, r.Counts.Findings, r.Counts.Health, r.Counts.Events, r.Counts.Changes)
 	for _, f := range r.Findings {
 		t.Logf("  [%s] %s", f.Severity, f.Title)
 	}

@@ -7,7 +7,7 @@ import (
 )
 
 func oneCustomer(host string) Config {
-	cfg := Config{Customers: []Customer{{Name: "Acme", Host: host, Extension: "100", Password: "p"}}}
+	cfg := Config{Systems: []System{{Name: "Acme", Host: host, Extension: "100", Password: "p"}}}
 	cfg.withDefaults()
 	return cfg
 }
@@ -83,23 +83,28 @@ func TestConfig_ConfiguredNeedsEveryCustomerComplete(t *testing.T) {
 	if !full.Configured() {
 		t.Error("a complete customer should be configured")
 	}
-	for name, partial := range map[string]Customer{
+	for name, partial := range map[string]System{
 		"no host":      {Name: "Acme", Extension: "100", Password: "p"},
 		"no extension": {Name: "Acme", Host: "acme.ny.3cx.us", Password: "p"},
 		"no password":  {Name: "Acme", Host: "acme.ny.3cx.us", Extension: "100"},
 	} {
-		cfg := Config{Customers: []Customer{full.Customers[0], partial}}
+		cfg := Config{Systems: []System{full.Systems[0], partial}}
 		if cfg.Configured() {
 			t.Errorf("%s should leave the instance unconfigured", name)
 		}
 	}
 }
 
-// Two customers may not share a name or alias, and may not share a phone
-// system: either is a call that could only be resolved by guessing.
+// A naming a call could not be resolved against without guessing is refused at
+// the configuration rather than at every call.
+//
+// Two rows of the *same* business may not share a name or alias, no two rows
+// may share an address, and a business's own name may not also name something
+// else. What is deliberately allowed is below: two different businesses using
+// the same alias.
 func TestConfig_RefusesCollidingCustomers(t *testing.T) {
 	cases := map[string]Config{
-		"same name, folded": {Customers: []Customer{
+		"same name, folded": {Systems: []System{
 			{Name: "Acme", Host: "a.example", Extension: "100", Password: "p"},
 			{Name: "acme", Host: "b.example", Extension: "100", Password: "p"},
 		}},
@@ -108,23 +113,41 @@ func TestConfig_RefusesCollidingCustomers(t *testing.T) {
 		// check compared a value with itself and found no collision. Every
 		// call to either was then refused as ambiguous at run time, which is a
 		// worse place to learn about it than the settings page.
-		"same name, exactly": {Customers: []Customer{
+		"same name, exactly": {Systems: []System{
 			{Name: "Acme", Host: "a.example", Extension: "100", Password: "p"},
 			{Name: "Acme", Host: "b.example", Extension: "101", Password: "p"},
 		}},
-		"same alias on two customers": {Customers: []Customer{
-			{Name: "Acme Dental", Aliases: []string{"acme"}, Host: "a.example", Extension: "100", Password: "p"},
-			{Name: "Acme Logistics", Aliases: []string{"acme"}, Host: "b.example", Extension: "101", Password: "p"},
+		// One business, two phone systems, one alias between them: a call to
+		// that business naming "hq" could not be settled, and asking the
+		// person is no help because they did say which.
+		"same alias on one business's two systems": {Systems: []System{
+			{Name: "Acme HQ", Customer: "Acme", Aliases: []string{"hq"}, Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Acme Branch", Customer: "Acme", Aliases: []string{"hq"}, Host: "b.example", Extension: "101", Password: "p"},
 		}},
-		"alias is another's name": {Customers: []Customer{
+		// A business with two systems cannot also be the name of one of them:
+		// "Acme" would mean the pair and one of the pair at once. This is the
+		// trap a table upgraded in place falls into, where the business is
+		// named after the phone system it used to be.
+		"business named after one of its own systems": {Systems: []System{
+			{Name: "Acme", Customer: "Acme", Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Acme Branch", Customer: "Acme", Host: "b.example", Extension: "101", Password: "p"},
+		}},
+		// Two businesses whose names differ only by punctuation are one
+		// business to the resolver and to this check.
+		"business name another business cannot be told from": {Systems: []System{
+			{Name: "First", Customer: "Acme Inc", Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Second", Customer: "Acme-Inc", Host: "b.example", Extension: "101", Password: "p"},
+			{Name: "Third", Customer: "Acme Inc", Host: "c.example", Extension: "102", Password: "p"},
+		}},
+		"alias is another's name": {Systems: []System{
 			{Name: "Acme Dental", Aliases: []string{"globex"}, Host: "a.example", Extension: "100", Password: "p"},
 			{Name: "Globex", Host: "b.example", Extension: "100", Password: "p"},
 		}},
-		"same host": {Customers: []Customer{
+		"same host": {Systems: []System{
 			{Name: "Acme", Host: "pbx.example", Extension: "100", Password: "p"},
 			{Name: "Globex", Host: "https://PBX.example/", Extension: "101", Password: "p"},
 		}},
-		"no name": {Customers: []Customer{
+		"no name": {Systems: []System{
 			{Host: "pbx.example", Extension: "100", Password: "p"},
 		}},
 	}
@@ -134,24 +157,46 @@ func TestConfig_RefusesCollidingCustomers(t *testing.T) {
 			t.Errorf("%s should be refused", name)
 		}
 	}
-	// A customer's own alias repeating its name is not a collision.
-	ok := Config{Customers: []Customer{{Name: "Acme", Aliases: []string{"acme", "ACME"}, Host: "a.example", Extension: "100", Password: "p"}}}
-	ok.withDefaults()
-	if err := ok.Validate(); err != nil {
-		t.Errorf("an alias repeating the customer's own name is fine: %v", err)
+	allowed := map[string]Config{
+		// A customer's own alias repeating its name is not a collision.
+		"an alias repeating the row's own name": {Systems: []System{
+			{Name: "Acme", Aliases: []string{"acme", "ACME"}, Host: "a.example", Extension: "100", Password: "p"},
+		}},
+		// One business, one phone system, named the same: this is every row of
+		// a table filled in before the Business column existed, and it has to
+		// stay legal or every existing deployment is refused.
+		"a business whose one system carries its name": {Systems: []System{
+			{Name: "Acme", Customer: "Acme", Host: "a.example", Extension: "100", Password: "p"},
+		}},
+		// Two businesses, one alias. Refused before a business could have two
+		// systems, and allowed now on purpose: "server 1" is what everybody
+		// calls their first one, and a global ban would make the aliases
+		// people actually want unusable. A call giving it with a customer
+		// resolves inside that customer; a call giving it alone is refused at
+		// the time, with both named.
+		"the same alias under two different businesses": {Systems: []System{
+			{Name: "Acme Dental", Aliases: []string{"server 1"}, Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Globex Roofing", Aliases: []string{"server 1"}, Host: "b.example", Extension: "101", Password: "p"},
+		}},
+	}
+	for name, cfg := range allowed {
+		cfg.withDefaults()
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%s should be accepted: %v", name, err)
+		}
 	}
 }
 
 // The plugin built from settings keeps no password on its config, so a dump of
 // the config -- a log line, the settings page -- cannot carry it.
 func TestNew_DoesNotRetainThePassword(t *testing.T) {
-	p, err := New(testDeps(), Config{Customers: []Customer{
+	p, err := New(testDeps(), Config{Systems: []System{
 		{Name: "Acme", Host: "acme.ny.3cx.us", Extension: "100", Password: "secret-pass"},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.cfg.Customers[0].Password != "" {
+	if p.cfg.Systems[0].Password != "" {
 		t.Error("the plugin's config still holds the password")
 	}
 	if p.accounts[0].client.password != "secret-pass" {
@@ -167,7 +212,7 @@ func TestConfig_PortsSurviveEverywhere(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	root := rootOf(cfg.Customers[0].Host)
+	root := rootOf(cfg.Systems[0].Host)
 	if root != "https://acme.ny.3cx.us:5001" {
 		t.Fatalf("root = %q", root)
 	}
@@ -196,7 +241,7 @@ func TestConfig_PortsSurviveEverywhere(t *testing.T) {
 func TestConfig_TimeoutIsSettableWithinBounds(t *testing.T) {
 	base := func(seconds int) Config {
 		return Config{
-			Customers:      []Customer{{Name: "Acme", Host: "acme.example", Extension: "100", Password: "p"}},
+			Systems:        []System{{Name: "Acme", Host: "acme.example", Extension: "100", Password: "p"}},
 			TimeoutSeconds: seconds, MaxItems: defaultMaxItems, RequestsPerSecond: defaultRPS,
 		}
 	}
@@ -257,17 +302,21 @@ func TestConfig_TimeoutDecodesAsSeconds(t *testing.T) {
 // and the punctuation a name is written back with, so names differing only in
 // those are one name as far as anybody asking is concerned.
 func TestConfig_NamesTheResolverCannotTellApartAreRefused(t *testing.T) {
-	// Each pair collides on the name or the alias quoted beside it.
-	pairs := [][2]Customer{
+	// Each pair collides on the name or the alias quoted beside it. They are
+	// rows of one business, which is what two names that cannot be told apart
+	// amount to: an unset Business column means the row is its own business,
+	// so "Acme Inc" and "Acme Inc." are one business with two phone systems
+	// and one name between them.
+	pairs := [][2]System{
 		{{Name: "Acme Inc", Host: "a.example", Extension: "100", Password: "p"},
 			{Name: "Acme Inc.", Host: "b.example", Extension: "100", Password: "p"}},
 		{{Name: "Acme Dental", Host: "a.example", Extension: "100", Password: "p"},
 			{Name: "Acme  Dental", Host: "b.example", Extension: "100", Password: "p"}},
-		{{Name: "Acme", Aliases: []string{"ADG."}, Host: "a.example", Extension: "100", Password: "p"},
-			{Name: "Globex", Aliases: []string{"adg"}, Host: "b.example", Extension: "100", Password: "p"}},
+		{{Name: "Acme HQ", Customer: "Acme", Aliases: []string{"ADG."}, Host: "a.example", Extension: "100", Password: "p"},
+			{Name: "Acme Branch", Customer: "Acme", Aliases: []string{"adg"}, Host: "b.example", Extension: "100", Password: "p"}},
 	}
 	for _, pair := range pairs {
-		cfg := Config{Customers: pair[:], MaxItems: defaultMaxItems, RequestsPerSecond: defaultRPS}
+		cfg := Config{Systems: pair[:], MaxItems: defaultMaxItems, RequestsPerSecond: defaultRPS}
 		err := cfg.Validate()
 		if err == nil {
 			t.Errorf("%q and %q cannot be told apart and should be refused",
@@ -278,7 +327,7 @@ func TestConfig_NamesTheResolverCannotTellApartAreRefused(t *testing.T) {
 		// and "Acme  Dental" look identical once anything renders them, so a
 		// message naming only the names tells an operator that two things
 		// they cannot tell apart are the same thing.
-		for _, want := range []string{"customer 1", "customer 2", "give one of them a different name"} {
+		for _, want := range []string{"phone system 1", "phone system 2", "a name or alias of its own"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("the refusal should say %q, got %v", want, err)
 			}
