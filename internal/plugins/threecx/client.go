@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,40 @@ type Client struct {
 	mu    sync.Mutex
 	token string
 	until time.Time
+	// margin is how long before expiry the held token is treated as spent.
+	// Held per client rather than taken from the constant because a phone
+	// system that issues a short token would otherwise have every token born
+	// expired; see bearer.
+	margin time.Duration
+
+	// absentMu guards absent, the properties this build of 3CX turned out not
+	// to have. Remembered per phone system because it is a fact about that
+	// build: without it every queue read on an older build would pay a refused
+	// request before the one that works.
+	absentMu sync.RWMutex
+	absent   map[string]bool
+}
+
+// forgetsProperty records that this build does not carry a property, and
+// reports whether that was news.
+func (c *Client) forgetsProperty(name string) bool {
+	c.absentMu.Lock()
+	defer c.absentMu.Unlock()
+	if c.absent == nil {
+		c.absent = map[string]bool{}
+	}
+	if c.absent[name] {
+		return false
+	}
+	c.absent[name] = true
+	return true
+}
+
+// lacks reports whether this build is known not to carry a property.
+func (c *Client) lacks(name string) bool {
+	c.absentMu.RLock()
+	defer c.absentMu.RUnlock()
+	return c.absent[name]
 }
 
 // NewClient builds a client for one customer's phone system. The credential
@@ -88,8 +123,8 @@ type loginAnswer struct {
 	} `json:"Token"`
 }
 
-// bearer returns a token that is good for at least tokenMargin, signing in
-// when there is none or the one held is about to lapse.
+// bearer returns a token that is still good for its margin, signing in when
+// there is none or the one held is about to lapse.
 //
 // One sign-in at a time. Two tool calls arriving together on a cold instance
 // would otherwise both send the password, and the PBX counts failed and
@@ -97,15 +132,36 @@ type loginAnswer struct {
 func (c *Client) bearer(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.token != "" && c.now().Before(c.until.Add(-tokenMargin)) {
+	if c.token != "" && c.now().Before(c.until.Add(-c.margin)) {
 		return c.token, nil
 	}
 	token, life, err := c.login(ctx)
 	if err != nil {
 		return "", err
 	}
-	c.token, c.until = token, c.now().Add(life)
+	c.token, c.until, c.margin = token, c.now().Add(life), marginFor(life)
 	return token, nil
+}
+
+// marginFor is how long before expiry a token of this life is given up.
+//
+// Never more than half of it. A flat minute was right while every phone system
+// answered with an hour, and silently wrong the moment one answered with sixty
+// seconds: the margin then covered the whole life, every held token was born
+// expired, and the client signed in again for every single request -- sending
+// the password each time, adding the best part of a second to every call, and
+// walking a burst of reads straight into the anti-hacking count that exists to
+// stop exactly that. Four of this deployment's phone systems answer with sixty
+// seconds, so this is not hypothetical.
+//
+// Half is deliberately crude. The right margin is however long a request might
+// take, which nothing here knows; what matters is that a short-lived token is
+// still worth holding for part of its life rather than none of it.
+func marginFor(life time.Duration) time.Duration {
+	if life <= 0 {
+		return tokenMargin
+	}
+	return min(tokenMargin, life/2)
 }
 
 // forget drops the held token, so the next call signs in again. Called when
@@ -681,4 +737,57 @@ func (c *counter) Write(p []byte) (int, error) {
 		c.fn(c.got, c.expected)
 	}
 	return n, err
+}
+
+// readWithout runs a read whose $select names fields an older build may not
+// have, dropping any it turns out not to have and reporting which.
+//
+// 3CX refuses the whole query when one named property is unknown, so a field
+// that arrived in a later build takes every read that names it down on every
+// older one -- all of it, not just that field. ComfortPrompts did exactly that
+// to list_queues, get_queue and search_audio_usage on a 20.0.8 build, while
+// the same tools worked on 20.0.9.
+//
+// What is deliberately not done here is guessing from a version number. The
+// build that has a property is the one that answers for it, and asking is both
+// cheaper to maintain and right on a build nobody has seen. The answer is
+// remembered per phone system, so the refused request is paid once rather than
+// on every call.
+//
+// The dropped fields are returned rather than logged, because a result missing
+// half of what a caller asked for has to say so: a queue reported with no
+// comfort prompt because the build cannot say is not a queue with no comfort
+// prompt.
+func readWithout[T any](c *Client, fields []string, run func(selected string) (T, error)) (T, []string, error) {
+	var zero T
+	// Bounded by the field count: each pass either succeeds, fails for another
+	// reason, or learns one more absent field.
+	for range len(fields) + 1 {
+		use := make([]string, 0, len(fields))
+		var dropped []string
+		for _, f := range fields {
+			if c.lacks(f) {
+				dropped = append(dropped, f)
+				continue
+			}
+			use = append(use, f)
+		}
+		out, err := run(strings.Join(use, ","))
+		if err == nil {
+			return out, dropped, nil
+		}
+		name, ok := missingProperty(err)
+		if !ok || !slices.Contains(fields, name) {
+			// Either an ordinary failure, or a property that is not one of
+			// ours to drop -- an $expand's own $select, say. Dropping fields
+			// until an error goes away is how a read quietly stops answering
+			// the question it was asked.
+			return zero, nil, err
+		}
+		if !c.forgetsProperty(name) {
+			// Already known absent and still refused: retrying would loop.
+			return zero, nil, err
+		}
+	}
+	return zero, nil, fmt.Errorf("3cx: this phone system refused every projection of the read")
 }

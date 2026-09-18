@@ -292,10 +292,20 @@ There is no API key. The extension's web-client password is exchanged at
 {"Status":"AuthSuccess","Token":{"access_token":"…","expires_in":3600,"token_type":"Bearer","refresh_token":"…"}}
 ```
 
-The token lasts an hour and is what travels on every read. The password
-crosses the network once an hour and appears nowhere else; the plugin's own
-`Config` has it blanked after construction so a dump of the config cannot carry
-it.
+The token is what travels on every read. The password crosses the network once
+per token and appears nowhere else; the plugin's own `Config` has it blanked
+after construction so a dump of the config cannot carry it.
+
+**How long the token lasts is not a constant, and assuming it was cost a
+sign-in per request.** Most builds answer `expires_in: 3600`. Some answer
+**60**, and the client used to give a token up a flat minute before its expiry
+-- which for a sixty-second token is the whole of it. Every held token was born
+expired, so every single read signed in first: the password on the wire each
+time, the best part of a second added to every call, and a burst of reads
+walking straight into the anti-hacking count that exists to stop exactly that
+pattern. `marginFor` now gives up at most half a token's life, so a short token
+is still worth holding for part of it. The fix is not to trust the number less
+but to stop assuming its size.
 
 Three things about the sign-in are worth knowing:
 
@@ -315,6 +325,15 @@ perfectly well and is refused every listing with a 403, so the on-demand check
 lists one extension after signing in: a wrong address, a wrong password and a
 missing role are then three different sentences rather than one failure inside
 the first tool call.
+
+**A gateway status is not the address being wrong.** A 502, 503 or 504 is the
+phone system's own front end giving up on its back end, and 3CX answers it with
+an HTML error page. Read through the generic summary that becomes "the response
+was an HTML page rather than the API's JSON -- the address may be reaching a web
+server, a proxy or a sign-in page", which is the right sentence for a
+misconfigured host and badly wrong for a query that is merely too wide. They are
+told apart, because the first calls for fixing the address and the second for
+asking again for less.
 
 ## OData, as 3CX speaks it
 
@@ -372,6 +391,29 @@ A property that is null is **omitted** from the response rather than sent as
 inherits the system's -- neither key appears. Decoding into a struct handles
 this; code that ranged over a `map[string]any` and expected every selected key
 would not.
+
+**A property one build has and another does not takes the whole read with it.**
+3CX refuses the entire query when a `$select` names a property the type does not
+carry -- not that field, the query. So a field added in a later build breaks
+every read that names it on every older one: a queue projection naming
+`ComfortPrompts` answered on a 20.0.9 system and refused all nineteen queues on
+a 20.0.8 one, with `Could not find a property named 'ComfortPrompts' on type
+'Pbx.Queue'` and HTTP 400.
+
+`readWithout` handles it by asking rather than by guessing from a version
+number: the read is made, and a refusal naming a property drops that one and is
+tried again. What the build does not carry is remembered per phone system, so
+the refused request is paid once rather than on every call, and the answer names
+the dropped fields in `unavailable` -- because a queue reported with no comfort
+prompt *because the build cannot say* is not a queue with no comfort prompt.
+Only a small core is never dropped (`Id`, `Number`, `Name`); dropping fields
+until an error goes away is how a read quietly stops answering the question it
+was asked.
+
+A version number would have been the obvious alternative and is the wrong one:
+it needs a table of which build introduced which field, that table is wrong the
+moment 3CX ships a build nobody here has seen, and the phone system already
+knows the answer.
 
 ## Where the answer actually is
 
