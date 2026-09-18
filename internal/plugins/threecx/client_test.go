@@ -101,7 +101,16 @@ func TestClient_ExplainsRefusals(t *testing.T) {
 		{404, ``, "does not offer"},
 		{400, `{"error":{"code":"","message":"Could not find a property named 'Nope' on type 'Pbx.User'.","details":[]}}`, "Could not find a property named 'Nope'"},
 		{500, ``, "HTTP 500 with an empty body"},
-		{502, `<html><body>Bad gateway</body></html>`, "HTML page"},
+		// A gateway status is the phone system cutting its own request off,
+		// and it arrives as an HTML error page. It used to read as "the
+		// address may be reaching a web server rather than the phone system",
+		// which is the right sentence for a misconfigured host and the wrong
+		// one here, where the address is right and the query is too wide.
+		{502, `<html><body>Bad gateway</body></html>`, "took too long"},
+		{504, `<html><body>Gateway Time-out</body></html>`, "narrower time window"},
+		// And the HTML-page sentence is still there for the case it was
+		// written for: something that is not the API answering at all.
+		{405, `<html><body>Method Not Allowed</body></html>`, "HTML page"},
 	}
 	for _, c := range cases {
 		err := explainRequestFailure(c.status, "Users", []byte(c.body))

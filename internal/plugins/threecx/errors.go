@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -82,6 +83,43 @@ func missing(err error) bool {
 	return errors.As(err, &n)
 }
 
+// unknownProperty is a $select naming a field this build of 3CX does not have.
+//
+// A type rather than a sentence, for the same reason as notOffered: "this
+// build does not carry that field" and "the query was wrong" need different
+// answers. 3CX refuses the whole read when one named property is unknown, so a
+// field added in a later build takes every queue on an older one down with it
+// -- which is what ComfortPrompts did. Naming the property is what lets the
+// read be made again without it.
+type unknownProperty struct {
+	name string
+	typ  string
+	text string
+}
+
+func (u *unknownProperty) Error() string { return u.text }
+
+// missingProperty reports the property an error says does not exist, if that
+// is what it says.
+func missingProperty(err error) (string, bool) {
+	var u *unknownProperty
+	if errors.As(err, &u) {
+		return u.name, true
+	}
+	return "", false
+}
+
+// unknownPropertyPattern matches the OData refusal 3CX sends for a $select
+// naming a property a type does not have:
+//
+//	The query specified in the URI is not valid. Could not find a property
+//	named 'ComfortPrompts' on type 'Pbx.Queue'.
+//
+// Matched on the message rather than on a code because the code is empty in
+// every refusal a live system has sent.
+var unknownPropertyPattern = regexp.MustCompile(
+	`Could not find a property named '([^']+)' on type '([^']+)'`)
+
 // explainRequestFailure turns a failed read into a sentence that says what to
 // do about it.
 //
@@ -104,9 +142,36 @@ func explainRequestFailure(status int, path string, body []byte) error {
 			"under Users, or sign in as one that has it", path)
 	case 404:
 		return &notOffered{path: path}
+	case 400:
+		// A named property this build does not have. Reported as itself so the
+		// read can be made again without it; the sentence is unchanged, so a
+		// 400 that is not this still reads as it always did.
+		text := fmt.Sprintf("3cx: the phone system refused %s: %s", path, summarise(status, body))
+		if m := unknownPropertyPattern.FindSubmatch(body); m != nil {
+			return &unknownProperty{name: string(m[1]), typ: string(m[2]), text: text}
+		}
+		return errors.New(text)
 	case 429:
 		return fmt.Errorf("3cx: the phone system is rate limiting us (HTTP 429); " +
 			"wait a few seconds before asking again")
+	}
+	// A gateway status is the phone system's own front end giving up on its
+	// back end, not the back end failing. It matters because the two call for
+	// opposite things: a 500 is worth reporting, and this is worth asking again
+	// for less. 3CX answers it with an HTML error page, which the generic
+	// summary reads as "the address may be reaching a web server rather than
+	// the phone system" -- true of a misconfigured host and badly wrong here,
+	// where the address is right and the query is simply too wide. One
+	// customer's CallHistoryView answers a one-hour window in 15 seconds, a
+	// whole day in 50, and is cut off at 60 with this status; no timeout on our
+	// side can change that, because the limit is theirs.
+	if status == 502 || status == 503 || status == 504 {
+		return fmt.Errorf("3cx: the phone system took too long over %s and its own "+
+			"front end cut the request off (HTTP %d). The address is fine and nothing "+
+			"is broken -- the query is more than this system can answer in the time it "+
+			"allows itself. Ask for less: a narrower time window is what helps most, "+
+			"then fewer rows. Filtering by extension or number alone does not, because "+
+			"the phone system reads the whole history before it filters", path, status)
 	}
 	if status >= 500 {
 		return fmt.Errorf("3cx: the phone system failed answering %s: %s", path, summarise(status, body))

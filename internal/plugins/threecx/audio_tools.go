@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/spoked/mcpd/internal/plugins"
@@ -67,6 +68,36 @@ const queueAudioFields = "OnHoldFile,PromptSet,EnableIntro,IntroFile,PlayFullPro
 const queueFields = "Id,Number,Name,PollingStrategy,RingTimeout,MasterTimeout," +
 	"MaxCallersInQueue,SLATime,IsRegistered,WrapUpTime,PriorityQueue,ForwardNoAnswer," +
 	queueAudioFields
+
+// queueCoreFields are the three a queue is useless without: without a number
+// there is nothing to name it by, and a read that has lost those has not
+// degraded, it has failed. Everything else in queueFields may be dropped when
+// the build does not carry it; see readWithout.
+const queueCoreFields = "Id,Number,Name"
+
+// queueOptionalFields is queueFields less the core, as a list, which is what
+// readWithout drops from one at a time.
+func queueOptionalFields() []string {
+	var out []string
+	core := strings.Split(queueCoreFields, ",")
+	for _, f := range strings.Split(queueFields, ",") {
+		if !slices.Contains(core, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// readQueues runs a queue read with the projection this build will accept.
+//
+// Shared by the listing, the detailed read and the audio search so that all
+// three learn from one refusal and none of them can be left naming a field the
+// others have given up on.
+func readQueues[T any](c *Client, run func(selected string) (T, error)) (T, []string, error) {
+	return readWithout(c, queueOptionalFields(), func(optional string) (T, error) {
+		return run(queueCoreFields + "," + optional)
+	})
+}
 
 const queueExpand = "Agents($select=Id,Number,Name,SkillGroup),Managers($select=Id,Number,Name)"
 
@@ -212,12 +243,12 @@ func (p *Plugin) getQueue(ctx context.Context, args queueArgs) (Queue, error) {
 	// By number first, because that is what a queue is identified by and it
 	// cannot match two. A name is tried only when no number matched, so a
 	// queue named after another's number can never be returned in its place.
-	rec, found, err := p.readQueue(ctx, acct, "Number eq "+odataString(asked))
+	rec, found, absent, err := p.readQueue(ctx, acct, "Number eq "+odataString(asked))
 	if err != nil {
 		return Queue{}, acct.call(err)
 	}
 	if !found {
-		rec, found, err = p.readQueue(ctx, acct, "Name eq "+odataString(asked))
+		rec, found, absent, err = p.readQueue(ctx, acct, "Name eq "+odataString(asked))
 		if err != nil {
 			return Queue{}, acct.call(err)
 		}
@@ -249,6 +280,15 @@ func (p *Plugin) getQueue(ctx context.Context, args queueArgs) (Queue, error) {
 		},
 	}
 
+	// A property this build does not carry was never read, so the field it
+	// would have filled says nothing -- which is not the same as the queue
+	// having nothing set. Named here in the same words as the rest, because a
+	// reader of this answer is not reading 3CX's schema.
+	for _, f := range absent {
+		out.Unavailable = append(out.Unavailable,
+			fmt.Sprintf("%s, which this build of the phone system does not report", f))
+	}
+
 	// What the queue inherits is only knowable from the system's own setting,
 	// and a build that does not serve it leaves the question open rather than
 	// answered wrongly.
@@ -270,14 +310,22 @@ func (p *Plugin) getQueue(ctx context.Context, args queueArgs) (Queue, error) {
 	return out, nil
 }
 
-// readQueue reads one queue by an OData filter.
-func (p *Plugin) readQueue(ctx context.Context, acct *account, filter string) (queueRecord, bool, error) {
-	q := url.Values{
-		"$select": {queueFields},
-		"$expand": {queueExpand},
-		"$filter": {filter},
+// readQueue reads one queue by an OData filter, with whatever projection this
+// build accepts. The third return is the properties it does not carry.
+func (p *Plugin) readQueue(ctx context.Context, acct *account, filter string) (queueRecord, bool, []string, error) {
+	type found struct {
+		rec queueRecord
+		ok  bool
 	}
-	return one[queueRecord](ctx, acct.client, "Queues", q)
+	got, absent, err := readQueues(acct.client, func(selected string) (found, error) {
+		rec, ok, err := one[queueRecord](ctx, acct.client, "Queues", url.Values{
+			"$select": {selected},
+			"$expand": {queueExpand},
+			"$filter": {filter},
+		})
+		return found{rec, ok}, err
+	})
+	return got.rec, got.ok, absent, err
 }
 
 // musicOnHoldOf works out what a queue plays and where it comes from.
@@ -715,11 +763,15 @@ func (p *Plugin) audioSources() []audioSource {
 }
 
 func (p *Plugin) findInQueues(ctx context.Context, acct *account, wanted string) ([]AudioUsage, error) {
-	q := url.Values{
-		"$select":  {"Id,Number,Name," + queueAudioFields},
-		"$orderby": {"Number"},
-	}
-	got, err := list[queueRecord](ctx, acct.client, "Queues", q, p.cfg.MaxItems)
+	// Through the same projection as the other two queue reads: a build that
+	// cannot answer for a field must not turn a search for an audio file into
+	// a refusal that reads as the file being unused.
+	got, _, err := readQueues(acct.client, func(selected string) (listing[queueRecord], error) {
+		return list[queueRecord](ctx, acct.client, "Queues", url.Values{
+			"$select":  {selected},
+			"$orderby": {"Number"},
+		}, p.cfg.MaxItems)
+	})
 	if err != nil {
 		return nil, err
 	}

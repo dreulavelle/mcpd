@@ -165,6 +165,12 @@ type QueuesResult struct {
 	Source
 	Queues   []QueueRow `json:"queues"`
 	Returned int        `json:"returned"`
+	// Unavailable names the queue properties this build of 3CX does not carry,
+	// which were dropped from the read so the rest could be answered. A field
+	// missing from here is a field the phone system genuinely reported; a
+	// field named here was never asked about successfully, and the queue rows
+	// say nothing about it either way.
+	Unavailable []string `json:"unavailable,omitempty"`
 	truncation
 }
 
@@ -175,12 +181,13 @@ func (p *Plugin) listQueues(ctx context.Context, args queuesArgs) (QueuesResult,
 	}
 	// The same record and the same projection the detailed read uses, so the
 	// summary here and get_queue can never disagree about what a queue plays.
-	q := url.Values{
-		"$select":  {queueFields},
-		"$expand":  {queueExpand},
-		"$orderby": {"Number"},
-	}
-	got, err := list[queueRecord](ctx, acct.client, "Queues", q, p.cfg.MaxItems)
+	got, absent, err := readQueues(acct.client, func(selected string) (listing[queueRecord], error) {
+		return list[queueRecord](ctx, acct.client, "Queues", url.Values{
+			"$select":  {selected},
+			"$expand":  {queueExpand},
+			"$orderby": {"Number"},
+		}, p.cfg.MaxItems)
+	})
 	if err != nil {
 		return QueuesResult{}, acct.call(err)
 	}
@@ -195,6 +202,7 @@ func (p *Plugin) listQueues(ctx context.Context, args queuesArgs) (QueuesResult,
 		})
 	}
 	out.Queues, out.truncation = bound(out.Queues, got.reason())
+	out.Unavailable = absent
 	out.Returned = len(out.Queues)
 	acct.note(nil)
 	out.Source = acct.source()
