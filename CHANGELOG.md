@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.1](https://github.com/dreulavelle/mcpd/compare/v0.28.0...v0.28.1) (2026-09-18)
+
+
+### Fixes
+
+* **threecx:** queues on older builds, and one sign-in per burst ([99c290f](https://github.com/dreulavelle/mcpd/commit/99c290f252744f033582898e70d0e9f3582a0e70))
+
 ## [0.28.0](https://github.com/dreulavelle/mcpd/compare/v0.27.2...v0.28.0) (2026-09-17)
 
 
