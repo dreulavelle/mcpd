@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.2](https://github.com/dreulavelle/mcpd/compare/v0.28.1...v0.28.2) (2026-09-21)
+
+
+### Fixes
+
+* **tunnel:** give every tunnel command its own MCP session ([665d1d7](https://github.com/dreulavelle/mcpd/commit/665d1d709f5af47ce7f2a73f85d4af7f3b536521))
+
 ## [0.28.1](https://github.com/dreulavelle/mcpd/compare/v0.28.0...v0.28.1) (2026-09-18)
 
 
