@@ -71,9 +71,9 @@ func (c observedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 // inMemoryRuntime is the embedded SDK, driving an MCP server in this process.
 type inMemoryRuntime struct {
 	client *tunnelclient.Client
-	// served closes when the MCP server goroutine has returned, so Stop can
-	// wait for it rather than leaving it running past shutdown.
-	served chan struct{}
+	// served closes when every MCP server session has ended, so Stop can
+	// wait for them rather than leaving them running past shutdown.
+	served <-chan struct{}
 }
 
 func newInMemoryRuntime(cfg Config, server *mcp.Server, runCtx context.Context, log *slog.Logger, out logWriter, observe func()) (runtime, error) {
@@ -83,11 +83,7 @@ func newInMemoryRuntime(cfg Config, server *mcp.Server, runCtx context.Context, 
 		// the process rather than the tunnel.
 		return nil, fmt.Errorf("tunnel: an in-memory binding needs an MCP server")
 	}
-	serverSide, tunnelTransport := mcp.NewInMemoryTransports()
-	var serverTransport mcp.Transport = serverSide
-	if observe != nil {
-		serverTransport = observedTransport{inner: serverSide, observe: observe}
-	}
+	sessions := newCommandSessions(runCtx, server, observe)
 
 	client, err := tunnelclient.New(tunnelclient.Config{
 		TunnelID:            cfg.TunnelID,
@@ -95,19 +91,11 @@ func newInMemoryRuntime(cfg Config, server *mcp.Server, runCtx context.Context, 
 		ControlPlaneBaseURL: cfg.ControlPlaneBaseURL,
 		LogLevel:            cfg.LogLevel,
 		LogWriter:           out,
-	}, tunnelTransport)
+	}, sessions)
 	if err != nil {
 		return nil, err
 	}
-
-	r := inMemoryRuntime{client: client, served: make(chan struct{})}
-	go func() {
-		defer close(r.served)
-		if err := server.Run(runCtx, serverTransport); err != nil && runCtx.Err() == nil {
-			log.Error("tunnel MCP server stopped", "error", err)
-		}
-	}()
-	return r, nil
+	return inMemoryRuntime{client: client, served: sessions.done}, nil
 }
 
 func (r inMemoryRuntime) Start(ctx context.Context) error { return r.client.Start(ctx) }
@@ -115,7 +103,7 @@ func (r inMemoryRuntime) Ready() <-chan struct{}          { return r.client.Read
 
 func (r inMemoryRuntime) Stop(ctx context.Context) error {
 	err := r.client.Stop(ctx)
-	// The server returns once the run context is cancelled, which the manager
+	// The sessions end once the run context is cancelled, which the manager
 	// does before stopping. Waiting for it here keeps "stopped" meaning the
 	// whole tunnel is stopped.
 	select {
