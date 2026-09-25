@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ToolCallStore is the record of who called what.
@@ -38,7 +39,15 @@ type ToolCall struct {
 	// Not zero: a fast call and a refused one are different facts.
 	DurationUS    *int64 `json:"duration_us,omitempty"`
 	CorrelationID string `json:"correlation_id,omitempty"`
+	// Reason is why a call that did not succeed failed, as its caller was
+	// told. Empty for a success, and for calls recorded before it was kept.
+	Reason string `json:"reason,omitempty"`
 }
+
+// maxReason bounds a stored reason. A tool's error is a sentence or two; an
+// upstream that answers a failure with a whole page must not grow the ledger
+// by that page on every call.
+const maxReason = 2000
 
 // Record writes one call.
 //
@@ -50,14 +59,27 @@ func (s *ToolCallStore) Record(ctx context.Context, c ToolCall) error {
 		at = s.now()
 	}
 	_, err := s.db.Writer().ExecContext(ctx, `
-		INSERT INTO tool_calls (at, principal, role, plugin, tool, outcome, duration_us, correlation_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO tool_calls (at, principal, role, plugin, tool, outcome, duration_us, correlation_id, reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		at.UnixMilli(), c.Principal, c.Role, c.Plugin, c.Tool, c.Outcome,
-		c.DurationUS, c.CorrelationID)
+		c.DurationUS, c.CorrelationID, boundReason(c.Reason))
 	if err != nil {
 		return fmt.Errorf("sqlite: record tool call: %w", err)
 	}
 	return nil
+}
+
+// boundReason trims a reason to maxReason bytes without splitting a rune.
+func boundReason(r string) string {
+	r = strings.TrimSpace(r)
+	if len(r) <= maxReason {
+		return r
+	}
+	cut := maxReason
+	for cut > 0 && !utf8.RuneStart(r[cut]) {
+		cut--
+	}
+	return r[:cut] + "…"
 }
 
 // ToolCallFilter narrows a read. Every field is optional; the zero filter is
@@ -103,7 +125,7 @@ func (s *ToolCallStore) Calls(ctx context.Context, f ToolCallFilter) ([]ToolCall
 		add("id < ?", f.Before)
 	}
 
-	query := `SELECT id, at, principal, role, plugin, tool, outcome, duration_us, correlation_id
+	query := `SELECT id, at, principal, role, plugin, tool, outcome, duration_us, correlation_id, reason
 	            FROM tool_calls`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
@@ -133,7 +155,7 @@ func (s *ToolCallStore) Calls(ctx context.Context, f ToolCallFilter) ([]ToolCall
 			duration sql.NullInt64
 		)
 		if err := rows.Scan(&c.ID, &at, &c.Principal, &c.Role, &c.Plugin, &c.Tool,
-			&c.Outcome, &duration, &c.CorrelationID); err != nil {
+			&c.Outcome, &duration, &c.CorrelationID, &c.Reason); err != nil {
 			return nil, fmt.Errorf("sqlite: scan tool call: %w", err)
 		}
 		c.At = time.UnixMilli(at)

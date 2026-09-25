@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { copyText } from "@/lib/clipboard";
+import { useQueryParam } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
 /**
@@ -153,7 +154,16 @@ export function Logs() {
   const [connected, setConnected] = useState(false);
   const [paused, setPaused] = useState(false);
   const [level, setLevel] = useState<Level>("ALL");
-  const [needle, setNeedle] = useState("");
+  // In the address, so a link -- a failed call's "Find it in the logs" --
+  // can arrive with it set. Read from the address once and kept locally
+  // after that: the address updates a tick behind, and a box bound to it
+  // directly dropped letters from anything typed quickly.
+  const [q, setQ] = useQueryParam("q");
+  const [needle, setNeedleState] = useState(q);
+  const setNeedle = useCallback((next: string) => {
+    setNeedleState(next);
+    setQ(next);
+  }, [setQ]);
   // "" is every source. A chip per source seen so far, because "which part
   // of the host is talking" is the question being asked while scanning.
   const [source, setSource] = useState("");

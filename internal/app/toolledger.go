@@ -40,7 +40,7 @@ type toolObserver struct {
 // a WAL-mode SQLite is far below the cost of the upstream call it describes. A
 // buffer would trade that for losing the most recent calls in a crash -- which
 // are the ones somebody investigating an incident wants most.
-func (o *toolObserver) ToolCall(ctx context.Context, plugin, tool, outcome string, d time.Duration) {
+func (o *toolObserver) ToolCall(ctx context.Context, plugin, tool, outcome string, d time.Duration, failure error) {
 	o.metrics.ToolCall(ctx, plugin, tool, outcome, d)
 
 	// The hour the call started, not the hour it finished reporting. The size
@@ -69,6 +69,7 @@ func (o *toolObserver) ToolCall(ctx context.Context, plugin, tool, outcome strin
 		Outcome:       outcome,
 		DurationUS:    measured(outcome, d),
 		CorrelationID: observability.CorrelationID(ctx),
+		Reason:        reasonOf(failure),
 	}); err != nil {
 		// Logged and swallowed. The call itself either worked or did not, and
 		// that answer belongs to the caller; failing a tool call because the
@@ -76,6 +77,14 @@ func (o *toolObserver) ToolCall(ctx context.Context, plugin, tool, outcome strin
 		o.log.WarnContext(ctx, "could not record a tool call",
 			"plugin", plugin, "tool", tool, "error", err)
 	}
+}
+
+// reasonOf is the text a failed call's caller was given, or "" for a success.
+func reasonOf(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // measured returns the duration only for a call that actually ran.

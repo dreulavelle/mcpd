@@ -24,6 +24,7 @@ import {
 } from "@/components/chrome";
 import { Evidence, EvidenceText } from "@/components/evidence";
 import { unverifiedWorkspaces } from "@/components/pairing";
+import { CallDetail } from "@/components/call-detail";
 import { Chip, StatusDot, type Tone } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -595,6 +596,7 @@ function Chart({ values, errors }: { values: number[]; errors: number[] }) {
 function RecentCalls({ principal, plugin }: { principal?: string; plugin: string }) {
   const [calls, setCalls] = useState<ToolCall[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
   const mayRead = useCan("history:read");
   useEffect(() => {
     if (!mayRead || !principal) return;
@@ -617,14 +619,39 @@ function RecentCalls({ principal, plugin }: { principal?: string; plugin: string
         <p className="text-xs text-muted-foreground">Nothing in the last twelve hours.</p>
       ) : (
         <ul className="space-y-1">
-          {calls.map((c) => (
-            <li key={c.id} className="flex items-center gap-2 text-xs">
-              <StatusDot tone={c.outcome === "ok" ? "good" : c.outcome === "denied" ? "attention" : c.outcome === "error" ? "problem" : "neutral"} />
-              <span className="min-w-0 flex-1 truncate font-mono">{plugin ? c.tool : `${c.plugin}_${c.tool}`}</span>
-              <span className="text-muted-foreground">{c.outcome === "ok" ? "" : c.outcome.replace("_", " ")}</span>
-              <span className="whitespace-nowrap text-muted-foreground">{relative(c.at)}</span>
-            </li>
-          ))}
+          {calls.map((c) => {
+            const line = (
+              <>
+                <StatusDot tone={c.outcome === "ok" ? "good" : c.outcome === "denied" ? "attention" : c.outcome === "error" ? "problem" : "neutral"} />
+                <span className="min-w-0 flex-1 truncate font-mono">{plugin ? c.tool : `${c.plugin}_${c.tool}`}</span>
+                <span className="text-muted-foreground">{c.outcome === "ok" ? "" : c.outcome.replace("_", " ")}</span>
+                <span className="whitespace-nowrap text-muted-foreground">{relative(c.at)}</span>
+              </>
+            );
+            // A failed call opens to say why. It said "error" and nothing
+            // else, and the reason was the one thing worth reading.
+            return (
+              <li key={c.id} className="text-xs">
+                {c.outcome === "ok" ? (
+                  <div className="flex items-center gap-2">{line}</div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-sm text-left hover:bg-accent/60"
+                      aria-expanded={open === c.id}
+                      onClick={() => setOpen(open === c.id ? null : c.id)}
+                    >
+                      {line}
+                    </button>
+                    {open === c.id && (
+                      <div className="mt-1 mb-2 ml-4"><CallDetail call={c} /></div>
+                    )}
+                  </>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       <Link to={href} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">

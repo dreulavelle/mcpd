@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spoked/mcpd/internal/auth"
@@ -110,9 +111,17 @@ func BenchmarkToolCallBySize(b *testing.B) {
 func BenchmarkToolCallObserved(b *testing.B) {
 	for _, size := range []int{512, 20_000, MaxResultBytes} {
 		b.Run(fmt.Sprintf("%dB", size), func(b *testing.B) {
-			callBench(b, mountBenchTool(b, size, observability.NewMetrics()))
+			callBench(b, mountBenchTool(b, size, metricsObserver{observability.NewMetrics()}))
 		})
 	}
+}
+
+// metricsObserver is the metrics alone, as a ToolObserver: the counters take
+// no failure reason, which only the call ledger keeps.
+type metricsObserver struct{ *observability.Metrics }
+
+func (m metricsObserver) ToolCall(ctx context.Context, plugin, tool, outcome string, d time.Duration, _ error) {
+	m.Metrics.ToolCall(ctx, plugin, tool, outcome, d)
 }
 
 // BenchmarkMarshalledSize isolates the measurement from everything around it.
