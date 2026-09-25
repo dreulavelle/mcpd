@@ -37,6 +37,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useConfirm } from "@/components/confirm";
+import { Disclosure } from "@/components/disclosure";
 
 /**
  * The ChatGPT accounts this host connects to.
@@ -80,6 +81,8 @@ export function ChatGPT() {
         lede="One account per OpenAI organisation, with its keys and the identity its connectors use."
         actions={rows && <Button onClick={() => setAdding(true)}>Add account</Button>}
       />
+
+      <HowItFits />
 
       {error && <Notice tone="problem">{error}</Notice>}
 
@@ -433,11 +436,11 @@ function AccountDialog({ account, onClose, onSaved }: {
             <div className="space-y-1.5">
               <Label htmlFor="acct-org">Organization ID</Label>
               <Input
-                id="acct-org" value={orgID} placeholder="org_…"
+                id="acct-org" value={orgID} placeholder="org-…"
                 onChange={(e) => setOrgID(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Goes with the admin key. Starts <span className="font-medium">org_</span>.
+                Goes with the admin key. Starts <span className="font-medium">org-</span>.
               </p>
             </div>
           </div>
@@ -579,5 +582,74 @@ export function CheckResult({ check, onClose }: {
         />
       )}
     </div>
+  );
+}
+
+const TUNNEL_GUIDE = "https://developers.openai.com/api/docs/guides/secure-mcp-tunnels";
+const ORG_SETTINGS = "https://platform.openai.com/settings/organization/general";
+
+/**
+ * What an organisation, a workspace and the two keys are, and how OpenAI
+ * checks them against each other.
+ *
+ * Only what OpenAI documents or what its API was seen to do. Where to find a
+ * workspace id is left out on purpose: OpenAI does not say, and a guess here
+ * would be read as fact.
+ */
+function HowItFits() {
+  return (
+    <Disclosure summary="How organisations, workspaces and keys fit together" className="mb-4">
+      <dl className="grid gap-3 text-sm sm:grid-cols-[10rem_1fr]">
+        <dt className="font-medium">Organization ID</dt>
+        <dd className="text-muted-foreground">
+          Starts with <span className="font-mono">org-</span>. It names the OpenAI Platform
+          organisation that tunnels are made in. It is under{" "}
+          <a href={ORG_SETTINGS} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2">
+            Organization › General
+          </a>{" "}
+          on platform.openai.com.
+        </dd>
+
+        <dt className="font-medium">Workspace ID</dt>
+        <dd className="text-muted-foreground">
+          Names a ChatGPT workspace. A tunnel listed in a workspace appears in that workspace's
+          connector list. A tunnel made in the organisation alone may not appear in a ChatGPT
+          Enterprise or Edu workspace. Find workspaces, on an account, lists the workspaces this
+          organisation's tunnels already use.
+        </dd>
+
+        <dt className="font-medium">Pairing</dt>
+        <dd className="text-muted-foreground">
+          Before OpenAI makes a tunnel that names a workspace, it checks that the workspace belongs
+          to the organisation. If it cannot confirm that, it refuses, and only OpenAI Support can
+          review it. mcpd checks each workspace when an account is saved and shows the result
+          beside it.
+        </dd>
+
+        <dt className="font-medium">Default workspace</dt>
+        <dd className="text-muted-foreground">
+          New tunnels go in the account's default workspace unless you choose another when making
+          one.
+        </dd>
+
+        <dt className="font-medium">OpenAI key</dt>
+        <dd className="text-muted-foreground">
+          Runs this account's tunnels. It needs Tunnels: Read and Use.
+        </dd>
+
+        <dt className="font-medium">Admin key</dt>
+        <dd className="text-muted-foreground">
+          Makes and removes tunnels. It needs Tunnels: Read and Manage, and has to belong to the
+          organisation named above. Without one, tunnels can still run but cannot be made here.
+        </dd>
+      </dl>
+      <p className="text-xs text-muted-foreground">
+        From OpenAI's{" "}
+        <a href={TUNNEL_GUIDE} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2">
+          Secure MCP Tunnel guide
+        </a>
+        .
+      </p>
+    </Disclosure>
   );
 }

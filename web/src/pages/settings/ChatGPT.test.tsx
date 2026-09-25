@@ -290,3 +290,19 @@ describe("an account's workspaces", () => {
     expect(screen.getByText("Needs OpenAI Support")).toBeInTheDocument();
   });
 });
+
+// The two ids and two keys are the part of this page people get wrong, so the
+// page says what each is -- folded away, so it costs nothing once known.
+describe("the explanation at the top of the page", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("says what each id and key is, and where OpenAI documents it", async () => {
+    stub([account()]);
+    renderWith(<ChatGPT />);
+    await userEvent.click(await screen.findByText("How organisations, workspaces and keys fit together"));
+    expect(screen.getByText(/checks that the workspace belongs/)).toBeInTheDocument();
+    expect(screen.getByText(/Tunnels: Read and Manage/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Secure MCP Tunnel guide" }))
+      .toHaveAttribute("href", "https://developers.openai.com/api/docs/guides/secure-mcp-tunnels");
+  });
+});

@@ -146,7 +146,7 @@ const EXPLANATIONS: Record<OpenAIReason, Explanation> = {
   openai_org_id_rejected: {
     title: "OpenAI did not accept that organization ID",
     lede:
-      "It begins with org_. An organisation name, an email address or a " +
+      "It begins with org-. An organisation name, an email address or a " +
       "project ID will not work in its place.",
     steps: [
       {
