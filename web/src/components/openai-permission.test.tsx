@@ -112,6 +112,6 @@ describe("OpenAI refusals", () => {
 
   it("says what an organization ID looks like", () => {
     render(<OpenAIPermissionDialog reason="openai_org_id_rejected" onClose={() => {}} />);
-    expect(screen.getByText(/begins with org_/)).toBeInTheDocument();
+    expect(screen.getByText(/begins with org-/)).toBeInTheDocument();
   });
 });
