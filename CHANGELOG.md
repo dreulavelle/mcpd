@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/dreulavelle/mcpd/compare/v0.30.0...v0.31.0) (2026-09-25)
+
+
+### Features
+
+* **activity:** say why a failed call failed ([299322e](https://github.com/dreulavelle/mcpd/commit/299322e57b12e325855c790dda5a0967d81fb51e))
+
 ## [0.30.0](https://github.com/dreulavelle/mcpd/compare/v0.29.0...v0.30.0) (2026-09-25)
 
 
