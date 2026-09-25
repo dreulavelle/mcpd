@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { copyShortcut, copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
+import { Evidence } from "@/components/evidence";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -18,9 +19,17 @@ export const OPENAI_REASONS = [
   "openai_admin_key_rejected",
   "openai_tunnels_manage_required",
   "openai_org_id_rejected",
+  "openai_workspace_refused",
 ] as const;
 
 export type OpenAIReason = (typeof OPENAI_REASONS)[number];
+
+/**
+ * One refusal as a page holds it: the reason to lay out, the server's
+ * sentence, and what OpenAI itself said -- which goes under Technical
+ * details, because its request id is what OpenAI can look the refusal up by.
+ */
+export type Refusal = { reason: OpenAIReason; detail: string; upstream?: string };
 
 export function isOpenAIReason(code: string): code is OpenAIReason {
   return (OPENAI_REASONS as readonly string[]).includes(code);
@@ -29,6 +38,7 @@ export function isOpenAIReason(code: string): code is OpenAIReason {
 const ROLES_URL = "https://platform.openai.com/settings/organization/people/roles";
 const ADMIN_KEYS_URL = "https://platform.openai.com/settings/organization/admin-keys";
 const GENERAL_URL = "https://platform.openai.com/settings/organization/general";
+const CHATGPT_SETTINGS = "/settings/chatgpt";
 
 type Step = { do: string; where?: { label: string; href: string } };
 
@@ -81,6 +91,41 @@ const EXPLANATIONS: Record<OpenAIReason, Explanation> = {
     footnote:
       "The request above is only needed if your role is the problem — an owner already has these, and only an owner can grant them to someone else.",
   },
+  // The Check used to pass on an account like this: its probe named no
+  // workspace, and the refusal that followed at Make said the key lacked a
+  // permission the Check had just shown it has. The server now tells the two
+  // apart by making the same tunnel without the workspace.
+  openai_workspace_refused: {
+    title: "OpenAI refused the workspace, not the key",
+    lede:
+      "The same admin key made a tunnel when no workspace was named, so its " +
+      "permissions are fine. What OpenAI refused is listing the tunnel in the " +
+      "workspace saved on this ChatGPT account.",
+    steps: [
+      {
+        do:
+          "Check the workspace ID saved on the account is the ChatGPT " +
+          "workspace this account's connectors belong to, and that it has not " +
+          "changed.",
+        where: { label: "Settings → ChatGPT", href: CHATGPT_SETTINGS },
+      },
+      {
+        do:
+          "Check that workspace is still connected to the same OpenAI " +
+          "organisation as the admin key. A key can only list tunnels in " +
+          "workspaces its own organisation is connected to.",
+        where: { label: "Organization → General", href: GENERAL_URL },
+      },
+      {
+        do:
+          "If the workspace is right and still refused, send OpenAI the " +
+          "technical details below. The request ID there is what they look " +
+          "it up by.",
+      },
+    ],
+    footnote:
+      "Removing the workspace from the account lets the tunnel be made, but a tunnel with no workspace does not appear in an Enterprise or Edu workspace.",
+  },
   openai_admin_key_rejected: {
     title: "OpenAI did not recognise that admin key",
     lede:
@@ -118,10 +163,12 @@ const EXPLANATIONS: Record<OpenAIReason, Explanation> = {
  * this is several paragraphs and a form is the wrong place for them.
  */
 export function OpenAIPermissionDialog({
-  reason, detail, onClose,
+  reason, detail, upstream, onClose,
 }: {
   reason: OpenAIReason;
   detail?: string;
+  /** What OpenAI said, shown under Technical details. */
+  upstream?: string;
   onClose: () => void;
 }) {
   // "" until pressed, then what actually happened. A button that reports
@@ -221,6 +268,8 @@ export function OpenAIPermissionDialog({
         {it.footnote && (
           <p className="text-xs text-muted-foreground">{it.footnote}</p>
         )}
+
+        <Evidence detail={upstream} />
 
         <DialogFooter>
           <Button type="button" onClick={onClose}>Close</Button>

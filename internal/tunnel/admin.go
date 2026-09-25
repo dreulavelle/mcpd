@@ -95,7 +95,6 @@ func (d *Directory) List(ctx context.Context) ([]TunnelInfo, error) {
 	return out, nil
 }
 
-// Create makes a new tunnel and returns it.
 // Create makes a tunnel, optionally listed in a ChatGPT workspace.
 //
 // The workspace matters more than it looks. A tunnel associated only with a
@@ -219,23 +218,48 @@ const (
 	ReasonTunnelsManageRequired = "openai_tunnels_manage_required"
 	// ReasonOrgIDRejected: the organization id is not one.
 	ReasonOrgIDRejected = "openai_org_id_rejected"
+	// ReasonWorkspaceRefused: the key can make tunnels in its organisation,
+	// and OpenAI would not list one in a workspace the account names. Told
+	// apart from ReasonTunnelsManageRequired by making the same tunnel
+	// without the workspace, because OpenAI answers both with the same 403 --
+	// and saying "the key lacks the permission" right after the account's
+	// Check proved it has it sent somebody to regenerate a key that was fine.
+	ReasonWorkspaceRefused = "openai_workspace_refused"
 )
 
 // Refused builds a refusal with the same reason and a fuller sentence, for a
 // caller that has learned something the control plane's one line did not
 // say -- such as that the same key can list tunnels and so lacks only the
 // scope to make them.
-func Refused(reason, msg string) error {
-	return &refusal{reason: reason, msg: msg}
+//
+// cause is the refusal it replaces, so what OpenAI itself said travels with
+// the new sentence rather than being lost to it. It may be nil.
+func Refused(reason, msg string, cause error) error {
+	return &refusal{reason: reason, msg: msg, upstream: Upstream(cause)}
 }
 
 // refusal is an error that names why OpenAI said no.
 type refusal struct {
 	reason string
 	msg    string
+	// upstream is OpenAI's own account of the refusal -- status, code,
+	// message and x-request-id -- with the key removed. It is evidence, not
+	// the sentence: it goes under Technical details, and it is the one thing
+	// OpenAI's support can look a request up by.
+	upstream string
 }
 
 func (r *refusal) Error() string { return r.msg }
+
+// Upstream reports what OpenAI said when it refused, or "" when the error is
+// not a refusal or carried nothing.
+func Upstream(err error) string {
+	var r *refusal
+	if errors.As(err, &r) {
+		return r.upstream
+	}
+	return ""
+}
 
 // Reason reports why OpenAI refused, or "" for anything else.
 //
@@ -262,12 +286,17 @@ func (d *Directory) explain(err error) error {
 		return nil
 	}
 
+	// What OpenAI said, kept beside the sentence that replaces it. Dropping
+	// it left a 403 with nothing to tell a missing permission from a refused
+	// workspace, and nothing to quote to OpenAI.
+	upstream := redactKey(err, d.adminKey).Error()
+
 	var req *tcadmin.RequestError
 	if errors.As(err, &req) {
 		switch req.StatusCode {
 		case http.StatusUnauthorized:
 			return &refusal{ReasonAdminKeyRejected,
-				"OpenAI did not recognise that admin key."}
+				"OpenAI did not recognise that admin key.", upstream}
 		case http.StatusForbidden:
 			// Two things gate this independently: the org role of whoever made
 			// the key, and the scopes chosen for the key itself. An earlier
@@ -276,12 +305,12 @@ func (d *Directory) explain(err error) error {
 			// than saying nothing, because regenerating the key is exactly
 			// what fixes the common case. The dashboard lays out both.
 			return &refusal{ReasonTunnelsManageRequired,
-				"That admin key is not allowed to manage tunnels."}
+				"That admin key is not allowed to manage tunnels.", upstream}
 		case http.StatusBadRequest:
 			if strings.Contains(req.ResponseBody, "organization_id") ||
 				strings.Contains(req.Message, "organization_id") {
 				return &refusal{ReasonOrgIDRejected,
-					"OpenAI did not accept that organization ID."}
+					"OpenAI did not accept that organization ID.", upstream}
 			}
 		}
 	}

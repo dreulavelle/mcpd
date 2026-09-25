@@ -71,7 +71,6 @@ func (a *App) MakeTunnel(ctx context.Context, actor string, req MakeTunnelReques
 	// somebody else had made. What a create returns is enough to keep the list
 	// filling itself in without reading anybody else's tunnel.
 	workspaces := tunnel.NormalizeWorkspaces(acct.Workspaces)
-	listed := len(workspaces) > 0
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -82,7 +81,14 @@ func (a *App) MakeTunnel(ctx context.Context, actor string, req MakeTunnelReques
 	}
 	made, err := dir.Create(ctx, name, createdByMCPD, workspaces)
 	if err != nil {
-		return MakeTunnelResult{}, a.explainCreate(ctx, dir, err, listed)
+		err = a.explainCreate(ctx, dir, acct, err, workspaces)
+		// Logged here, with the context, because nothing else records it: the
+		// person is shown a correlation id, and until this line there was no
+		// log entry for it to match.
+		a.log.WarnContext(ctx, "OpenAI refused to make a tunnel",
+			"account", acct.Name, "workspaces", strings.Join(workspaces, ","),
+			"reason", tunnel.Reason(err), "upstream", tunnel.Upstream(err), "error", err)
+		return MakeTunnelResult{}, err
 	}
 
 	// Assigned and switched on in one write: a tunnel that exists at OpenAI
@@ -160,24 +166,55 @@ func (a *App) recordWorkspaces(ctx context.Context, acct tunnel.Account, found [
 		"account", acct.Name, "workspaces", strings.Join(all, ","))
 }
 
-// explainCreate turns OpenAI's refusal of a create into what to do. A 403
-// says only that the key may not; the same key having just listed tunnels
-// says it lacks the write scope specifically, and a key that could not list
-// lacks them all.
-func (a *App) explainCreate(ctx context.Context, dir *tunnel.Directory, err error, listed bool) error {
+// explainCreate turns OpenAI's refusal of a create into what to do.
+//
+// A 403 says only that the request may not be made, and a create that names a
+// workspace can be refused for the workspace as well as for the key. The
+// account's Check used to make its probe without one, so it passed on an
+// account whose every real create was refused -- and the refusal then said the
+// key lacked the write permission the Check had just proved it has. So when a
+// create naming workspaces is refused, the same key makes the same tunnel
+// without them: if that is allowed, the workspace is what OpenAI refused.
+func (a *App) explainCreate(ctx context.Context, dir *tunnel.Directory, acct tunnel.Account, err error, workspaces []string) error {
 	if tunnel.Reason(err) != tunnel.ReasonTunnelsManageRequired {
 		return err
 	}
-	if listed {
-		return tunnel.Refused(tunnel.ReasonTunnelsManageRequired,
-			"This account's admin key can list tunnels but OpenAI refused to make one, "+
-				"so the key lacks the tunnel write scope (api.organization.tunnel.write). "+
-				"Regenerate it with the tunnel scopes and paste it into the account.")
+	keyRefused := tunnel.Refused(tunnel.ReasonTunnelsManageRequired,
+		"OpenAI refused to make a tunnel with this account's admin key, so the key lacks "+
+			"the tunnel write permission (api.organization.tunnel.write). "+
+			"Regenerate it with the tunnel permissions and paste it into the account.", err)
+	if len(workspaces) == 0 {
+		return keyRefused
 	}
-	_ = ctx
-	_ = dir
-	return tunnel.Refused(tunnel.ReasonTunnelsManageRequired,
-		"This account's admin key cannot list tunnels either, so it has no tunnel scopes at all.")
+	probe, perr := dir.Create(ctx, probeName, probeDescription, nil)
+	if perr != nil {
+		return keyRefused
+	}
+	a.deleteProbe(ctx, dir, acct, probe.ID)
+	which := "the workspace "
+	if len(workspaces) > 1 {
+		which = "the workspaces "
+	}
+	return tunnel.Refused(tunnel.ReasonWorkspaceRefused,
+		"This account's admin key can make tunnels, but OpenAI will not list one in "+
+			which+strings.Join(workspaces, ", ")+" saved on the account.", err)
+}
+
+// probeName and probeDescription mark a tunnel made only to learn what a key
+// may do, so one left behind by a failed delete is obviously a probe.
+const (
+	probeName        = "mcpd check"
+	probeDescription = "Made by mcpd to prove this key can make tunnels; deleted at once"
+)
+
+// deleteProbe removes a probe tunnel. A failure is logged rather than
+// returned: the answer the probe was made for is already known, and the
+// leftover is named so somebody can remove it by hand.
+func (a *App) deleteProbe(ctx context.Context, dir *tunnel.Directory, acct tunnel.Account, id string) {
+	if err := dir.Delete(ctx, id); err != nil {
+		a.log.WarnContext(ctx, "the probe tunnel could not be deleted; remove it by hand",
+			"account", acct.Name, "tunnel", id, "error", err)
+	}
 }
 
 // AccountCheck is what a "Check" on an account found out, by doing: a
@@ -196,7 +233,9 @@ type AccountCheck struct {
 	// Problem is OpenAI's refusal, in the words the dialog shows.
 	Problem string `json:"problem,omitempty"`
 	Reason  string `json:"reason,omitempty"`
-	At      string `json:"checked_at"`
+	// Upstream is what OpenAI itself said, for Technical details.
+	Upstream string `json:"upstream,omitempty"`
+	At       string `json:"checked_at"`
 }
 
 // CheckChatGPTAccount proves what an account's admin key can do.
@@ -216,25 +255,28 @@ func (a *App) CheckChatGPTAccount(ctx context.Context, id string) (AccountCheck,
 	// with this host, and neither their count nor their workspaces are this
 	// host's business.
 	if _, err := dir.List(ctx); err != nil {
-		out.Problem, out.Reason = err.Error(), tunnel.Reason(err)
+		out.Problem, out.Reason, out.Upstream = err.Error(), tunnel.Reason(err), tunnel.Upstream(err)
 		return out, nil
 	}
 	out.CanList = true
-	out.Workspaces = tunnel.NormalizeWorkspaces(acct.Workspaces)
+	workspaces := tunnel.NormalizeWorkspaces(acct.Workspaces)
+	out.Workspaces = workspaces
 
-	// The write half: made and deleted inside one call, organisation-only so
-	// it appears nowhere, named so that a leftover -- if the delete failed --
-	// is obviously a probe.
-	made, err := dir.Create(ctx, "mcpd check", "Made by mcpd to prove this key can make tunnels; deleted at once", nil)
+	// The write half: made and deleted inside one call, and made exactly as
+	// Make would make it -- in the account's own workspaces. The probe used to
+	// be organisation-only, so it tested a request nobody sends: an account
+	// whose workspace OpenAI refused passed its Check and then failed every
+	// create.
+	made, err := dir.Create(ctx, probeName, probeDescription, workspaces)
 	if err != nil {
-		e := a.explainCreate(ctx, dir, err, true)
-		out.Problem, out.Reason = e.Error(), tunnel.Reason(e)
+		e := a.explainCreate(ctx, dir, acct, err, workspaces)
+		out.Problem, out.Reason, out.Upstream = e.Error(), tunnel.Reason(e), tunnel.Upstream(e)
+		a.log.WarnContext(ctx, "an account's check could not make a tunnel",
+			"account", acct.Name, "workspaces", strings.Join(workspaces, ","),
+			"reason", out.Reason, "upstream", out.Upstream, "error", e)
 		return out, nil
 	}
-	if err := dir.Delete(ctx, made.ID); err != nil {
-		a.log.WarnContext(ctx, "the probe tunnel could not be deleted; remove it by hand",
-			"account", acct.Name, "tunnel", made.ID, "error", err)
-	}
+	a.deleteProbe(ctx, dir, acct, made.ID)
 	out.CanMake = true
 	return out, nil
 }

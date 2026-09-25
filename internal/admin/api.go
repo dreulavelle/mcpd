@@ -1748,6 +1748,12 @@ func (s *Server) writeUpstreamError(w http.ResponseWriter, r *http.Request, stat
 	if reason := tunnel.Reason(err); reason != "" {
 		body["error"] = reason
 	}
+	// What OpenAI itself said, for Technical details: the sentence above is
+	// ours, and the request id in this is the only thing OpenAI's support can
+	// look the refusal up by.
+	if upstream := tunnel.Upstream(err); upstream != "" {
+		body["upstream"] = upstream
+	}
 	s.writeJSON(w, r, status, body)
 }
 
@@ -2222,6 +2228,9 @@ func (s *Server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := dir.Delete(r.Context(), id); err != nil {
+		s.opts.Log.WarnContext(r.Context(), "OpenAI refused to delete a tunnel",
+			"tunnel", id, "account", account.Name, "reason", tunnel.Reason(err),
+			"upstream", tunnel.Upstream(err), "error", err)
 		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
 		return
 	}

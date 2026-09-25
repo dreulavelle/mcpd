@@ -680,6 +680,8 @@ export interface AccountCheck {
   workspaces: string[];
   problem?: string;
   reason?: string;
+  /** What OpenAI itself said, for Technical details. */
+  upstream?: string;
   checked_at: string;
 }
 
@@ -1063,6 +1065,8 @@ export class ApiError extends Error {
      * and no `detail` at all, so without them the form can name no field.
      */
     readonly problems?: string[],
+    /** What an upstream (OpenAI) said when it refused, for Technical details. */
+    readonly upstream?: string,
   ) {
     super(detail || code);
     this.name = "ApiError";
@@ -1147,6 +1151,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       String(body.detail ?? body.error ?? response.statusText),
       body.correlation_id as string | undefined,
       problems,
+      typeof body.upstream === "string" ? body.upstream : undefined,
     );
   }
   return body as T;
@@ -1383,6 +1388,8 @@ async function failure(response: Response): Promise<ApiError> {
     String(body.error ?? `http_${response.status}`),
     String(body.detail ?? body.error ?? response.statusText),
     body.correlation_id as string | undefined,
+    undefined,
+    typeof body.upstream === "string" ? body.upstream : undefined,
   );
 }
 
