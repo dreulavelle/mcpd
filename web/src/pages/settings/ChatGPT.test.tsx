@@ -3,7 +3,7 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api, type ChatGPTAccount } from "@/lib/api";
 import { renderWith } from "@/test/render";
-import { ChatGPT } from "./ChatGPT";
+import { ChatGPT, CheckResult } from "./ChatGPT";
 
 function account(overrides: Partial<ChatGPTAccount> = {}): ChatGPTAccount {
   return {
@@ -190,5 +190,43 @@ describe("the ChatGPT accounts page", () => {
     stub([account({ has_admin_key: false, organization_id: "", can_manage: false })]);
     renderWith(<ChatGPT />);
     expect(await screen.findByText(/no admin key/i)).toBeInTheDocument();
+  });
+});
+
+// A Check's refusal used to be one line in a cell that does not wrap:
+// OpenAI's whole error, request id and all, ran across the page. The verdict
+// is chips, the sentence is on its own, and OpenAI's words are evidence.
+describe("a Check's result", () => {
+  const refused = {
+    can_list: true,
+    can_make: false,
+    workspaces: ["ws_1"],
+    problem: "OpenAI could not verify that the workspace ws_1 belongs to this account's organisation.",
+    reason: "openai_workspace_refused",
+    upstream: "request POST /v1/tunnels failed: 403 tunnel_principal_association_unverified (x-request-id: req_123)",
+    checked_at: "2026-09-25T16:35:48Z",
+  };
+
+  it("keeps OpenAI's words out of the sentence and under Technical details", () => {
+    renderWith(<CheckResult check={refused} onClose={() => {}} />);
+    expect(screen.getByText("Can list tunnels")).toBeInTheDocument();
+    expect(screen.getByText("Cannot make tunnels")).toBeInTheDocument();
+    expect(screen.getByText(/could not verify that the workspace ws_1/)).toBeInTheDocument();
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
+    // In the evidence, not in the sentence.
+    expect(screen.getByText(/could not verify/).textContent).not.toContain("req_123");
+  });
+
+  it("opens the same explanation a refused Make does", async () => {
+    renderWith(<CheckResult check={refused} onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "What to do" }));
+    expect(await screen.findByText("OpenAI refused the workspace, not the key")).toBeInTheDocument();
+  });
+
+  it("offers no explanation for a check that passed", () => {
+    renderWith(<CheckResult check={{ ...refused, can_make: true, problem: undefined, reason: undefined, upstream: undefined }} onClose={() => {}} />);
+    expect(screen.getByText("Can make tunnels")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "What to do" })).toBeNull();
+    expect(screen.queryByText("Technical details")).toBeNull();
   });
 });

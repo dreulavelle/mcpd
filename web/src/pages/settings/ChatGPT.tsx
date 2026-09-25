@@ -16,6 +16,10 @@ import { EVERYTHING, GrantsPicker, grantsLabel } from "@/components/GrantsPicker
 import { RolePicker } from "@/components/RolePicker";
 import { Chip } from "@/components/status";
 import { Evidence } from "@/components/evidence";
+import {
+  isOpenAIReason, OpenAIPermissionDialog, type Refusal,
+} from "@/components/openai-permission";
+import { when, whenExact } from "@/lib/format";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -201,10 +205,12 @@ function AccountRow({ account, notify, onChanged }: {
               ? account.organization_id || "admin key set"
               : "no admin key — tunnels are pasted in, not made here"}
           </div>
+          {/* The cell does not wrap -- a table's cells never do -- so a
+              sentence here has to ask for it, or it stretches the table. */}
           {account.problem && (
-            <div className="text-xs text-problem">{account.problem}</div>
+            <div className="max-w-sm text-xs whitespace-normal text-problem">{account.problem}</div>
           )}
-          {error && <div className="text-xs text-problem">{error}</div>}
+          {error && <div className="max-w-sm text-xs whitespace-normal text-problem">{error}</div>}
         </TableCell>
         <TableCell className="font-mono text-xs">{account.principal}</TableCell>
         <TableCell>
@@ -244,24 +250,9 @@ function AccountRow({ account, notify, onChanged }: {
       </TableRow>
 
       {check && (
-        <TableRow>
-          <TableCell colSpan={6} className="bg-muted/30 text-xs">
-            {check.problem ? (
-              <>
-                <span className="text-problem">{check.problem}</span>
-                <Evidence detail={check.upstream} />
-              </>
-            ) : (
-              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <Chip tone="good">Can list tunnels</Chip>
-                <Chip tone={check.can_make ? "good" : "problem"}>{check.can_make ? "Can make tunnels" : "Cannot make tunnels"}</Chip>
-                {check.workspaces.length > 0 && (
-                  <span className="text-muted-foreground">
-                    workspaces {check.workspaces.join(", ")}
-                  </span>
-                )}
-              </span>
-            )}
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={6} className="bg-muted/30 whitespace-normal">
+            <CheckResult check={check} onClose={() => setCheck(null)} />
           </TableCell>
         </TableRow>
       )}
@@ -484,5 +475,64 @@ function AccountDialog({ account, onClose, onSaved }: {
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * What a Check found, laid out rather than run together.
+ *
+ * It used to be the refusal's sentence in a table cell, and a table cell does
+ * not wrap: OpenAI's refusal -- status, code, message, mitigation and request
+ * id in one line -- ran out across the page and took the table with it. The
+ * verdict is the chips; the sentence says why; what to do is the same dialog
+ * a refused Make opens; and OpenAI's own words are evidence, folded away.
+ */
+export function CheckResult({ check, onClose }: {
+  check: AccountCheck;
+  onClose: () => void;
+}) {
+  const [explaining, setExplaining] = useState<Refusal | null>(null);
+  const reason = check.reason && isOpenAIReason(check.reason) ? check.reason : null;
+  return (
+    <div className="space-y-2 py-1 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <Chip tone={check.can_list ? "good" : "problem"}>
+          {check.can_list ? "Can list tunnels" : "Cannot list tunnels"}
+        </Chip>
+        <Chip tone={check.can_make ? "good" : "problem"}>
+          {check.can_make ? "Can make tunnels" : "Cannot make tunnels"}
+        </Chip>
+        {check.workspaces.length > 0 && (
+          <span className="text-muted-foreground">
+            {check.workspaces.length === 1 ? "Workspace " : "Workspaces "}
+            <span className="font-mono">{check.workspaces.join(", ")}</span>
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-2 text-muted-foreground">
+          <span title={whenExact(check.checked_at)}>Checked {when(check.checked_at)}</span>
+          <Button variant="ghost" size="sm" onClick={onClose}>Dismiss</Button>
+        </span>
+      </div>
+      {check.problem && (
+        <p className="max-w-prose text-sm text-problem">{check.problem}</p>
+      )}
+      {reason && (
+        <Button
+          variant="outline" size="sm"
+          onClick={() => setExplaining({ reason, detail: check.problem ?? "", upstream: check.upstream })}
+        >
+          What to do
+        </Button>
+      )}
+      <Evidence detail={check.upstream} className="max-w-prose" />
+      {explaining && (
+        <OpenAIPermissionDialog
+          reason={explaining.reason}
+          detail={explaining.detail}
+          upstream={explaining.upstream}
+          onClose={() => setExplaining(null)}
+        />
+      )}
+    </div>
   );
 }
