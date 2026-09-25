@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.29.0](https://github.com/dreulavelle/mcpd/compare/v0.28.5...v0.29.0) (2026-09-25)
+
+
+### Features
+
+* **tunnel:** verify each workspace against its organisation and keep the answer ([7b83b37](https://github.com/dreulavelle/mcpd/commit/7b83b370d01b30cb9122a9075aaaaca88fda950f))
+
+
+### Fixes
+
+* **web:** lay out an account Check's result instead of one unwrapped line ([36f0ed9](https://github.com/dreulavelle/mcpd/commit/36f0ed98582c103343daec87c35407ff16924bdd))
+
 ## [0.28.5](https://github.com/dreulavelle/mcpd/compare/v0.28.4...v0.28.5) (2026-09-25)
 
 
