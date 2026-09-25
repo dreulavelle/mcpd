@@ -23,6 +23,7 @@ import {
   Copyable, EmptyState, Loading, Notice, Out, PageHeader,
 } from "@/components/chrome";
 import { Evidence, EvidenceText } from "@/components/evidence";
+import { unverifiedWorkspaces } from "@/components/pairing";
 import { Chip, StatusDot, type Tone } from "@/components/status";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
@@ -454,6 +455,14 @@ function TunnelRow({ row, reading: r, accounts, selected, onSelect, onDone, noti
       <TableCell className="min-w-[14rem]">
         <span className="block truncate font-medium">{row.name}</span>
         <span className={cn("block text-xs", toneText(r.tone))}>{r.label}</span>
+        {row.no_workspace && (
+          // Connected is not the same as offered: a tunnel in no workspace
+          // may never appear in a ChatGPT Enterprise or Edu workspace.
+          <span className="block text-xs text-muted-foreground"
+                title="Made in no ChatGPT workspace. A ChatGPT Enterprise or Edu workspace may not offer it.">
+            In no ChatGPT workspace
+          </span>
+        )}
       </TableCell>
       {accounts.length > 1 && (
         <TableCell>
@@ -970,6 +979,10 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
   const [busy, setBusy] = useState(false);
   const chosen = canMake.find((a) => a.id === account);
   const workspaces = chosen?.workspaces ?? [];
+  // OpenAI has already said it cannot verify these belong to the account's
+  // organisation, and the host refuses a Make naming one rather than asking
+  // again -- so the dialog says so before Make, not after.
+  const blocked = unverifiedWorkspaces(chosen);
 
   async function add() {
     setBusy(true);
@@ -1018,14 +1031,24 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
                    placeholder={plugin ? `mcpd: ${plugin}` : "mcpd"}
                    onChange={(e) => setName(e.target.value)} />
           </div>
-          <p className="text-xs text-muted-foreground">
-            {workspaces.length > 0
-              ? <>It appears in {workspaces.length === 1 ? "the workspace" : `the ${workspaces.length} workspaces`} this account already uses, beside its other tunnels.</>
-              : <>This account has no workspace saved yet. If ChatGPT does not show the tunnel, add the workspace under Settings › ChatGPT.</>}
-          </p>
+          {blocked.length > 0 ? (
+            <Notice tone="problem">
+              OpenAI could not verify that {blocked.length === 1 ? "the workspace " : "the workspaces "}
+              <span className="font-mono">{blocked.join(", ")}</span> belong{blocked.length === 1 ? "s" : ""} to
+              this account's organisation, so it will not make a tunnel there. Once OpenAI Support has
+              reviewed it, press Check on the account under Settings › ChatGPT; until then, remove the
+              workspace there to make tunnels without it.
+            </Notice>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {workspaces.length > 0
+                ? <>It appears in {workspaces.length === 1 ? "the workspace" : `the ${workspaces.length} workspaces`} this account already uses, beside its other tunnels.</>
+                : <>This account has no workspace saved, so the tunnel is made in the organisation alone. It will connect, but a ChatGPT Enterprise or Edu workspace may not offer it. If it does not show in ChatGPT, add the workspace under Settings › ChatGPT.</>}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button disabled={busy || !account} onClick={add}>{busy ? "Making…" : "Make"}</Button>
+            <Button disabled={busy || !account || blocked.length > 0} onClick={add}>{busy ? "Making…" : "Make"}</Button>
           </div>
         </div>
       </DialogContent>

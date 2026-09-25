@@ -281,10 +281,15 @@ func (a *App) AddChatGPTAccount(ctx context.Context, actor string, acct tunnel.A
 	if err := a.proveAdminKey(ctx, acct.AdminKey, acct.OrgID); err != nil {
 		return tunnel.Account{}, err
 	}
+	found, err := a.provePairings(ctx, acct, tunnel.NormalizeWorkspaces(acct.Workspaces))
+	if err != nil {
+		return tunnel.Account{}, err
+	}
 	created, err := a.chatgpt.Create(ctx, actor, acct)
 	if err != nil {
 		return tunnel.Account{}, err
 	}
+	a.recordPairings(ctx, created, found)
 	a.reconnectTunnels(ctx, "a ChatGPT account was added")
 	return created, nil
 }
@@ -295,25 +300,38 @@ func (a *App) UpdateChatGPTAccount(ctx context.Context, actor, id string, up tun
 		return tunnel.Account{}, fmt.Errorf("ChatGPT accounts are unavailable")
 	}
 	// Proved against what the account will hold after the edit, since an
-	// edit may change either half of the pair.
-	if up.AdminKey != nil || up.OrgID != nil {
-		if current, ok := accountFor(a.chatgptAccounts(ctx), id); ok {
-			adminKey, orgID := current.AdminKey, current.OrgID
-			if up.AdminKey != nil {
-				adminKey = *up.AdminKey
-			}
-			if up.OrgID != nil {
-				orgID = *up.OrgID
-			}
-			if err := a.proveAdminKey(ctx, adminKey, orgID); err != nil {
+	// edit may change either half of the pair -- and then the workspaces
+	// against that pair, since OpenAI verifies each workspace belongs to the
+	// organisation and will not say which it accepts until a tunnel is made.
+	var found []tunnel.Pairing
+	current, known := accountFor(a.chatgptAccounts(ctx), id)
+	if known && id != "" {
+		next := current
+		if up.AdminKey != nil {
+			next.AdminKey = *up.AdminKey
+		}
+		if up.OrgID != nil {
+			next.OrgID = *up.OrgID
+		}
+		if up.Workspaces != nil {
+			next.Workspaces = tunnel.NormalizeWorkspaces(*up.Workspaces)
+		}
+		if up.AdminKey != nil || up.OrgID != nil {
+			if err := a.proveAdminKey(ctx, next.AdminKey, next.OrgID); err != nil {
 				return tunnel.Account{}, err
 			}
+		}
+		var err error
+		found, err = a.provePairings(ctx, next, workspacesToProve(current, up, tunnel.NormalizeWorkspaces(next.Workspaces)))
+		if err != nil {
+			return tunnel.Account{}, err
 		}
 	}
 	updated, err := a.chatgpt.Update(ctx, actor, id, up)
 	if err != nil {
 		return tunnel.Account{}, err
 	}
+	a.recordPairings(ctx, updated, found)
 	a.reconnectTunnels(ctx, "a ChatGPT account was changed")
 	return updated, nil
 }

@@ -617,6 +617,9 @@ export interface OpenAITunnel {
   name: string;
   description?: string;
   workspace_ids?: string[];
+  /** Made in no ChatGPT workspace: it connects, and ChatGPT may never offer
+   *  it. Absent for a tunnel made before workspaces were recorded. */
+  no_workspace?: boolean;
   /** Which account this tunnel was listed from. Two accounts are two
    *  organisations, so an id alone does not say whose a tunnel is. */
   account_id?: string;
@@ -661,6 +664,9 @@ export interface ChatGPTAccount {
    * selected account cannot reach.
    */
   workspaces?: string[];
+  /** What OpenAI last said about the organisation ("" workspace) and each
+   *  workspace. A workspace with no entry has not been asked about. */
+  pairings?: Pairing[];
 }
 
 /**
@@ -670,6 +676,23 @@ export interface ChatGPTAccount {
  * matters most for the keys: an edit that changes only the rate limit sends no
  * key at all, and a blank string would read as an instruction to erase one.
  */
+/**
+ * What OpenAI last said about an organisation and a workspace named together
+ * on a tunnel. `workspace_id` is "" for the organisation on its own.
+ */
+export interface Pairing {
+  workspace_id: string;
+  /** verified: a tunnel was made with it. unverified: OpenAI could not verify
+   *  the workspace belongs to the organisation, which only its Support can
+   *  review. refused: refused for another reason, such as the key. */
+  status: "verified" | "unverified" | "refused";
+  organization_id?: string;
+  problem?: string;
+  reason?: string;
+  upstream?: string;
+  checked_at: string;
+}
+
 /** What a check found an account's admin key can do. */
 export interface AccountCheck {
   can_list: boolean;
@@ -682,6 +705,8 @@ export interface AccountCheck {
   reason?: string;
   /** What OpenAI itself said, for Technical details. */
   upstream?: string;
+  /** The organisation on its own and each workspace, as this check found them. */
+  pairings?: Pairing[];
   checked_at: string;
 }
 

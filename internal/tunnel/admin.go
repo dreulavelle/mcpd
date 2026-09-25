@@ -105,22 +105,6 @@ func (d *Directory) Create(ctx context.Context, name, description string, worksp
 	return d.create(ctx, name, description, []string{d.orgID}, workspaceIDs)
 }
 
-// CreateInWorkspaces makes a tunnel listed in workspaces and naming no
-// organisation, which is the shape OpenAI's own documentation creates.
-//
-// It exists for one refusal. OpenAI checks that every organisation and
-// workspace named on a tunnel belong together, and when it cannot verify the
-// pairing it refuses the create with CodeAssociationUnverified -- even for a
-// workspace the account's earlier tunnels were made in. A tunnel naming the
-// workspace alone has no pairing to verify.
-func (d *Directory) CreateInWorkspaces(ctx context.Context, name, description string, workspaceIDs []string) (*TunnelInfo, error) {
-	ws := NormalizeWorkspaces(workspaceIDs)
-	if len(ws) == 0 {
-		return nil, errors.New("tunnel: a workspace is required")
-	}
-	return d.create(ctx, name, description, nil, ws)
-}
-
 func (d *Directory) create(ctx context.Context, name, description string, orgIDs, workspaceIDs []string) (*TunnelInfo, error) {
 	client, err := d.client()
 	if err != nil {
@@ -261,6 +245,12 @@ const CodeAssociationUnverified = "tunnel_principal_association_unverified"
 // the new sentence rather than being lost to it. It may be nil.
 func Refused(reason, msg string, cause error) error {
 	return &refusal{reason: reason, msg: msg, upstream: Upstream(cause), code: Code(cause)}
+}
+
+// Recalled rebuilds a refusal OpenAI gave earlier, from what was kept of it,
+// for a caller that refuses a request up front rather than asking again.
+func Recalled(reason, msg, upstream string) error {
+	return &refusal{reason: reason, msg: msg, upstream: upstream}
 }
 
 // refusal is an error that names why OpenAI said no.

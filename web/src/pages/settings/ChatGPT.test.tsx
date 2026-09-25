@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { api, type ChatGPTAccount } from "@/lib/api";
+import { api, ApiError, type ChatGPTAccount } from "@/lib/api";
 import { renderWith } from "@/test/render";
 import { ChatGPT, CheckResult } from "./ChatGPT";
 
@@ -228,5 +228,65 @@ describe("a Check's result", () => {
     expect(screen.getByText("Can make tunnels")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "What to do" })).toBeNull();
     expect(screen.queryByText("Technical details")).toBeNull();
+  });
+});
+
+// OpenAI verifies each workspace belongs to the organisation and says so only
+// when a tunnel is made, so what it last said is shown beside each workspace.
+// Nobody having asked is its own state, not a pass.
+describe("an account's workspaces", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("shows what OpenAI said of each, and which were never asked about", async () => {
+    stub([account({
+      workspaces: ["ws_bad", "ws_new", "ws_ok"],
+      pairings: [
+        { workspace_id: "ws_ok", status: "verified", checked_at: "2026-09-25T16:00:00Z" },
+        { workspace_id: "ws_bad", status: "unverified", checked_at: "2026-09-25T16:00:00Z" },
+      ],
+    })]);
+    renderWith(<ChatGPT />);
+    expect(await screen.findByText("Needs OpenAI Support")).toBeInTheDocument();
+    expect(screen.getByText("Verified")).toBeInTheDocument();
+    expect(screen.getByText("Not checked")).toBeInTheDocument();
+  });
+
+  // The bug behind all of this: a workspace OpenAI would not accept was
+  // saved without a word and found at the first Make. The save is refused
+  // now, and the form says what to do with OpenAI's words under Technical
+  // details.
+  it("says what to do when a save is refused over a workspace", async () => {
+    stub([account()]);
+    vi.spyOn(api, "updateChatGPTAccount").mockRejectedValue(new ApiError(
+      400, "openai_workspace_refused",
+      "OpenAI would not make a tunnel in the workspace ws_bad with this organisation and admin key, so the account was not saved.",
+      "c1", undefined,
+      "request POST /v1/tunnels failed: 403 tunnel_principal_association_unverified (x-request-id: req_9)",
+    ));
+    renderWith(<ChatGPT />);
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText(/would not make a tunnel in the workspace ws_bad/)).toBeInTheDocument();
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "What to do" }));
+    expect(await screen.findByText("OpenAI refused the workspace, not the key")).toBeInTheDocument();
+  });
+
+  it("lists each pairing a Check asked about", () => {
+    renderWith(<CheckResult check={{
+      can_list: true, can_make: false, workspaces: ["ws_bad", "ws_ok"],
+      problem: "OpenAI could not verify that the workspace ws_bad belongs to this account's organisation.",
+      reason: "openai_workspace_refused", checked_at: "2026-09-25T16:00:00Z",
+      pairings: [
+        { workspace_id: "", status: "verified", checked_at: "2026-09-25T16:00:00Z" },
+        { workspace_id: "ws_bad", status: "unverified", checked_at: "2026-09-25T16:00:00Z" },
+        { workspace_id: "ws_ok", status: "verified", checked_at: "2026-09-25T16:00:00Z" },
+      ],
+    }} onClose={() => {}} />);
+    expect(screen.getByText("The organisation on its own")).toBeInTheDocument();
+    expect(screen.getByText("ws_ok")).toBeInTheDocument();
+    expect(screen.getAllByText("Verified")).toHaveLength(2);
+    expect(screen.getByText("Needs OpenAI Support")).toBeInTheDocument();
   });
 });

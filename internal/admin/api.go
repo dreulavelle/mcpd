@@ -332,6 +332,15 @@ type Options struct {
 	// them.
 	TunnelsMadeHere func() map[string]string
 
+	// TunnelWorkspaces reports the ChatGPT workspaces each tunnel this host
+	// made was listed in. A tunnel absent from it was made before that was
+	// recorded; an empty list is a tunnel in no workspace.
+	TunnelWorkspaces func() map[string][]string
+
+	// ChatGPTPairings reports what OpenAI last said about each account's
+	// organisation and workspaces, by account id.
+	ChatGPTPairings func(ctx context.Context) map[string][]tunnel.Pairing
+
 	// Plugins names the mounted systems, so a tunnel can be assigned to one.
 	Plugins func() []string
 
@@ -1014,6 +1023,10 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 	// mix of this host's connectors, other mcpd instances' and people's, and
 	// it carries no field saying which is which. Reading it to decide what to
 	// show is what let one instance offer to re-point and delete another's.
+	var tunnelWorkspaces map[string][]string
+	if s.opts.TunnelWorkspaces != nil {
+		tunnelWorkspaces = s.opts.TunnelWorkspaces()
+	}
 	if s.opts.TunnelsMadeHere != nil {
 		for id, name := range s.opts.TunnelsMadeHere() {
 			if name == "" {
@@ -1021,18 +1034,25 @@ func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
 				// what it serves instead.
 				name = tunnelName("", resp.Assignments[id])
 			}
-			resp.Available = append(resp.Available, availableTunnel{
+			made := availableTunnel{
 				TunnelInfo:  tunnel.TunnelInfo{ID: id, Name: name, Description: createdByMCPD},
 				AccountID:   resp.AccountAssignments[id],
 				AccountName: accountNamed(accounts, resp.AccountAssignments[id]),
-			})
+			}
+			if ws, known := tunnelWorkspaces[id]; known {
+				made.WorkspaceIDs = ws
+				made.NoWorkspace = len(ws) == 0
+			}
+			resp.Available = append(resp.Available, made)
 		}
 		sort.Slice(resp.Available, func(i, j int) bool {
 			return resp.Available[i].ID < resp.Available[j].ID
 		})
 	}
+	pairings := s.chatgptPairings(r.Context())
 	for _, acct := range accounts {
 		view := newAccountView(acct)
+		view.Pairings = nonNilPairings(pairings[acct.ID])
 		dir := s.directory(acct.ID)
 		view.Missing = dir.Missing()
 		if dir.Available() {
@@ -2376,6 +2396,7 @@ func (s *Server) unassign(r *http.Request, id string) error {
 		{Key: settings.TunnelAccountKey(id), Delete: true},
 		{Key: settings.TunnelMadeHereKey(id), Delete: true},
 		{Key: settings.TunnelNameKey(id), Delete: true},
+		{Key: settings.TunnelWorkspacesKey(id), Delete: true},
 	})
 }
 

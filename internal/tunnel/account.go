@@ -235,3 +235,43 @@ type AccountUpdate struct {
 	RatePerSec *float64
 	Enabled    *bool
 }
+
+// PairingStatus is what OpenAI said about an organisation and a workspace
+// named together on a tunnel.
+type PairingStatus string
+
+const (
+	// PairingVerified: OpenAI made a tunnel naming the pair.
+	PairingVerified PairingStatus = "verified"
+	// PairingUnverified: OpenAI could not verify the pair belongs together.
+	// Only its Support can review that, so asking again changes nothing
+	// until they have.
+	PairingUnverified PairingStatus = "unverified"
+	// PairingRefused: OpenAI refused for another reason, such as the admin
+	// key's permissions. A fixed key is worth another Check.
+	PairingRefused PairingStatus = "refused"
+)
+
+// Pairing is the last answer OpenAI gave about one of an account's
+// workspaces. Workspace is "" for the organisation on its own.
+//
+// There is no endpoint that lists which pairings OpenAI accepts; the only way
+// to learn is to make a tunnel and see, which is what a Check, a save and a
+// Make do. This is what they found, kept so it need not be found again at the
+// moment somebody is trying to make a connector.
+//
+// Status is empty for a pairing that could not be asked about -- OpenAI was
+// not reachable -- which is never stored: "could not ask" is not an answer.
+type Pairing struct {
+	Workspace string        `json:"workspace_id"`
+	Status    PairingStatus `json:"status"`
+	// OrgID is the organisation the answer was about.
+	OrgID string `json:"organization_id,omitempty"`
+	// Problem is the sentence shown, Reason what the dashboard branches on,
+	// and Upstream OpenAI's own words with the request id its Support looks
+	// the refusal up by.
+	Problem   string    `json:"problem,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	Upstream  string    `json:"upstream,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
+}

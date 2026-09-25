@@ -303,3 +303,48 @@ describe("what a tunnel is doing", () => {
     }
   });
 });
+
+// OpenAI has already said it cannot verify a workspace belongs to the
+// account's organisation, and the host refuses a Make naming it -- so the
+// dialog says so, and what to do, before Make rather than after.
+describe("making a tunnel", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState(null, "", "/tunnels");
+  });
+
+  it("says a workspace OpenAI cannot verify will be refused, before Make", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      accounts: [account({ pairings: [
+        { workspace_id: "ws_1", status: "unverified", checked_at: "2026-09-25T16:00:00Z" },
+      ] })],
+    }));
+    renderWith(<Tunnels />, { session: sessionFor("admin") });
+    await userEvent.click(await screen.findByRole("button", { name: /Make a tunnel/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/OpenAI could not verify/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Make" })).toBeDisabled();
+  });
+
+  it("says a tunnel in no workspace may not show in ChatGPT", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      accounts: [account({ workspaces: [] })],
+    }));
+    renderWith(<Tunnels />, { session: sessionFor("admin") });
+    await userEvent.click(await screen.findByRole("button", { name: /Make a tunnel/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/made in the organisation alone/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Make" })).toBeEnabled();
+  });
+
+  it("marks a tunnel made in no ChatGPT workspace", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      available: [
+        { id: "tunnel_a", name: "mcpd: graylog", account_id: "acct_1", no_workspace: true },
+        { id: "tunnel_b", name: "mcpd: echo", account_id: "acct_2" },
+      ] as never,
+    }));
+    renderWith(<Tunnels />, { session: sessionFor("admin") });
+    expect(await screen.findAllByText("In no ChatGPT workspace")).toHaveLength(1);
+  });
+});

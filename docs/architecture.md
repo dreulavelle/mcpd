@@ -1921,13 +1921,30 @@ this host's business. That question used to be on the form, defaulting to a
 host-wide list, and an account with no workspaces of its own was offered
 another organisation's -- which OpenAI refuses with the same 403 as a key
 without the write scope, and an operator whose key had made tunnels an hour
-earlier was told it could not. A refused create is now explained by the same
-key's ability to list: a key that reads and cannot write lacks one scope,
-and the message names it. `CheckChatGPTAccount` proves both halves by doing
-them -- a listing, and a tunnel made organisation-only and deleted in the same
-call -- because "has an admin key" was being shown as "can make tunnels". What
-that listing returns is not recorded: it proves the key reads, and the
-organisation's tunnel count is not this host's to report.
+earlier was told it could not.
+
+**A workspace is verified against its organisation, one pairing at a time.**
+OpenAI checks that every ChatGPT workspace named on a tunnel belongs to the
+Platform organisation named with it, and refuses a create it cannot verify
+(`tunnel_principal_association_unverified`) -- on an account whose earlier
+tunnels had been made with exactly that pair, once OpenAI began enforcing it.
+Only OpenAI Support can review a refused pairing, and there is no endpoint that
+lists which pairings it accepts: the one way to learn is to make a tunnel and
+see. So the three things that already make tunnels ask, and keep the answer in
+`chatgpt_pairings`: saving an account tries each workspace being added (all of
+them, when the organisation or admin key changed) and refuses the save on a
+definitive no; `CheckChatGPTAccount` makes a probe in the organisation alone,
+then one per workspace, and deletes each; a Make records what it proved. A Make
+naming a workspace already known to be unverified is refused with what OpenAI
+said then, rather than asked again -- a Check is how somebody says Support has
+reviewed it. The Check used to make one organisation-only probe, which tested a
+request nobody sends and passed on an account every real create was refused on.
+A tunnel made in no workspace is recorded as such (`tunnel.<id>.workspaces`)
+and marked on the Tunnels page, because it connects and a ChatGPT Enterprise
+or Edu workspace may never offer it -- which looks healthy from here. A
+workspace-only create was tried as a way round an unverified pairing and
+removed: OpenAI refuses it on the same grounds, since the admin key carries its
+organisation whether the request names it or not.
 
 **The handoff is the one step mcpd cannot do.** OpenAI exposes no API for
 attaching a tunnel as a connector in a ChatGPT workspace; that is done in
