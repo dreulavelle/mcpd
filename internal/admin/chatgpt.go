@@ -47,8 +47,13 @@ type accountView struct {
 	// workspace the host has ever seen would let a tunnel be created in one
 	// the selected account cannot reach, and the refusal arrives after the
 	// tunnel is made rather than while it is being chosen.
-	Workspaces []string  `json:"workspaces"`
-	CreatedAt  time.Time `json:"created_at"`
+	Workspaces []string `json:"workspaces"`
+	// Pairings is what OpenAI last said about the organisation on its own and
+	// each workspace, since OpenAI verifies that a workspace belongs to the
+	// organisation and says so only when a tunnel is made. A workspace with
+	// no entry has not been asked about.
+	Pairings  []tunnel.Pairing `json:"pairings"`
+	CreatedAt time.Time        `json:"created_at"`
 }
 
 // availableTunnel is a tunnel in an organisation, with the account it was
@@ -58,6 +63,10 @@ type availableTunnel struct {
 	tunnel.TunnelInfo
 	AccountID   string `json:"account_id"`
 	AccountName string `json:"account_name"`
+	// NoWorkspace marks a tunnel made in no ChatGPT workspace. It connects,
+	// and a ChatGPT Enterprise or Edu workspace may never offer it, which
+	// looks healthy from here -- so the page says so.
+	NoWorkspace bool `json:"no_workspace,omitempty"`
 }
 
 func newAccountView(a tunnel.Account) accountView {
@@ -82,6 +91,23 @@ func newAccountView(a tunnel.Account) accountView {
 // chatgptAccounts reads the accounts, or an empty list when there are none to
 // read. The error is returned rather than swallowed so a host with no
 // encryption key says why its accounts are missing.
+// chatgptPairings reads what OpenAI last said about the accounts' pairings.
+func (s *Server) chatgptPairings(ctx context.Context) map[string][]tunnel.Pairing {
+	if s.opts.ChatGPTPairings == nil {
+		return nil
+	}
+	return s.opts.ChatGPTPairings(ctx)
+}
+
+// nonNilPairings keeps an account with none from encoding as null, which the
+// page would have to guard every use of.
+func nonNilPairings(ps []tunnel.Pairing) []tunnel.Pairing {
+	if ps == nil {
+		return []tunnel.Pairing{}
+	}
+	return ps
+}
+
 func (s *Server) chatgptAccounts(ctx context.Context) ([]tunnel.Account, error) {
 	if s.opts.ChatGPTAccounts == nil {
 		return nil, nil
@@ -132,8 +158,10 @@ func (s *Server) handleListChatGPTAccounts(w http.ResponseWriter, r *http.Reques
 	// Empty rather than nil: the page maps over these, and a null would blank
 	// it on the ordinary state of a new install.
 	views := []accountView{}
+	pairings := s.chatgptPairings(r.Context())
 	for _, a := range accounts {
 		view := newAccountView(a)
+		view.Pairings = nonNilPairings(pairings[a.ID])
 		dir := s.directory(a.ID)
 		view.Missing = dir.Missing()
 		view.CanManage = dir.Available()
@@ -212,7 +240,7 @@ func (s *Server) handleAddChatGPTAccount(w http.ResponseWriter, r *http.Request)
 
 	created, err := s.opts.AddChatGPTAccount(r.Context(), auth.FromContext(r.Context()).ID, acct)
 	if err != nil {
-		s.writeError(w, r, accountStatus(err), err.Error())
+		s.writeAccountError(w, r, err)
 		return
 	}
 	s.writeJSON(w, r, http.StatusCreated, newAccountView(created))
@@ -247,7 +275,7 @@ func (s *Server) handleUpdateChatGPTAccount(w http.ResponseWriter, r *http.Reque
 	updated, err := s.opts.UpdateChatGPTAccount(r.Context(),
 		auth.FromContext(r.Context()).ID, r.PathValue("id"), up)
 	if err != nil {
-		s.writeError(w, r, accountStatus(err), err.Error())
+		s.writeAccountError(w, r, err)
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, newAccountView(updated))
@@ -311,6 +339,18 @@ func (s *Server) pluginNames() []string {
 // and an account that is not there is not there. Everything else is this
 // host's problem and says so, rather than being reported as a bad request the
 // operator can do nothing about.
+// writeAccountError answers a failed save. A refusal from OpenAI -- the admin
+// key, or a workspace it would not make a tunnel in -- carries its reason and
+// OpenAI's own words, so the form can lay it out and put the request id under
+// Technical details rather than in the sentence.
+func (s *Server) writeAccountError(w http.ResponseWriter, r *http.Request, err error) {
+	if tunnel.Reason(err) != "" {
+		s.writeUpstreamError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	s.writeError(w, r, accountStatus(err), err.Error())
+}
+
 func accountStatus(err error) int {
 	msg := err.Error()
 	switch {

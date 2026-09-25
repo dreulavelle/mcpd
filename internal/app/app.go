@@ -788,6 +788,10 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			TunnelsMadeHere: func() map[string]string {
 				return a.tunnelsMadeHere(context.Background())
 			},
+			TunnelWorkspaces: func() map[string][]string {
+				return a.tunnelWorkspaces(context.Background())
+			},
+			ChatGPTPairings:            a.ChatGPTPairings,
 			CACertificate:              a.caPEM,
 			TLSStatus:                  a.tlsStatus,
 			SetDashboardCertificate:    a.setDashboardCertificate,

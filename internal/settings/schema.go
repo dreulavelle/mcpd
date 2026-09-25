@@ -546,6 +546,14 @@ func TunnelNameKey(tunnelID string) string {
 	return tunnelKeyPrefix + tunnelID + ".name"
 }
 
+// TunnelWorkspacesKey records the ChatGPT workspaces a tunnel was made in, as
+// a JSON array. An empty array is a tunnel in no workspace: it connects, and
+// ChatGPT may never offer it, so the page says so. No key at all is a tunnel
+// made before this was recorded, which is not known either way.
+func TunnelWorkspacesKey(tunnelID string) string {
+	return tunnelKeyPrefix + tunnelID + ".workspaces"
+}
+
 // TunnelIDFromKey reverses TunnelPluginKey, returning "" for anything else.
 //
 // The suffix is checked as well as the prefix because "tunnel." also begins

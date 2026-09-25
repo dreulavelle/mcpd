@@ -5,6 +5,7 @@ import {
   type ChatGPTAccount,
   type ChatGPTAccountBody,
   type Grant,
+  ApiError,
   problemText,
 } from "@/lib/api";
 import { useLoader, usePoll } from "@/lib/hooks";
@@ -20,6 +21,7 @@ import {
   isOpenAIReason, OpenAIPermissionDialog, type Refusal,
 } from "@/components/openai-permission";
 import { when, whenExact } from "@/lib/format";
+import { PairingChip, pairingFor } from "@/components/pairing";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -205,6 +207,12 @@ function AccountRow({ account, notify, onChanged }: {
               ? account.organization_id || "admin key set"
               : "no admin key — tunnels are pasted in, not made here"}
           </div>
+          {(account.workspaces ?? []).map((ws) => (
+            <div key={ws} className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="font-mono">{ws}</span>
+              {account.has_admin_key && <PairingChip pairing={pairingFor(account, ws)} />}
+            </div>
+          ))}
           {/* The cell does not wrap -- a table's cells never do -- so a
               sentence here has to ask for it, or it stretches the table. */}
           {account.problem && (
@@ -300,6 +308,11 @@ function AccountDialog({ account, onClose, onSaved }: {
   const [rate, setRate] = useState(String(account?.rate_per_sec ?? 0));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // A refusal from OpenAI -- the admin key, or a workspace it will not make
+  // a tunnel in -- keeps its reason and OpenAI's own words, so the form can
+  // offer what to do and put the request id under Technical details.
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
+  const [explaining, setExplaining] = useState(false);
   const notify = useNotify();
 
   const ready = name.trim() !== "" && (editing || apiKey.trim() !== "");
@@ -308,6 +321,7 @@ function AccountDialog({ account, onClose, onSaved }: {
     e.preventDefault();
     setBusy(true);
     setError("");
+    setRefusal(null);
 
     const body: ChatGPTAccountBody = {
       name: name.trim(),
@@ -336,6 +350,9 @@ function AccountDialog({ account, onClose, onSaved }: {
       onSaved();
     } catch (e) {
       setError(problemText(e, "That didn't work."));
+      if (e instanceof ApiError && isOpenAIReason(e.code)) {
+        setRefusal({ reason: e.code, detail: e.detail, upstream: e.upstream });
+      }
     } finally {
       setBusy(false);
     }
@@ -429,8 +446,9 @@ function AccountDialog({ account, onClose, onSaved }: {
               onChange={(e) => setWorkspaces(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Learned from this account's tunnels. Add one by hand only if a
-              new tunnel does not show in ChatGPT.
+              Learned from this account's tunnels. OpenAI checks that each
+              belongs to the organisation, so a new one is tried when you save
+              and refused here if OpenAI will not accept it.
             </p>
           </div>
 
@@ -463,6 +481,20 @@ function AccountDialog({ account, onClose, onSaved }: {
           />
 
           {error && <Notice tone="problem">{error}</Notice>}
+          {refusal && (
+            <div className="space-y-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setExplaining(true)}>
+                What to do
+              </Button>
+              <Evidence detail={refusal.upstream} />
+            </div>
+          )}
+          {refusal && explaining && (
+            <OpenAIPermissionDialog
+              reason={refusal.reason} detail={refusal.detail} upstream={refusal.upstream}
+              onClose={() => setExplaining(false)}
+            />
+          )}
 
           <DialogFooter className="sm:justify-start">
             <Button type="submit" disabled={busy || !ready}>
@@ -502,17 +534,25 @@ export function CheckResult({ check, onClose }: {
         <Chip tone={check.can_make ? "good" : "problem"}>
           {check.can_make ? "Can make tunnels" : "Cannot make tunnels"}
         </Chip>
-        {check.workspaces.length > 0 && (
-          <span className="text-muted-foreground">
-            {check.workspaces.length === 1 ? "Workspace " : "Workspaces "}
-            <span className="font-mono">{check.workspaces.join(", ")}</span>
-          </span>
-        )}
         <span className="ml-auto flex items-center gap-2 text-muted-foreground">
           <span title={whenExact(check.checked_at)}>Checked {when(check.checked_at)}</span>
           <Button variant="ghost" size="sm" onClick={onClose}>Dismiss</Button>
         </span>
       </div>
+      {(check.pairings ?? []).length > 1 && (
+        // One line per pairing, because OpenAI verifies each workspace on its
+        // own and a Make naming several fails if any one is refused.
+        <ul className="space-y-1">
+          {(check.pairings ?? []).map((p) => (
+            <li key={p.workspace_id} className="flex flex-wrap items-center gap-2">
+              <span className={p.workspace_id ? "font-mono" : undefined}>
+                {p.workspace_id || "The organisation on its own"}
+              </span>
+              <PairingChip pairing={p.status ? p : undefined} />
+            </li>
+          ))}
+        </ul>
+      )}
       {check.problem && (
         <p className="max-w-prose text-sm text-problem">{check.problem}</p>
       )}

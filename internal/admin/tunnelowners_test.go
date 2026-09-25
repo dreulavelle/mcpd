@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -81,5 +82,41 @@ func TestDeleteTunnel_RefusesOneThisHostDidNotMake(t *testing.T) {
 	}
 	if deletedAt != 0 {
 		t.Fatalf("nothing should have reached OpenAI's delete, got %d calls", deletedAt)
+	}
+}
+
+// A tunnel made in no ChatGPT workspace connects and may never be offered in
+// ChatGPT, which looks healthy from here, so the page is told. One made before
+// workspaces were recorded is not known either way and is not marked.
+func TestTunnelStatus_MarksATunnelInNoWorkspace(t *testing.T) {
+	const none = "tunnel_1123456789abcdef0123456789abcdef"
+	const listed = "tunnel_2123456789abcdef0123456789abcdef"
+	const older = "tunnel_3123456789abcdef0123456789abcdef"
+	s := NewServer(Options{
+		TunnelsMadeHere: func() map[string]string {
+			return map[string]string{none: "a", listed: "b", older: "c"}
+		},
+		TunnelWorkspaces: func() map[string][]string {
+			return map[string][]string{none: {}, listed: {"ws_1"}}
+		},
+	})
+	w := httptest.NewRecorder()
+	s.handleTunnelStatus(w, httptest.NewRequest(http.MethodGet, "/api/tunnel", nil))
+
+	var resp struct {
+		Available []struct {
+			ID          string `json:"id"`
+			NoWorkspace bool   `json:"no_workspace"`
+		} `json:"available"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	marked := map[string]bool{}
+	for _, a := range resp.Available {
+		marked[a.ID] = a.NoWorkspace
+	}
+	if len(marked) != 3 || !marked[none] || marked[listed] || marked[older] {
+		t.Errorf("marked = %v, want only the tunnel recorded in no workspace", marked)
 	}
 }

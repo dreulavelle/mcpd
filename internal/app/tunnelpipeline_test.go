@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,11 +22,13 @@ type fakeControlPlane struct {
 	// what OpenAI does when the key may make tunnels and the workspace is not
 	// one it will list them in.
 	refuseWorkspace bool
-	// unverifiedPair refuses a create naming both an organisation and a
-	// workspace, as OpenAI does when it cannot verify they belong together.
-	unverifiedPair bool
-	created        []map[string]any
-	deleted        []string
+	// unverified are workspaces OpenAI cannot verify belong to the
+	// organisation: a create naming one is refused with the association code.
+	unverified []string
+	// posts counts every create asked for, made or refused.
+	posts   int
+	created []map[string]any
+	deleted []string
 }
 
 func (f *fakeControlPlane) handler() http.Handler {
@@ -38,10 +41,15 @@ func (f *fakeControlPlane) handler() http.Handler {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/tunnels":
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if f.unverifiedPair && body["workspace_ids"] != nil && body["organization_ids"] != nil {
-				w.WriteHeader(http.StatusForbidden)
-				_, _ = w.Write([]byte(`{"error":{"code":"tunnel_principal_association_unverified","message":"We couldn't automatically verify the association between these workspaces and organizations."}}`))
-				return
+			f.posts++
+			named, _ := body["workspace_ids"].([]any)
+			for _, ws := range named {
+				if slices.Contains(f.unverified, ws.(string)) {
+					w.Header().Set("x-request-id", "req_unverified")
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write([]byte(`{"error":{"code":"tunnel_principal_association_unverified","message":"We couldn't automatically verify the association between these workspaces and organizations."}}`))
+					return
+				}
 			}
 			if f.refuseCreate || (f.refuseWorkspace && body["workspace_ids"] != nil) {
 				w.WriteHeader(http.StatusForbidden)
@@ -223,15 +231,21 @@ func TestCheckChatGPTAccount_ProvesListAndMake(t *testing.T) {
 	if !got.CanList || !got.CanMake {
 		t.Fatalf("check = %+v", got)
 	}
-	if len(cp.created) != 1 || len(cp.deleted) != 1 {
-		t.Fatalf("the probe should be made once and deleted once: made %d, deleted %d", len(cp.created), len(cp.deleted))
+	// The organisation on its own, then each workspace on its own, so a
+	// refusal names what was refused. An organisation-only probe was all
+	// this made once, and it passed on an account whose workspace OpenAI
+	// refused at every Make.
+	if len(cp.created) != 2 || len(cp.deleted) != 2 {
+		t.Fatalf("made %d probes and deleted %d, want 2 of each", len(cp.created), len(cp.deleted))
 	}
-	// Made exactly as Make would make it. An organisation-only probe tested a
-	// request nobody sends, and passed on an account whose workspace OpenAI
-	// refused.
-	ws, _ := json.Marshal(cp.created[0]["workspace_ids"])
-	if string(ws) != `["ws_own"]` {
-		t.Errorf("probe listed in %s, want the account's own workspace", ws)
+	if cp.created[0]["workspace_ids"] != nil {
+		t.Errorf("the first probe should name no workspace: %v", cp.created[0])
+	}
+	if ws, _ := json.Marshal(cp.created[1]["workspace_ids"]); string(ws) != `["ws_own"]` {
+		t.Errorf("the second probe listed in %s, want the account's workspace", ws)
+	}
+	if len(got.Pairings) != 2 || got.Pairings[1].Status != tunnel.PairingVerified {
+		t.Errorf("pairings = %+v, want the organisation and ws_own verified", got.Pairings)
 	}
 }
 
@@ -247,7 +261,7 @@ func TestCheckChatGPTAccount_FailsOnARefusedWorkspace(t *testing.T) {
 	if !got.CanList || got.CanMake {
 		t.Fatalf("check = %+v, want can list and cannot make", got)
 	}
-	if got.Reason != tunnel.ReasonWorkspaceRefused || got.Upstream == "" {
+	if got.Reason != tunnel.ReasonWorkspaceRefused || !strings.Contains(got.Problem, "ws_own") {
 		t.Errorf("reason = %q, upstream = %q; want the workspace refusal with OpenAI's words", got.Reason, got.Upstream)
 	}
 	if len(cp.created) != len(cp.deleted) {
@@ -255,61 +269,136 @@ func TestCheckChatGPTAccount_FailsOnARefusedWorkspace(t *testing.T) {
 	}
 }
 
-// OpenAI began refusing an organisation and a workspace named together when
-// it could not verify the pairing, on an account whose earlier tunnels had
-// been made with exactly that pair. The workspace alone has no pairing to
-// verify, and it is the shape OpenAI's own documentation creates.
-func TestMakeTunnel_MakesItInTheWorkspaceAloneWhenThePairIsUnverified(t *testing.T) {
-	cp := &fakeControlPlane{unverifiedPair: true}
+// A workspace OpenAI cannot verify is named on its own, beside the ones it
+// can: an account with one bad workspace of several was a refusal with
+// nothing in it to act on. What was found is kept on the account.
+func TestCheckChatGPTAccount_NamesTheWorkspaceOpenAICannotVerify(t *testing.T) {
+	cp := &fakeControlPlane{unverified: []string{"ws_bad"}}
 	a, acct := pipelineApp(t, cp)
-	made, err := a.MakeTunnel(context.Background(), "user:test", MakeTunnelRequest{Account: acct.ID})
-	if err != nil {
-		t.Fatalf("MakeTunnel: %v", err)
+	ctx := context.Background()
+	both := []string{"ws_own", "ws_bad"}
+	if _, err := a.chatgpt.Update(ctx, "user:test", acct.ID, tunnel.AccountUpdate{Workspaces: &both}); err != nil {
+		t.Fatal(err)
 	}
-	if len(cp.created) != 1 {
-		t.Fatalf("created %d tunnels, want 1", len(cp.created))
-	}
-	if cp.created[0]["organization_ids"] != nil {
-		t.Errorf("the retry should name no organisation: %v", cp.created[0])
-	}
-	ws, _ := json.Marshal(cp.created[0]["workspace_ids"])
-	if string(ws) != `["ws_own"]` {
-		t.Errorf("listed in %s, want the account's own workspace", ws)
-	}
-	if at := a.assignedTunnels(context.Background()); len(at) != 1 || at[0].TunnelID != made.TunnelID {
-		t.Errorf("assignment = %+v, want the tunnel made", at)
-	}
-}
 
-// The Check goes through the same path, so it passes where Make will work.
-func TestCheckChatGPTAccount_PassesWhereMakeWillWork(t *testing.T) {
-	cp := &fakeControlPlane{unverifiedPair: true}
-	a, acct := pipelineApp(t, cp)
-	got, err := a.CheckChatGPTAccount(context.Background(), acct.ID)
+	got, err := a.CheckChatGPTAccount(ctx, acct.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.CanMake {
-		t.Fatalf("check = %+v, want can make", got)
+	if got.CanMake || !strings.Contains(got.Problem, "ws_bad") || strings.Contains(got.Problem, "ws_own") {
+		t.Fatalf("check = %+v, want ws_bad named and ws_own not", got)
 	}
-	if len(cp.created) != 1 || len(cp.deleted) != 1 {
-		t.Errorf("the probe should be made once and deleted: made %d, deleted %d", len(cp.created), len(cp.deleted))
+	kept := map[string]tunnel.PairingStatus{}
+	for _, p := range a.ChatGPTPairings(ctx)[acct.ID] {
+		kept[p.Workspace] = p.Status
+	}
+	if kept[""] != tunnel.PairingVerified || kept["ws_own"] != tunnel.PairingVerified || kept["ws_bad"] != tunnel.PairingUnverified {
+		t.Errorf("kept = %v", kept)
+	}
+	if len(cp.created) != len(cp.deleted) {
+		t.Errorf("every probe made should be deleted: made %d, deleted %d", len(cp.created), len(cp.deleted))
 	}
 }
 
-// When the workspace alone is refused too, the refusal says what OpenAI said:
-// the association needs its Support. Not the key's permissions.
-func TestMakeTunnel_SendsAnUnverifiablePairToSupport(t *testing.T) {
-	cp := &fakeControlPlane{unverifiedPair: true, refuseWorkspace: true}
+// Once OpenAI has said it cannot verify a workspace, Make says so with what it
+// said then instead of asking again -- only its Support can change the answer.
+// A Check is how somebody says they have, and it clears the way.
+func TestMakeTunnel_RemembersAWorkspaceOpenAICannotVerify(t *testing.T) {
+	cp := &fakeControlPlane{unverified: []string{"ws_own"}}
 	a, acct := pipelineApp(t, cp)
-	_, err := a.MakeTunnel(context.Background(), "user:test", MakeTunnelRequest{Account: acct.ID})
-	if tunnel.Reason(err) != tunnel.ReasonWorkspaceRefused {
-		t.Fatalf("err = %v (reason %q), want the workspace refusal", err, tunnel.Reason(err))
+	ctx := context.Background()
+
+	_, err := a.MakeTunnel(ctx, "user:test", MakeTunnelRequest{Account: acct.ID})
+	if tunnel.Reason(err) != tunnel.ReasonWorkspaceRefused || !strings.Contains(err.Error(), "OpenAI Support") {
+		t.Fatalf("first make: %v, want the unverified workspace named with what to do", err)
 	}
-	if !strings.Contains(err.Error(), "verify") || !strings.Contains(tunnel.Upstream(err), "tunnel_principal_association_unverified") {
-		t.Errorf("err = %v, upstream = %q; want the association named", err, tunnel.Upstream(err))
+	asked := cp.posts
+
+	_, err = a.MakeTunnel(ctx, "user:test", MakeTunnelRequest{Account: acct.ID})
+	if tunnel.Reason(err) != tunnel.ReasonWorkspaceRefused || !strings.Contains(tunnel.Upstream(err), "req_unverified") {
+		t.Fatalf("second make: %v (upstream %q), want the kept refusal with OpenAI's request id", err, tunnel.Upstream(err))
 	}
-	if len(cp.created) != 0 {
-		t.Errorf("nothing should be left made: %d", len(cp.created))
+	if cp.posts != asked {
+		t.Errorf("OpenAI was asked again: %d creates, want %d", cp.posts, asked)
+	}
+
+	// OpenAI's Support reviews it; a Check sees that and Make works again.
+	cp.unverified = nil
+	if got, _ := a.CheckChatGPTAccount(ctx, acct.ID); !got.CanMake {
+		t.Fatalf("check after the review = %+v", got)
+	}
+	if _, err := a.MakeTunnel(ctx, "user:test", MakeTunnelRequest{Account: acct.ID}); err != nil {
+		t.Fatalf("make after the review: %v", err)
+	}
+}
+
+// A workspace OpenAI will not accept is refused when the account is saved,
+// not discovered at the first Make -- and the account is left as it was.
+func TestUpdateChatGPTAccount_RefusesAWorkspaceOpenAICannotVerify(t *testing.T) {
+	cp := &fakeControlPlane{unverified: []string{"ws_bad"}}
+	a, acct := pipelineApp(t, cp)
+	ctx := context.Background()
+
+	bad := []string{"ws_own", "ws_bad"}
+	_, err := a.UpdateChatGPTAccount(ctx, "user:test", acct.ID, tunnel.AccountUpdate{Workspaces: &bad})
+	if tunnel.Reason(err) != tunnel.ReasonWorkspaceRefused || !strings.Contains(err.Error(), "ws_bad") {
+		t.Fatalf("err = %v, want the workspace refused by name", err)
+	}
+	if tunnel.Upstream(err) == "" {
+		t.Error("what OpenAI said should travel with the refusal")
+	}
+	again, _, _ := a.chatgpt.Get(ctx, acct.ID)
+	if strings.Join(again.Workspaces, ",") != "ws_own" {
+		t.Errorf("workspaces = %v, want the account unchanged", again.Workspaces)
+	}
+	// Only the workspace being added was asked about, after the organisation.
+	if cp.posts != 2 {
+		t.Errorf("asked OpenAI %d times, want the organisation and the one new workspace", cp.posts)
+	}
+	if len(cp.created) != len(cp.deleted) {
+		t.Errorf("every probe made should be deleted: made %d, deleted %d", len(cp.created), len(cp.deleted))
+	}
+
+	// An edit that does not touch the pair asks OpenAI nothing.
+	cp.posts = 0
+	rate := 5.0
+	if _, err := a.UpdateChatGPTAccount(ctx, "user:test", acct.ID, tunnel.AccountUpdate{RatePerSec: &rate}); err != nil {
+		t.Fatal(err)
+	}
+	if cp.posts != 0 {
+		t.Errorf("an edit to the rate asked OpenAI %d times", cp.posts)
+	}
+}
+
+// A workspace OpenAI accepts is saved, and the answer kept.
+func TestUpdateChatGPTAccount_KeepsWhatOpenAISaidOfANewWorkspace(t *testing.T) {
+	cp := &fakeControlPlane{}
+	a, acct := pipelineApp(t, cp)
+	ctx := context.Background()
+	more := []string{"ws_own", "ws_new"}
+	if _, err := a.UpdateChatGPTAccount(ctx, "user:test", acct.ID, tunnel.AccountUpdate{Workspaces: &more}); err != nil {
+		t.Fatal(err)
+	}
+	var verified bool
+	for _, p := range a.ChatGPTPairings(ctx)[acct.ID] {
+		verified = verified || (p.Workspace == "ws_new" && p.Status == tunnel.PairingVerified)
+	}
+	if !verified {
+		t.Errorf("pairings = %+v, want ws_new verified", a.ChatGPTPairings(ctx)[acct.ID])
+	}
+}
+
+// A tunnel's workspaces are recorded when it is made, so the page can say when
+// one is in none: it connects, and ChatGPT may never offer it.
+func TestMakeTunnel_RecordsTheWorkspacesItWasMadeIn(t *testing.T) {
+	cp := &fakeControlPlane{}
+	a, acct := pipelineApp(t, cp)
+	ctx := context.Background()
+	made, err := a.MakeTunnel(ctx, "user:test", MakeTunnelRequest{Account: acct.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.tunnelWorkspaces(ctx)[made.TunnelID]; strings.Join(got, ",") != "ws_made,ws_own" {
+		t.Errorf("recorded workspaces = %v", got)
 	}
 }
