@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.1](https://github.com/dreulavelle/mcpd/compare/v0.31.0...v0.31.1) (2026-09-25)
+
+
+### Documentation
+
+* **web:** say what an organisation, a workspace and each key are ([b676b8c](https://github.com/dreulavelle/mcpd/commit/b676b8c36897201ac21c9c9eb7e6b6700d165076))
+
 ## [0.31.0](https://github.com/dreulavelle/mcpd/compare/v0.30.0...v0.31.0) (2026-09-25)
 
 
