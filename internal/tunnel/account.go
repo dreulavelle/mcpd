@@ -3,6 +3,7 @@ package tunnel
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -38,6 +39,10 @@ type Account struct {
 	// say where its first one belongs; what the listings report is merged
 	// in when they are shown.
 	Workspaces []string
+	// DefaultWorkspace is the one of Workspaces a tunnel is made in unless
+	// the Make names another, or "" for none chosen -- every saved workspace,
+	// as it always was.
+	DefaultWorkspace string
 
 	// Principal is the identity calls through this account's tunnels act as.
 	// It is what the audit trail records, which is why two accounts may not
@@ -103,6 +108,10 @@ func (a *Account) Validate() error {
 			problems = append(problems, "a workspace id may not contain spaces or quotes")
 			break
 		}
+	}
+	a.DefaultWorkspace = strings.TrimSpace(a.DefaultWorkspace)
+	if a.DefaultWorkspace != "" && !slices.Contains(a.Workspaces, a.DefaultWorkspace) {
+		problems = append(problems, "the default workspace has to be one of the account's workspaces")
 	}
 
 	name := strings.TrimSpace(a.Name)
@@ -230,10 +239,12 @@ type AccountUpdate struct {
 	AdminKey   *string
 	OrgID      *string
 	Workspaces *[]string
-	RoleID     *string
-	Grants     *auth.Grants
-	RatePerSec *float64
-	Enabled    *bool
+	// DefaultWorkspace sets the default; "" clears it.
+	DefaultWorkspace *string
+	RoleID           *string
+	Grants           *auth.Grants
+	RatePerSec       *float64
+	Enabled          *bool
 }
 
 // PairingStatus is what OpenAI said about an organisation and a workspace
@@ -274,4 +285,13 @@ type Pairing struct {
 	Reason    string    `json:"reason,omitempty"`
 	Upstream  string    `json:"upstream,omitempty"`
 	CheckedAt time.Time `json:"checked_at"`
+}
+
+// MakeWorkspaces is where a tunnel is made when the Make does not say: the
+// default workspace if one is chosen, and otherwise every saved workspace.
+func (a Account) MakeWorkspaces() []string {
+	if a.DefaultWorkspace != "" {
+		return []string{a.DefaultWorkspace}
+	}
+	return NormalizeWorkspaces(a.Workspaces)
 }

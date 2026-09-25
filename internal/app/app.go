@@ -774,7 +774,12 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Opti
 			},
 			ChatGPTAccounts: a.ListChatGPTAccounts,
 			MakeTunnel: func(ctx context.Context, actor string, req admin.MakeTunnelRequest) (any, error) {
-				return a.MakeTunnel(ctx, actor, MakeTunnelRequest{Plugin: req.Plugin, Account: req.Account, Name: req.Name})
+				return a.MakeTunnel(ctx, actor, MakeTunnelRequest{
+					Plugin: req.Plugin, Account: req.Account, Name: req.Name, Workspace: req.Workspace,
+				})
+			},
+			WorkspaceCandidates: func(ctx context.Context, id string) (any, error) {
+				return a.WorkspaceCandidates(ctx, id)
 			},
 			CheckChatGPTAccount: func(ctx context.Context, id string) (any, error) {
 				return a.CheckChatGPTAccount(ctx, id)

@@ -48,6 +48,9 @@ type accountView struct {
 	// the selected account cannot reach, and the refusal arrives after the
 	// tunnel is made rather than while it is being chosen.
 	Workspaces []string `json:"workspaces"`
+	// DefaultWorkspace is where a tunnel is made unless the Make names
+	// another; "" for none chosen.
+	DefaultWorkspace string `json:"default_workspace,omitempty"`
 	// Pairings is what OpenAI last said about the organisation on its own and
 	// each workspace, since OpenAI verifies that a workspace belongs to the
 	// organisation and says so only when a tunnel is made. A workspace with
@@ -84,7 +87,8 @@ func newAccountView(a tunnel.Account) accountView {
 		HasAdminKey: strings.TrimSpace(a.AdminKey) != "",
 		CreatedAt:   a.CreatedAt,
 		// The account's own; the tunnel listing adds what it reports.
-		Workspaces: append([]string{}, a.Workspaces...),
+		Workspaces:       append([]string{}, a.Workspaces...),
+		DefaultWorkspace: a.DefaultWorkspace,
 	}
 }
 
@@ -182,15 +186,17 @@ func (s *Server) handleListChatGPTAccounts(w http.ResponseWriter, r *http.Reques
 // never reads one back, so an edit that changes only the rate limit arrives
 // with no key at all, and a plain string would read that as an erasure.
 type accountBody struct {
-	Name       *string       `json:"name"`
-	APIKey     *string       `json:"api_key"`
-	AdminKey   *string       `json:"admin_key"`
-	OrgID      *string       `json:"organization_id"`
-	Workspaces *[]string     `json:"workspaces"`
-	Role       *string       `json:"role"`
-	Grants     *[]auth.Grant `json:"grants"`
-	RatePerSec *float64      `json:"rate_per_sec"`
-	Enabled    *bool         `json:"enabled"`
+	Name       *string   `json:"name"`
+	APIKey     *string   `json:"api_key"`
+	AdminKey   *string   `json:"admin_key"`
+	OrgID      *string   `json:"organization_id"`
+	Workspaces *[]string `json:"workspaces"`
+	// DefaultWorkspace sets the account's default; "" clears it.
+	DefaultWorkspace *string       `json:"default_workspace"`
+	Role             *string       `json:"role"`
+	Grants           *[]auth.Grant `json:"grants"`
+	RatePerSec       *float64      `json:"rate_per_sec"`
+	Enabled          *bool         `json:"enabled"`
 }
 
 // handleAddChatGPTAccount stores a new account.
@@ -217,6 +223,9 @@ func (s *Server) handleAddChatGPTAccount(w http.ResponseWriter, r *http.Request)
 	}
 	if body.OrgID != nil {
 		acct.OrgID = *body.OrgID
+	}
+	if body.DefaultWorkspace != nil {
+		acct.DefaultWorkspace = *body.DefaultWorkspace
 	}
 	if body.Workspaces != nil {
 		acct.Workspaces = *body.Workspaces
@@ -260,7 +269,7 @@ func (s *Server) handleUpdateChatGPTAccount(w http.ResponseWriter, r *http.Reque
 
 	up := tunnel.AccountUpdate{
 		Name: body.Name, APIKey: body.APIKey, AdminKey: body.AdminKey,
-		OrgID: body.OrgID, Workspaces: body.Workspaces, RoleID: body.Role,
+		OrgID: body.OrgID, Workspaces: body.Workspaces, DefaultWorkspace: body.DefaultWorkspace, RoleID: body.Role,
 		RatePerSec: body.RatePerSec, Enabled: body.Enabled,
 	}
 	if body.Grants != nil {

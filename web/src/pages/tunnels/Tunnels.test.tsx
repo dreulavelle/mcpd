@@ -348,3 +348,33 @@ describe("making a tunnel", () => {
     expect(await screen.findAllByText("In no ChatGPT workspace")).toHaveLength(1);
   });
 });
+
+// A tunnel goes in the account's default workspace unless somebody picks
+// another, and a workspace OpenAI cannot verify is not offered at all.
+describe("where a tunnel is shown", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState(null, "", "/tunnels");
+  });
+
+  it("starts at the default and sends the choice", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info({
+      accounts: [account({
+        workspaces: ["ws_1", "ws_2", "ws_bad"], default_workspace: "ws_2",
+        pairings: [{ workspace_id: "ws_bad", status: "unverified", checked_at: "2026-09-25T16:00:00Z" }],
+      })],
+    }));
+    const create = vi.spyOn(api, "createTunnel").mockResolvedValue(
+      { id: "tunnel_new", name: "mcpd", account_id: "acct_1", workspace_ids: ["ws_1"] });
+    renderWith(<Tunnels />, { session: sessionFor("admin") });
+    await userEvent.click(await screen.findByRole("button", { name: /Make a tunnel/ }));
+    const dialog = await screen.findByRole("dialog");
+    const showIn = within(dialog).getByLabelText("Show in") as HTMLSelectElement;
+    expect(showIn.value).toBe("ws_2");
+    expect(within(dialog).getByRole("option", { name: /ws_bad/ })).toBeDisabled();
+
+    await userEvent.selectOptions(showIn, "ws_1");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Make" }));
+    expect(create).toHaveBeenCalledWith("", "acct_1", "", "ws_1");
+  });
+});

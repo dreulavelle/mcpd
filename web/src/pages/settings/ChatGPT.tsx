@@ -22,6 +22,7 @@ import {
 } from "@/components/openai-permission";
 import { when, whenExact } from "@/lib/format";
 import { PairingChip, pairingFor } from "@/components/pairing";
+import { WorkspacePicker } from "@/components/WorkspacePicker";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -298,7 +299,8 @@ function AccountDialog({ account, onClose, onSaved }: {
   // changing a rate limit quietly took the Tunnels page's Add form away.
   const [dropAdminKey, setDropAdminKey] = useState(false);
   const [orgID, setOrgID] = useState(account?.organization_id ?? "");
-  const [workspaces, setWorkspaces] = useState((account?.workspaces ?? []).join(", "));
+  const [workspaces, setWorkspaces] = useState<string[]>(account?.workspaces ?? []);
+  const [defaultWorkspace, setDefaultWorkspace] = useState(account?.default_workspace ?? "");
   const [role, setRole] = useState(account?.role ?? "role_operator");
   // Held in the shape the API takes, so nothing has to be parsed back out of
   // a sentence on the way to the request.
@@ -326,7 +328,8 @@ function AccountDialog({ account, onClose, onSaved }: {
     const body: ChatGPTAccountBody = {
       name: name.trim(),
       organization_id: orgID.trim(),
-      workspaces: workspaces.split(/[\s,]+/).map((w) => w.trim()).filter(Boolean),
+      workspaces,
+      default_workspace: workspaces.includes(defaultWorkspace) ? defaultWorkspace : "",
       role,
       grants: reach,
       rate_per_sec: Number(rate) || 0,
@@ -440,15 +443,17 @@ function AccountDialog({ account, onClose, onSaved }: {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="acct-ws">Workspaces</Label>
-            <Input
-              id="acct-ws" value={workspaces} placeholder="ws_…, ws_…"
-              onChange={(e) => setWorkspaces(e.target.value)}
+            <Label>Workspaces</Label>
+            <WorkspacePicker
+              accountId={account?.id}
+              canLookUp={!!account?.has_admin_key}
+              value={workspaces} onChange={setWorkspaces}
+              defaultWorkspace={defaultWorkspace} onDefault={setDefaultWorkspace}
+              pairings={account?.pairings}
             />
             <p className="text-xs text-muted-foreground">
-              Learned from this account's tunnels. OpenAI checks that each
-              belongs to the organisation, so a new one is tried when you save
-              and refused here if OpenAI will not accept it.
+              The ChatGPT workspaces this account's tunnels appear in. OpenAI
+              checks each belongs to the organisation when you save.
             </p>
           </div>
 

@@ -976,18 +976,27 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
   const busiest = [...canMake].sort((a, b) =>
     rows.filter((r) => r.account === b.id).length - rows.filter((r) => r.account === a.id).length)[0];
   const [account, setAccount] = useState(busiest?.id ?? "");
+  const [target, setTarget] = useState(() => targetFor(busiest));
   const [busy, setBusy] = useState(false);
   const chosen = canMake.find((a) => a.id === account);
   const workspaces = chosen?.workspaces ?? [];
+  const named = target === EVERY ? workspaces : target ? [target] : [];
   // OpenAI has already said it cannot verify these belong to the account's
   // organisation, and the host refuses a Make naming one rather than asking
   // again -- so the dialog says so before Make, not after.
-  const blocked = unverifiedWorkspaces(chosen);
+  const unverified = unverifiedWorkspaces(chosen);
+  const blocked = named.filter((ws) => unverified.includes(ws));
+
+  function pickAccount(id: string) {
+    setAccount(id);
+    setTarget(targetFor(canMake.find((a) => a.id === id)));
+  }
 
   async function add() {
     setBusy(true);
     try {
-      const made = await api.createTunnel(plugin, account, name.trim());
+      const made = await api.createTunnel(plugin, account, name.trim(),
+        target === EVERY ? undefined : target);
       // A tunnel is not active for the first half minute; OpenAI's own CLI
       // says the same after creating one.
       notify("good", `Made ${made.name}. Give it about 30 seconds to become active in ChatGPT.`);
@@ -1013,7 +1022,7 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
           {canMake.length > 1 && (
             <div className="space-y-1.5">
               <Label htmlFor="tacct">Account</Label>
-              <NativeSelect id="tacct" value={account} onChange={(e) => setAccount(e.target.value)}>
+              <NativeSelect id="tacct" value={account} onChange={(e) => pickAccount(e.target.value)}>
                 {canMake.map((a) => <option key={a.id} value={a.id}>{a.name}{a.organization_id ? ` · ${a.organization_id}` : ""}</option>)}
               </NativeSelect>
             </div>
@@ -1031,6 +1040,21 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
                    placeholder={plugin ? `mcpd: ${plugin}` : "mcpd"}
                    onChange={(e) => setName(e.target.value)} />
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="tws">Show in</Label>
+            <NativeSelect id="tws" value={target} onChange={(e) => setTarget(e.target.value)}>
+              {workspaces.length > 1 && !chosen?.default_workspace && (
+                <option value={EVERY}>Every saved workspace</option>
+              )}
+              {workspaces.map((ws) => (
+                <option key={ws} value={ws} disabled={unverified.includes(ws)}>
+                  {ws}{ws === chosen?.default_workspace ? " (default)" : ""}
+                  {unverified.includes(ws) ? " · needs OpenAI Support" : ""}
+                </option>
+              ))}
+              <option value="">The organisation only</option>
+            </NativeSelect>
+          </div>
           {blocked.length > 0 ? (
             <Notice tone="problem">
               OpenAI could not verify that {blocked.length === 1 ? "the workspace " : "the workspaces "}
@@ -1041,9 +1065,9 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
             </Notice>
           ) : (
             <p className="text-xs text-muted-foreground">
-              {workspaces.length > 0
-                ? <>It appears in {workspaces.length === 1 ? "the workspace" : `the ${workspaces.length} workspaces`} this account already uses, beside its other tunnels.</>
-                : <>This account has no workspace saved, so the tunnel is made in the organisation alone. It will connect, but a ChatGPT Enterprise or Edu workspace may not offer it. If it does not show in ChatGPT, add the workspace under Settings › ChatGPT.</>}
+              {named.length > 0
+                ? <>It appears in {named.length === 1 ? "that workspace" : `the ${named.length} saved workspaces`}, beside the account's other tunnels.</>
+                : <>The tunnel is made in the organisation alone. It will connect, but a ChatGPT Enterprise or Edu workspace may not offer it. {workspaces.length === 0 && <>Add the workspace under Settings › ChatGPT if it does not show in ChatGPT.</>}</>}
             </p>
           )}
           <div className="flex justify-end gap-2">
@@ -1054,6 +1078,22 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
       </DialogContent>
     </Dialog>
   );
+}
+
+/** "Every saved workspace", for an account with several and no default. */
+const EVERY = "*every";
+
+/**
+ * Where a new tunnel goes unless somebody picks otherwise: the account's
+ * default, its one workspace, every saved one when it has several and no
+ * default, or the organisation alone when it has none.
+ */
+function targetFor(account: ChatGPTAccount | undefined): string {
+  const ws = account?.workspaces ?? [];
+  if (account?.default_workspace) return account.default_workspace;
+  if (ws.length === 1) return ws[0]!;
+  if (ws.length > 1) return EVERY;
+  return "";
 }
 
 /** The plugins offered, plus one a tunnel is already waiting on so its own

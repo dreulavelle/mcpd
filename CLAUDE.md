@@ -229,7 +229,10 @@ its own plugins, and would delete them, while the delete path checked nothing
 at all and would remove a tunnel somebody made by hand in OpenAI's console.
 Provenance has to be local, because the control plane has no field for it. So a
 tunnel made elsewhere is not adoptable, and an organisation's listing is read
-only to prove a key works — never to decide what this host manages.
+for two things only: to prove a key works, and to offer the workspaces its
+tunnels already sit in as choices on the account form, because OpenAI lists
+workspaces nowhere else. Never to decide what this host manages, and nothing
+from it is stored unless a person picks it and the save verifies it.
 
 **Tools are named `verb_resource`.** The host prefixes the instance name, so
 `search` reaches a model as `graylog_search` — a service and a verb, saying

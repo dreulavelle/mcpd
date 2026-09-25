@@ -116,3 +116,35 @@ func TestPairings_GoWithTheirWorkspaceAndAccount(t *testing.T) {
 		t.Fatalf("rows left after removing the account: %d, %v", n, err)
 	}
 }
+
+// The default is always one of the account's workspaces. Taking that
+// workspace off the account takes the default with it rather than refusing
+// the removal, and a default naming anything else is refused.
+func TestDefaultWorkspace_IsOneOfTheAccountsWorkspaces(t *testing.T) {
+	s := newAccountStore(t)
+	ctx := context.Background()
+	a := pairedAccount(t, s)
+
+	def := "ws_b"
+	got, err := s.Update(ctx, "user:test", a.ID, tunnel.AccountUpdate{DefaultWorkspace: &def})
+	if err != nil || got.DefaultWorkspace != "ws_b" {
+		t.Fatalf("set default = %q, %v", got.DefaultWorkspace, err)
+	}
+	if again, _, _ := s.Get(ctx, a.ID); again.DefaultWorkspace != "ws_b" {
+		t.Fatalf("stored default = %q", again.DefaultWorkspace)
+	}
+
+	stranger := "ws_elsewhere"
+	if _, err := s.Update(ctx, "user:test", a.ID, tunnel.AccountUpdate{DefaultWorkspace: &stranger}); err == nil {
+		t.Error("a default that is not one of the account's workspaces was accepted")
+	}
+
+	only := []string{"ws_a"}
+	got, err = s.Update(ctx, "user:test", a.ID, tunnel.AccountUpdate{Workspaces: &only})
+	if err != nil {
+		t.Fatalf("removing the default's workspace: %v", err)
+	}
+	if got.DefaultWorkspace != "" {
+		t.Errorf("default = %q after its workspace was removed, want none", got.DefaultWorkspace)
+	}
+}

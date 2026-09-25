@@ -109,10 +109,10 @@ func (s *ChatGPTAccountStore) Create(ctx context.Context, actor string, a tunnel
 		}
 		_, err := u.exec(`
 			INSERT INTO chatgpt_accounts
-			  (id, name, api_key, admin_key, org_id, workspaces, principal, role_id, grants_json,
+			  (id, name, api_key, admin_key, org_id, workspaces, default_workspace, principal, role_id, grants_json,
 			   rate_per_sec, enabled, created_by, created_at, updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			a.ID, a.Name, apiKey, adminKey, nullIfEmpty(a.OrgID), encodeWorkspaces(a.Workspaces), a.Principal,
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			a.ID, a.Name, apiKey, adminKey, nullIfEmpty(a.OrgID), encodeWorkspaces(a.Workspaces), a.DefaultWorkspace, a.Principal,
 			a.RoleID, auth.EncodeGrants(a.Grants), a.RatePerSec, boolToInt(a.Enabled),
 			actor, now.UnixMilli(), now.UnixMilli())
 		if err != nil {
@@ -175,6 +175,20 @@ func (s *ChatGPTAccountStore) Update(ctx context.Context, actor, id string, up t
 			changed["workspaces"] = next.Workspaces
 		}
 	}
+	if up.DefaultWorkspace != nil && strings.TrimSpace(*up.DefaultWorkspace) != current.DefaultWorkspace {
+		next.DefaultWorkspace = strings.TrimSpace(*up.DefaultWorkspace)
+		changed["default_workspace"] = next.DefaultWorkspace
+	}
+	// A default that is no longer one of the workspaces goes with it, rather
+	// than refusing the removal: taking a workspace off an account is the
+	// decision, and the default following it is what that decision means.
+	// A default somebody names that is not one of the workspaces is refused
+	// by Validate instead.
+	if up.Workspaces != nil && next.DefaultWorkspace == current.DefaultWorkspace &&
+		next.DefaultWorkspace != "" && !slices.Contains(next.Workspaces, next.DefaultWorkspace) {
+		next.DefaultWorkspace = ""
+		changed["default_workspace"] = ""
+	}
 	if up.RoleID != nil && *up.RoleID != current.RoleID {
 		next.RoleID = *up.RoleID
 		changed["role"] = next.RoleID
@@ -230,10 +244,11 @@ func (s *ChatGPTAccountStore) Update(ctx context.Context, actor, id string, up t
 		// the first made and nobody saw.
 		res, err := u.exec(`
 			UPDATE chatgpt_accounts
-			   SET name = ?, api_key = ?, admin_key = ?, org_id = ?, workspaces = ?, role_id = ?,
-			       grants_json = ?, rate_per_sec = ?, enabled = ?, updated_at = ?
+			   SET name = ?, api_key = ?, admin_key = ?, org_id = ?, workspaces = ?, default_workspace = ?,
+			       role_id = ?, grants_json = ?, rate_per_sec = ?, enabled = ?, updated_at = ?
 			 WHERE id = ? AND updated_at = ?`,
-			next.Name, apiKey, adminKey, nullIfEmpty(next.OrgID), encodeWorkspaces(next.Workspaces), next.RoleID,
+			next.Name, apiKey, adminKey, nullIfEmpty(next.OrgID), encodeWorkspaces(next.Workspaces),
+			next.DefaultWorkspace, next.RoleID,
 			auth.EncodeGrants(next.Grants), next.RatePerSec, boolToInt(next.Enabled),
 			now.UnixMilli(), id, current.UpdatedAt.UnixMilli())
 		if err != nil {
@@ -288,7 +303,7 @@ func (s *ChatGPTAccountStore) Delete(ctx context.Context, actor, id string) erro
 // List returns every account, by name.
 func (s *ChatGPTAccountStore) List(ctx context.Context) ([]tunnel.Account, error) {
 	rows, err := s.db.Reader().QueryContext(ctx, `
-		SELECT a.id, a.name, a.api_key, a.admin_key, a.org_id, a.workspaces, a.principal, a.role_id,
+		SELECT a.id, a.name, a.api_key, a.admin_key, a.org_id, a.workspaces, a.default_workspace, a.principal, a.role_id,
 		       COALESCE(r.name, ''), COALESCE(r.permissions_json, '{}'), a.grants_json,
 		       a.rate_per_sec, a.enabled, a.created_by, a.created_at, a.updated_at
 		  FROM chatgpt_accounts a LEFT JOIN roles r ON r.id = a.role_id
@@ -312,7 +327,7 @@ func (s *ChatGPTAccountStore) List(ctx context.Context) ([]tunnel.Account, error
 // Get returns one account.
 func (s *ChatGPTAccountStore) Get(ctx context.Context, id string) (tunnel.Account, bool, error) {
 	row := s.db.Reader().QueryRowContext(ctx, `
-		SELECT a.id, a.name, a.api_key, a.admin_key, a.org_id, a.workspaces, a.principal, a.role_id,
+		SELECT a.id, a.name, a.api_key, a.admin_key, a.org_id, a.workspaces, a.default_workspace, a.principal, a.role_id,
 		       COALESCE(r.name, ''), COALESCE(r.permissions_json, '{}'), a.grants_json,
 		       a.rate_per_sec, a.enabled, a.created_by, a.created_at, a.updated_at
 		  FROM chatgpt_accounts a LEFT JOIN roles r ON r.id = a.role_id
@@ -349,7 +364,7 @@ func (s *ChatGPTAccountStore) scan(sc scanner) (tunnel.Account, error) {
 		enabled            int
 		createdAt, updated int64
 	)
-	if err := sc.Scan(&a.ID, &a.Name, &apiKey, &adminKey, &orgID, &workspaces, &a.Principal,
+	if err := sc.Scan(&a.ID, &a.Name, &apiKey, &adminKey, &orgID, &workspaces, &a.DefaultWorkspace, &a.Principal,
 		&a.RoleID, &a.RoleName, &perms, &grants, &a.RatePerSec, &enabled, &a.CreatedBy,
 		&createdAt, &updated); err != nil {
 		return tunnel.Account{}, err
