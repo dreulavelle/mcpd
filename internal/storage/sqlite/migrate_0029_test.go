@@ -52,7 +52,6 @@ func TestMigrate0029_BackfillMatchesTheLiveUpsert(t *testing.T) {
 
 	// The ledger route: rows written before the migration, folded up by it.
 	viaBackfill := openDBThrough(t, "backfill29.db", 28)
-	ledger := NewToolCallStore(viaBackfill, time.Now)
 	for i, d := range durations {
 		outcome := "ok"
 		if d == nil {
@@ -60,10 +59,13 @@ func TestMigrate0029_BackfillMatchesTheLiveUpsert(t *testing.T) {
 		}
 		// Two hours, so the grouping is exercised rather than assumed.
 		at := hour.Add(time.Duration(i%2) * time.Hour)
-		if err := ledger.Record(ctx, ToolCall{
-			At: at, Principal: "user:someone", Plugin: "echo", Tool: "say",
-			Outcome: outcome, DurationUS: d,
-		}); err != nil {
+		// In the shape the ledger had at 0028, written directly: today's
+		// Record writes the columns later migrations added, which a database
+		// at 0028 does not have yet.
+		if _, err := viaBackfill.Writer().ExecContext(ctx, `
+			INSERT INTO tool_calls (at, principal, role, plugin, tool, outcome, duration_us, correlation_id)
+			VALUES (?, 'user:someone', '', 'echo', 'say', ?, ?, '')`,
+			at.UnixMilli(), outcome, d); err != nil {
 			t.Fatal(err)
 		}
 	}

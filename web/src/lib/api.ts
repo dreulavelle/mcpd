@@ -1512,6 +1512,9 @@ export interface ToolCall {
    */
   duration_us?: number;
   correlation_id?: string;
+  /** Why a call that did not succeed failed, as the caller was told. Absent
+   *  for a success, and for calls recorded before it was kept. */
+  reason?: string;
 }
 
 /** One caller's activity, for deciding whether a credential should still exist. */

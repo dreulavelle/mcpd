@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { api, type Caller, type ToolCall, problemText } from "@/lib/api";
 import { when, who } from "@/lib/format";
 import { usePoll } from "@/lib/hooks";
 import { Link, useQueryParam } from "@/lib/router";
 import { EmptyState, Loading, Notice, PageHeader, Section } from "@/components/chrome";
 import { Chip } from "@/components/status";
+import { CallDetail } from "@/components/call-detail";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -65,6 +66,8 @@ export function Activity() {
   // has called this" and a reload keeps the view.
   const [hoursParam, setHoursParam] = useQueryParam("hours");
   const [outcome, setOutcome] = useQueryParam("outcome");
+  // The one failed call opened to say why.
+  const [open, setOpen] = useState<number | null>(null);
   const [principal, setPrincipal] = useQueryParam("principal");
   const [plugin, setPlugin] = useQueryParam("plugin");
   const hours = Number(hoursParam) > 0 ? Number(hoursParam) : 24;
@@ -282,7 +285,8 @@ export function Activity() {
                   </TableHeader>
                   <TableBody>
                     {calls.map((c) => (
-                      <TableRow key={c.id}>
+                      <Fragment key={c.id}>
+                      <TableRow>
                         <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
                           {when(c.at)}
                         </TableCell>
@@ -306,14 +310,39 @@ export function Activity() {
                           </Link>
                         </TableCell>
                         <TableCell>
-                          <Chip tone={OUTCOMES[c.outcome]?.tone ?? "neutral"}>
-                            {OUTCOMES[c.outcome]?.label ?? c.outcome}
-                          </Chip>
+                          {c.outcome === "ok" ? (
+                            <Chip tone={OUTCOMES[c.outcome]?.tone ?? "neutral"}>
+                              {OUTCOMES[c.outcome]?.label ?? c.outcome}
+                            </Chip>
+                          ) : (
+                            // A failed call opens to say why: it said
+                            // "failed" and nothing else.
+                            <button
+                              type="button"
+                              aria-expanded={open === c.id}
+                              aria-label={`${OUTCOMES[c.outcome]?.label ?? c.outcome}: why`}
+                              className="inline-flex items-center gap-1 rounded-sm hover:underline"
+                              onClick={() => setOpen(open === c.id ? null : c.id)}
+                            >
+                              <Chip tone={OUTCOMES[c.outcome]?.tone ?? "neutral"}>
+                                {OUTCOMES[c.outcome]?.label ?? c.outcome}
+                              </Chip>
+                              <span className="text-xs text-muted-foreground">{open === c.id ? "Hide" : "Why?"}</span>
+                            </button>
+                          )}
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
                           {took(c.duration_us)}
                         </TableCell>
                       </TableRow>
+                      {open === c.id && (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell colSpan={5} className="bg-muted/30 whitespace-normal">
+                            <div className="max-w-prose py-1"><CallDetail call={c} /></div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      </Fragment>
                     ))}
                   </TableBody>
                 </Table>

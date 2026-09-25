@@ -131,3 +131,18 @@ describe("the activity page", () => {
     expect(await screen.findByText(/not keeping a record/)).toBeInTheDocument();
   });
 });
+
+// The list said a call failed and nothing else. A failed call opens to say
+// why, in the words the assistant was given.
+describe("a failed call on the activity page", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("opens to say why it failed", async () => {
+    stub([call({ id: 3, outcome: "error", reason: "graylog answered 503" })], [caller()]);
+    renderWith(<Activity />);
+    const calls = await screen.findByRole("table", { name: "Calls" });
+    expect(within(calls).queryByText("graylog answered 503")).toBeNull();
+    await userEvent.click(within(calls).getByRole("button", { name: /why/ }));
+    expect(within(calls).getByText("graylog answered 503")).toBeInTheDocument();
+  });
+});

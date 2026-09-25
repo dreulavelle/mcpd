@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
+import { renderWith } from "@/test/render";
 import { Logs, parseLogfmtForTest } from "./Logs";
 
 /**
@@ -309,5 +310,20 @@ describe("the logs page", () => {
     const source = FakeEventSource.last!;
     unmount();
     expect(source.closed).toBe(true);
+  });
+});
+
+// A failed call's "Find it in the logs" arrives with its correlation id as the
+// search, so the lines for that call are what is shown.
+describe("the logs page, arriving from a link", () => {
+  it("starts with the search the address carries", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    renderWith(<Logs />, { path: "/logs?q=c0ffee" });
+    const source = FakeEventSource.last!;
+    source.open();
+    source.send({ time: AT, level: "INFO", msg: "started", correlation_id: "c0ffee" });
+    source.send({ time: AT, level: "INFO", msg: "started", correlation_id: "other" });
+    expect(screen.getByLabelText("Containing")).toHaveValue("c0ffee");
+    expect(screen.getAllByRole("button", { name: /started/ })).toHaveLength(1);
   });
 });

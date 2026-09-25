@@ -251,19 +251,19 @@ func Tool[In, Out any](r *Registry, spec ToolSpec, fn func(context.Context, In) 
 				var zero Out
 				started := time.Now()
 				if err := mw(ctx, qualified, capability); err != nil {
-					obs.ToolCall(ctx, plugin, spec.Name, observability.OutcomeDenied, 0)
+					obs.ToolCall(ctx, plugin, spec.Name, observability.OutcomeDenied, 0, err)
 					return nil, zero, err
 				}
 				if err := limiter.allow(started); err != nil {
-					obs.ToolCall(ctx, plugin, spec.Name, observability.OutcomeRateLimited, 0)
+					obs.ToolCall(ctx, plugin, spec.Name, observability.OutcomeRateLimited, 0, err)
 					return nil, zero, err
 				}
 				out, err := fn(ctx, in)
 				if err != nil {
-					obs.ToolCall(ctx, plugin, spec.Name, observability.OutcomeError, time.Since(started))
+					obs.ToolCall(ctx, plugin, spec.Name, observability.OutcomeError, time.Since(started), err)
 					return nil, zero, err
 				}
-				obs.ToolCall(ctx, plugin, spec.Name, observability.OutcomeOK, time.Since(started))
+				obs.ToolCall(ctx, plugin, spec.Name, observability.OutcomeOK, time.Since(started), nil)
 				obs.ToolResultSize(ctx, started, plugin, spec.Name, func() int { return marshalledSize(out) })
 				return sendOnce(req), out, nil
 			})
@@ -397,7 +397,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 			obs.MutationProposal(plugin, spec.Action, observability.OutcomeDenied)
 			// Zero, as for a read refused before it ran: a rejection took
 			// microseconds and would drag every quantile towards nothing.
-			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeDenied, 0)
+			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeDenied, 0, err)
 			return nil, operationView{}, err
 		}
 		// What was asked for, before anything is decided about it. A proposal
@@ -414,7 +414,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		// and cannot spend a budget by being refused.
 		if err := limiter.allow(auth.FromContext(ctx).ID, time.Now()); err != nil {
 			obs.MutationProposal(plugin, spec.Action, observability.OutcomeRateLimited)
-			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeRateLimited, 0)
+			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeRateLimited, 0, err)
 			return nil, operationView{}, err
 		}
 
@@ -423,7 +423,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 			// Recorded so that calls and outcomes still add up. It is not a
 			// MutationProposal outcome: nothing was proposed, and inflating
 			// that counter would overstate how often a change was asked for.
-			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeError, time.Since(started))
+			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeError, time.Since(started), err)
 			return nil, operationView{}, fmt.Errorf("encode parameters: %w", err)
 		}
 
@@ -433,7 +433,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		plan, err := adapter.plan(ctx, params)
 		if err != nil {
 			obs.MutationProposal(plugin, spec.Action, observability.OutcomeError)
-			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeError, time.Since(started))
+			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeError, time.Since(started), err)
 			return nil, operationView{}, err
 		}
 
@@ -455,7 +455,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		})
 		if err != nil {
 			obs.MutationProposal(plugin, spec.Action, observability.OutcomeError)
-			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeError, time.Since(started))
+			obs.ToolCall(ctx, plugin, timedName, observability.OutcomeError, time.Since(started), err)
 			return nil, operationView{}, err
 		}
 		obs.MutationProposal(plugin, spec.Action, observability.OutcomeOK)
@@ -468,7 +468,7 @@ func attachProposeTool[P any](srv *mcp.Server, plugin, purpose, qualified string
 		// measurement that stopped short would report the fast half of a call
 		// whose slow half is the part anybody waits on.
 		view := resolveApproval(ctx, req, svc, inline, op)
-		obs.ToolCall(ctx, plugin, timedName, observability.OutcomeOK, time.Since(started))
+		obs.ToolCall(ctx, plugin, timedName, observability.OutcomeOK, time.Since(started), nil)
 		obs.ToolResultSize(ctx, started, plugin, timedName, func() int { return marshalledSize(view) })
 		return sendOnce(req), view, nil
 	})
@@ -572,7 +572,11 @@ type ToolObserver interface {
 	// metrics implementation ignores it and must: a Prometheus label with one
 	// value per credential is unbounded cardinality. The ledger needs it,
 	// because "who called this" is the question the counters cannot answer.
-	ToolCall(ctx context.Context, plugin, tool, outcome string, d time.Duration)
+	//
+	// err is why a call that did not succeed failed -- the tool's error, the
+	// gate's refusal, the rate limit -- and nil for a success. It is the text
+	// the caller is sent, so recording it keeps nothing the caller did not see.
+	ToolCall(ctx context.Context, plugin, tool, outcome string, d time.Duration, err error)
 	// ToolResultSize reports how large a successful result was, in bytes of
 	// the JSON the plugin built. Lazy because measuring costs a marshal of
 	// the whole answer, which a host with no metrics endpoint should not pay.
@@ -642,9 +646,9 @@ func marshalledSize(v any) int {
 // a nil check.
 type noObserver struct{}
 
-func (noObserver) ToolCall(context.Context, string, string, string, time.Duration)       {}
-func (noObserver) ToolResultSize(context.Context, time.Time, string, string, func() int) {}
-func (noObserver) MutationProposal(string, string, string)                               {}
+func (noObserver) ToolCall(context.Context, string, string, string, time.Duration, error) {}
+func (noObserver) ToolResultSize(context.Context, time.Time, string, string, func() int)  {}
+func (noObserver) MutationProposal(string, string, string)                                {}
 
 type registeredTool struct {
 	spec       ToolSpec

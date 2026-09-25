@@ -2,8 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // us is a pointer to a measured duration, for the tests that care.
@@ -450,5 +452,25 @@ func TestSummary_HasNoLastCallInAnEmptyWindow(t *testing.T) {
 	}
 	if !sum.LastAt.IsZero() {
 		t.Errorf("last call at %v, want none", sum.LastAt)
+	}
+}
+
+// A reason is a sentence or two; an upstream that answers a failure with a
+// whole page must not grow the ledger by that page on every call. Cut on a
+// rune boundary, so what is kept is still valid text.
+func TestCalls_BoundsAReason(t *testing.T) {
+	s := NewToolCallStore(newTestDB(t), time.Now)
+	ctx := context.Background()
+	long := strings.Repeat("é", maxReason) // two bytes each
+	if err := s.Record(ctx, ToolCall{Principal: "p", Plugin: "echo", Tool: "say", Outcome: "error", Reason: long}); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := s.Calls(ctx, ToolCallFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := calls[0].Reason
+	if len(got) > maxReason+len("…") || !utf8.ValidString(got) || !strings.HasSuffix(got, "…") {
+		t.Errorf("kept %d bytes, valid=%v", len(got), utf8.ValidString(got))
 	}
 }

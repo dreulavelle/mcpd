@@ -378,3 +378,28 @@ describe("where a tunnel is shown", () => {
     expect(create).toHaveBeenCalledWith("", "acct_1", "", "ws_1");
   });
 });
+
+// A tunnel's recent calls said "error" and nothing else. A failed one opens to
+// say why, in the words the assistant was given.
+describe("a tunnel's recent calls", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState(null, "", "/tunnels");
+  });
+
+  it("open to say why a call failed", async () => {
+    vi.spyOn(api, "tunnel").mockResolvedValue(info());
+    vi.spyOn(api, "calls").mockResolvedValue({ calls: [{
+      id: 9, at: new Date().toISOString(), principal: "svc:chatgpt:lab", plugin: "echo",
+      tool: "get_status", outcome: "error", duration_us: 900, correlation_id: "c1",
+      reason: "echo is not configured",
+    }], count: 1, next: "" } as never);
+    renderWith(<Tunnels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Details for mcpd: echo" }));
+    const sheet = await screen.findByRole("dialog");
+    const row = await within(sheet).findByRole("button", { name: /get_status/ });
+    expect(within(sheet).queryByText("echo is not configured")).toBeNull();
+    await userEvent.click(row);
+    expect(within(sheet).getByText("echo is not configured")).toBeInTheDocument();
+  });
+});
