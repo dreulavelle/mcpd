@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, ChevronRight, Copy, Plus, RotateCw, Search, Waypoints } from "lucide-react";
 import {
-  isOpenAIReason, OpenAIPermissionDialog, type OpenAIReason,
+  isOpenAIReason, OpenAIPermissionDialog, type Refusal,
 } from "@/components/openai-permission";
 import {
   api,
@@ -169,7 +169,7 @@ export function Tunnels() {
   // A refusal from OpenAI is several paragraphs of instruction, which a toast
   // cannot carry: newlines collapse and the numbered steps run together. It
   // gets a dialog; everything else stays a toast.
-  const [refused, setRefused] = useState<{ reason: OpenAIReason; detail: string } | null>(null);
+  const [refused, setRefused] = useState<Refusal | null>(null);
   const [selectedParam, setSelected] = useQueryParam("tunnel");
   // "metrics" opens the detail on its chart; clicking the bars sets it.
   const [view, setView] = useQueryParam("view");
@@ -270,6 +270,7 @@ export function Tunnels() {
         <OpenAIPermissionDialog
           reason={refused.reason}
           detail={refused.detail}
+          upstream={refused.upstream}
           onClose={() => setRefused(null)}
         />
       )}
@@ -422,7 +423,7 @@ function TunnelRow({ row, reading: r, accounts, selected, onSelect, onDone, noti
   onSelect: (view?: "metrics") => void;
   onDone: () => void;
   notify: Notify;
-  onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
+  onRefused: (r: Refusal) => void;
 }) {
   const admin = useCan("tunnels:write");
   const [busy, setBusy] = useState(false);
@@ -663,10 +664,10 @@ export function showFailure(
   e: unknown,
   fallback: string,
   notify: Notify,
-  onRefused: (r: { reason: OpenAIReason; detail: string }) => void,
+  onRefused: (r: Refusal) => void,
 ) {
   if (e instanceof ApiError && isOpenAIReason(e.code)) {
-    onRefused({ reason: e.code, detail: e.detail });
+    onRefused({ reason: e.code, detail: e.detail, upstream: e.upstream });
     return;
   }
   notify("problem", problemText(e, fallback));
@@ -687,7 +688,7 @@ function Inspector({ row, reading: r, info, plugins, accounts, metricsFirst, onD
   metricsFirst?: boolean;
   onDone: () => void;
   notify: Notify;
-  onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
+  onRefused: (r: Refusal) => void;
 }) {
   const confirm = useConfirm();
   const admin = useCan("tunnels:write");
@@ -950,7 +951,7 @@ function MakeTunnel({ plugins, accounts, rows, notify, onRefused, onClose, onMad
   /** Every tunnel here, so the default account is the one already in use. */
   rows: Row[];
   notify: Notify;
-  onRefused: (r: { reason: OpenAIReason; detail: string }) => void;
+  onRefused: (r: Refusal) => void;
   onClose: () => void;
   /** Told the new tunnel's id, so the page can select it and walk through the rest. */
   onMade: (id: string) => void;

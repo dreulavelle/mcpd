@@ -9,6 +9,7 @@ describe("OpenAI refusals", () => {
     expect(isOpenAIReason("openai_tunnels_manage_required")).toBe(true);
     expect(isOpenAIReason("openai_admin_key_rejected")).toBe(true);
     expect(isOpenAIReason("openai_org_id_rejected")).toBe(true);
+    expect(isOpenAIReason("openai_workspace_refused")).toBe(true);
     // A refusal this page has no explanation for must fall through to a toast
     // rather than open an empty dialog.
     expect(isOpenAIReason("upstream_refused")).toBe(false);
@@ -40,6 +41,26 @@ describe("OpenAI refusals", () => {
       .toHaveAttribute("href", "https://platform.openai.com/settings/organization/admin-keys");
     expect(screen.getByRole("link", { name: /Organization → People → Roles/ }))
       .toHaveAttribute("href", "https://platform.openai.com/settings/organization/people/roles");
+  });
+
+  // The bug this exists for: an account's Check passed and every Make was
+  // refused as "That key cannot manage tunnels", sending somebody to
+  // regenerate a key that was fine. A refused workspace says so, and does not
+  // offer the permission request that would have been the wrong errand.
+  it("says a refused workspace is not the key's fault", () => {
+    render(
+      <OpenAIPermissionDialog
+        reason="openai_workspace_refused"
+        detail="This account's admin key can make tunnels, but OpenAI will not list one in the workspace ws_1 saved on the account."
+        upstream="request POST /v1/tunnels failed: 403 forbidden (x-request-id: req_123)"
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("OpenAI refused the workspace, not the key")).toBeInTheDocument();
+    expect(screen.queryByText(/Send this to your organisation owner/)).toBeNull();
+    // OpenAI's own words, request id included, under Technical details.
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
+    expect(screen.getByText(/req_123/)).toBeInTheDocument();
   });
 
   // The reader is frequently not the person who can grant it, so the request

@@ -27,7 +27,7 @@ import { ForgetRemovalButton } from "./PluginsList";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useConfirm } from "@/components/confirm";
-import { OpenAIPermissionDialog, type OpenAIReason } from "@/components/openai-permission";
+import { OpenAIPermissionDialog, type Refusal } from "@/components/openai-permission";
 import { showFailure } from "@/pages/tunnels/Tunnels";
 import { RemoteServer } from "./RemoteServer";
 
@@ -572,7 +572,7 @@ function TunnelControl({ plugin, tunnels, tunnel, onChanged }: {
   const mayManage = useCan("plugins:write");
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
-  const [refused, setRefused] = useState<{ reason: OpenAIReason; detail: string } | null>(null);
+  const [refused, setRefused] = useState<Refusal | null>(null);
   const accounts = tunnels?.accounts ?? [];
   // With one account there is nothing to choose; with several, a tunnel made
   // without one lands as "No account" on the Tunnels page and never starts.
@@ -620,6 +620,7 @@ function TunnelControl({ plugin, tunnels, tunnel, onChanged }: {
     <OpenAIPermissionDialog
       reason={refused.reason}
       detail={refused.detail}
+      upstream={refused.upstream}
       onClose={() => setRefused(null)}
     />
   );

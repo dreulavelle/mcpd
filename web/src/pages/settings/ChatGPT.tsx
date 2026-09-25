@@ -15,6 +15,7 @@ import { SETTING_LINKS } from "./SettingsSection";
 import { EVERYTHING, GrantsPicker, grantsLabel } from "@/components/GrantsPicker";
 import { RolePicker } from "@/components/RolePicker";
 import { Chip } from "@/components/status";
+import { Evidence } from "@/components/evidence";
 import { useNotify, type Notify } from "@/components/toast";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -246,7 +247,10 @@ function AccountRow({ account, notify, onChanged }: {
         <TableRow>
           <TableCell colSpan={6} className="bg-muted/30 text-xs">
             {check.problem ? (
-              <span className="text-problem">{check.problem}</span>
+              <>
+                <span className="text-problem">{check.problem}</span>
+                <Evidence detail={check.upstream} />
+              </>
             ) : (
               <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <Chip tone="good">Can list tunnels</Chip>

@@ -81,6 +81,24 @@ func TestDiagnosisReadsTheStatusNotTheText(t *testing.T) {
 	}
 }
 
+// OpenAI's own words go with the sentence that replaces them, because they
+// are what separates one 403 from another and the request id in them is what
+// OpenAI can look a refusal up by. The key does not go with them.
+func TestDiagnosisKeepsWhatOpenAISaid(t *testing.T) {
+	const key = "sk-admin-verysecret"
+	d := NewDirectory(key, "org_test", "")
+	got := d.explain(&tcadmin.RequestError{
+		StatusCode: 403, Message: "workspace not permitted for " + key, RequestID: "req_123",
+	})
+	up := Upstream(got)
+	if !strings.Contains(up, "workspace not permitted") || !strings.Contains(up, "req_123") {
+		t.Errorf("upstream = %q, want OpenAI's message and request id", up)
+	}
+	if strings.Contains(up, key) {
+		t.Fatalf("upstream leaked the key: %q", up)
+	}
+}
+
 // Errors from the transport quote request details freely.
 func TestAnUnrecognisedFailureStillHidesTheKey(t *testing.T) {
 	const key = "sk-admin-verysecret"
