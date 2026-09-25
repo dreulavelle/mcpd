@@ -102,6 +102,26 @@ func (d *Directory) List(ctx context.Context) ([]TunnelInfo, error) {
 // a connector created without one is invisible in exactly the accounts that
 // have workspaces at all.
 func (d *Directory) Create(ctx context.Context, name, description string, workspaceIDs []string) (*TunnelInfo, error) {
+	return d.create(ctx, name, description, []string{d.orgID}, workspaceIDs)
+}
+
+// CreateInWorkspaces makes a tunnel listed in workspaces and naming no
+// organisation, which is the shape OpenAI's own documentation creates.
+//
+// It exists for one refusal. OpenAI checks that every organisation and
+// workspace named on a tunnel belong together, and when it cannot verify the
+// pairing it refuses the create with CodeAssociationUnverified -- even for a
+// workspace the account's earlier tunnels were made in. A tunnel naming the
+// workspace alone has no pairing to verify.
+func (d *Directory) CreateInWorkspaces(ctx context.Context, name, description string, workspaceIDs []string) (*TunnelInfo, error) {
+	ws := NormalizeWorkspaces(workspaceIDs)
+	if len(ws) == 0 {
+		return nil, errors.New("tunnel: a workspace is required")
+	}
+	return d.create(ctx, name, description, nil, ws)
+}
+
+func (d *Directory) create(ctx context.Context, name, description string, orgIDs, workspaceIDs []string) (*TunnelInfo, error) {
 	client, err := d.client()
 	if err != nil {
 		return nil, err
@@ -112,7 +132,7 @@ func (d *Directory) Create(ctx context.Context, name, description string, worksp
 	req := tcadmin.TunnelCreateRequest{
 		Name:            name,
 		Description:     description,
-		OrganizationIDs: []string{d.orgID},
+		OrganizationIDs: orgIDs,
 	}
 	if ws := NormalizeWorkspaces(workspaceIDs); len(ws) > 0 {
 		req.WorkspaceIDs = ws
@@ -227,6 +247,11 @@ const (
 	ReasonWorkspaceRefused = "openai_workspace_refused"
 )
 
+// CodeAssociationUnverified is OpenAI's code for a create naming an
+// organisation and a workspace it cannot verify belong together. OpenAI's own
+// codes, unlike the reasons above, are read only to decide what to try next.
+const CodeAssociationUnverified = "tunnel_principal_association_unverified"
+
 // Refused builds a refusal with the same reason and a fuller sentence, for a
 // caller that has learned something the control plane's one line did not
 // say -- such as that the same key can list tunnels and so lacks only the
@@ -235,7 +260,7 @@ const (
 // cause is the refusal it replaces, so what OpenAI itself said travels with
 // the new sentence rather than being lost to it. It may be nil.
 func Refused(reason, msg string, cause error) error {
-	return &refusal{reason: reason, msg: msg, upstream: Upstream(cause)}
+	return &refusal{reason: reason, msg: msg, upstream: Upstream(cause), code: Code(cause)}
 }
 
 // refusal is an error that names why OpenAI said no.
@@ -247,6 +272,8 @@ type refusal struct {
 	// the sentence: it goes under Technical details, and it is the one thing
 	// OpenAI's support can look a request up by.
 	upstream string
+	// code is OpenAI's own error code, such as CodeAssociationUnverified.
+	code string
 }
 
 func (r *refusal) Error() string { return r.msg }
@@ -257,6 +284,15 @@ func Upstream(err error) string {
 	var r *refusal
 	if errors.As(err, &r) {
 		return r.upstream
+	}
+	return ""
+}
+
+// Code reports OpenAI's own error code for a refusal, or "".
+func Code(err error) string {
+	var r *refusal
+	if errors.As(err, &r) {
+		return r.code
 	}
 	return ""
 }
@@ -296,7 +332,7 @@ func (d *Directory) explain(err error) error {
 		switch req.StatusCode {
 		case http.StatusUnauthorized:
 			return &refusal{ReasonAdminKeyRejected,
-				"OpenAI did not recognise that admin key.", upstream}
+				"OpenAI did not recognise that admin key.", upstream, req.Code}
 		case http.StatusForbidden:
 			// Two things gate this independently: the org role of whoever made
 			// the key, and the scopes chosen for the key itself. An earlier
@@ -305,12 +341,12 @@ func (d *Directory) explain(err error) error {
 			// than saying nothing, because regenerating the key is exactly
 			// what fixes the common case. The dashboard lays out both.
 			return &refusal{ReasonTunnelsManageRequired,
-				"That admin key is not allowed to manage tunnels.", upstream}
+				"That admin key is not allowed to manage tunnels.", upstream, req.Code}
 		case http.StatusBadRequest:
 			if strings.Contains(req.ResponseBody, "organization_id") ||
 				strings.Contains(req.Message, "organization_id") {
 				return &refusal{ReasonOrgIDRejected,
-					"OpenAI did not accept that organization ID.", upstream}
+					"OpenAI did not accept that organization ID.", upstream, req.Code}
 			}
 		}
 	}

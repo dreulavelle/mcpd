@@ -79,7 +79,7 @@ func (a *App) MakeTunnel(ctx context.Context, actor string, req MakeTunnelReques
 			name = "mcpd: " + req.Plugin
 		}
 	}
-	made, err := dir.Create(ctx, name, createdByMCPD, workspaces)
+	made, err := a.createForAccount(ctx, dir, acct, name, createdByMCPD, workspaces)
 	if err != nil {
 		err = a.explainCreate(ctx, dir, acct, err, workspaces)
 		// Logged here, with the context, because nothing else records it: the
@@ -166,6 +166,36 @@ func (a *App) recordWorkspaces(ctx context.Context, acct tunnel.Account, found [
 		"account", acct.Name, "workspaces", strings.Join(all, ","))
 }
 
+// createForAccount makes a tunnel in an account's organisation, listed in its
+// workspaces -- and, when OpenAI cannot verify that the two belong together,
+// in the workspaces alone.
+//
+// OpenAI began refusing an organisation and a workspace named together when
+// it could not verify the pairing (CodeAssociationUnverified), on an account
+// whose earlier tunnels had been made with exactly that pair. The remedy it
+// names is a Support review. A tunnel naming the workspace alone has no
+// pairing to verify and is the shape OpenAI's own documentation creates, so
+// that is tried before anybody is sent to Support. Make and the account's
+// Check both come through here, so the Check answers for what Make will do.
+func (a *App) createForAccount(ctx context.Context, dir *tunnel.Directory, acct tunnel.Account, name, description string, workspaces []string) (*tunnel.TunnelInfo, error) {
+	made, err := dir.Create(ctx, name, description, workspaces)
+	if err == nil || len(workspaces) == 0 || tunnel.Code(err) != tunnel.CodeAssociationUnverified {
+		return made, err
+	}
+	alone, werr := dir.CreateInWorkspaces(ctx, name, description, workspaces)
+	if werr != nil {
+		a.log.WarnContext(ctx, "OpenAI refused the tunnel in the workspace alone as well",
+			"account", acct.Name, "workspaces", strings.Join(workspaces, ","),
+			"upstream", tunnel.Upstream(werr), "error", werr)
+		// The first refusal, because it is the one that names the problem.
+		return nil, err
+	}
+	a.log.InfoContext(ctx, "made the tunnel in the workspace alone: OpenAI could not verify the workspace belongs to the organisation",
+		"account", acct.Name, "tunnel", alone.ID, "workspaces", strings.Join(workspaces, ","),
+		"upstream", tunnel.Upstream(err))
+	return alone, nil
+}
+
 // explainCreate turns OpenAI's refusal of a create into what to do.
 //
 // A 403 says only that the request may not be made, and a create that names a
@@ -176,6 +206,13 @@ func (a *App) recordWorkspaces(ctx context.Context, acct tunnel.Account, found [
 // create naming workspaces is refused, the same key makes the same tunnel
 // without them: if that is allowed, the workspace is what OpenAI refused.
 func (a *App) explainCreate(ctx context.Context, dir *tunnel.Directory, acct tunnel.Account, err error, workspaces []string) error {
+	// OpenAI said what it refused, so there is nothing to probe for.
+	if tunnel.Code(err) == tunnel.CodeAssociationUnverified {
+		return tunnel.Refused(tunnel.ReasonWorkspaceRefused,
+			"OpenAI could not verify that the workspace "+strings.Join(workspaces, ", ")+
+				" belongs to this account's organisation, and wants its Support to review the "+
+				"association before a tunnel is made there.", err)
+	}
 	if tunnel.Reason(err) != tunnel.ReasonTunnelsManageRequired {
 		return err
 	}
@@ -267,7 +304,7 @@ func (a *App) CheckChatGPTAccount(ctx context.Context, id string) (AccountCheck,
 	// be organisation-only, so it tested a request nobody sends: an account
 	// whose workspace OpenAI refused passed its Check and then failed every
 	// create.
-	made, err := dir.Create(ctx, probeName, probeDescription, workspaces)
+	made, err := a.createForAccount(ctx, dir, acct, probeName, probeDescription, workspaces)
 	if err != nil {
 		e := a.explainCreate(ctx, dir, acct, err, workspaces)
 		out.Problem, out.Reason, out.Upstream = e.Error(), tunnel.Reason(e), tunnel.Upstream(e)
