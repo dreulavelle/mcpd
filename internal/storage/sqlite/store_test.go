@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,11 +18,51 @@ import (
 
 var testClock = time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 
+// testTemplate is a migrated, empty database, built once per test binary.
+//
+// Every test here used to migrate a fresh file, and under the race detector
+// that is about five seconds each for well over a hundred tests -- most of
+// CI's time. Each test now starts from a byte copy instead. The migrations
+// still run in full, for the template and in the migrate_*_test.go files,
+// which build their databases step by step on purpose and do not use this.
+//
+// A copy of sqlitetest's, because that package imports this one and a test
+// in this package cannot import it back.
+var testTemplate = sync.OnceValues(func() ([]byte, error) {
+	ctx := context.Background()
+	dir, err := os.MkdirTemp("", "mcpd-sqlite-template-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	db, err := Open(ctx, Options{Path: filepath.Join(dir, "template.db"), RelaxedDurability: true})
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	if _, err := Migrate(ctx, db); err != nil {
+		return nil, err
+	}
+	out := filepath.Join(dir, "copy.db")
+	if err := db.Backup(ctx, out); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(out)
+})
+
 func newTestDB(t *testing.T) *DB {
 	t.Helper()
 	ctx := context.Background()
+	template, err := testTemplate()
+	if err != nil {
+		t.Fatalf("build the migrated template: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "test.db")
+	if err := os.WriteFile(path, template, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	db, err := Open(ctx, Options{
-		Path: filepath.Join(t.TempDir(), "test.db"),
+		Path: path,
 		// Durability is verified separately; test fixtures do not need an
 		// fsync per commit.
 		RelaxedDurability: true,

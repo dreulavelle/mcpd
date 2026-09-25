@@ -11,6 +11,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/settings"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 	"github.com/spoked/mcpd/internal/tunnel"
 )
 
@@ -25,6 +26,7 @@ func newSettingsApp(t *testing.T) *App {
 
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Legacy().Server.PublicURL = ptr("http://localhost:9080")
 	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"

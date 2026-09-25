@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // newStoreWithDB is newStore, plus the handle the audit assertions need. A
@@ -19,18 +19,7 @@ import (
 // read it, and the trail is not the account store's to expose.
 func newStoreWithDB(t *testing.T) (*Store, *sqlite.DB) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path:              filepath.Join(t.TempDir(), "test.db"),
-		RelaxedDurability: true,
-	})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if _, err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Open(t)
 	return NewStore(db, func() time.Time { return testClock }), db
 }
 

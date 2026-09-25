@@ -2,7 +2,6 @@ package users
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,24 +9,14 @@ import (
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // newStoreWithGroups opens an account store and a group store over one
 // database, which is what the running host has: two stores, one union.
 func newStoreWithGroups(t *testing.T) (*Store, *groups.Store, *sqlite.DB) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path:              filepath.Join(t.TempDir(), "accounts.db"),
-		RelaxedDurability: true,
-	})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if _, err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Open(t)
 	now := func() time.Time { return testClock }
 	return NewStore(db, now), groups.NewStore(db, now), db
 }

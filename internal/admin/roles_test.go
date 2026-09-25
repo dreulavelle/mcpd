@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +16,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth/roles"
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/settings"
-	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // fakeRoles is a stand-in for the role store. What these tests are about is
@@ -223,18 +222,7 @@ func TestReaderSession_ReadsSettingsButCannotWriteThemOrSeeAccess(t *testing.T) 
 	accounts := newFakeAccounts()
 	accounts.user.RoleID = auth.RoleReader
 
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path:              filepath.Join(t.TempDir(), "reader.db"),
-		RelaxedDurability: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if _, err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.Open(t)
 	store := settings.NewStore(db, nil, time.Now)
 
 	s := NewServer(Options{

@@ -10,6 +10,7 @@ import (
 
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/settings"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 func instanceApp(t *testing.T) *App {
@@ -27,6 +28,7 @@ func fileApp(t *testing.T, dbPath string, plugins map[string]config.PluginConfig
 
 	cfg := config.Default()
 	cfg.Storage.Path = dbPath
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Legacy().Server.PublicURL = ptr("http://localhost:9080")
 	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"

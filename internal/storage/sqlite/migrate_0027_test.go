@@ -9,15 +9,13 @@ import (
 // 0027 is the shape of change where that can quietly stop being true: two
 // columns added to a table in place, and a new table beside it.
 func TestMigrate0027_UpgradingMatchesAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh27.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded27.db")
-	applyThrough(t, upgraded, 26)
+	upgraded := openDBThrough(t, "upgraded27.db", 26)
 	seedPre27Fixture(t, upgraded)
 	if _, err := Migrate(ctx, upgraded); err != nil {
 		t.Fatalf("upgrade: %v", err)
@@ -35,9 +33,9 @@ func TestMigrate0027_UpgradingMatchesAFreshDatabase(t *testing.T) {
 // make every existing account claimable by whoever holds its address at a
 // provider.
 func TestMigrate0027_ExistingAccountsAreNotInvited(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db := openDBAt(t, "carried27.db")
-	applyThrough(t, db, 26)
+	db := openDBThrough(t, "carried27.db", 26)
 	seedPre27Fixture(t, db)
 
 	if _, err := Migrate(ctx, db); err != nil {
@@ -63,6 +61,7 @@ func TestMigrate0027_ExistingAccountsAreNotInvited(t *testing.T) {
 // outside it would be a provider nobody configured, which is an invitation
 // nobody can ever claim.
 func TestMigrate0027_RefusesAProviderThisBuildDoesNotKnow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "check27.db")
 	if _, err := Migrate(ctx, db); err != nil {

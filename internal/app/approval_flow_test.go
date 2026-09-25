@@ -14,6 +14,7 @@ import (
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/settings"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 const approverToken = "approver-token-000000000000000000000000"
@@ -26,6 +27,7 @@ func newApprovalApp(t *testing.T) *App {
 
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")
 	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}

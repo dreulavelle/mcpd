@@ -10,15 +10,13 @@ import (
 // different schemas. A database that upgraded into it has to be
 // indistinguishable from one that started there.
 func TestMigrate0015_UpgradingMatchesAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh15.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded15.db")
-	applyThrough(t, upgraded, 14)
+	upgraded := openDBThrough(t, "upgraded15.db", 14)
 	seedUser(t, upgraded, "usr_before_0015", "before@example.com")
 	if _, err := Migrate(ctx, upgraded); err != nil {
 		t.Fatalf("upgrade: %v", err)
@@ -34,9 +32,9 @@ func TestMigrate0015_UpgradingMatchesAFreshDatabase(t *testing.T) {
 // that existed before this migration reaches exactly what its own grant lists
 // and nothing more -- which is the direction a default has to be wrong in.
 func TestMigrate0015_UpgradeGrantsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db := openDBAt(t, "quiet15.db")
-	applyThrough(t, db, 14)
+	db := openDBThrough(t, "quiet15.db", 14)
 	seedUser(t, db, "usr_before_0015", "before@example.com")
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatalf("upgrade: %v", err)
@@ -58,6 +56,7 @@ func TestMigrate0015_UpgradeGrantsNothing(t *testing.T) {
 // CHECK is what makes that so against two writers at once, which no test in Go
 // could stand in for.
 func TestMigrate0015_AMembershipNamesExactlyOneSubject(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := migrated(t, "members15.db")
 	seedUserAtHead(t, db, "usr_1", "a@example.com")
@@ -94,6 +93,7 @@ func TestMigrate0015_AMembershipNamesExactlyOneSubject(t *testing.T) {
 // the same rule config validation applies to two static tokens sharing a
 // secret_ref.
 func TestMigrate0015_ASecretBelongsToOneKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := migrated(t, "secrets15.db")
 
@@ -118,6 +118,7 @@ func TestMigrate0015_ASecretBelongsToOneKey(t *testing.T) {
 // Group names are unique case-insensitively: two groups called "Field" and
 // "field" are one group as far as anybody reading the list is concerned.
 func TestMigrate0015_GroupNamesAreUniqueRegardlessOfCase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := migrated(t, "names15.db")
 	seedGroup(t, db, "grp_1", "Field")

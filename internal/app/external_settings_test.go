@@ -14,6 +14,7 @@ import (
 
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/settings"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // buildExternal compiles a test plugin into a plugins directory, the way an
@@ -59,6 +60,7 @@ func TestExternalPlugin_SettingsReachTheProcess(t *testing.T) {
 	cfg := config.Default()
 	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Storage.PluginsDir = pluginsDir
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")

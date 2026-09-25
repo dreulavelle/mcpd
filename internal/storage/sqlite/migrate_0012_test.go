@@ -16,15 +16,13 @@ import (
 // started there, or two deployments on the same version number disagree about
 // what the schema is.
 func TestMigrate0012_UpgradingMatchesAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh12.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded12.db")
-	applyThrough(t, upgraded, 11)
+	upgraded := openDBThrough(t, "upgraded12.db", 11)
 	seedOperation(t, upgraded, "op_before_0012")
 	if _, err := Migrate(ctx, upgraded); err != nil {
 		t.Fatalf("upgrade: %v", err)
@@ -40,9 +38,9 @@ func TestMigrate0012_UpgradingMatchesAFreshDatabase(t *testing.T) {
 // the column answering "which rule" is correctly empty for it. Reading it back
 // must not turn that absence into a rule nobody wrote.
 func TestMigrate0012_ExistingOperationsCarryNoRule(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db := openDBAt(t, "carried.db")
-	applyThrough(t, db, 11)
+	db := openDBThrough(t, "carried.db", 11)
 	seedOperation(t, db, "op_before_0012")
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatalf("upgrade: %v", err)
@@ -65,6 +63,7 @@ func TestMigrate0012_ExistingOperationsCarryNoRule(t *testing.T) {
 // survives the round trip. Both halves matter: an operation approved with no
 // account of what authorised it is the thing the column exists to prevent.
 func TestOperationStore_RecordsTheAuthorisingRuleWithTheApproval(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, _ := newStore(t)
 
@@ -115,6 +114,7 @@ func TestOperationStore_RecordsTheAuthorisingRuleWithTheApproval(t *testing.T) {
 // The property is not "it cannot be changed once set". It is "it can only be
 // set by the approval it belongs to".
 func TestOperationStore_TheAuthorisingRuleCannotBeFabricated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, db := newStore(t)
 	audit := NewAuditStore(db)
@@ -177,6 +177,7 @@ func TestOperationStore_TheAuthorisingRuleCannotBeFabricated(t *testing.T) {
 // in the statement that performs the approval, so a write that leaves the
 // state alone is refused whatever the state happens to be.
 func TestOperationStore_TheAuthorisingRuleCannotBeSetWithoutApproving(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, db := newStore(t)
 	op := proposeOp(t, store, "op_pending")
@@ -197,6 +198,7 @@ func TestOperationStore_TheAuthorisingRuleCannotBeSetWithoutApproving(t *testing
 // rewritten afterwards would let that account be edited after the fact, which
 // is the same as not having it.
 func TestOperationStore_TheAuthorisingRuleCannotBeRewritten(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, db := newStore(t)
 

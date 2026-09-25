@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/spoked/mcpd/internal/config"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 const (
@@ -38,6 +39,7 @@ func newTestApp(t *testing.T) *App {
 
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")
 	cfg.Plugins = map[string]config.PluginConfig{
@@ -311,6 +313,7 @@ func TestNew_RefusesUnknownPlugin(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Plugins = map[string]config.PluginConfig{"nonexistent": {Enabled: true}}
 	cfg.Auth.StaticTokens = []config.StaticTokenConfig{{

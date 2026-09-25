@@ -8,15 +8,13 @@ import (
 
 // Two deployments on the same version number must have the same schema.
 func TestMigrate0029_UpgradingMatchesAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh29.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded29.db")
-	applyThrough(t, upgraded, 28)
+	upgraded := openDBThrough(t, "upgraded29.db", 28)
 	if _, err := Migrate(ctx, upgraded); err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}
@@ -42,6 +40,7 @@ The durations are the boundaries themselves and one microsecond either side of
 each, which is where an off-by-one between `<=` and `<` would show.
 */
 func TestMigrate0029_BackfillMatchesTheLiveUpsert(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	durations := []*int64{
@@ -52,8 +51,7 @@ func TestMigrate0029_BackfillMatchesTheLiveUpsert(t *testing.T) {
 	}
 
 	// The ledger route: rows written before the migration, folded up by it.
-	viaBackfill := openDBAt(t, "backfill29.db")
-	applyThrough(t, viaBackfill, 28)
+	viaBackfill := openDBThrough(t, "backfill29.db", 28)
 	ledger := NewToolCallStore(viaBackfill, time.Now)
 	for i, d := range durations {
 		outcome := "ok"
@@ -103,8 +101,8 @@ func TestMigrate0029_BackfillMatchesTheLiveUpsert(t *testing.T) {
 
 // An empty ledger backfills nothing rather than one row of zeroes.
 func TestMigrate0029_BackfillsNothingFromAnEmptyLedger(t *testing.T) {
-	db := openDBAt(t, "emptybackfill29.db")
-	applyThrough(t, db, 28)
+	t.Parallel()
+	db := openDBThrough(t, "emptybackfill29.db", 28)
 	if _, err := Migrate(context.Background(), db); err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}

@@ -15,10 +15,12 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/mcpservers"
 	"github.com/spoked/mcpd/internal/plugins"
 	"github.com/spoked/mcpd/internal/settings"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // tokenRemote is the credential the endpoint test presents.
@@ -84,6 +86,7 @@ func newAppIn(t *testing.T, dir string) *App {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")
 	cfg.Plugins = nil

@@ -9,7 +9,12 @@ permissions:
   contents: read
 
 jobs:
-  go:
+  # Two jobs rather than one so the checks run beside the tests rather than
+  # before them. The race-detector run is the long pole; formatting, vet, the
+  # dependency pin and the static build used to add two minutes in front of
+  # it on every push. The tests keep the job name "go", which is the name a
+  # required status check would already know.
+  go-checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -37,11 +42,6 @@ jobs:
       - name: Verify dependency pinning
         run: make verify-deps
 
-      # The race detector needs cgo, which is why this is separate from the
-      # build: the shipped binary is CGO-free so it stays static.
-      - name: Test
-        run: CGO_ENABLED=1 go test -race -count=1 ./...
-
       - name: Build a static binary
         run: CGO_ENABLED=0 go build -trimpath -o /tmp/mcpd ./cmd/mcpd
 
@@ -52,6 +52,21 @@ jobs:
             echo "the binary is not static; something reintroduced cgo"
             exit 1
           }
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+          cache: true
+
+      # The race detector needs cgo, which is why this is separate from the
+      # build: the shipped binary is CGO-free so it stays static.
+      - name: Test
+        run: CGO_ENABLED=1 go test -race -count=1 ./...
 
   web:
     runs-on: ubuntu-latest

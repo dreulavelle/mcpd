@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +17,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth/sso"
 	"github.com/spoked/mcpd/internal/auth/users"
 	"github.com/spoked/mcpd/internal/observability"
-	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // fakeIdentities stands in for the account store, for the same reason
@@ -460,18 +459,7 @@ func testOptions(accounts Accounts, identities Registrations) Options {
 // fake that answered "no such state" would be asserting itself.
 func newTestSSO(t *testing.T) *sso.Service {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path:              filepath.Join(t.TempDir(), "sso.db"),
-		RelaxedDurability: true,
-	})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if _, err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Open(t)
 	return sso.NewService(sso.Options{
 		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		States:       sso.NewStateStore(db, time.Now),

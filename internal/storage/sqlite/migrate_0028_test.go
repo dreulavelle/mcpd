@@ -9,15 +9,13 @@ import (
 // migration that adds two tables and three indexes is where that can quietly
 // stop being true.
 func TestMigrate0028_UpgradingMatchesAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh28.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded28.db")
-	applyThrough(t, upgraded, 27)
+	upgraded := openDBThrough(t, "upgraded28.db", 27)
 	if _, err := Migrate(ctx, upgraded); err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}
@@ -32,6 +30,7 @@ func TestMigrate0028_UpgradingMatchesAFreshDatabase(t *testing.T) {
 // somewhere. Recording a different one for the same version would leave two
 // deployments claiming schema 28 with different tables in them.
 func TestMigrate0028_IsRecordedWithItsChecksum(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "checksum28.db")
 	if _, err := Migrate(ctx, db); err != nil {
@@ -64,6 +63,7 @@ func TestMigrate0028_IsRecordedWithItsChecksum(t *testing.T) {
 // The constraints are the point of the table, so each one is asserted against
 // the database rather than trusted to the Go that writes through it.
 func TestMigrate0028_TheConstraintsHold(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "checks28.db")
 	if _, err := Migrate(ctx, db); err != nil {
@@ -136,6 +136,7 @@ func TestMigrate0028_TheConstraintsHold(t *testing.T) {
 // process holds. A second run would take a second snapshot of a database the
 // first is still copying, and race it to the same names on every destination.
 func TestMigrate0028_OnlyOneRunCanBeRunning(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "runs28.db")
 	if _, err := Migrate(ctx, db); err != nil {
