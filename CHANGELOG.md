@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.5](https://github.com/dreulavelle/mcpd/compare/v0.28.4...v0.28.5) (2026-09-25)
+
+
+### Fixes
+
+* **tunnel:** make the tunnel in the workspace alone when OpenAI cannot verify the pair ([fc4ae3a](https://github.com/dreulavelle/mcpd/commit/fc4ae3a2c587103676e5f31827063a23f2f39617))
+
 ## [0.28.4](https://github.com/dreulavelle/mcpd/compare/v0.28.3...v0.28.4) (2026-09-25)
 
 
