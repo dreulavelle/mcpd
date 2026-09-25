@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.3](https://github.com/dreulavelle/mcpd/compare/v0.28.2...v0.28.3) (2026-09-25)
+
+
+### Fixes
+
+* **tunnel:** update tunnel-client to v0.0.15 ([9e73251](https://github.com/dreulavelle/mcpd/commit/9e73251dacde1d6be7149a8ccb5b1e913d016cc1))
+
 ## [0.28.2](https://github.com/dreulavelle/mcpd/compare/v0.28.1...v0.28.2) (2026-09-21)
 
 
