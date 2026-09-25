@@ -7,7 +7,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/openai/tunnel-client v0.0.13
+	github.com/openai/tunnel-client v0.0.15
 	github.com/pkg/sftp v1.13.11
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
