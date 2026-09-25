@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.0](https://github.com/dreulavelle/mcpd/compare/v0.29.0...v0.30.0) (2026-09-25)
+
+
+### Features
+
+* **tunnel:** pick an account's workspaces and make tunnels in its default ([9d00451](https://github.com/dreulavelle/mcpd/commit/9d004515371f59fcb9aedad11f7e30f5c0f57051))
+
 ## [0.29.0](https://github.com/dreulavelle/mcpd/compare/v0.28.5...v0.29.0) (2026-09-25)
 
 
