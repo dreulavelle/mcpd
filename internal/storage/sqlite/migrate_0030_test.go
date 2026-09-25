@@ -7,15 +7,13 @@ import (
 
 // Two deployments on the same version number must have the same schema.
 func TestMigrate0030_UpgradingMatchesAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh30.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded30.db")
-	applyThrough(t, upgraded, 29)
+	upgraded := openDBThrough(t, "upgraded30.db", 29)
 	if _, err := Migrate(ctx, upgraded); err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}
@@ -36,9 +34,9 @@ remains of the window instead. Nothing else defends this: the checksum stops
 the file being edited later, not the behaviour being wrong the first time.
 */
 func TestMigrate0030_SeedsLastSeenFromWhenTheSessionBegan(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db := openDBAt(t, "seed30.db")
-	applyThrough(t, db, 29)
+	db := openDBThrough(t, "seed30.db", 29)
 
 	const created = 1_757_000_000_000
 	if err := db.WriteTx(ctx, created, func(tx *UnitOfWork) error {
@@ -73,6 +71,7 @@ func TestMigrate0030_SeedsLastSeenFromWhenTheSessionBegan(t *testing.T) {
 
 // The column has to be usable by a STRICT table's rules and never null.
 func TestMigrate0030_LastSeenIsANonNullInteger(t *testing.T) {
+	t.Parallel()
 	db := openDBAt(t, "column30.db")
 	if _, err := Migrate(context.Background(), db); err != nil {
 		t.Fatalf("migrate: %v", err)

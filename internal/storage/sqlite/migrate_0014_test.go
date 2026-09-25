@@ -11,15 +11,13 @@ import (
 // fresh path applies. A database that upgraded into it has to be
 // indistinguishable from one that started there.
 func TestMigrate0014_UpgradingMatchesAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh14.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded14.db")
-	applyThrough(t, upgraded, 13)
+	upgraded := openDBThrough(t, "upgraded14.db", 13)
 	seedUser(t, upgraded, "usr_before_0014", "before@example.com")
 	if _, err := Migrate(ctx, upgraded); err != nil {
 		t.Fatalf("upgrade: %v", err)
@@ -36,9 +34,9 @@ func TestMigrate0014_UpgradingMatchesAFreshDatabase(t *testing.T) {
 // capability away from everybody the moment a host upgraded, which is the
 // worst possible way for a default to be wrong.
 func TestMigrate0014_ExistingAccountsAreActive(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db := openDBAt(t, "carried14.db")
-	applyThrough(t, db, 13)
+	db := openDBThrough(t, "carried14.db", 13)
 	seedUser(t, db, "usr_before_0014", "before@example.com")
 	if _, err := Migrate(ctx, db); err != nil {
 		t.Fatalf("upgrade: %v", err)
@@ -57,6 +55,7 @@ func TestMigrate0014_ExistingAccountsAreActive(t *testing.T) {
 // The column carries its own CHECK, so a status this build does not understand
 // cannot reach the table at all.
 func TestMigrate0014_StatusIsConstrained(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "constrained14.db")
 	if _, err := Migrate(ctx, db); err != nil {
@@ -74,6 +73,7 @@ func TestMigrate0014_StatusIsConstrained(t *testing.T) {
 // identity per provider. Both are constraints rather than checks in Go,
 // because both have to hold against two writers at once.
 func TestMigrate0014_IdentitiesAreUniqueBothWays(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "identities14.db")
 	if _, err := Migrate(ctx, db); err != nil {

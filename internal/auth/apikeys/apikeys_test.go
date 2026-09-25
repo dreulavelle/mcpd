@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,24 +14,14 @@ import (
 	"github.com/spoked/mcpd/internal/auth"
 	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 var testClock = time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 
 func newStore(t *testing.T) (*Store, *groups.Store, *sqlite.DB, func(time.Time)) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path:              filepath.Join(t.TempDir(), "keys.db"),
-		RelaxedDurability: true,
-	})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if _, err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Open(t)
 	clock := testClock
 	now := func() time.Time { return clock }
 	gs := groups.NewStore(db, now)

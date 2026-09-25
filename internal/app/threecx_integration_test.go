@@ -13,6 +13,7 @@ import (
 
 	"github.com/spoked/mcpd/internal/config"
 	"github.com/spoked/mcpd/internal/settings"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // The 3CX plugin through the whole host: settings resolved from the file
@@ -31,6 +32,7 @@ func TestThreecx_ThroughTheHost(t *testing.T) {
 	t.Setenv("MCPD_TOKEN_WILDCARD", tokenWildcard)
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")
 	cfg.Plugins = map[string]config.PluginConfig{
@@ -124,6 +126,7 @@ func TestThreecx_ANewCustomerOrSystemNeedsNoRestart(t *testing.T) {
 	cfg := config.Default()
 	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")
 	cfg.Plugins = map[string]config.PluginConfig{"pbx": {Enabled: true, Type: "threecx"}}

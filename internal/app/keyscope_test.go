@@ -14,6 +14,7 @@ import (
 	"github.com/spoked/mcpd/internal/auth/apikeys"
 	"github.com/spoked/mcpd/internal/auth/groups"
 	"github.com/spoked/mcpd/internal/config"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // An API key's reach is the union of its own grants and every group it
@@ -33,6 +34,7 @@ func TestScopedAPIKey_ReachesUnionOfOwnAndGroupGrants(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Plugins = map[string]config.PluginConfig{
 		"echo": {Enabled: true},
@@ -48,6 +50,14 @@ func TestScopedAPIKey_ReachesUnionOfOwnAndGroupGrants(t *testing.T) {
 	}
 	t.Cleanup(func() { a.db.Close() })
 	h := a.Handler()
+
+	// The outbox drain, so the echo change proposed below runs once a standing
+	// rule approves it. Without it the call waited out its whole thirty-second
+	// window for an outcome nothing was going to produce -- half a minute of
+	// every CI run, in a test about which grants a key holds.
+	workerCtx, stop := context.WithCancel(context.Background())
+	t.Cleanup(stop)
+	go a.publisher.Run(workerCtx)
 
 	// A real database-backed key, not a static one from the configuration
 	// file: a file token carries its grants literally and never resolves

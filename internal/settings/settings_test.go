@@ -2,31 +2,19 @@ package settings
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 var clock = time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 
 func newTestStore(t *testing.T, withCipher bool) *Store {
 	t.Helper()
-	ctx := context.Background()
 
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path:              filepath.Join(t.TempDir(), "settings.db"),
-		RelaxedDurability: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if _, err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.Open(t)
 
 	var c *Cipher
 	if withCipher {

@@ -12,15 +12,13 @@ import (
 // shape of change that can leave two deployments on the same version number
 // with different schemas.
 func TestMigrate0025_UpgradingMatchesAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh25.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded25.db")
-	applyThrough(t, upgraded, 24)
+	upgraded := openDBThrough(t, "upgraded25.db", 24)
 	seedPre25Fixture(t, upgraded)
 	if _, err := Migrate(ctx, upgraded); err != nil {
 		t.Fatalf("upgrade: %v", err)
@@ -41,9 +39,9 @@ func TestMigrate0025_UpgradingMatchesAFreshDatabase(t *testing.T) {
 // left as a note an operator reads at startup rather than silently dropped or
 // silently widened.
 func TestMigrate0025_CarriesSubjectsAndNotesWhatChanged(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db := openDBAt(t, "carried25.db")
-	applyThrough(t, db, 24)
+	db := openDBThrough(t, "carried25.db", 24)
 	seedPre25Fixture(t, db)
 
 	if _, err := Migrate(ctx, db); err != nil {

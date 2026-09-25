@@ -2,8 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -25,11 +28,90 @@ func openDBAt(t *testing.T, name string) *DB {
 	return db
 }
 
-// applyThrough runs migrations up to and including version, which is what a
-// deployment that has not upgraded yet looks like.
-func applyThrough(t *testing.T, db *DB, version int) {
+// openDBThrough opens a database migrated up to and including version --
+// what a deployment that has not upgraded yet looks like -- in a file of
+// its own.
+//
+// Each version is built once per test binary, from the one below it, and
+// every test asking for it starts from a copy. It replaces applyThrough, which
+// migrated a database the test had just opened. Building it afresh for every
+// test ran the same migrations dozens of times over, several seconds each
+// under the race detector, and it was most of this package's time in CI.
+// The steps still run in order: a version is the one below it with the next
+// migrations applied.
+func openDBThrough(t *testing.T, name string, version int) *DB {
 	t.Helper()
+	image, err := snapshotThrough(version)
+	if err != nil {
+		t.Fatalf("migrate through %04d: %v", version, err)
+	}
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, image, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(context.Background(), Options{Path: path, RelaxedDurability: true})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+var (
+	snapshotsMu sync.Mutex
+	snapshots   = map[int][]byte{}
+)
+
+// snapshotThrough returns a database file migrated through version. Held
+// under one lock while it builds, so tests running in parallel that want the
+// same version wait for it rather than each building it.
+func snapshotThrough(version int) ([]byte, error) {
+	snapshotsMu.Lock()
+	defer snapshotsMu.Unlock()
+	if image, ok := snapshots[version]; ok {
+		return image, nil
+	}
+	base, from := []byte(nil), 0
+	for v, image := range snapshots {
+		if v < version && v > from {
+			base, from = image, v
+		}
+	}
+
 	ctx := context.Background()
+	dir, err := os.MkdirTemp("", "mcpd-migrate-through-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "through.db")
+	if base != nil {
+		if err := os.WriteFile(path, base, 0o600); err != nil {
+			return nil, err
+		}
+	}
+	db, err := Open(ctx, Options{Path: path, RelaxedDurability: true})
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	if err := applyRange(ctx, db, from, version); err != nil {
+		return nil, err
+	}
+	out := filepath.Join(dir, "image.db")
+	if err := db.Backup(ctx, out); err != nil {
+		return nil, err
+	}
+	image, err := os.ReadFile(out)
+	if err != nil {
+		return nil, err
+	}
+	snapshots[version] = image
+	return image, nil
+}
+
+// applyRange applies the migrations after from, up to and including to.
+func applyRange(ctx context.Context, db *DB, from, to int) error {
 	if _, err := db.Writer().ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    INTEGER PRIMARY KEY,
@@ -37,20 +119,24 @@ func applyThrough(t *testing.T, db *DB, version int) {
 			checksum   TEXT    NOT NULL,
 			applied_at INTEGER NOT NULL
 		) STRICT`); err != nil {
-		t.Fatal(err)
+		return err
 	}
 	migrations, err := loadMigrations()
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	for _, m := range migrations {
-		if m.version > version {
-			return
+		if m.version <= from {
+			continue
+		}
+		if m.version > to {
+			return nil
 		}
 		if err := applyOne(ctx, db.Writer(), m); err != nil {
-			t.Fatalf("apply %04d: %v", m.version, err)
+			return fmt.Errorf("apply %04d: %w", m.version, err)
 		}
 	}
+	return nil
 }
 
 // 0011 rebuilds the users table to add a constraint, and a rebuild is the one
@@ -61,15 +147,13 @@ func applyThrough(t *testing.T, db *DB, version int) {
 // upgrades a populated one, because a rebuild that works on an empty table and
 // fails on a filled one is the interesting failure.
 func TestMigrate0011_UpgradingAPopulatedDatabaseMatchesAFreshOne(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded.db")
-	applyThrough(t, upgraded, 10)
+	upgraded := openDBThrough(t, "upgraded.db", 10)
 	seedAccount(t, upgraded, "usr_1", "alice@example.com", "Alice")
 	seedSession(t, upgraded, "hash-1", "ses_1", "usr_1")
 	if _, err := Migrate(ctx, upgraded); err != nil {
@@ -87,9 +171,9 @@ func TestMigrate0011_UpgradingAPopulatedDatabaseMatchesAFreshOne(t *testing.T) {
 // deletes every session -- which 0007 did, and which is not a reasonable price
 // for adding a length check.
 func TestMigrate0011_CarriesAccountsAndKeepsSessions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db := openDBAt(t, "upgrade.db")
-	applyThrough(t, db, 10)
+	db := openDBThrough(t, "upgrade.db", 10)
 	seedAccount(t, db, "usr_1", "alice@example.com", "Alice")
 	seedSession(t, db, "hash-1", "ses_1", "usr_1")
 
@@ -119,9 +203,9 @@ func TestMigrate0011_CarriesAccountsAndKeepsSessions(t *testing.T) {
 // Rows written before there was a rule are brought inside it, or the rebuild
 // fails on a value nobody can now edit.
 func TestMigrate0011_NormalisesNamesWrittenBeforeTheRule(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db := openDBAt(t, "upgrade.db")
-	applyThrough(t, db, 10)
+	db := openDBThrough(t, "upgrade.db", 10)
 
 	seedAccount(t, db, "usr_long", "long@example.com", strings.Repeat("a", 200))
 	seedAccount(t, db, "usr_lines", "lines@example.com", "Alice\nBob")
@@ -154,6 +238,7 @@ func TestMigrate0011_NormalisesNamesWrittenBeforeTheRule(t *testing.T) {
 // The bound is in the schema, so a value written past this layer -- at a
 // sqlite3 prompt, say -- cannot become a value the dashboard renders.
 func TestMigrate0011_TheDatabaseRefusesAnOverlongName(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "fresh.db")
 	if _, err := Migrate(ctx, db); err != nil {

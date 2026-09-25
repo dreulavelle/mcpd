@@ -46,8 +46,18 @@ const (
 	// Deliberately expensive. This is a human-chosen passphrase guarded by
 	// nothing but its own length, protecting a file an attacker can grind on
 	// offline for as long as they like. OWASP's floor for PBKDF2-HMAC-SHA256.
-	iterations = 600_000
+	defaultIterations = 600_000
 )
+
+// iterations is the work factor new archives are written with.
+//
+// A variable only so this package's tests can lower it: under the race
+// detector 600,000 rounds cost seconds, every archive test derives a key at
+// least twice, and that was most of the package's time in CI. Nothing outside
+// the tests changes it, and an archive records its own count, so one written
+// at a lower count still reads back correctly. TestWorkFactorIsOWASPsFloor
+// holds the real value.
+var iterations = defaultIterations
 
 // deriveKey turns a passphrase into the 32 bytes AES-256 wants.
 //

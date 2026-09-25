@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/settings"
 	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // customersField is a collection the way an integration would declare it: a
@@ -39,17 +39,7 @@ const rowsKey = "/api/settings/rows/plugins.pbx.customers"
 
 func newRowsDashboard(t *testing.T, role string) (*Server, *sqlite.PluginRowStore, *[]string) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path: filepath.Join(t.TempDir(), "test.db"), RelaxedDurability: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if _, err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.Open(t)
 	key, _ := settings.GenerateKey()
 	cipher, err := settings.NewCipher(key)
 	if err != nil {

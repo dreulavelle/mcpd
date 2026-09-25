@@ -16,6 +16,7 @@ import (
 	"github.com/spoked/mcpd/internal/observability"
 	"github.com/spoked/mcpd/internal/operations"
 	"github.com/spoked/mcpd/internal/settings"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // What an operator's file looked like before any of this moved into the
@@ -55,6 +56,7 @@ func upgradeConfig(t *testing.T, dbPath string) *config.Config {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Storage.Path = dbPath
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.SecretKeyRef = "env:MCPD_SECRET_KEY"
 	cfg.Plugins = map[string]config.PluginConfig{"echo": {Enabled: true}}
 	if err := cfg.Validate(); err != nil {

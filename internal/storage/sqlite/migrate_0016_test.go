@@ -11,15 +11,13 @@ import (
 // key that comes back without its cascade. Comparing the whole schema against
 // a database that started here catches all three at once.
 func TestMigrate0016_UpgradingMatchesAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	fresh := openDBAt(t, "fresh16.db")
-	if _, err := Migrate(ctx, fresh); err != nil {
-		t.Fatalf("fresh migrate: %v", err)
-	}
+	// The template is a fresh database migrated in full, built once.
+	fresh := newTestDB(t)
 
-	upgraded := openDBAt(t, "upgraded16.db")
-	applyThrough(t, upgraded, 15)
+	upgraded := openDBThrough(t, "upgraded16.db", 15)
 	if _, err := Migrate(ctx, upgraded); err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}
@@ -35,9 +33,9 @@ func TestMigrate0016_UpgradingMatchesAFreshDatabase(t *testing.T) {
 // and it would surface as "that address already belongs to somebody" on the
 // next attempt.
 func TestMigrate0016_CarriesIdentitiesAndStatesAcross(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	db := openDBAt(t, "carried16.db")
-	applyThrough(t, db, 15)
+	db := openDBThrough(t, "carried16.db", 15)
 	seedUser(t, db, "usr_linked", "linked@example.com")
 
 	if _, err := db.Writer().ExecContext(ctx, `
@@ -85,6 +83,7 @@ func TestMigrate0016_CarriesIdentitiesAndStatesAcross(t *testing.T) {
 // provider failed on a CHECK -- which is how the feature shipped unable to
 // store anything at all.
 func TestMigrate0016_TheOperatorsOwnProviderCanBeStored(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "ownprovider16.db")
 	if _, err := Migrate(ctx, db); err != nil {
@@ -110,6 +109,7 @@ func TestMigrate0016_TheOperatorsOwnProviderCanBeStored(t *testing.T) {
 // Widened, not removed. The constraint's job is to hold when something
 // bypasses the Go enum, so a provider nobody configured still has to bounce.
 func TestMigrate0016_AProviderNobodyConfiguredIsStillRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "unknown16.db")
 	if _, err := Migrate(ctx, db); err != nil {
@@ -132,6 +132,7 @@ func TestMigrate0016_AProviderNobodyConfiguredIsStillRefused(t *testing.T) {
 // account leaves its provider links behind -- and the next person to sign in
 // at that subject would be handed the deleted account's row.
 func TestMigrate0016_DeletingAnAccountStillTakesItsIdentities(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openDBAt(t, "cascade16.db")
 	if _, err := Migrate(ctx, db); err != nil {

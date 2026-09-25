@@ -3,12 +3,11 @@ package sso
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/spoked/mcpd/internal/auth/users"
-	"github.com/spoked/mcpd/internal/storage/sqlite"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 var testClock = time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
@@ -16,17 +15,7 @@ var testClock = time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
 func newStates(t *testing.T) (*StateStore, func(time.Time)) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sqlite.Open(ctx, sqlite.Options{
-		Path:              filepath.Join(t.TempDir(), "sso.db"),
-		RelaxedDurability: true,
-	})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if _, err := sqlite.Migrate(ctx, db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Open(t)
 	clock := testClock
 	// A link flow's state carries a foreign key into users, so the tests that
 	// exercise one need an account to link to. Made here rather than per test:

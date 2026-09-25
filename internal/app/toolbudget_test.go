@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/spoked/mcpd/internal/config"
+	"github.com/spoked/mcpd/internal/storage/sqlite/sqlitetest"
 )
 
 // A plugin's tool list is paid for on every conversation, before a single tool
@@ -239,6 +240,7 @@ func allPluginsApp(t *testing.T) *App {
 
 	cfg := config.Default()
 	cfg.Storage.Path = filepath.Join(dir, "mcpd.db")
+	sqlitetest.Seed(t, cfg.Storage.Path)
 	cfg.Legacy().Storage.RelaxedDurability = ptr(true)
 	cfg.Legacy().Server.PublicURL = ptr("https://mcp.test.invalid")
 	cfg.Plugins = map[string]config.PluginConfig{

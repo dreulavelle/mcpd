@@ -289,11 +289,30 @@ func (s Session) EndsAt() time.Time {
 // costs nothing noticeable and raises the price of an offline attack on a
 // leaked database.
 //
-// A variable rather than a constant so this package's own tests can lower it:
-// under the race detector one hash at this cost takes seconds, and a few
-// hundred of them met CI's ten-minute limit. Nothing outside the tests writes
-// it.
-var bcryptCost = 12
+// A variable rather than a constant so tests can lower it: under the race
+// detector one hash at this cost takes seconds, and a few hundred of them met
+// CI's ten-minute limit. Nothing outside the tests writes it, and
+// TestHashCostIsAboveTheLibraryDefault holds the real value.
+var bcryptCost = defaultBcryptCost
+
+const defaultBcryptCost = 12
+
+// LowerHashCostForTests makes password hashing as cheap as bcrypt allows, for
+// the rest of the process. It is for a TestMain and nothing else.
+//
+// Exported because the packages that make accounts through this one -- sign-in,
+// the admin API, the app -- are tested too, and every account they create
+// hashed a password at the real cost: seconds each under the race detector,
+// and one test in the app took half a minute. The cost is what a leaked
+// database faces, not what any of those tests is about.
+//
+// The decoy Authenticate compares an unknown address against is rebuilt at
+// the lower cost as well; it was made at package init with the real one and
+// would otherwise keep every wrong-password test slow.
+func LowerHashCostForTests() {
+	bcryptCost = bcrypt.MinCost
+	dummyHash = mustHash("a-password-no-account-has")
+}
 
 // HashPassword derives the stored form of a password.
 func HashPassword(plaintext string) (string, error) {
