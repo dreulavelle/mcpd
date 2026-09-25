@@ -303,6 +303,8 @@ type Options struct {
 	MakeTunnel func(ctx context.Context, actor string, req MakeTunnelRequest) (any, error)
 	// CheckChatGPTAccount proves what an account's admin key can do.
 	CheckChatGPTAccount func(ctx context.Context, id string) (any, error)
+	// WorkspaceCandidates lists the workspaces an account could use.
+	WorkspaceCandidates func(ctx context.Context, id string) (any, error)
 
 	// The ChatGPT accounts tunnels connect with. Each carries a credential, an
 	// identity and a grant, so adding or editing one is an administrative act
@@ -396,6 +398,9 @@ type MakeTunnelRequest struct {
 	Plugin  string `json:"plugin"`
 	Account string `json:"account"`
 	Name    string `json:"name"`
+	// Workspace is where the tunnel is listed: absent for the account's
+	// default, "" for the organisation alone, or one of its saved workspaces.
+	Workspace *string `json:"workspace,omitempty"`
 }
 
 type TunnelController interface {
@@ -633,6 +638,10 @@ func (s *Server) routes() {
 	api("PATCH /api/chatgpt/accounts/{id}", s.handleUpdateChatGPTAccount, auth.PermTunnelsWrite)
 	api("DELETE /api/chatgpt/accounts/{id}", s.handleRemoveChatGPTAccount, auth.PermTunnelsWrite)
 	api("POST /api/chatgpt/accounts/{id}/check", s.handleCheckChatGPTAccount, auth.PermTunnelsWrite)
+	// The workspaces an account's organisation already uses, to pick from.
+	// Write rather than read, like the Check: it reads the organisation with
+	// the account's admin key, which is an administrator's business.
+	api("GET /api/chatgpt/accounts/{id}/workspaces", s.handleWorkspaceCandidates, auth.PermTunnelsWrite)
 
 	api("POST /api/tunnel/start", s.handleTunnelStart, auth.PermTunnelsWrite)
 	api("POST /api/tunnel/stop", s.handleTunnelStop, auth.PermTunnelsWrite)
@@ -2147,6 +2156,23 @@ func (s *Server) handleCheckChatGPTAccount(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, result)
+}
+
+// handleWorkspaceCandidates lists the workspaces an account could use.
+func (s *Server) handleWorkspaceCandidates(w http.ResponseWriter, r *http.Request) {
+	if s.opts.WorkspaceCandidates == nil {
+		s.writeError(w, r, http.StatusNotImplemented, "this host cannot list workspaces")
+		return
+	}
+	found, err := s.opts.WorkspaceCandidates(r.Context(), r.PathValue("id"))
+	switch {
+	case err == nil:
+		s.writeJSON(w, r, http.StatusOK, map[string]any{"workspaces": found})
+	case tunnel.Reason(err) != "":
+		s.writeUpstreamError(w, r, http.StatusBadGateway, err)
+	default:
+		s.writeProblem(w, r, http.StatusNotFound, err, "That account's workspaces could not be read.")
+	}
 }
 
 // handleRestartTunnel stops one tunnel and starts it again.

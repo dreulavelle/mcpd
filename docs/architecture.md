@@ -1946,6 +1946,18 @@ workspace-only create was tried as a way round an unverified pairing and
 removed: OpenAI refuses it on the same grounds, since the admin key carries its
 organisation whether the request names it or not.
 
+**An account has a default workspace, and a workspace is picked, not typed.**
+A Make lists the tunnel in the account's default workspace, not every saved
+one: nearly always one is meant, and since OpenAI verifies each workspace named,
+one refused workspace among several refused every tunnel. The Make dialog can
+name another saved workspace or the organisation alone, never a workspace the
+account has not saved -- that list is what saving verified. With no default
+chosen, a Make uses every saved workspace, as it always did. OpenAI lists
+workspaces nowhere, so the account form's "Find workspaces" offers the ones the
+organisation's tunnels already sit in (`WorkspaceCandidates`), most used first.
+That is the one other thing the organisation's listing is read for, and nothing
+from it is stored until a person picks a workspace and the save verifies it.
+
 **The handoff is the one step mcpd cannot do.** OpenAI exposes no API for
 attaching a tunnel as a connector in a ChatGPT workspace; that is done in
 ChatGPT's own settings, by picking the tunnel or pasting its id. So the

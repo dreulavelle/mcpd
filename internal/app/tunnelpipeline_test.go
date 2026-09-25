@@ -402,3 +402,74 @@ func TestMakeTunnel_RecordsTheWorkspacesItWasMadeIn(t *testing.T) {
 		t.Errorf("recorded workspaces = %v", got)
 	}
 }
+
+// A tunnel goes in the account's default workspace, not every saved one: one
+// refused workspace among several used to refuse every tunnel. A Make can
+// still name another saved workspace, or the organisation alone -- but not a
+// workspace the account has not saved, which nothing has verified.
+func TestMakeTunnel_GoesWhereItIsAsked(t *testing.T) {
+	cp := &fakeControlPlane{}
+	a, acct := pipelineApp(t, cp)
+	ctx := context.Background()
+	both, def := []string{"ws_own", "ws_other"}, "ws_own"
+	if _, err := a.chatgpt.Update(ctx, "user:test", acct.ID, tunnel.AccountUpdate{
+		Workspaces: &both, DefaultWorkspace: &def,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	listed := func(i int) string {
+		b, _ := json.Marshal(cp.created[i]["workspace_ids"])
+		return string(b)
+	}
+
+	if _, err := a.MakeTunnel(ctx, "user:test", MakeTunnelRequest{Account: acct.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := listed(0); got != `["ws_own"]` {
+		t.Errorf("default make listed in %s, want the default alone", got)
+	}
+
+	other := "ws_other"
+	if _, err := a.MakeTunnel(ctx, "user:test", MakeTunnelRequest{Account: acct.ID, Workspace: &other}); err != nil {
+		t.Fatal(err)
+	}
+	if got := listed(1); got != `["ws_other"]` {
+		t.Errorf("named make listed in %s", got)
+	}
+
+	none := ""
+	if _, err := a.MakeTunnel(ctx, "user:test", MakeTunnelRequest{Account: acct.ID, Workspace: &none}); err != nil {
+		t.Fatal(err)
+	}
+	if got := listed(2); got != "null" {
+		t.Errorf("organisation-only make listed in %s", got)
+	}
+
+	stranger := "ws_elsewhere"
+	if _, err := a.MakeTunnel(ctx, "user:test", MakeTunnelRequest{Account: acct.ID, Workspace: &stranger}); err == nil {
+		t.Error("a workspace the account has not saved was accepted")
+	}
+	if len(cp.created) != 3 {
+		t.Errorf("made %d tunnels, want 3", len(cp.created))
+	}
+}
+
+// The picker offers the account's own workspaces and the ones its
+// organisation's tunnels already sit in, without storing the second.
+func TestWorkspaceCandidates_OffersWhatTheOrganisationUses(t *testing.T) {
+	cp := &fakeControlPlane{}
+	a, acct := pipelineApp(t, cp)
+	ctx := context.Background()
+
+	got, err := a.WorkspaceCandidates(ctx, acct.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "ws_own" || !got[0].Saved || got[1].ID != "ws_seen" || got[1].Saved || got[1].Tunnels != 1 {
+		t.Fatalf("candidates = %+v, want ws_own saved first and ws_seen from the listing", got)
+	}
+	again, _, _ := a.chatgpt.Get(ctx, acct.ID)
+	if strings.Join(again.Workspaces, ",") != "ws_own" {
+		t.Errorf("workspaces = %v; offering one must not save it", again.Workspaces)
+	}
+}

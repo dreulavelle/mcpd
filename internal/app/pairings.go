@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -230,4 +231,86 @@ func (a *App) tunnelWorkspaces(ctx context.Context) map[string][]string {
 		out[id] = tunnel.NormalizeWorkspaces(ws)
 	}
 	return out
+}
+
+// WorkspaceCandidate is a workspace an account could use, for the picker on
+// the account form.
+type WorkspaceCandidate struct {
+	ID string `json:"workspace_id"`
+	// Tunnels is how many of the organisation's tunnels are listed in it.
+	Tunnels int  `json:"tunnels"`
+	Saved   bool `json:"saved"`
+	Default bool `json:"default"`
+	// Pairing is what OpenAI last said about it with this organisation, when
+	// anything has asked.
+	Pairing *tunnel.Pairing `json:"pairing,omitempty"`
+}
+
+// WorkspaceCandidates lists the workspaces an account's organisation already
+// uses -- the workspaces its tunnels are listed in -- beside the account's own,
+// so a person picks one rather than finding and typing an id.
+//
+// The organisation's listing is read for this and nothing else, and nothing
+// from it is stored: it includes tunnels other people and other mcpd hosts
+// made, which are not this host's to manage, but the workspaces they sit in
+// are exactly where somebody would look for the id. A workspace becomes the
+// account's only when a person picks it and the save verifies it with OpenAI.
+// OpenAI publishes no endpoint that lists workspaces, so this is the only
+// place one can be read rather than typed.
+func (a *App) WorkspaceCandidates(ctx context.Context, accountID string) ([]WorkspaceCandidate, error) {
+	acct, ok := accountFor(a.chatgptAccounts(ctx), accountID)
+	if !ok || accountID == "" {
+		return nil, fmt.Errorf("no such ChatGPT account")
+	}
+	byID := map[string]*WorkspaceCandidate{}
+	get := func(id string) *WorkspaceCandidate {
+		if c, ok := byID[id]; ok {
+			return c
+		}
+		c := &WorkspaceCandidate{ID: id}
+		byID[id] = c
+		return c
+	}
+	for _, ws := range tunnel.NormalizeWorkspaces(acct.Workspaces) {
+		c := get(ws)
+		c.Saved = true
+		c.Default = ws == acct.DefaultWorkspace
+	}
+	dir := a.chatgptDirectory(ctx, acct.ID)
+	if dir.Available() {
+		listed, err := dir.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range listed {
+			for _, ws := range tunnel.NormalizeWorkspaces(t.WorkspaceIDs) {
+				get(ws).Tunnels++
+			}
+		}
+	}
+	for _, p := range a.ChatGPTPairings(ctx)[acct.ID] {
+		if c, ok := byID[p.Workspace]; ok && p.Workspace != "" {
+			pairing := p
+			c.Pairing = &pairing
+		}
+	}
+	out := make([]WorkspaceCandidate, 0, len(byID))
+	for _, c := range byID {
+		out = append(out, *c)
+	}
+	// Saved first, then the most used: the one somebody wants is almost always
+	// the workspace the organisation's other connectors already sit in.
+	slices.SortFunc(out, func(x, y WorkspaceCandidate) int {
+		switch {
+		case x.Saved != y.Saved:
+			if x.Saved {
+				return -1
+			}
+			return 1
+		case x.Tunnels != y.Tunnels:
+			return y.Tunnels - x.Tunnels
+		}
+		return strings.Compare(x.ID, y.ID)
+	})
+	return out, nil
 }

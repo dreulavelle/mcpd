@@ -667,6 +667,8 @@ export interface ChatGPTAccount {
   /** What OpenAI last said about the organisation ("" workspace) and each
    *  workspace. A workspace with no entry has not been asked about. */
   pairings?: Pairing[];
+  /** Where a tunnel is made unless the Make names another; absent for none. */
+  default_workspace?: string;
 }
 
 /**
@@ -721,6 +723,18 @@ export interface ChatGPTAccountBody {
   enabled?: boolean;
   /** The workspaces this account's connectors sit in, by id. */
   workspaces?: string[];
+  /** Where a tunnel is made unless the Make says otherwise; "" for none. */
+  default_workspace?: string;
+}
+
+/** A workspace an account could use, for the picker on the account form. */
+export interface WorkspaceCandidate {
+  workspace_id: string;
+  /** How many of the organisation's tunnels are listed in it. */
+  tunnels: number;
+  saved: boolean;
+  default: boolean;
+  pairing?: Pairing;
 }
 
 export type SettingKind =
@@ -2209,11 +2223,20 @@ export const api = {
    * listed wherever the account's other tunnels are, pointed at the system,
    * switched on and started. No workspace to supply; the host knows them.
    */
-  createTunnel: (plugin: string, account?: string, name?: string) =>
+  /** `workspace` absent is the account's default; "" is the organisation alone. */
+  createTunnel: (plugin: string, account?: string, name?: string, workspace?: string) =>
     request<{ id: string; name: string; account_id: string; workspace_ids: string[] }>("/api/tunnels", {
       method: "POST",
-      body: JSON.stringify({ name: name ?? "", plugin, account: account ?? "" }),
+      body: JSON.stringify({
+        name: name ?? "", plugin, account: account ?? "",
+        ...(workspace === undefined ? {} : { workspace }),
+      }),
     }),
+
+  /** The workspaces an account's organisation already uses, to pick from. */
+  workspaceCandidates: (id: string) =>
+    request<{ workspaces: WorkspaceCandidate[] }>(
+      `/api/chatgpt/accounts/${encodeURIComponent(id)}/workspaces`),
 
   /** Proves what an account's admin key can do, by listing and by making and deleting a tunnel. */
   checkChatGPTAccount: (id: string) =>

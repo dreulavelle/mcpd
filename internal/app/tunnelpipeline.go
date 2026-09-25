@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,6 +25,10 @@ type MakeTunnelRequest struct {
 	Account string
 	// Name is optional; the host names it after the system otherwise.
 	Name string
+	// Workspace is where the tunnel is listed: nil for the account's default
+	// (every saved workspace when none is chosen), "" for the organisation
+	// alone, or one of the account's saved workspaces.
+	Workspace *string
 }
 
 // MakeTunnelResult is the tunnel, made, assigned and starting.
@@ -70,7 +75,10 @@ func (a *App) MakeTunnel(ctx context.Context, actor string, req MakeTunnelReques
 	// learned from -- and written to this host's account row from -- tunnels
 	// somebody else had made. What a create returns is enough to keep the list
 	// filling itself in without reading anybody else's tunnel.
-	workspaces := tunnel.NormalizeWorkspaces(acct.Workspaces)
+	workspaces, err := workspacesFor(acct, req.Workspace)
+	if err != nil {
+		return MakeTunnelResult{}, err
+	}
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -147,6 +155,24 @@ func (a *App) MakeTunnel(ctx context.Context, actor string, req MakeTunnelReques
 		Account:    acct.ID,
 		Workspaces: append([]string{}, made.WorkspaceIDs...),
 	}, nil
+}
+
+// workspacesFor settles where a tunnel is listed. Only a workspace already
+// saved on the account can be named: that is the list saving the account
+// verified against OpenAI, and a Make naming anything else would be the
+// unverified create that list exists to prevent.
+func workspacesFor(acct tunnel.Account, asked *string) ([]string, error) {
+	if asked == nil {
+		return acct.MakeWorkspaces(), nil
+	}
+	ws := strings.TrimSpace(*asked)
+	if ws == "" {
+		return nil, nil
+	}
+	if !slices.Contains(tunnel.NormalizeWorkspaces(acct.Workspaces), ws) {
+		return nil, fmt.Errorf("tunnel: the workspace %s is not saved on the account %s; add it under Settings › ChatGPT first", ws, acct.Name)
+	}
+	return []string{ws}, nil
 }
 
 // createdByMCPD is the description this host puts on tunnels it makes.
