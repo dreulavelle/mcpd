@@ -98,9 +98,9 @@ const EXPLANATIONS: Record<OpenAIReason, Explanation> = {
   openai_workspace_refused: {
     title: "OpenAI refused the workspace, not the key",
     lede:
-      "The same admin key made a tunnel when no workspace was named, so its " +
-      "permissions are fine. What OpenAI refused is listing the tunnel in the " +
-      "workspace saved on this ChatGPT account.",
+      "OpenAI refused the workspace saved on this ChatGPT account, not the " +
+      "admin key's permissions. When it cannot verify that a workspace " +
+      "belongs to the key's organisation, only OpenAI Support can review it.",
     steps: [
       {
         do:
@@ -118,9 +118,10 @@ const EXPLANATIONS: Record<OpenAIReason, Explanation> = {
       },
       {
         do:
-          "If the workspace is right and still refused, send OpenAI the " +
-          "technical details below. The request ID there is what they look " +
-          "it up by.",
+          "If the workspace is right and still refused, ask OpenAI Support to " +
+          "review the association between the workspace and the organisation, " +
+          "quoting the technical details below. The request ID there is what " +
+          "they look it up by.",
       },
     ],
     footnote:

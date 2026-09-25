@@ -21,8 +21,11 @@ type fakeControlPlane struct {
 	// what OpenAI does when the key may make tunnels and the workspace is not
 	// one it will list them in.
 	refuseWorkspace bool
-	created         []map[string]any
-	deleted         []string
+	// unverifiedPair refuses a create naming both an organisation and a
+	// workspace, as OpenAI does when it cannot verify they belong together.
+	unverifiedPair bool
+	created        []map[string]any
+	deleted        []string
 }
 
 func (f *fakeControlPlane) handler() http.Handler {
@@ -35,6 +38,11 @@ func (f *fakeControlPlane) handler() http.Handler {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/tunnels":
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			if f.unverifiedPair && body["workspace_ids"] != nil && body["organization_ids"] != nil {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":{"code":"tunnel_principal_association_unverified","message":"We couldn't automatically verify the association between these workspaces and organizations."}}`))
+				return
+			}
 			if f.refuseCreate || (f.refuseWorkspace && body["workspace_ids"] != nil) {
 				w.WriteHeader(http.StatusForbidden)
 				_, _ = w.Write([]byte(`{"error":{"message":"forbidden","code":"forbidden"}}`))
@@ -244,5 +252,64 @@ func TestCheckChatGPTAccount_FailsOnARefusedWorkspace(t *testing.T) {
 	}
 	if len(cp.created) != len(cp.deleted) {
 		t.Errorf("every probe made should be deleted: made %d, deleted %d", len(cp.created), len(cp.deleted))
+	}
+}
+
+// OpenAI began refusing an organisation and a workspace named together when
+// it could not verify the pairing, on an account whose earlier tunnels had
+// been made with exactly that pair. The workspace alone has no pairing to
+// verify, and it is the shape OpenAI's own documentation creates.
+func TestMakeTunnel_MakesItInTheWorkspaceAloneWhenThePairIsUnverified(t *testing.T) {
+	cp := &fakeControlPlane{unverifiedPair: true}
+	a, acct := pipelineApp(t, cp)
+	made, err := a.MakeTunnel(context.Background(), "user:test", MakeTunnelRequest{Account: acct.ID})
+	if err != nil {
+		t.Fatalf("MakeTunnel: %v", err)
+	}
+	if len(cp.created) != 1 {
+		t.Fatalf("created %d tunnels, want 1", len(cp.created))
+	}
+	if cp.created[0]["organization_ids"] != nil {
+		t.Errorf("the retry should name no organisation: %v", cp.created[0])
+	}
+	ws, _ := json.Marshal(cp.created[0]["workspace_ids"])
+	if string(ws) != `["ws_own"]` {
+		t.Errorf("listed in %s, want the account's own workspace", ws)
+	}
+	if at := a.assignedTunnels(context.Background()); len(at) != 1 || at[0].TunnelID != made.TunnelID {
+		t.Errorf("assignment = %+v, want the tunnel made", at)
+	}
+}
+
+// The Check goes through the same path, so it passes where Make will work.
+func TestCheckChatGPTAccount_PassesWhereMakeWillWork(t *testing.T) {
+	cp := &fakeControlPlane{unverifiedPair: true}
+	a, acct := pipelineApp(t, cp)
+	got, err := a.CheckChatGPTAccount(context.Background(), acct.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.CanMake {
+		t.Fatalf("check = %+v, want can make", got)
+	}
+	if len(cp.created) != 1 || len(cp.deleted) != 1 {
+		t.Errorf("the probe should be made once and deleted: made %d, deleted %d", len(cp.created), len(cp.deleted))
+	}
+}
+
+// When the workspace alone is refused too, the refusal says what OpenAI said:
+// the association needs its Support. Not the key's permissions.
+func TestMakeTunnel_SendsAnUnverifiablePairToSupport(t *testing.T) {
+	cp := &fakeControlPlane{unverifiedPair: true, refuseWorkspace: true}
+	a, acct := pipelineApp(t, cp)
+	_, err := a.MakeTunnel(context.Background(), "user:test", MakeTunnelRequest{Account: acct.ID})
+	if tunnel.Reason(err) != tunnel.ReasonWorkspaceRefused {
+		t.Fatalf("err = %v (reason %q), want the workspace refusal", err, tunnel.Reason(err))
+	}
+	if !strings.Contains(err.Error(), "verify") || !strings.Contains(tunnel.Upstream(err), "tunnel_principal_association_unverified") {
+		t.Errorf("err = %v, upstream = %q; want the association named", err, tunnel.Upstream(err))
+	}
+	if len(cp.created) != 0 {
+		t.Errorf("nothing should be left made: %d", len(cp.created))
 	}
 }
