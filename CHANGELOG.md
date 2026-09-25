@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.4](https://github.com/dreulavelle/mcpd/compare/v0.28.3...v0.28.4) (2026-09-25)
+
+
+### Fixes
+
+* **tunnel:** tell a refused workspace from a refused key ([e25f622](https://github.com/dreulavelle/mcpd/commit/e25f6229ac3f0efa254f6748edcbaedf79e49a87))
+
 ## [0.28.3](https://github.com/dreulavelle/mcpd/compare/v0.28.2...v0.28.3) (2026-09-25)
 
 
