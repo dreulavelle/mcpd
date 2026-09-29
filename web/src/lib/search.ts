@@ -33,6 +33,21 @@ export function score(haystack: string, query: string): number {
   return Math.round(total / words.length);
 }
 
+/**
+ * The score of the worst-matched word, or 0 when one does not match at all.
+ *
+ * For a filter with a floor, where the mean is the wrong thing to hold to it:
+ * one word matched exactly carries a second that only matched as scattered
+ * letters, and the scattered one is exactly what the floor was there to keep
+ * out. Every word has to clear it on its own.
+ */
+export function weakestWord(haystack: string, query: string): number {
+  const h = haystack.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return 1;
+  return Math.min(...words.map((w) => scoreWord(h, w)));
+}
+
 /** One word against the whole haystack. */
 function scoreWord(h: string, word: string): number {
   const at = h.indexOf(word);
