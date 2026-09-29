@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError, type SettingField, type SettingRow, problemText } from "@/lib/api";
+import { useQueryParam } from "@/lib/router";
+import { weakestWord } from "@/lib/search";
 import { Notice } from "@/components/chrome";
 import { useConfirm } from "@/components/confirm";
 import { Chip } from "@/components/status";
@@ -12,13 +14,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
 
 /**
  * A table setting: rows shaped by the field's columns, each added, edited and
  * removed on its own through the row endpoints.
+ *
+ * Drawn as a list rather than a table, and that is not a style choice. A
+ * collection's width is whatever the plugin declared: six columns holding a
+ * name, a business, an alias list, an FQDN, an extension and a secret do not
+ * fit the settings panel, and a table that does not fit gets a scroll bar
+ * inside the page -- which hides columns behind a gesture nobody makes, and
+ * hides them worst on the narrow screens where the page is already hard. A
+ * list wraps instead. Each row leads with the column that names it and carries
+ * the rest as labelled pairs, so a seventh column costs a line break rather
+ * than another thing off the right-hand edge.
  *
  * Not part of the surrounding form's draft. A row's secret column cannot live
  * in a draft of strings without being sent back whole on every save, and a
@@ -31,8 +40,36 @@ export function CollectionField({ field, readOnly }: { field: SettingField; read
   const [rows, setRows] = useState<SettingRow[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [editing, setEditing] = useState<SettingRow | "new" | null>(null);
-  const columns = field.columns ?? [];
+  // The row last saved from this page, shown whether or not it matches the
+  // search. Adding "Initech" while the list is narrowed to "acme" otherwise
+  // saves it straight out of sight, and the only sign it worked is a count
+  // going up by one -- which reads as the save having gone somewhere else.
+  const [saved, setSaved] = useState<string | null>(null);
+  const columns = field.columns ?? noColumns;
   const identity = columns[0];
+  // Named after the field's own last segment -- "customers", "sites" -- so the
+  // address says what is being searched, two collections on one page do not
+  // fight over one parameter, and a link can arrive with the search already in
+  // it. That last one is the point: "the row for X" is a thing people send
+  // each other.
+  const [query, setQuery] = useQueryParam(field.key.split(".").pop() || "find");
+  const q = query.trim();
+  // A search arriving in a link is honoured on a short list too, so the box
+  // has to be there whenever one is in force: rows hidden by a filter nobody
+  // can see or clear read as rows that were deleted.
+  const searchable = rows !== null && (rows.length >= searchFrom || q !== "");
+  useEffect(() => setSaved(null), [q]);
+
+  const matching = useMemo(() => {
+    if (rows === null) return null;
+    if (!q) return rows;
+    // Matched with the command palette's scorer, not a second one written
+    // here: every word has to appear somewhere in the row, in any order, which
+    // is how people search for a thing they half remember. Filtered but not
+    // reordered -- a settings list is an inventory, and rows that rearrange
+    // themselves under the cursor are hard to work in.
+    return rows.filter((r) => r.id === saved || weakestWord(haystack(columns, r), q) >= asSubstring);
+  }, [rows, q, columns, saved]);
 
   const load = useCallback(() => {
     api.settingRows(field.key)
@@ -69,10 +106,28 @@ export function CollectionField({ field, readOnly }: { field: SettingField; read
           {field.required && rows !== null && rows.length === 0 && (
             <Chip tone="attention">needs at least one</Chip>
           )}
+          {rows !== null && matching !== null && searchable && (
+            <span className="text-xs font-normal text-muted-foreground">
+              {matching.length === rows.length
+                ? `${rows.length}`
+                : `${matching.length} of ${rows.length}`}
+            </span>
+          )}
         </Label>
-        {!readOnly && (
-          <Button size="sm" type="button" onClick={() => setEditing("new")}>Add</Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {searchable && (
+            <Input
+              aria-label={`Find in ${field.label.toLowerCase()}`}
+              className="h-8 w-48"
+              placeholder="Find…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          )}
+          {!readOnly && (
+            <Button size="sm" type="button" onClick={() => setEditing("new")}>Add</Button>
+          )}
+        </div>
       </div>
       {field.help && <p className="text-xs text-muted-foreground">{field.help}</p>}
 
@@ -82,42 +137,68 @@ export function CollectionField({ field, readOnly }: { field: SettingField; read
         <p className="text-sm text-muted-foreground">Nothing here yet.</p>
       )}
 
-      {rows !== null && rows.length > 0 && (
-        <div className="overflow-x-auto rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {shown.map((c) => <TableHead key={c.key}>{c.label}</TableHead>)}
-                {secrets.map((c) => <TableHead key={c.key}>{c.label}</TableHead>)}
-                {!readOnly && <TableHead className="w-0" />}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row) => (
-                <TableRow key={row.id}>
-                  {shown.map((c) => (
-                    <TableCell key={c.key} className={c.key === identity?.key ? "font-medium" : ""}>
-                      {cellText(row.values[c.key])}
-                    </TableCell>
-                  ))}
+      {matching !== null && rows !== null && rows.length > 0 && matching.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          Nothing here matches “{q}”.{" "}
+          <button
+            type="button"
+            className="text-primary hover:underline"
+            onClick={() => setQuery("")}
+          >
+            Show all {rows.length}
+          </button>
+        </p>
+      )}
+
+      {matching !== null && matching.length > 0 && (
+        <ul className="divide-y rounded-md border">
+          {matching.map((row) => (
+            <li
+              key={row.id}
+              className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 p-3"
+            >
+              <div className="min-w-0 space-y-1">
+                <p className="text-sm font-medium break-words">
+                  {cellText(row.values[identity?.key ?? ""])}
+                </p>
+                <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                  {shown.filter((c) => c.key !== identity?.key).map((c) => {
+                    const text = cellText(row.values[c.key]);
+                    // A column nothing has filled in is left out rather than
+                    // shown as a dash. One optional column empty on sixteen of
+                    // eighteen rows is sixteen dashes, and they are read before
+                    // they can be dismissed.
+                    if (text === EMPTY) return null;
+                    return (
+                      <div key={c.key} className="flex min-w-0 items-baseline gap-1.5">
+                        <dt className="shrink-0 text-muted-foreground">{c.label}</dt>
+                        <dd className="min-w-0 break-words">{text}</dd>
+                      </div>
+                    );
+                  })}
+                  {/* A secret is always named, because "missing" is the whole
+                      reason somebody opened this page. */}
                   {secrets.map((c) => (
-                    <TableCell key={c.key}>
-                      {row.secrets_set.includes(c.key)
-                        ? <Chip tone="good">set</Chip>
-                        : <Chip tone="attention">missing</Chip>}
-                    </TableCell>
+                    <div key={c.key} className="flex min-w-0 items-baseline gap-1.5">
+                      <dt className="shrink-0 text-muted-foreground">{c.label}</dt>
+                      <dd>
+                        {row.secrets_set.includes(c.key)
+                          ? <Chip tone="good">set</Chip>
+                          : <Chip tone="attention">missing</Chip>}
+                      </dd>
+                    </div>
                   ))}
-                  {!readOnly && (
-                    <TableCell className="whitespace-nowrap text-right">
-                      <Button variant="ghost" size="sm" type="button" onClick={() => setEditing(row)}>Edit</Button>
-                      <Button variant="ghost" size="sm" type="button" onClick={() => remove(row)}>Remove</Button>
-                    </TableCell>
-                  )}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+                </dl>
+              </div>
+              {!readOnly && (
+                <div className="flex shrink-0 gap-1">
+                  <Button variant="ghost" size="sm" type="button" onClick={() => setEditing(row)}>Edit</Button>
+                  <Button variant="ghost" size="sm" type="button" onClick={() => remove(row)}>Remove</Button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
 
       {editing !== null && (
@@ -125,17 +206,71 @@ export function CollectionField({ field, readOnly }: { field: SettingField; read
           field={field}
           row={editing === "new" ? null : editing}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); load(); }}
+          onSaved={(r) => { setEditing(null); setSaved(r.id); load(); }}
         />
       )}
     </div>
   );
 }
 
+/**
+ * How many rows there have to be before a search box is worth its space.
+ *
+ * Under this a person finds a row by looking. Well over it -- an MSP adding
+ * phone systems by the hundred -- looking is not an option, and the box is the
+ * only way to reach a row at all.
+ */
+const searchFrom = 10;
+
+/**
+ * The weakest score this filter accepts: the palette's lowest substring
+ * bucket, which leaves out its subsequence one.
+ *
+ * The palette wants that bucket -- guessing at a half-typed command is its
+ * job. A list of configured rows does not: searching pbx2.example there turned
+ * up pbx2.globex.example, because every character of the first appears
+ * somewhere in the second in order. A row that is not the one you named is
+ * worse than no row, especially in a list long enough to need searching, where
+ * nobody is going to check whether the one match is really a match.
+ */
+const asSubstring = 60;
+
+/** Stable, so a field without columns does not rebuild every row's haystack each render. */
+const noColumns: SettingField[] = [];
+
+/** What an empty value reads as where one is shown at all. */
+const EMPTY = "—";
+
+/**
+ * The text of one row that a search runs against: every column a reader can
+ * see, in one string.
+ *
+ * Every column, not just the one that names the row, because the thing people
+ * have to hand is rarely the name -- it is the address they are looking at, an
+ * alias somebody used, or the business a site belongs to. A secret is not in
+ * here: it is not on the page, and a value nobody can see is not one anybody
+ * can search for.
+ *
+ * The stored value goes in beside the shown one where the two differ, because
+ * an address is most often pasted from a browser, scheme and all, and the
+ * list shows it without one.
+ */
+function haystack(columns: SettingField[], row: SettingRow): string {
+  return columns
+    .filter((c) => c.kind !== "secret")
+    .flatMap((c) => {
+      const v = row.values[c.key];
+      const shown = cellText(v);
+      if (shown === EMPTY) return [];
+      return typeof v === "string" && v !== shown ? [shown, v] : [shown];
+    })
+    .join(" ");
+}
+
 /** A cell, as text. A list joins; a switch says yes or no; nothing is a dash. */
 function cellText(v: unknown): string {
-  if (v === undefined || v === null || v === "") return "—";
-  if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
+  if (v === undefined || v === null || v === "") return EMPTY;
+  if (Array.isArray(v)) return v.length ? v.join(", ") : EMPTY;
   if (typeof v === "boolean") return v ? "yes" : "no";
   return tidyAddress(String(v));
 }
@@ -160,7 +295,7 @@ function RowDialog({ field, row, onClose, onSaved }: {
   field: SettingField;
   row: SettingRow | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (row: SettingRow) => void;
 }) {
   const notify = useNotify();
   const columns = field.columns ?? [];
@@ -185,10 +320,11 @@ function RowDialog({ field, row, onClose, onSaved }: {
     try {
       const cleaned = tidyValues(columns, values);
       setValues(cleaned);
-      if (row) await api.updateSettingRow(field.key, row.id, cleaned, clearing);
-      else await api.addSettingRow(field.key, cleaned);
+      const saved = row
+        ? await api.updateSettingRow(field.key, row.id, cleaned, clearing)
+        : await api.addSettingRow(field.key, cleaned);
       notify("good", "Saved.");
-      onSaved();
+      onSaved(saved);
     } catch (e) {
       if (e instanceof ApiError && e.problems?.length) setProblems(e.problems);
       else setProblems([problemText(e, "Couldn't save. Try again in a moment.")]);

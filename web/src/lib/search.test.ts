@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { score } from "./search";
+import { score, weakestWord } from "./search";
 
 describe("ranking a search", () => {
   it("prefers a match at the start, then at a word, then anywhere, then scattered", () => {
@@ -50,5 +50,17 @@ describe("ranking a search", () => {
     expect(score("Settings › Keys", "  settings   keys  "))
       .toBe(score("Settings › Keys", "settings keys"));
     expect(score("anything", "   ")).toBeGreaterThan(0);
+  });
+});
+describe("the weakest word", () => {
+  // A floor held against the mean lets an exact word carry one that only
+  // matched as scattered letters; held against the weakest, it cannot.
+  it("scores a query by its worst-matched word", () => {
+    const h = "Globex 2 pbx2.globex.example";
+    expect(score(h, "globex pbx2.example")).toBe(60);
+    expect(weakestWord(h, "globex pbx2.example")).toBe(20);
+    expect(weakestWord(h, "globex pbx2")).toBe(80);
+    expect(weakestWord(h, "globex initech")).toBe(0);
+    expect(weakestWord(h, "  ")).toBe(1);
   });
 });
