@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/dreulavelle/mcpd/compare/v0.31.1...v0.32.0) (2026-09-29)
+
+
+### Features
+
+* **web:** list a collection's rows and find one by searching ([c7bfda4](https://github.com/dreulavelle/mcpd/commit/c7bfda4ac5bc899b56ebb4ec4f26e1c856c6943f))
+
 ## [0.31.1](https://github.com/dreulavelle/mcpd/compare/v0.31.0...v0.31.1) (2026-09-25)
 
 
